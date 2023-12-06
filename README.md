@@ -11,7 +11,9 @@ Requirements:
 - winget executable
 
 ```cmd
-curl dotfiles.ranolp.dev/setup | cmd /Q
+curl -L dotfiles.ranolp.dev/setup | cmd /Q
+# or directly
+curl -L dotfiles.ranolp.dev/setup-scripts/batch.bat | cmd /Q
 ```
 
 ### Windows PowerShell
@@ -22,7 +24,7 @@ Requirements:
 - winget executable
 
 ```powershell
-curl dotfiles.ranolp.dev/setup | iex
+curl -L dotfiles.ranolp.dev/setup | iex
 ```
 
 ### Windows ArchWSL
@@ -30,9 +32,10 @@ curl dotfiles.ranolp.dev/setup | iex
 Requirements:
 
 - ArchWSL Bash
+- curl executable
 
 ```bash
-WIP
+curl -L dotfiles.ranolp.dev/setup | sh
 ```
 
 ### macOS
@@ -40,7 +43,8 @@ WIP
 Requirements:
 
 - macOS zsh
+- curl executable
 
 ```bash
-WIP
+curl -L dotfiles.ranolp.dev/setup | sh
 ```

@@ -11,7 +11,7 @@ Requirements:
 - winget executable
 
 ```cmd
-WIP
+curl dotfiles.ranolp.dev/setup | cmd /Q
 ```
 
 ### Windows PowerShell
@@ -22,7 +22,7 @@ Requirements:
 - winget executable
 
 ```powershell
-WIP
+curl dotfiles.ranolp.dev/setup | iex
 ```
 
 ### Windows ArchWSL

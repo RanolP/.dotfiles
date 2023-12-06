@@ -24,7 +24,7 @@ Requirements:
 - winget executable
 
 ```powershell
-curl -L dotfiles.ranolp.dev/setup | iex
+iwr dotfiles.ranolp.dev/setup | iex
 ```
 
 ### Windows ArchWSL

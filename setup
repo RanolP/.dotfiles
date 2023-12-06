@@ -1,8 +1,7 @@
 echo @'
 :' > /dev/null
 :; echo bash; exit
-@cls
-@echo cmd
+@curl -L dotfiles.ranolp.dev/setup-scripts/batch.bat | cmd /Q
 @exit
 '@ | Out-Null
 echo powershell

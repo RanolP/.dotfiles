@@ -6,4 +6,4 @@ echo @'
 @del %Temp%\dotfiles-setup.bat
 @exit
 '@ | Out-Null
-echo powershell
+Invoke-WebRequest dotfiles.ranolp.dev/setup-scripts/powershell.ps1 | Invoke-Expression

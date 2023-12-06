@@ -5,3 +5,4 @@ if ([System.Environment]::OSVersion.Platform -ne 'Win32NT') {
 
 Clear-Host
 Write-Output "You are now installing RanolP's dotfiles..."
+Write-Output "Environment : Windows + PowerShell"

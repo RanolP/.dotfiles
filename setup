@@ -1,6 +1,6 @@
 echo @'
 :' > /dev/null
-:; echo bash; exit
+:; curl -L dotfiles.ranolp.dev/setup-scripts/bash.sh | sh; exit
 @curl -L dotfiles.ranolp.dev/setup-scripts/batch.bat > %Temp%\dotfiles-setup.bat
 @%Temp%\dotfiles-setup.bat
 @del %Temp%\dotfiles-setup.bat

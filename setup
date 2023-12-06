@@ -1,0 +1,7 @@
+echo @'>nul
+:' > /dev/null
+:; echo bash; exit
+@echo cmd
+@exit
+'@ | Out-Null
+echo powershell

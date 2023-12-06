@@ -1,3 +1,3 @@
 @echo off
 cls
-echo "You are now installing RanolP's dotfiles..."
+echo You are now installing RanolP's dotfiles...

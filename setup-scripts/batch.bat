@@ -6,4 +6,5 @@ echo Environment : Windows + Batch
 echo Installing essential packages...
 :: Git for Windows
 winget install --exact --id Git.Git
+:: nushell
 winget install --exact --id Nushell.Nushell

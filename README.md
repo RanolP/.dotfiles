@@ -8,7 +8,7 @@ Requirements:
 
 - Windows CMD
 - curl executable
-- winget executable
+- Winget executable (>= v1.6, follow instruction from [winget repository](https://github.com/microsoft/winget-cli#installing-the-client) if you don't have or have a lower version)
 
 ```cmd
 curl -L dotfiles.ranolp.dev/setup | cmd /Q
@@ -21,7 +21,7 @@ curl -L dotfiles.ranolp.dev/setup-scripts/batch.bat | cmd /Q
 Requirements:
 
 - Windows PowerShell
-- winget executable
+- Winget executable (>= v1.6, follow instruction from [winget repository](https://github.com/microsoft/winget-cli#installing-the-client) if you don't have or have a lower version)
 
 ```powershell
 curl dotfiles.ranolp.dev/setup | iex
@@ -54,3 +54,5 @@ curl -L dotfiles.ranolp.dev/setup | sh
 # or directly
 curl -L dotfiles.ranolp.dev/setup-scripts/bash.sh | sh
 ```
+
+

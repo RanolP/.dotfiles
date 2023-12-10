@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/configuration-dsc-schema/0.2
 properties:
   resources:
-    - resource: Microsoft.Winget.DSC/WinGetPackage
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
       directives:
         description: Install Bitwarden
       settings:

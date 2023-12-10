@@ -1,3 +1,3 @@
 echo Cloning git repository...
 cd ~
-git clone RanolP/.dotfiles
+git clone https://github.com/RanolP/.dotfiles.git

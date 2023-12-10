@@ -17,8 +17,10 @@ echo y | winget install --exact --id uutils.coreutils
 
 :: refresh "Path" env var
 echo Refreshing paths for getting "git" and "nu" executable...
-for /f "usebackq skip=2 tokens=2,*" %%a in (`%WinDir%\System32\Reg QUERY "HKLM\System\CurrentControlSet\Control\Session Manager\Environment" /v Path`) do (
-  for /f "usebackq skip=2 tokens=2,*" %%c in (`%WinDir%\System32\Reg QUERY "HKCU\Environment" /v Path`) do (
-    set Path=%%b;%%d
-  )
-)
+echo @echo off >> %Temp%\refresh.bzt
+echo for /f "usebackq skip=2 tokens=2,*" %%a in (`%WinDir%\System32\Reg QUERY "HKLM\System\CurrentControlSet\Control\Session Manager\Environment" /v Path`) do ( >> %Temp%\refresh.bat
+echo  for /f "usebackq skip=2 tokens=2,*" %%c in (`%WinDir%\System32\Reg QUERY "HKCU\Environment" /v Path`) do ( >> %Temp%\refresh.bat
+echo    set Path=%%b;%%d >> %Temp%\refresh.bat
+echo  ) >> %Temp%\refresh.bat
+echo ) >> %Temp%\refresh.bat
+call %Temp%\refresh.bat

@@ -2,6 +2,8 @@
 properties:
   resources:
     - resource: Microsoft.Winget.DSC/WinGetPackage
+      directives:
+        description: Install Bitwarden
       settings:
         id: Bitwarden.Bitwarden
         source: winget

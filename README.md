@@ -2,7 +2,7 @@
 
 ## Installation
 
-### Windows CMD
+### Windows CMD (WIP)
 
 Requirements:
 
@@ -16,7 +16,7 @@ curl -L dotfiles.ranolp.dev/setup | cmd /Q
 curl -L dotfiles.ranolp.dev/setup-scripts/batch.bat | cmd /Q
 ```
 
-### Windows PowerShell
+### Windows PowerShell (TODO)
 
 Requirements:
 
@@ -29,7 +29,7 @@ curl dotfiles.ranolp.dev/setup | iex
 curl dotfiles.ranolp.dev/setup-scripts/powershell.ps1 | iex
 ```
 
-### Windows ArchWSL
+### Windows ArchWSL (TODO)
 
 Requirements:
 
@@ -42,7 +42,7 @@ curl -L dotfiles.ranolp.dev/setup | sh
 curl -L dotfiles.ranolp.dev/setup-scripts/bash.sh | sh
 ```
 
-### macOS
+### macOS (TODO)
 
 Requirements:
 

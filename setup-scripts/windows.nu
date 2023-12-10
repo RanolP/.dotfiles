@@ -1,0 +1,3 @@
+echo Cloning git repository...
+cd ~
+git clone RanolP/.dotfiles

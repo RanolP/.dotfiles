@@ -5,3 +5,4 @@ properties:
       settings:
         id: Bitwarden.Bitwarden
         source: winget
+  configurationVersion: 0.2.0

@@ -4,6 +4,7 @@ properties:
     - resource: Microsoft.WinGet.DSC/WinGetPackage
       directives:
         description: Install Bitwarden
+        allowPrerelease: true
       settings:
         id: Bitwarden.Bitwarden
         source: winget

@@ -17,9 +17,9 @@ echo y | winget install --exact --id uutils.coreutils
 
 :: refresh "Path" env var
 echo Refreshing paths for getting "git" and "nu" executable...
-curl -L dotfiles.ranolp.dev/utils/windows/refresh-path.bat > %Temp%\refresh-path.bat
+curl -L dotfiles.ranolp.dev/utils/@windows/refresh-path.bat > %Temp%\refresh-path.bat
 call %Temp%\refresh-path.bat
 
 :: run common windows setup script
-curl -L dotfiles.ranolp.dev/setup-scripts/windows.nu > %Temp%\windows.nu.tmp
-nu %Temp%\windows.nu.tmp
+curl -L dotfiles.ranolp.dev/setup-scripts/@windows.nu > %Temp%\@windows.nu.tmp
+nu %Temp%\@windows.nu.tmp

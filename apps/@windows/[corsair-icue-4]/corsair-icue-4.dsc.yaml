@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://aka.ms/configuration-dsc-schema/0.2
+properties:
+  resources:
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      directives:
+        description: Install Corsair iCUE 4
+        allowPrerelease: true
+      settings:
+        # @todo: iCUE 5 is available
+        id: Corsair.iCUE.4
+        source: winget
+  configurationVersion: 0.2.0

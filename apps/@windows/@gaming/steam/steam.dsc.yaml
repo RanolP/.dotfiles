@@ -3,7 +3,7 @@ properties:
   resources:
     - resource: Microsoft.WinGet.DSC/WinGetPackage
       directives:
-        description: Install Corsair iCUE 4
+        description: Install Steam
         allowPrerelease: true
       settings:
         id: Valve.Steam

@@ -14,6 +14,9 @@ echo y | winget install --exact --id Nushell.Nushell
 :: uutils coreutils
 echo $ winget install --exact --id uutils.coreutils
 echo y | winget install --exact --id uutils.coreutils
+:: gsudo
+echo $ winget install --exact --id gerardog.gsudo
+echo y | winget install --exact --id gerardog.gsudo
 
 :: refresh "Path" env var
 echo Refreshing paths for getting "git" and "nu" executable...

@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://aka.ms/configuration-dsc-schema/0.2
+properties:
+  resources:
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      directives:
+        description: Install Obsidian
+        allowPrerelease: true
+      settings:
+        id: Obsidian.Obsidian
+        source: winget
+  configurationVersion: 0.2.0

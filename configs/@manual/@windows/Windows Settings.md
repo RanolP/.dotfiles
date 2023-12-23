@@ -1,5 +1,11 @@
 # Windows Settings
 
+## System
+
+### Clipboard
+
+- Clipboard History : On
+
 ## Personalization
 
 ### Colors

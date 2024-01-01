@@ -1,0 +1,7 @@
+{
+    "telemetry.telemetryLevel": "off",
+    
+    "workbench.colorTheme": "Nord",
+    
+    "files.autoSave": "onFocusChange"
+}

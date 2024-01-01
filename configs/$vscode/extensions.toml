@@ -1,0 +1,12 @@
+customizing = [
+    'arcticicestudio.nord-visual-studio-code',
+    'vscode-icons-team.vscode-icons',
+]
+
+language-support = [
+    'tamasfe.even-better-toml',
+    'TheNuProjectContributors.vscode-nushell-lang',
+    'redhat.vscode-yaml'
+]
+
+git = ['eamodio.gitlens']

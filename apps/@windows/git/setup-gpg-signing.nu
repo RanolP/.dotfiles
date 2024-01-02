@@ -1,27 +1,5 @@
-def yesno [message: string default: bool] {
-    if $default {
-        print -n $"($message) [Y/n]: "
-    } else {
-        print -n $"($message) [y/N]: "
-    }
-    while true {
-        let ch = input -sn 1
-        if $ch == 'y' {
-            print "yes"
-            return true
-        } else if $ch == 'n' {
-            print "no"
-            return false
-        } else if $ch == '' {
-            if $default {
-                print "yes"
-            } else {
-                print "no"
-            }
-            return $default
-        }
-    }
-}
+use ~/.dotfiles/utils/yesno.nu
+
 if (yesno "Will you import public key?" true) {
     echo "$ keybase pgp export | gpg --import"
     keybase pgp export | (nu ~/.dotfiles/utils/@windows/git-bash.nu "gpg --import")

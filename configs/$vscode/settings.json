@@ -1,7 +1,16 @@
 {
     "telemetry.telemetryLevel": "off",
-    
+
     "workbench.colorTheme": "Nord",
+    "workbench.iconTheme": "vscode-icons",
+
+    "files.autoSave": "onFocusChange",
+
+    "editor.cursorBlinking": "expand",
+    "editor.formatOnSave": true,
+    "editor.fontFamily": "'Iosevka Nerd Font', Consolas, 'Courier New', monospace",
+    "editor.fontLigatures": true,
     
-    "files.autoSave": "onFocusChange"
+    "terminal.integrated.defaultProfile.windows": "Nushell",
+    "terminal.integrated.fontFamily": "'IosevkaTerm Nerd Font'"
 }

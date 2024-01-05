@@ -2,7 +2,7 @@
 
 ## Installation
 
-### Windows CMD (WIP)
+### Windows CMD
 
 Requirements:
 
@@ -25,7 +25,7 @@ Requirements:
 curl dotfiles.ranolp.dev/setup | iex
 ```
 
-### Windows ArchWSL (TODO)
+### Windows ArchWSL (WIP)
 
 Requirements:
 

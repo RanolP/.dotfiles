@@ -1,12 +1,17 @@
 #!/usr/bin/env nu
 
+if ($nu.os-info.kernal-version | str contains 'WSL2') {
+    echo $'(ansi black)Skipped(ansi reset) VS Code Configuration not required in WSL2'
+    return
+}
+
 # ref: https://code.visualstudio.com/docs/getstarted/settings#_settings-file-locations
 let target = if $nu.os-info.name == macos {
     $'($nu.home-path)/Library/Application Support/Code/User/settings.json'
 } else if $nu.os-info.name == windows {
     $'($env.APPDATA)\Code\User\settings.json'
 } else if $nu.os-info.family == unix {
-    $'$(nu.home-path)/.config/Code/User/settings.json'
+    $'($nu.home-path)/.config/Code/User/settings.json'
 } else {
     ''
 }

@@ -1,7 +1,7 @@
 const os_file = if $nu.os-info.name == windows {
     '~/.dotfiles/utils/@windows/normalize.nu'
 } else {
-    '~/.dotfiles/'
+    '~/.dotfiles/utils/empty.nu'
 }
 
 if ($os_file | path type) != file {

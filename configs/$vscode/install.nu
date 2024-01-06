@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 
-if ($nu.os-info.kernal-version | str contains 'WSL2') {
+if ($nu.os-info.kernal_version | str contains 'WSL2') {
     echo $'(ansi black)Skipped(ansi reset) VS Code Configuration not required in WSL2'
     return
 }

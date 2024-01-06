@@ -7,6 +7,11 @@ pacman -Sy --noconfirm git
 # nushell
 echo $ pacman -Sy --noconfirm nushell
 pacman -Sy --noconfirm nushell
+# paru
+sudo pacman -S --needed base-devel
+git clone https://aur.archlinux.org/paru.git
+(cd paru; makepkg -si)
+rm -rf paru
 
 # run common windows setup script
 nu -c "nu -c (http get https://dotfiles.ranolp.dev/setup-scripts/nu.nu)"

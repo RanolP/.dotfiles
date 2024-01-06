@@ -2,15 +2,15 @@
 echo Installing essential packages...
 echo You may interfered with several popups.
 # Git
-echo $ pacman -Sy --noconfirm git
-pacman -Sy --noconfirm git
+echo $ sudo pacman -Sy --noconfirm git
+sudo pacman -Sy --noconfirm git
 # nushell
-echo $ pacman -Sy --noconfirm nushell
-pacman -Sy --noconfirm nushell
+echo $ sudo pacman -Sy --noconfirm nushell
+sudo pacman -Sy --noconfirm nushell
 # paru
 echo $ # Install paru
-echo $ pacman -Sy --noconfirm base-devel
-sudo pacman -Sy --needed base-devel
+echo $ sudo pacman -Sy --noconfirm --needed base-devel
+sudo pacman -Sy --noconfirm --needed base-devel
 git clone https://aur.archlinux.org/paru.git
 (cd paru; makepkg -si)
 rm -rf paru

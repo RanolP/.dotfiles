@@ -1,8 +1,8 @@
 #!/usr/bin/env nu
 source ~/.dotfiles/utils/normalize.nu
 
-if not (is-admin) {
-    echo "Relaunch ~/.dotfiles/configs/install.nu with admin privileges"
+if ($nu.os-info.name == windows) and (not (is-admin)) {
+    echo $"(ansi yellow)!!(ansi reset) Relaunch ~/.dotfiles/configs/install.nu with admin privileges"
     sudo nu ~/.dotfiles/configs/install.nu
     return
 }

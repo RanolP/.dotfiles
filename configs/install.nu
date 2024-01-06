@@ -3,7 +3,7 @@ source ~/.dotfiles/utils/normalize.nu
 
 if not (is-admin) {
     echo "Relaunch ~/.dotfiles/configs/install.nu with admin privileges"
-    sudo source ~/.dotfiles/configs/install.nu
+    sudo nu ~/.dotfiles/configs/install.nu
     return
 }
 

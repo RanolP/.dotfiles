@@ -1,3 +1,4 @@
+#!/usr/bin/env nu
 export def main [message: string default: bool] {
     if $default {
         print -n $"($message) [Y/n]: "

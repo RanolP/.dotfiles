@@ -1,3 +1,5 @@
+#!/usr/bin/env nu
+
 # no CRLF at all
 git config --global core.eol lf
 

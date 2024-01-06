@@ -1,3 +1,4 @@
+#!/usr/bin/env nu
 echo 'Cloning git repository...'
 cd ~
 rm -rf .dotfiles

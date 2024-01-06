@@ -1,3 +1,4 @@
+#!/usr/bin/env nu
 source ~/.dotfiles/utils/normalize.nu
 
 if not (is-admin) {

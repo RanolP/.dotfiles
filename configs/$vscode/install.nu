@@ -1,3 +1,4 @@
+#!/usr/bin/env nu
 
 # ref: https://code.visualstudio.com/docs/getstarted/settings#_settings-file-locations
 let target = if $nu.os-info.name == macos {

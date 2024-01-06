@@ -8,7 +8,9 @@ pacman -Sy --noconfirm git
 echo $ pacman -Sy --noconfirm nushell
 pacman -Sy --noconfirm nushell
 # paru
-sudo pacman -S --needed base-devel
+echo $ # Install paru
+echo $ pacman -Sy --noconfirm base-devel
+sudo pacman -Sy --needed base-devel
 git clone https://aur.archlinux.org/paru.git
 (cd paru; makepkg -si)
 rm -rf paru

@@ -32,7 +32,6 @@ for manifest_file in (glob ~/.dotfiles/apps/**/*.manifest.toml$ | where { |x| ($
         
         echo $"    (ansi green)Install(ansi reset) ($package_name)"
 
-        do -i {
             match $nu.os-info.name {
                 windows => {
                     winget install -eh --accept-package-agreements --accept-source-agreements --id $package.windows.winget
@@ -51,6 +50,6 @@ for manifest_file in (glob ~/.dotfiles/apps/**/*.manifest.toml$ | where { |x| ($
                     echo $"    (ansi red)Unsupported OS(ansi reset): ($nu.os-info.name)"
                 }
             }
-        }
+        
     }
 }

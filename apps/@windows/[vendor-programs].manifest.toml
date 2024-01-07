@@ -1,0 +1,12 @@
+# iCUE 5 released but not registered as package
+[corsair-icue-4]
+windows.winget = 'Corsair.iCUE.4'
+optional = true
+
+[geforce-experience]
+windows.winget = 'Nvidia.GeForceExperience'
+optional = true
+
+[logitech-ghub]
+windows.winget = 'Logitech.GHUB'
+optional = true

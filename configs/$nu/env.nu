@@ -101,9 +101,9 @@ $env.NU_PLUGIN_DIRS = [
 # $env.PATH = ($env.PATH | split row (char esep) | prepend '/some/path')
 
 if not (which mise | is-empty) {
-    mise activate nu | write ~/.config/nushell/.mise.nu
+    mise activate nu | save ~/.config/nushell/.mise.nu
 } else if $nu.os-info.family == unix {
-    echo | write ~/.config/nushell/.mise.nu
+    echo | save ~/.config/nushell/.mise.nu
 }
 const mise_activate = if $nu.os-info.family == unix {
     '~/.config/nushell/.mise.nu'

@@ -110,4 +110,4 @@ const mise_activate = if $nu.os-info.family == unix {
 } else {
     '~/.dotfiles/utils/empty.nu'
 }
-use $mise_activate
+source $mise_activate

@@ -99,15 +99,3 @@ $env.NU_PLUGIN_DIRS = [
 
 # To add entries to PATH (on Windows you might use Path), you can use the following pattern:
 # $env.PATH = ($env.PATH | split row (char esep) | prepend '/some/path')
-
-if not (which mise | is-empty) {
-    mise activate nu | save -f ~/.config/nushell/.mise.nu
-} else if $nu.os-info.family == unix {
-    echo | save -f ~/.config/nushell/.mise.nu
-}
-const mise_activate = if $nu.os-info.family == unix {
-    '~/.config/nushell/.mise.nu'
-} else {
-    '~/.dotfiles/utils/empty.nu'
-}
-source $mise_activate

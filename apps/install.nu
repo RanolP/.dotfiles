@@ -30,26 +30,35 @@ for manifest_file in (glob ~/.dotfiles/apps/**/*.manifest.toml$ | where { |x| ($
             }
         }
         
-        echo $"    (ansi green)Install(ansi reset) ($package_name)"
 
-            match $nu.os-info.name {
-                windows => {
-                    winget install -eh --accept-package-agreements --accept-source-agreements --id $package.windows.winget
+        match $nu.os-info.name {
+            windows => {
+                let to_install = $package.windows?.winget?
+                if ($to_install | describe) == nothing {
+                    echo $"    (ansi red)Error(ansi reset) no winget package specified for ($package_name)"
+                    continue
                 }
-                linux => {
-                    match (sys).host.name {
-                        'Arch Linux' => {
-                            paru --noconfirm --needed -Sy $manifest.linux.pacman
+                echo $"    (ansi green)Install(ansi reset) ($package_name) \(winget: ($to_install)\)"
+                winget install -eh --accept-package-agreements --accept-source-agreements --id $to_install
+            }
+            linux => {
+                match (sys).host.name {
+                    'Arch Linux' => {
+                        let to_install = $package.linux?.pacman?
+                        if ($to_install | describe) == nothing {
+                            echo $"    (ansi red)Error(ansi reset) no paru package specified for ($package_name)"
                         }
-                        _ => {
-                            echo $"    (ansi red)Unsupported Linux Distro(ansi reset): ((sys).host.name)"
-                        }
+                        echo $"    (ansi green)Install(ansi reset) ($package_name) \(paru: ($to_install)\)"
+                        paru --noconfirm --needed -Sy $to_install
+                    }
+                    _ => {
+                        echo $"    (ansi red)Unsupported Linux Distro(ansi reset): ((sys).host.name)"
                     }
                 }
-                _ => {
-                    echo $"    (ansi red)Unsupported OS(ansi reset): ($nu.os-info.name)"
-                }
             }
-        
+            _ => {
+                echo $"    (ansi red)Unsupported OS(ansi reset): ($nu.os-info.name)"
+            }
+        }
     }
 }

@@ -43,6 +43,12 @@ for manifest_file in (glob ~/.dotfiles/apps/**/*.manifest.toml$ | where { |x| ($
                             paru --noconfirm --needed -Sy $manifest.linux.pacman
                         }
                     }
+                    _ => {
+                        echo $"    (ansi red)Unsupported Linux Distro(ansi reset): ((sys).host.name)"
+                    }
+                }
+                _ => {
+                    echo $"    (ansi red)Unsupported OS(ansi reset): ($nu.os-info.name)"
                 }
             }
         }

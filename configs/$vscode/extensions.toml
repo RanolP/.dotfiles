@@ -8,6 +8,7 @@ language-support = [
     'TheNuProjectContributors.vscode-nushell-lang',
     'redhat.vscode-yaml',
     'ms-kubernetes-tools.vscode-kubernetes-tools',
+    'antfu.unocss',
 ]
 
 git = ['eamodio.gitlens']

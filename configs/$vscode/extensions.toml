@@ -6,7 +6,11 @@ customizing = [
 language-support = [
     'tamasfe.even-better-toml',
     'TheNuProjectContributors.vscode-nushell-lang',
-    'redhat.vscode-yaml'
+    'redhat.vscode-yaml',
 ]
 
 git = ['eamodio.gitlens']
+
+quality-of-life = ['pflannery.vscode-versionlens']
+
+base = ['ms-vscode-remote.remote-wsl']

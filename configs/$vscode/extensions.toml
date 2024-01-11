@@ -18,3 +18,5 @@ quality-of-life = ['pflannery.vscode-versionlens']
 base = ['ms-vscode-remote.remote-wsl']
 
 time-tracking = ['WakaTime.vscode-wakatime']
+
+code-quality = ['dbaeumer.vscode-eslint', 'esbenp.prettier-vscode']

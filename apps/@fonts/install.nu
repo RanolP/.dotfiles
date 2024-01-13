@@ -14,6 +14,12 @@ for $fontname in ($file | columns) {
     }
     mkdir $"($env.FILE_PWD)/.fonts/($fontname)"
     let font = ($file | get $fontname)
+
+    if $font.manual? == true {
+        echo $"    (ansi yellow)[!](ansi reset) You should manually install this. visit (ansi u)($font.url)(ansi reset)"
+        continue
+    }
+
     curl $font.url -sLo $"($env.FILE_PWD)/.fonts/($fontname)/font.zip"
 
     let files = (

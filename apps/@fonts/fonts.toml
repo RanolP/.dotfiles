@@ -9,3 +9,7 @@ extract = "IosevkaTermNerdFont-[^.]*\\.ttf"
 [pretendard]
 url = "https://github.com/orioncactus/pretendard/releases/download/v1.3.9/Pretendard-1.3.9.zip"
 extract = "(PretendardVariable.ttf$|Pretendard-[^.]+\\.otf$)"
+
+[silver]
+url = "https://poppyworks.itch.io/silver"
+manual = true

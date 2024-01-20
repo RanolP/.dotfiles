@@ -40,6 +40,10 @@ export def main [] {
             
             match $nu.os-info.name {
                 windows => {
+                    if ($package.windows.manual? | describe) != nothing {
+                        echo $"    (ansi yellow)[!](ansi reset) You should manually install ($package_name): ($package.windows.manual?)"
+                        continue
+                    }
                     let to_install = $package.windows?.winget?
                     if ($to_install | describe) == nothing {
                         echo $"    (ansi red)Error(ansi reset) no winget package specified for ($package_name)"

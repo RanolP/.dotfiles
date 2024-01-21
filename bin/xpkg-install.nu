@@ -50,7 +50,11 @@ export def main [] {
                         continue
                     }
                     echo $"     (ansi green)++(ansi reset) ($package_name) \(winget: ($to_install)\)"
-                    do -i { winget install -eh --accept-package-agreements --accept-source-agreements --id $to_install }
+                    if $package.windows.winget-skip-dependencies? == true {
+                        do -i { winget install -eh --accept-package-agreements --accept-source-agreements --id $to_install --skip-dependencies }
+                    } else {
+                        do -i { winget install -eh --accept-package-agreements --accept-source-agreements --id $to_install }
+                    }
                 }
                 linux => {
                     match (sys).host.name {

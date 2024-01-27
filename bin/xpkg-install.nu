@@ -3,7 +3,7 @@ use ~/.dotfiles/utils/is-compatible.nu
 use ~/.dotfiles/utils/is-optional.nu
 use ~/.dotfiles/utils/yesno.nu
 use ~/.dotfiles/utils/escape-filename.nu
-export def main [] {
+export def main [--allow-upgrade = false] {
     for manifest_file in (glob ~/.dotfiles/xpkg/**/*.manifest.toml$ | where { |x| ($x | path type) == file }) {
         if not (is-compatible $manifest_file) {
             echo $"(ansi black)Skipped(ansi reset) ($manifest_file | path relative-to ~/.dotfiles)"
@@ -50,11 +50,9 @@ export def main [] {
                         continue
                     }
                     echo $"     (ansi green)++(ansi reset) ($package_name) \(winget: ($to_install)\)"
-                    if $package.windows.winget-skip-dependencies? == true {
-                        do -i { winget install -eh --accept-package-agreements --accept-source-agreements --id $to_install --skip-dependencies }
-                    } else {
-                        do -i { winget install -eh --accept-package-agreements --accept-source-agreements --id $to_install }
-                    }
+                    nu -c $"do -i { winget install -eh --accept-package-agreements --accept-source-agreements --id ($to_install) (
+                        if $package.windows.winget-skip-dependencies? == true { '--skip-dependencies' } else {''}
+                    ) (if $allow_upgrade == true { '' } else { '--no-upgrade' }) }"
                 }
                 linux => {
                     match (sys).host.name {

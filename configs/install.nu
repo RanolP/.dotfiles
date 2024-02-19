@@ -18,3 +18,7 @@ if not (which code | is-empty) {
     echo $"(ansi purple)>>(ansi reset) Symlinking VS Code settings"
     nu $'($env.FILE_PWD)/$vscode/install.nu'    
 }
+
+if ($nu.os-info.kernel_version | str contains 'WSL2') {
+    do -i { ln -s -f $'($nu.home-path)/.dotfiles/configs/$etc/fonts/local.conf' '/etc/fonts/local.conf' }
+}

@@ -22,5 +22,5 @@ if not (which code | is-empty) {
 if ($nu.os-info.kernel_version | str contains 'WSL2') {
     echo $"(ansi purple)>>(ansi reset) Integrating Windows fonts for WSL2"
     do -i { sudo mkdir /etc/fonts/ }
-    do -i { ln -s -f $'($nu.home-path)/.dotfiles/configs/$etc/fonts/local.conf' '/etc/fonts/local.conf' }
+    do -i { sudo ln -s -f $'($nu.home-path)/.dotfiles/configs/$etc/fonts/local.conf' '/etc/fonts/local.conf' }
 }

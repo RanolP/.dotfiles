@@ -12,6 +12,8 @@ if [[ `uname -s` == 'Linux' ]]; then
         echo "Environment : ?Unknown Linux? + Unix Shell"
         ;;
     esac
+elif [[ `uname -s` == "Darwin" ]]; then
+    echo "Environment : macOS + Unix Shell"
 else
     echo "Environment : ?Unknown? + Unix Shell"
 fi

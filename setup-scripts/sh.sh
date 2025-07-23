@@ -14,6 +14,7 @@ if [[ `uname -s` == 'Linux' ]]; then
     esac
 elif [[ `uname -s` == "Darwin" ]]; then
     echo "Environment : macOS + Unix Shell"
+    curl -L dotfiles.ranolp.dev/setup-scripts/macos.sh | sh
 else
     echo "Environment : ?Unknown? + Unix Shell"
 fi

@@ -11,6 +11,7 @@
     };
     brews = [
       "mise"
+      "paneru"
     ];
     casks = [
       "claude"

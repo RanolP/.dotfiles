@@ -1,0 +1,6 @@
+# Copy this file to local.nix and fill in your values.
+# local.nix is gitignored — never commit it.
+{
+  # GPG key for commit signing
+  # gpgKey = "YOUR_KEY_ID";
+}

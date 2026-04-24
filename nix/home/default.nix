@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 let
   # Copy local.nix.example → local.nix and fill in secrets (gpg signing key, etc.)
   # local.nix is gitignored.
@@ -16,6 +16,9 @@ in {
 
     # nix shell integration for nushell
     nix-your-shell
+
+    # xcodes CLI (prebuilt — brew formula builds from source, needs xcbuild = Xcode 닭달걀 문제)
+    (import ./xcodes.nix { inherit pkgs; })
   ];
 
 # mise is managed by homebrew — only write the config file
@@ -85,11 +88,29 @@ in {
     };
   };
 
+  home.file.".paneru.toml".text = ''
+    [swipe.gesture]
+    fingers_count = 3
+    direction = "Natural"
+
+    [bindings]
+    window_focus_west = "cmd - h"
+    window_focus_east = "cmd - l"
+    window_virtual_north = "cmd + shift - k"
+    window_virtual_south = "cmd + shift - j"
+  '';
+
   home.file.".config/ghostty/config".text = ''
     theme = Nord
     font-family = Iosevka Nerd Font Mono
     command = /run/current-system/sw/bin/nu
   '';
+
+
+  home.activation.miseInstall = lib.hm.dag.entryAfter ["writeBoundary"] ''
+    /opt/homebrew/bin/mise install --quiet
+  '';
+
 
   programs.direnv = {
     enable = true;
@@ -99,7 +120,7 @@ in {
   programs.nushell = {
     enable = true;
     extraConfig = ''
-      $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims")
+      $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims" | prepend "/Users/ranolp/.local/bin")
 
       # nix-your-shell: nix develop / nix-shell → nushell
       nix-your-shell nu | save --force ~/.cache/nix-your-shell.nu

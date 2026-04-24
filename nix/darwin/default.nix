@@ -22,8 +22,8 @@
       "raycast"
       "karabiner-elements"
       "linearmouse"
-      "xcodes-app"
       "font-iosevka-nerd-font"
+      "font-pretendard"
     ];
   };
 
@@ -34,6 +34,7 @@
       show-recents = false;
       # hot corner: bottom-left → lock screen (modifier set via activation script)
       wvous-bl-corner = 13;
+      persistent-apps = [];
     };
     finder = {
       AppleShowAllExtensions = true;
@@ -58,6 +59,8 @@
     sudo -u ranolp defaults write com.apple.Spotlight "NSStatusItem Visible Item-0" -bool false
     sudo -u ranolp defaults write com.apple.AppleMultitouchTrackpad TrackpadThreeFingerDrag -bool true
     sudo -u ranolp defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadThreeFingerDrag -bool true
+    sudo -u ranolp defaults write com.apple.AppleMultitouchTrackpad Dragging -bool true
+    sudo -u ranolp defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Dragging -bool true
 
     # Symbolic hotkeys: F18 → 한영 (ID 60), Spotlight Cmd+Space 비활성화 (ID 64)
     sudo -u ranolp python3 - <<'EOF'

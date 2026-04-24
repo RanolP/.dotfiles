@@ -14,13 +14,8 @@ in {
     gnupg
     pinentry_mac
 
-    # shell utilities
-    ripgrep
-    fd
-    jq
-    curl
-    vim
-    tmux
+    # nix shell integration for nushell
+    nix-your-shell
   ];
 
 # mise is managed by homebrew — only write the config file
@@ -31,15 +26,14 @@ in {
     [tools]
     node = "lts"
     python = "latest"
-    rust = "stable"
     fzf = "latest"
     bat = "latest"
-    delta = "latest"
-    difftastic = "latest"
-    lsd = "latest"
-    btop = "latest"
-    watchexec = "latest"
-    yt-dlp = "latest"
+    eza = "latest"
+    ripgrep = "latest"
+    fd = "latest"
+    jq = "latest"
+    vim = "latest"
+    tmux = "latest"
   '';
 
   # karabiner.json — fully declarative
@@ -97,13 +91,24 @@ in {
     command = /run/current-system/sw/bin/nu
   '';
 
+  programs.direnv = {
+    enable = true;
+    nix-direnv.enable = true;
+  };
+
   programs.nushell = {
     enable = true;
     extraConfig = ''
       $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims")
+
+      # nix-your-shell: nix develop / nix-shell → nushell
+      nix-your-shell nu | save --force ~/.cache/nix-your-shell.nu
+      source ~/.cache/nix-your-shell.nu
     '';
     shellAliases = {
       rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-MBP-26";
+      cat = "bat";
+      ls = "eza";
     };
   };
 

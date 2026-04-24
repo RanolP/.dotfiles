@@ -12,7 +12,6 @@
     brews = [
       "mise"
       "paneru"
-      "ffmpeg"
       "git-absorb"
       "git-filter-repo"
     ];
@@ -22,7 +21,6 @@
       "ghostty"
       "raycast"
       "karabiner-elements"
-      "shottr"
       "linearmouse"
       "xcodes-app"
       "font-iosevka-nerd-font"
@@ -94,7 +92,9 @@ EOF
   # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
 
-  # Skip direnv tests (hangs on macOS)
+  # direnv 테스트가 macOS Nix 샌드박스에서 hang함
+  # 원인: FSEvents/임시 디렉토리/프로세스 스폰이 샌드박스에서 차단됨
+  # 이벤트를 영원히 기다리며 빌드가 멈춤. upstream fix 없음, doCheck=false가 공식 workaround
   nixpkgs.overlays = [
     (final: prev: {
       direnv = prev.direnv.overrideAttrs (_: { doCheck = false; });

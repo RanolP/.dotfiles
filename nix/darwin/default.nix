@@ -9,6 +9,9 @@
       autoUpdate = true;
       cleanup = "zap";
     };
+    brews = [
+      "mise"
+    ];
     casks = [
       "claude"
       "firefox@developer-edition"
@@ -36,7 +39,14 @@
   # Nix settings
   nix.settings = {
     experimental-features = [ "nix-command" "flakes" ];
-    auto-optimise-store = true;
+    substituters = [
+      "https://cache.nixos.org"
+      "https://nix-community.cachix.org"
+    ];
+    trusted-public-keys = [
+      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+      "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCUSDs="
+    ];
   };
 
   # Primary user (required for homebrew, dock, finder, NSGlobalDomain options)
@@ -50,6 +60,15 @@
 
   # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
+
+  # Skip direnv tests (hangs on macOS)
+  nixpkgs.overlays = [
+    (final: prev: {
+      direnv = prev.direnv.overrideAttrs (_: { doCheck = false; });
+    })
+  ];
+
+  nix.optimise.automatic = true;
 
   system.stateVersion = 6;
 }

@@ -14,9 +14,6 @@ in {
     gnupg
     pinentry_mac
 
-    # dev runtime manager
-    mise
-
     # shell utilities
     ripgrep
     fd
@@ -24,18 +21,24 @@ in {
     curl
     vim
     tmux
-    zoxide
   ];
+
+# mise is managed by homebrew — only write the config file
+  home.file.".config/mise/config.toml".text = ''
+    [settings]
+    experimental = true
+  '';
 
   programs.zsh = {
     enable = true;
     autosuggestion.enable = true;
     syntaxHighlighting.enable = true;
+    completionInit = "";
     shellAliases = {
       rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-MBP-26";
     };
     initContent = ''
-      eval "$(zoxide init zsh)"
+      eval "$(mise activate zsh --shims)"
     '';
   };
 

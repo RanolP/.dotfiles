@@ -14,13 +14,8 @@ in {
     gnupg
     pinentry_mac
 
-    # dev tools
-    gh
-    nodejs_24
-    pnpm
-    python312
-    zig
-    uv
+    # dev runtime manager
+    mise
 
     # shell utilities
     ripgrep

@@ -15,6 +15,12 @@
     casks = [
       "claude"
       "firefox@developer-edition"
+      "ghostty"
+      "raycast"
+      "karabiner-elements"
+      "shottr"
+      "linearmouse"
+      "xcodes"
     ];
   };
 

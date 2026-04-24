@@ -5,6 +5,8 @@ let
   hasLocal = builtins.pathExists ./local.nix;
   local = if hasLocal then import ./local.nix else {};
 in {
+  home.username = "ranolp";
+  home.homeDirectory = "/Users/ranolp";
   home.stateVersion = "24.11";
 
   home.packages = with pkgs; [
@@ -15,7 +17,7 @@ in {
     # dev tools
     gh
     nodejs_24
-    nodePackages.pnpm
+    pnpm
     python312
     zig
     uv
@@ -34,23 +36,23 @@ in {
     enable = true;
     autosuggestion.enable = true;
     syntaxHighlighting.enable = true;
-    initExtra = ''
+    initContent = ''
       eval "$(zoxide init zsh)"
     '';
   };
 
   programs.git = {
     enable = true;
-    userName = "RanolP";
-    userEmail = "me@ranolp.dev";
-    signing = if local ? gpgKey then {
-      key = local.gpgKey;
-      signByDefault = true;
-    } else {};
-    extraConfig = {
+    signing.format = null;
+    settings = {
+      user.name = "RanolP";
+      user.email = "me@ranolp.dev";
       init.defaultBranch = "main";
       push.autoSetupRemote = true;
       pull.rebase = true;
-    };
+    } // (if local ? gpgKey then {
+      user.signingKey = local.gpgKey;
+      commit.gpgSign = true;
+    } else {});
   };
 }

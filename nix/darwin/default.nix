@@ -39,6 +39,15 @@
     auto-optimise-store = true;
   };
 
+  # Primary user (required for homebrew, dock, finder, NSGlobalDomain options)
+  system.primaryUser = "ranolp";
+
+  # User definition (needed for home-manager homeDirectory derivation)
+  users.users.ranolp = {
+    name = "ranolp";
+    home = "/Users/ranolp";
+  };
+
   # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
 

@@ -37,6 +37,7 @@
             home-manager = {
               useGlobalPkgs = true;
               useUserPackages = true;
+              backupFileExtension = "before-hm";
               users.${username} = import ./home;
             };
           }

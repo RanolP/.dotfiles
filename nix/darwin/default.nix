@@ -24,6 +24,11 @@
       "linearmouse"
       "font-iosevka-nerd-font"
       "font-pretendard"
+      "discord"
+      "bitwarden"
+      "figma"
+      "slack"
+      "zed"
     ];
   };
 

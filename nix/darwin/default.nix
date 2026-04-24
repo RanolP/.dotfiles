@@ -39,14 +39,6 @@
   # Nix settings
   nix.settings = {
     experimental-features = [ "nix-command" "flakes" ];
-    substituters = [
-      "https://cache.nixos.org"
-      "https://nix-community.cachix.org"
-    ];
-    trusted-public-keys = [
-      "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-      "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCUSDs="
-    ];
   };
 
   # Primary user (required for homebrew, dock, finder, NSGlobalDomain options)
@@ -56,6 +48,7 @@
   users.users.ranolp = {
     name = "ranolp";
     home = "/Users/ranolp";
+    shell = pkgs.nushell;
   };
 
   # Allow unfree packages
@@ -69,6 +62,13 @@
   ];
 
   nix.optimise.automatic = true;
+
+  # Disable compinit + bashcompinit in /etc/zshrc — slow with nix store paths
+  programs.zsh = {
+    enable = true;
+    enableCompletion = false;
+    enableBashCompletion = false;
+  };
 
   system.stateVersion = 6;
 }

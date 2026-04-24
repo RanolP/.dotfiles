@@ -29,16 +29,24 @@ in {
     experimental = true
   '';
 
-  programs.zsh = {
+  programs.nushell = {
     enable = true;
-    autosuggestion.enable = true;
-    syntaxHighlighting.enable = false;
-    completionInit = "";
+    extraConfig = ''
+      $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims")
+    '';
     shellAliases = {
       rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-MBP-26";
     };
+  };
+
+  # minimal zsh as fallback
+  programs.zsh = {
+    enable = true;
+    autosuggestion.enable = false;
+    syntaxHighlighting.enable = false;
+    completionInit = "";
     initContent = ''
-      eval "$(mise activate zsh --shims)"
+      export PATH="/Users/ranolp/.local/share/mise/shims:$PATH"
     '';
   };
 

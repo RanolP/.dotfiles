@@ -36,6 +36,9 @@ in {
     enable = true;
     autosuggestion.enable = true;
     syntaxHighlighting.enable = true;
+    shellAliases = {
+      rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-MBP-26";
+    };
     initContent = ''
       eval "$(zoxide init zsh)"
     '';

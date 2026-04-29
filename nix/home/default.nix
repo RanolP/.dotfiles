@@ -111,6 +111,20 @@ in {
     /opt/homebrew/bin/mise install --quiet
   '';
 
+  home.activation.androidSdk = lib.hm.dag.entryAfter ["writeBoundary"] ''
+    export ANDROID_HOME="$HOME/Library/Android/sdk"
+    export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home")
+    sdkmanager=/opt/homebrew/bin/sdkmanager
+    if [ -x "$sdkmanager" ]; then
+      yes | "$sdkmanager" --sdk_root="$ANDROID_HOME" --licenses > /dev/null 2>&1 || true
+      "$sdkmanager" --sdk_root="$ANDROID_HOME" \
+        "platform-tools" \
+        "platforms;android-35" \
+        "build-tools;35.0.0" \
+        "emulator"
+    fi
+  '';
+
 
   programs.direnv = {
     enable = true;
@@ -120,14 +134,15 @@ in {
   programs.nushell = {
     enable = true;
     extraConfig = ''
-      $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims" | prepend "/Users/ranolp/.local/bin")
+      $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims" | prepend "/Users/ranolp/.local/bin" | prepend "/Users/ranolp/Library/Android/sdk/platform-tools" | prepend "/Users/ranolp/Library/Android/sdk/emulator")
+      $env.ANDROID_HOME = "/Users/ranolp/Library/Android/sdk"
 
       # nix-your-shell: nix develop / nix-shell → nushell
       nix-your-shell nu | save --force ~/.cache/nix-your-shell.nu
       source ~/.cache/nix-your-shell.nu
     '';
     shellAliases = {
-      rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-MBP-26";
+      rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26";
       cat = "bat";
       ls = "eza";
     };
@@ -141,6 +156,8 @@ in {
     completionInit = "";
     initContent = ''
       export PATH="/Users/ranolp/.local/share/mise/shims:$PATH"
+      export ANDROID_HOME="$HOME/Library/Android/sdk"
+      export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
     '';
   };
 
@@ -153,9 +170,11 @@ in {
       init.defaultBranch = "main";
       push.autoSetupRemote = true;
       pull.rebase = true;
+      merge.conflictstyle = "zdiff3";
+      rerere.enabled = true;
+      commit.gpgSign = true;
     } // (if local ? gpgKey then {
       user.signingKey = local.gpgKey;
-      commit.gpgSign = true;
     } else {});
   };
 }

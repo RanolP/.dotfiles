@@ -29,6 +29,9 @@
       "figma"
       "slack"
       "zed"
+      "syncthing-app"
+      "android-commandlinetools"
+      "temurin"
     ];
   };
 
@@ -43,6 +46,7 @@
     };
     finder = {
       AppleShowAllExtensions = true;
+      AppleShowAllFiles = true;
       FXPreferredViewStyle = "clmv";
       ShowPathbar = true;
     };
@@ -53,6 +57,7 @@
       ApplePressAndHoldEnabled = false; # key repeat instead of accent popup
     };
     trackpad = {
+      Clicking = true;
       TrackpadThreeFingerDrag = true;
     };
     controlcenter.Bluetooth = false;
@@ -60,6 +65,8 @@
 
   # Extra tweaks not covered by nix-darwin options (runs as root, sudo -u for user prefs)
   system.activationScripts.extraActivation.text = ''
+    xcode=$(find /Applications -maxdepth 1 -name 'Xcode*.app' -type d 2>/dev/null | sort -V | tail -1)
+    if [ -n "$xcode" ]; then xcode-select -s "$xcode/Contents/Developer"; fi
     sudo -u ranolp defaults write com.apple.dock wvous-bl-modifier -int 1048576
     sudo -u ranolp defaults write com.apple.Spotlight "NSStatusItem Visible Item-0" -bool false
     sudo -u ranolp defaults write com.apple.AppleMultitouchTrackpad TrackpadThreeFingerDrag -bool true
@@ -89,6 +96,9 @@ EOF
 
   # Primary user (required for homebrew, dock, finder, NSGlobalDomain options)
   system.primaryUser = "ranolp";
+
+  networking.hostName = "ranolp-work-MBP-26";
+  networking.localHostName = "ranolp-work-MBP-26";
 
   # User definition (needed for home-manager homeDirectory derivation)
   users.users.ranolp = {

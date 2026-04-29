@@ -21,7 +21,7 @@
     let
       username = "ranolp";
     in {
-      darwinConfigurations."ranolp-MBP-26" = nix-darwin.lib.darwinSystem {
+      darwinConfigurations."ranolp-work-MBP-26" = nix-darwin.lib.darwinSystem {
         system = "aarch64-darwin";
         modules = [
           ./darwin

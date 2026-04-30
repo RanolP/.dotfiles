@@ -73,6 +73,13 @@
 CHROMEPOLICY
     chmod 644 /Library/Google/Chrome/policies/managed/extensions.json
 
+    # Firefox: symlink to ~/Applications so macOS privacy dialogs can find it
+    mkdir -p /Users/ranolp/Applications
+    firefox_app=$(find /nix/store -maxdepth 4 -name "Firefox Developer Edition.app" -path "*/firefox-devedition-*/Applications/*" 2>/dev/null | head -1)
+    if [ -n "$firefox_app" ]; then
+      ln -sfn "$firefox_app" "/Users/ranolp/Applications/Firefox Developer Edition.app"
+    fi
+
     xcode=$(find /Applications -maxdepth 1 -name 'Xcode*.app' -type d 2>/dev/null | sort -V | tail -1)
     if [ -n "$xcode" ]; then xcode-select -s "$xcode/Contents/Developer"; fi
     sudo -u ranolp defaults write com.apple.dock wvous-bl-modifier -int 1048576

@@ -4,11 +4,7 @@
     enable = true;
     enableNushellIntegration = true;
     settings = {
-      format = "$all$fill$cmd_duration$time\n$character";
-
-      fill = {
-        symbol = " ";
-      };
+      right_format = "$cmd_duration$time";
 
       cmd_duration = {
         min_time = 0;

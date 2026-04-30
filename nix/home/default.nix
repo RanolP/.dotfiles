@@ -37,6 +37,8 @@ in {
     jq = "latest"
     vim = "latest"
     tmux = "latest"
+    gh = "latest"
+    "npm:@anthropic-ai/claude-code" = "latest"
   '';
 
   # karabiner.json — fully declarative
@@ -55,7 +57,15 @@ in {
         name = "Default profile";
         selected = true;
         simple_modifications = [];
-        devices = [];
+        devices = [{
+          identifiers = {
+            vendor_id = 9741;
+            product_id = 48;
+            is_keyboard = true;
+            is_pointing_device = true;
+          };
+          ignore = false;
+        }];
         fn_function_keys = [];
         parameters.delay_milliseconds_before_open_device = 1000;
         virtual_hid_keyboard = {
@@ -73,32 +83,29 @@ in {
             "basic.to_if_held_down_threshold_milliseconds" = 500;
             "mouse_motion_to_scroll.speed" = 100;
           };
-          rules = [{
-            description = "MacBook internal keyboard: Windows-style layout";
-            manipulators = [
-              { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "fn";            to = [{ key_code = "left_command"; }]; }
-              { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "left_control";  to = [{ key_code = "left_option";  }]; }
-              { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "left_option";   to = [{ key_code = "fn";           }]; }
-              { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "left_command";  to = [{ key_code = "left_control"; }]; }
-              { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "right_command"; to = [{ key_code = "f18"; }]; }
-            ];
-          }];
+          rules = [
+            {
+              description = "MacBook internal keyboard: Windows-style layout";
+              manipulators = [
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "fn";            to = [{ key_code = "left_command"; }]; }
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "left_control";  to = [{ key_code = "fn";           }]; }
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "left_command";  to = [{ key_code = "left_control"; }]; }
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "right_command"; to = [{ key_code = "f18"; }]; }
+              ];
+            }
+            {
+              description = "Dareu Z82: swap lctrl <-> lcmd, ropt to F18";
+              manipulators = [
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_control"; to = [{ key_code = "left_command"; }]; }
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_command"; to = [{ key_code = "left_control"; }]; }
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "right_option"; to = [{ key_code = "f18";          }]; }
+              ];
+            }
+          ];
         };
       }];
     };
   };
-
-  home.file.".paneru.toml".text = ''
-    [swipe.gesture]
-    fingers_count = 3
-    direction = "Natural"
-
-    [bindings]
-    window_focus_west = "cmd - h"
-    window_focus_east = "cmd - l"
-    window_virtual_north = "cmd + shift - k"
-    window_virtual_south = "cmd + shift - j"
-  '';
 
   home.file.".config/ghostty/config".text = ''
     theme = Nord
@@ -106,9 +113,88 @@ in {
     command = /run/current-system/sw/bin/nu
   '';
 
+  home.file.".yabairc" = {
+    executable = true;
+    text = ''
+      #!/usr/bin/env sh
+
+      yabai -m config layout bsp
+
+      # Gaps
+      yabai -m config top_padding    8
+      yabai -m config bottom_padding 8
+      yabai -m config left_padding   8
+      yabai -m config right_padding  8
+      yabai -m config window_gap     8
+
+      # Mouse
+      yabai -m config mouse_follows_focus on
+      yabai -m config focus_follows_mouse autoraise
+      yabai -m config mouse_modifier       alt
+      yabai -m config mouse_action1        move
+      yabai -m config mouse_action2        resize
+
+      # Window appearance
+      yabai -m config window_shadow off
+      yabai -m config window_opacity off
+
+      # Split ratios
+      yabai -m config split_ratio 0.5
+      yabai -m config auto_balance off
+
+      # Ignore apps that don't tile well
+      yabai -m rule --add app="^System Settings$"  manage=off
+      yabai -m rule --add app="^Calculator$"        manage=off
+      yabai -m rule --add app="^Finder$"            manage=off
+      yabai -m rule --add app="^Raycast$"           manage=off
+      yabai -m rule --add app="^Bitwarden$"         manage=off
+    '';
+  };
+
+  home.file.".config/skhd/skhdrc".text = ''
+    # Focus window
+    alt - h : yabai -m window --focus west
+    alt - j : yabai -m window --focus south
+    alt - k : yabai -m window --focus north
+    alt - l : yabai -m window --focus east
+
+    # Swap window
+    shift + alt - h : yabai -m window --swap west
+    shift + alt - j : yabai -m window --swap south
+    shift + alt - k : yabai -m window --swap north
+    shift + alt - l : yabai -m window --swap east
+
+    # Move window to another display
+    shift + alt - 1 : yabai -m window --display 1 && yabai -m display --focus 1
+    shift + alt - 2 : yabai -m window --display 2 && yabai -m display --focus 2
+    shift + alt - 3 : yabai -m window --display 3 && yabai -m display --focus 3
+
+    # Resize window
+    ctrl + alt - h : yabai -m window --resize left:-40:0
+    ctrl + alt - j : yabai -m window --resize bottom:0:40
+    ctrl + alt - k : yabai -m window --resize top:0:-40
+    ctrl + alt - l : yabai -m window --resize right:40:0
+
+    # Float / fullscreen
+    alt - f : yabai -m window --toggle zoom-fullscreen
+    alt - t : yabai -m window --toggle float; yabai -m window --grid 4:4:1:1:2:2
+
+    # Rotate layout
+    alt - r : yabai -m space --rotate 90
+
+    # Open Ghostty
+    alt - return : open -n /Applications/Ghostty.app
+  '';
+
 
   home.activation.miseInstall = lib.hm.dag.entryAfter ["writeBoundary"] ''
+    export PATH="$HOME/.local/share/mise/shims:/opt/homebrew/bin:$PATH"
     /opt/homebrew/bin/mise install --quiet
+  '';
+
+  home.activation.nixYourShellCache = lib.hm.dag.entryAfter ["writeBoundary"] ''
+    mkdir -p "$HOME/.cache"
+    /etc/profiles/per-user/ranolp/bin/nix-your-shell nu > "$HOME/.cache/nix-your-shell.nu" 2>/dev/null || touch "$HOME/.cache/nix-your-shell.nu"
   '';
 
   home.activation.androidSdk = lib.hm.dag.entryAfter ["writeBoundary"] ''
@@ -126,6 +212,63 @@ in {
   '';
 
 
+  programs.firefox = {
+    enable = true;
+    package = pkgs.firefox-devedition;
+    profiles.dev-edition-default = {
+      id = 0;
+      isDefault = true;
+      extensions.packages = let
+        addons = pkgs.nur.repos.rycee.firefox-addons;
+      in [
+        addons.bitwarden
+        addons.ublock-origin
+        addons.darkreader
+        addons.tampermonkey
+        (addons.buildFirefoxXpiAddon {
+          pname = "react-devtools";
+          version = "6.1.1";
+          addonId = "@react-devtools";
+          url = "https://addons.mozilla.org/firefox/downloads/latest/react-devtools/latest.xpi";
+          sha256 = "0iicv47qdnx3f84db8aknjmxrmmi2n4r8cyqqy5npg820hi9xmmj";
+          meta = {};
+        })
+        (addons.buildFirefoxXpiAddon {
+          pname = "kagi-search";
+          version = "0.7.6";
+          addonId = "search@kagi.com";
+          url = "https://addons.mozilla.org/firefox/downloads/latest/kagi-search-for-firefox/latest.xpi";
+          sha256 = "03wrf2shznnw16gj9476h2id73ls06k6dpq2smqpcgbyyprc1jji";
+          meta = {};
+        })
+        (addons.buildFirefoxXpiAddon {
+          pname = "maxfocus";
+          version = "1";
+          addonId = "{4bda55a4-25fc-4958-aca3-4b3261605398}";
+          url = "https://addons.mozilla.org/firefox/downloads/latest/maxfocus-link-preview/latest.xpi";
+          sha256 = "1lihhnbwz8cky8a0s36vvb46cf5mc4nkgyhaw3wqqx4qs3dqfkbh";
+          meta = {};
+        })
+        (addons.buildFirefoxXpiAddon {
+          pname = "simple-translate";
+          version = "3.0.1";
+          addonId = "simple-translate@sienori";
+          url = "https://addons.mozilla.org/firefox/downloads/latest/simple-translate/latest.xpi";
+          sha256 = "15n9jc36512b06vrxba0c948pacjhqdp9y1szl038pxs7jbjwi7q";
+          meta = {};
+        })
+        (addons.buildFirefoxXpiAddon {
+          pname = "multi-account-containers";
+          version = "8.3.7";
+          addonId = "@testpilot-containers";
+          url = "https://addons.mozilla.org/firefox/downloads/latest/multi-account-containers/latest.xpi";
+          sha256 = "0rai82dlwfbqkydzwlhq9dw7zl3540xfbifjk4dkvlq6n7vmwvvz";
+          meta = {};
+        })
+      ];
+    };
+  };
+
   programs.direnv = {
     enable = true;
     nix-direnv.enable = true;
@@ -136,9 +279,9 @@ in {
     extraConfig = ''
       $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims" | prepend "/Users/ranolp/.local/bin" | prepend "/Users/ranolp/Library/Android/sdk/platform-tools" | prepend "/Users/ranolp/Library/Android/sdk/emulator")
       $env.ANDROID_HOME = "/Users/ranolp/Library/Android/sdk"
+      $env.GITHUB_TOKEN = (^/Users/ranolp/.local/share/mise/shims/gh auth token | str trim)
 
       # nix-your-shell: nix develop / nix-shell → nushell
-      nix-your-shell nu | save --force ~/.cache/nix-your-shell.nu
       source ~/.cache/nix-your-shell.nu
     '';
     shellAliases = {

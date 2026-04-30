@@ -15,9 +15,11 @@
     };
 
     nix-homebrew.url = "github:zhaofengli/nix-homebrew";
+
+    nur.url = "github:nix-community/NUR";
   };
 
-  outputs = { self, nixpkgs, nix-darwin, home-manager, nix-homebrew }:
+  outputs = { self, nixpkgs, nix-darwin, home-manager, nix-homebrew, nur }:
     let
       username = "ranolp";
     in {
@@ -40,6 +42,12 @@
               backupFileExtension = "before-hm";
               users.${username} = import ./home;
             };
+
+            nixpkgs.overlays = [
+              (final: prev: {
+                nur = import nur { pkgs = prev; nurpkgs = prev; };
+              })
+            ];
           }
         ];
       };

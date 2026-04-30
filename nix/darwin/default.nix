@@ -11,13 +11,11 @@
     };
     brews = [
       "mise"
-      "paneru"
       "git-absorb"
       "git-filter-repo"
     ];
     casks = [
       "claude"
-      "firefox@developer-edition"
       "ghostty"
       "raycast"
       "karabiner-elements"
@@ -32,6 +30,7 @@
       "syncthing-app"
       "android-commandlinetools"
       "temurin"
+      "google-chrome"
     ];
   };
 
@@ -65,6 +64,13 @@
 
   # Extra tweaks not covered by nix-darwin options (runs as root, sudo -u for user prefs)
   system.activationScripts.extraActivation.text = ''
+    # Chrome enterprise policy — declarative extension management
+    mkdir -p /Library/Google/Chrome/policies/managed
+    cat > /Library/Google/Chrome/policies/managed/extensions.json << 'CHROMEPOLICY'
+{"ExtensionInstallForcelist":["fcoeoabgfenejglbffodgkkbkcdhcgfn;https://clients2.google.com/service/update2/crx"]}
+CHROMEPOLICY
+    chmod 644 /Library/Google/Chrome/policies/managed/extensions.json
+
     xcode=$(find /Applications -maxdepth 1 -name 'Xcode*.app' -type d 2>/dev/null | sort -V | tail -1)
     if [ -n "$xcode" ]; then xcode-select -s "$xcode/Contents/Developer"; fi
     sudo -u ranolp defaults write com.apple.dock wvous-bl-modifier -int 1048576
@@ -73,6 +79,13 @@
     sudo -u ranolp defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadThreeFingerDrag -bool true
     sudo -u ranolp defaults write com.apple.AppleMultitouchTrackpad Dragging -bool true
     sudo -u ranolp defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Dragging -bool true
+    sudo -u ranolp defaults write com.apple.HIToolbox TISRomanSwitchState -int 0
+    # Liquid Glass 비활성화 (macOS 26 Tahoe)
+    mkdir -p /Library/Preferences/FeatureFlags/Domain
+    defaults write /Library/Preferences/FeatureFlags/Domain/IconServices.plist EnhancedGlass -dict Enabled -bool false
+    defaults write /Library/Preferences/FeatureFlags/Domain/IconServices.plist SolariumCornerRadius -dict Enabled -bool false
+    defaults write /Library/Preferences/FeatureFlags/Domain/IconServices.plist inject_solarium_assets -dict Enabled -bool false
+    defaults write /Library/Preferences/FeatureFlags/Domain/SwiftUI.plist Solarium -dict Enabled -bool false
 
     # Symbolic hotkeys: F18 → 한영 (ID 60), Spotlight Cmd+Space 비활성화 (ID 64)
     sudo -u ranolp python3 - <<'EOF'

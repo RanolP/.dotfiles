@@ -59,7 +59,7 @@ in {
   home.activation.ohMyPoshInit = lib.hm.dag.entryAfter ["writeBoundary"] ''
     mkdir -p "$HOME/.cache"
     export PATH="/etc/profiles/per-user/ranolp/bin:$PATH"
-    ${pkgs.oh-my-posh}/bin/oh-my-posh init nu --print --config "${pkgs.oh-my-posh}/share/oh-my-posh/themes/powerlevel10k_lean.omp.json" > "$HOME/.cache/oh-my-posh.nu" 2>/dev/null || touch "$HOME/.cache/oh-my-posh.nu"
+    ${pkgs.oh-my-posh}/bin/oh-my-posh init nu --print --config "${./configs/oh-my-posh/theme.json}" > "$HOME/.cache/oh-my-posh.nu" 2>/dev/null || touch "$HOME/.cache/oh-my-posh.nu"
   '';
 
   home.activation.androidSdk = lib.hm.dag.entryAfter ["writeBoundary"] ''

@@ -1,0 +1,50 @@
+{
+  "$schema" : "https:\/\/schema.linearmouse.app\/0.11.0",
+  "schemes" : [
+    {
+      "if" : {
+        "app" : "com.mitchellh.ghostty"
+      },
+      "buttons" : {
+        "mappings" : [
+          {
+            "button" : 2,
+            "action" : "none"
+          }
+        ]
+      }
+    },
+    {
+      "buttons" : {
+        "gesture" : {
+          "actions" : {
+            "down" : "appExpose",
+            "left" : "missionControl.spaceRight",
+            "right" : "missionControl.spaceLeft",
+            "up" : "missionControl"
+          },
+          "enabled" : true,
+          "threshold" : 50,
+          "trigger" : {
+            "button" : 2
+          }
+        },
+        "universalBackForward" : true
+      },
+      "if" : {
+        "device" : {
+          "category" : "mouse",
+          "productID" : "0xb015",
+          "productName" : "M720 Triathlon",
+          "serialNumber" : "5D2CF5193A6E4B8F",
+          "vendorID" : "0x46d"
+        }
+      },
+      "scrolling" : {
+        "reverse" : {
+          "vertical" : true
+        }
+      }
+    }
+  ]
+}

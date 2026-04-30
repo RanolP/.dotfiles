@@ -2,5 +2,5 @@ theme = Nord
 font-family = Iosevka Nerd Font Mono
 font-size = 16
 mouse-shift-capture = false
-middle-click-paste = false
+middle-click-action = ignore
 command = /run/current-system/sw/bin/nu

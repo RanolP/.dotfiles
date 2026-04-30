@@ -3,14 +3,23 @@
   programs.vscode = {
     enable = true;
     package = pkgs.vscode;
+
+    # Workaround for home-manager bug #8793 (regression in Feb 2026 commit b593765):
+    # profiles.default.extensions breaks extension path resolution on macOS.
+    # Fix: move extensions to top-level + mutableExtensionsDir = false.
+    # Revert once upstream fix lands.
+    mutableExtensionsDir = false;
+    extensions = with pkgs.vscode-extensions; [
+      dbaeumer.vscode-eslint
+      esbenp.prettier-vscode
+      arcticicestudio.nord-visual-studio-code
+      vscode-icons-team.vscode-icons
+      eamodio.gitlens
+      github.copilot
+      github.copilot-chat
+    ];
+
     profiles.default = {
-      extensions = with pkgs.vscode-extensions; [
-        dbaeumer.vscode-eslint
-        esbenp.prettier-vscode
-        arcticicestudio.nord-visual-studio-code
-        vscode-icons-team.vscode-icons
-        eamodio.gitlens
-      ];
       userSettings = {
         "editor.fontFamily" = "Iosevka Nerd Font Mono";
         "editor.fontSize" = 14;

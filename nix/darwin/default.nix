@@ -55,6 +55,7 @@
       KeyRepeat = 2;
       InitialKeyRepeat = 15;
       ApplePressAndHoldEnabled = false; # key repeat instead of accent popup
+      "com.apple.keyboard.fnState" = true; # F1~Fn 우선 사용
     };
     trackpad = {
       Clicking = true;

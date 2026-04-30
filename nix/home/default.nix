@@ -227,6 +227,7 @@ in {
         "workbench.colorTheme" = "Nord";
         "workbench.iconTheme" = "vscode-icons";
         "terminal.integrated.defaultProfile.osx" = "nu";
+        "scm.defaultViewMode" = "tree";
         "terminal.integrated.profiles.osx" = {
           "nu" = {
             "path" = "/run/current-system/sw/bin/nu";

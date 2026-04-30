@@ -26,7 +26,6 @@
       "bitwarden"
       "figma"
       "slack"
-      "zed"
       "syncthing-app"
       "android-commandlinetools"
       "temurin"

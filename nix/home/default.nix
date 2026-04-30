@@ -190,6 +190,11 @@ in {
       rerere.enabled = true;
       commit.gpgSign = true;
       user.signingKey = "BB9C29B5FA1C8305";
+      core.pager = "delta";
+      interactive.diffFilter = "delta --color-only";
+      delta.navigate = true;
+      delta.side-by-side = false;
+      diff.colorMoved = "default";
     };
   };
 }

@@ -26,6 +26,9 @@ in {
     # nix shell integration for nushell
     nix-your-shell
 
+    # shell prompt
+    oh-my-posh
+
     # xcodes CLI (prebuilt — brew formula builds from source, needs xcbuild = Xcode 닭달걀 문제)
     (import ./packages/xcodes.nix { inherit pkgs; })
   ];
@@ -51,6 +54,12 @@ in {
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter ["writeBoundary"] ''
     mkdir -p "$HOME/.cache"
     /etc/profiles/per-user/ranolp/bin/nix-your-shell nu > "$HOME/.cache/nix-your-shell.nu" 2>/dev/null || touch "$HOME/.cache/nix-your-shell.nu"
+  '';
+
+  home.activation.ohMyPoshInit = lib.hm.dag.entryAfter ["writeBoundary"] ''
+    mkdir -p "$HOME/.cache"
+    export PATH="/etc/profiles/per-user/ranolp/bin:$PATH"
+    ${pkgs.oh-my-posh}/bin/oh-my-posh init nu --print --config "${pkgs.oh-my-posh}/share/oh-my-posh/themes/powerlevel10k_lean.omp.json" > "$HOME/.cache/oh-my-posh.nu" 2>/dev/null || touch "$HOME/.cache/oh-my-posh.nu"
   '';
 
   home.activation.androidSdk = lib.hm.dag.entryAfter ["writeBoundary"] ''

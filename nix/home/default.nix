@@ -211,14 +211,20 @@ in {
     enable = true;
     package = pkgs.vscode;
     profiles.default = {
-      extensions = [];
+      extensions = with pkgs.vscode-extensions; [
+        dbaeumer.vscode-eslint
+        esbenp.prettier-vscode
+        arcticicestudio.nord-visual-studio-code
+        vscode-icons-team.vscode-icons
+      ];
       userSettings = {
         "editor.fontFamily" = "Iosevka Nerd Font Mono";
         "editor.fontSize" = 14;
         "editor.fontLigatures" = true;
         "editor.formatOnSave" = true;
         "editor.minimap.enabled" = true;
-        "workbench.colorTheme" = "Default Dark Modern";
+        "workbench.colorTheme" = "Nord";
+        "workbench.iconTheme" = "vscode-icons";
         "terminal.integrated.defaultProfile.osx" = "nu";
         "terminal.integrated.profiles.osx" = {
           "nu" = {

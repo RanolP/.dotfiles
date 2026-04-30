@@ -11,14 +11,14 @@
       };
 
       cmd_duration = {
-        min_time = 0;
-        format = "[$duration]($style) ";
+        min_time = 5000;
+        format = "[took $duration]($style) ";
         style = "yellow";
       };
 
       time = {
         disabled = false;
-        format = "[$time]($style)";
+        format = "[🕐 $time]($style)";
         style = "cyan";
       };
     };

@@ -69,6 +69,12 @@ in {
           };
           rules = [
             {
+              description = "Ghostty: middle click no-op";
+              manipulators = [
+                { type = "basic"; conditions = [{ type = "frontmost_application_if"; bundle_identifiers = [ "^com\\.mitchellh\\.ghostty$" ]; }]; from.pointing_button = "button3"; to = []; }
+              ];
+            }
+            {
               description = "MacBook internal keyboard: Windows-style layout";
               manipulators = [
                 { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "fn";            to = [{ key_code = "left_command"; }]; }

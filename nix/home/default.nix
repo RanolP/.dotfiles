@@ -184,6 +184,7 @@ in {
       $env.PATH = ($env.PATH | prepend "/etc/profiles/per-user/ranolp/bin" | prepend "/Users/ranolp/.local/share/mise/shims" | prepend "/Users/ranolp/.local/bin" | prepend "/Users/ranolp/Library/Android/sdk/platform-tools" | prepend "/Users/ranolp/Library/Android/sdk/emulator")
       $env.ANDROID_HOME = "/Users/ranolp/Library/Android/sdk"
       $env.GITHUB_TOKEN = (^/Users/ranolp/.local/share/mise/shims/gh auth token | str trim)
+      $env.EZA_OPTS = "--icons=auto --git --group-directories-first --header --time-style=relative"
 
       # nix-your-shell: nix develop / nix-shell → nushell
       source ~/.cache/nix-your-shell.nu

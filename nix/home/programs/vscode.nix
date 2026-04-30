@@ -9,6 +9,7 @@
         esbenp.prettier-vscode
         arcticicestudio.nord-visual-studio-code
         vscode-icons-team.vscode-icons
+        eamodio.gitlens
       ];
       userSettings = {
         "editor.fontFamily" = "Iosevka Nerd Font Mono";

@@ -31,6 +31,7 @@
       "android-commandlinetools"
       "temurin"
       "google-chrome"
+      "notion"
     ];
   };
 

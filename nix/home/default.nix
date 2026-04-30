@@ -36,7 +36,6 @@ in {
     fd = "latest"
     jq = "latest"
     vim = "latest"
-    tmux = "latest"
     gh = "latest"
     "npm:@anthropic-ai/claude-code" = "latest"
   '';
@@ -94,10 +93,11 @@ in {
               ];
             }
             {
-              description = "Dareu Z82: swap lctrl <-> lcmd, ropt to F18";
+              description = "Dareu Z82: lctrl->lcmd, lcmd->lopt, lopt->lcmd, ropt->f18";
               manipulators = [
                 { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_control"; to = [{ key_code = "left_command"; }]; }
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_command"; to = [{ key_code = "left_control"; }]; }
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_command"; to = [{ key_code = "left_option";  }]; }
+                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_option";  to = [{ key_code = "left_control"; }]; }
                 { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "right_option"; to = [{ key_code = "f18";          }]; }
               ];
             }
@@ -110,6 +110,7 @@ in {
   home.file.".config/ghostty/config".text = ''
     theme = Nord
     font-family = Iosevka Nerd Font Mono
+    font-size = 16
     command = /run/current-system/sw/bin/nu
   '';
 

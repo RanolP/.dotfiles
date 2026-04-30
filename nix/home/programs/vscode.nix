@@ -1,0 +1,31 @@
+{ pkgs, ... }:
+{
+  programs.vscode = {
+    enable = true;
+    package = pkgs.vscode;
+    profiles.default = {
+      extensions = with pkgs.vscode-extensions; [
+        dbaeumer.vscode-eslint
+        esbenp.prettier-vscode
+        arcticicestudio.nord-visual-studio-code
+        vscode-icons-team.vscode-icons
+      ];
+      userSettings = {
+        "editor.fontFamily" = "Iosevka Nerd Font Mono";
+        "editor.fontSize" = 14;
+        "editor.fontLigatures" = true;
+        "editor.formatOnSave" = true;
+        "editor.minimap.enabled" = true;
+        "workbench.colorTheme" = "Nord";
+        "workbench.iconTheme" = "vscode-icons";
+        "terminal.integrated.defaultProfile.osx" = "nu";
+        "scm.defaultViewMode" = "tree";
+        "terminal.integrated.profiles.osx" = {
+          "nu" = {
+            "path" = "/run/current-system/sw/bin/nu";
+          };
+        };
+      };
+    };
+  };
+}

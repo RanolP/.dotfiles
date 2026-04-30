@@ -32,6 +32,7 @@
       "temurin"
       "google-chrome"
       "notion"
+      "keybase"
     ];
   };
 

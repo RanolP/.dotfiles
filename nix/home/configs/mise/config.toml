@@ -1,0 +1,15 @@
+[settings]
+experimental = true
+
+[tools]
+node = "lts"
+python = "latest"
+fzf = "latest"
+bat = "latest"
+eza = "latest"
+ripgrep = "latest"
+fd = "latest"
+jq = "latest"
+vim = "latest"
+gh = "latest"
+"npm:@anthropic-ai/claude-code" = "latest"

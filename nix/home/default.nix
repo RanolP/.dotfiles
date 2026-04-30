@@ -13,6 +13,7 @@ in {
     # crypto / gpg
     gnupg
     pinentry_mac
+    pinentry-tty
 
     # nix shell integration for nushell
     nix-your-shell
@@ -21,24 +22,8 @@ in {
     (import ./xcodes.nix { inherit pkgs; })
   ];
 
-# mise is managed by homebrew — only write the config file
-  home.file.".config/mise/config.toml".text = ''
-    [settings]
-    experimental = true
-
-    [tools]
-    node = "lts"
-    python = "latest"
-    fzf = "latest"
-    bat = "latest"
-    eza = "latest"
-    ripgrep = "latest"
-    fd = "latest"
-    jq = "latest"
-    vim = "latest"
-    gh = "latest"
-    "npm:@anthropic-ai/claude-code" = "latest"
-  '';
+  # mise is managed by homebrew — only write the config file
+  home.file.".config/mise/config.toml".source = ./configs/mise/config.toml;
 
   # karabiner.json — fully declarative
   # keyboard_type + keyboard_type_v2 둘 다 있어야 마법사 안 뜸
@@ -107,85 +92,7 @@ in {
     };
   };
 
-  home.file.".config/ghostty/config".text = ''
-    theme = Nord
-    font-family = Iosevka Nerd Font Mono
-    font-size = 16
-    command = /run/current-system/sw/bin/nu
-  '';
-
-  home.file.".yabairc" = {
-    executable = true;
-    text = ''
-      #!/usr/bin/env sh
-
-      yabai -m config layout bsp
-
-      # Gaps
-      yabai -m config top_padding    8
-      yabai -m config bottom_padding 8
-      yabai -m config left_padding   8
-      yabai -m config right_padding  8
-      yabai -m config window_gap     8
-
-      # Mouse
-      yabai -m config mouse_follows_focus on
-      yabai -m config focus_follows_mouse autoraise
-      yabai -m config mouse_modifier       alt
-      yabai -m config mouse_action1        move
-      yabai -m config mouse_action2        resize
-
-      # Window appearance
-      yabai -m config window_shadow off
-      yabai -m config window_opacity off
-
-      # Split ratios
-      yabai -m config split_ratio 0.5
-      yabai -m config auto_balance off
-
-      # Ignore apps that don't tile well
-      yabai -m rule --add app="^System Settings$"  manage=off
-      yabai -m rule --add app="^Calculator$"        manage=off
-      yabai -m rule --add app="^Finder$"            manage=off
-      yabai -m rule --add app="^Raycast$"           manage=off
-      yabai -m rule --add app="^Bitwarden$"         manage=off
-    '';
-  };
-
-  home.file.".config/skhd/skhdrc".text = ''
-    # Focus window
-    alt - h : yabai -m window --focus west
-    alt - j : yabai -m window --focus south
-    alt - k : yabai -m window --focus north
-    alt - l : yabai -m window --focus east
-
-    # Swap window
-    shift + alt - h : yabai -m window --swap west
-    shift + alt - j : yabai -m window --swap south
-    shift + alt - k : yabai -m window --swap north
-    shift + alt - l : yabai -m window --swap east
-
-    # Move window to another display
-    shift + alt - 1 : yabai -m window --display 1 && yabai -m display --focus 1
-    shift + alt - 2 : yabai -m window --display 2 && yabai -m display --focus 2
-    shift + alt - 3 : yabai -m window --display 3 && yabai -m display --focus 3
-
-    # Resize window
-    ctrl + alt - h : yabai -m window --resize left:-40:0
-    ctrl + alt - j : yabai -m window --resize bottom:0:40
-    ctrl + alt - k : yabai -m window --resize top:0:-40
-    ctrl + alt - l : yabai -m window --resize right:40:0
-
-    # Float / fullscreen
-    alt - f : yabai -m window --toggle zoom-fullscreen
-    alt - t : yabai -m window --toggle float; yabai -m window --grid 4:4:1:1:2:2
-
-    # Rotate layout
-    alt - r : yabai -m space --rotate 90
-
-    # Open Ghostty
-    alt - return : open -n /Applications/Ghostty.app
-  '';
+  home.file.".config/ghostty/config".source = ./configs/ghostty/config;
 
 
   home.activation.miseInstall = lib.hm.dag.entryAfter ["writeBoundary"] ''
@@ -278,7 +185,7 @@ in {
   programs.nushell = {
     enable = true;
     extraConfig = ''
-      $env.PATH = ($env.PATH | prepend "/Users/ranolp/.local/share/mise/shims" | prepend "/Users/ranolp/.local/bin" | prepend "/Users/ranolp/Library/Android/sdk/platform-tools" | prepend "/Users/ranolp/Library/Android/sdk/emulator")
+      $env.PATH = ($env.PATH | prepend "/etc/profiles/per-user/ranolp/bin" | prepend "/Users/ranolp/.local/share/mise/shims" | prepend "/Users/ranolp/.local/bin" | prepend "/Users/ranolp/Library/Android/sdk/platform-tools" | prepend "/Users/ranolp/Library/Android/sdk/emulator")
       $env.ANDROID_HOME = "/Users/ranolp/Library/Android/sdk"
       $env.GITHUB_TOKEN = (^/Users/ranolp/.local/share/mise/shims/gh auth token | str trim)
 
@@ -305,6 +212,28 @@ in {
     '';
   };
 
+  programs.vscode = {
+    enable = true;
+    package = pkgs.vscode;
+    profiles.default = {
+      extensions = [];
+      userSettings = {
+        "editor.fontFamily" = "Iosevka Nerd Font Mono";
+        "editor.fontSize" = 14;
+        "editor.fontLigatures" = true;
+        "editor.formatOnSave" = true;
+        "editor.minimap.enabled" = true;
+        "workbench.colorTheme" = "Default Dark Modern";
+        "terminal.integrated.defaultProfile.osx" = "nu";
+        "terminal.integrated.profiles.osx" = {
+          "nu" = {
+            "path" = "/run/current-system/sw/bin/nu";
+          };
+        };
+      };
+    };
+  };
+
   programs.git = {
     enable = true;
     signing.format = null;
@@ -317,8 +246,7 @@ in {
       merge.conflictstyle = "zdiff3";
       rerere.enabled = true;
       commit.gpgSign = true;
-    } // (if local ? gpgKey then {
-      user.signingKey = local.gpgKey;
-    } else {});
+      user.signingKey = "BB9C29B5FA1C8305";
+    };
   };
 }

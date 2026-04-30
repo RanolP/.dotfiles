@@ -9,6 +9,9 @@
 
       # nix-your-shell: nix develop / nix-shell → nushell
       source ~/.cache/nix-your-shell.nu
+
+      # oh-my-posh prompt
+      source ~/.cache/oh-my-posh.nu
     '';
     shellAliases = {
       rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26";

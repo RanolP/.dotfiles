@@ -25,74 +25,13 @@ in {
   # mise is managed by homebrew — only write the config file
   home.file.".config/mise/config.toml".source = ./configs/mise/config.toml;
 
-  # karabiner.json — fully declarative
-  # keyboard_type + keyboard_type_v2 둘 다 있어야 마법사 안 뜸
   home.file.".config/karabiner/karabiner.json" = {
     force = true;
-    text = builtins.toJSON {
-      global = {
-        ask_for_confirmation_before_quitting = true;
-        check_for_updates_at_startup = true;
-        show_in_menu_bar = true;
-        show_profile_name_in_menu_bar = false;
-        unsafe_ui = false;
-      };
-      profiles = [{
-        name = "Default profile";
-        selected = true;
-        simple_modifications = [];
-        devices = [{
-          identifiers = {
-            vendor_id = 9741;
-            product_id = 48;
-            is_keyboard = true;
-            is_pointing_device = true;
-          };
-          ignore = false;
-        }];
-        fn_function_keys = [];
-        parameters.delay_milliseconds_before_open_device = 1000;
-        virtual_hid_keyboard = {
-          country_code = 0;
-          indicate_sticky_modifier_keys_state = true;
-          keyboard_type = "ansi";
-          keyboard_type_v2 = "ansi";
-          mouse_key_xy_scale = 100;
-        };
-        complex_modifications = {
-          parameters = {
-            "basic.simultaneous_threshold_milliseconds" = 50;
-            "basic.to_delayed_action_delay_milliseconds" = 500;
-            "basic.to_if_alone_timeout_milliseconds" = 1000;
-            "basic.to_if_held_down_threshold_milliseconds" = 500;
-            "mouse_motion_to_scroll.speed" = 100;
-          };
-          rules = [
-            {
-              description = "MacBook internal keyboard: Windows-style layout";
-              manipulators = [
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "fn";            to = [{ key_code = "left_command"; }]; }
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "left_control";  to = [{ key_code = "fn";           }]; }
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "left_command";  to = [{ key_code = "left_control"; }]; }
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ is_built_in_keyboard = true; }]; }]; from.key_code = "right_command"; to = [{ key_code = "f18"; }]; }
-              ];
-            }
-            {
-              description = "Dareu Z82: lctrl->lcmd, lcmd->lopt, lopt->lcmd, ropt->f18";
-              manipulators = [
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_control"; to = [{ key_code = "left_command"; }]; }
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_command"; to = [{ key_code = "left_option";  }]; }
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "left_option";  to = [{ key_code = "left_control"; }]; }
-                { type = "basic"; conditions = [{ type = "device_if"; identifiers = [{ vendor_id = 9741; product_id = 48; }]; }]; from.key_code = "right_option"; to = [{ key_code = "f18";          }]; }
-              ];
-            }
-          ];
-        };
-      }];
-    };
+    source = ./configs/karabiner/karabiner.json;
   };
 
   home.file.".config/ghostty/config".source = ./configs/ghostty/config;
+  home.file.".gnupg/gpg-agent.conf" = { source = ./configs/gnupg/gpg-agent.conf; onChange = "/etc/profiles/per-user/ranolp/bin/gpgconf --kill gpg-agent"; };
   home.file.".config/linearmouse/linearmouse.json".source = ./configs/linearmouse/linearmouse.json;
 
 

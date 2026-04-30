@@ -20,6 +20,7 @@
         "workbench.iconTheme" = "vscode-icons";
         "terminal.integrated.defaultProfile.osx" = "nu";
         "scm.defaultViewMode" = "tree";
+        "diffEditor.hideUnchangedRegions.enabled" = true;
         "terminal.integrated.profiles.osx" = {
           "nu" = {
             "path" = "/run/current-system/sw/bin/nu";

@@ -195,6 +195,7 @@ in {
       delta.navigate = true;
       delta.side-by-side = false;
       diff.colorMoved = "default";
+      diff.algorithm = "histogram";
     };
   };
 }

@@ -13,6 +13,7 @@
       "mise"
       "git-absorb"
       "git-filter-repo"
+      "mdbook"
     ];
     casks = [
       "claude"

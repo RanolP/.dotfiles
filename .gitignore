@@ -1,2 +1,5 @@
 # sensitive — never commit
 local.nix
+
+# mdbook build output
+docs/book

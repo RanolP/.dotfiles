@@ -1,0 +1,7 @@
+[book]
+title = "ranolp's dotfiles"
+authors = ["RanolP"]
+src = "src"
+
+[output.html]
+no-section-label = true

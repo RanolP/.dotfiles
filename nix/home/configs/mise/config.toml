@@ -4,6 +4,8 @@ experimental = true
 [tools]
 node = "lts"
 python = "latest"
+uv = "latest"
+colima = "latest"
 fzf = "latest"
 bat = "latest"
 eza = "latest"

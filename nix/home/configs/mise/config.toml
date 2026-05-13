@@ -1,5 +1,6 @@
 [settings]
 experimental = true
+pipx.uvx = true
 
 [tools]
 node = "lts"
@@ -17,3 +18,4 @@ gh = "latest"
 delta = "latest"
 "npm:@anthropic-ai/claude-code" = "latest"
 "npm:@mariozechner/pi-coding-agent" = "latest"
+"npm:@getgrit/cli" = "latest"

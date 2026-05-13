@@ -14,15 +14,36 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nix-homebrew.url = "github:zhaofengli/nix-homebrew";
+    homebrew-brew = {
+      url = "github:Homebrew/brew";
+      flake = false;
+    };
+
+    nix-homebrew = {
+      url = "github:zhaofengli/nix-homebrew";
+      inputs.brew-src.follows = "homebrew-brew";
+    };
 
     nur.url = "github:nix-community/NUR";
   };
 
-  outputs = { self, nixpkgs, nix-darwin, home-manager, nix-homebrew, nur }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      nix-darwin,
+      home-manager,
+      nix-homebrew,
+      nur,
+      homebrew-brew,
+      ...
+    }:
     let
       username = "ranolp";
-    in {
+    in
+    {
+      formatter.aarch64-darwin = nixpkgs.legacyPackages.aarch64-darwin.nixfmt-rfc-style;
+
       darwinConfigurations."ranolp-work-MBP-26" = nix-darwin.lib.darwinSystem {
         system = "aarch64-darwin";
         modules = [
@@ -45,7 +66,10 @@
 
             nixpkgs.overlays = [
               (final: prev: {
-                nur = import nur { pkgs = prev; nurpkgs = prev; };
+                nur = import nur {
+                  pkgs = prev;
+                  nurpkgs = prev;
+                };
               })
             ];
           }

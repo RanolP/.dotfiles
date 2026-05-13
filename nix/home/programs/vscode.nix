@@ -9,15 +9,26 @@
     # Fix: move extensions to top-level + mutableExtensionsDir = false.
     # Revert once upstream fix lands.
     mutableExtensionsDir = false;
-    extensions = with pkgs.vscode-extensions; [
-      dbaeumer.vscode-eslint
-      esbenp.prettier-vscode
-      arcticicestudio.nord-visual-studio-code
-      vscode-icons-team.vscode-icons
-      eamodio.gitlens
-      github.copilot
-      github.copilot-chat
-    ];
+    extensions =
+      (with pkgs.vscode-extensions; [
+        dbaeumer.vscode-eslint
+        esbenp.prettier-vscode
+        arcticicestudio.nord-visual-studio-code
+        vscode-icons-team.vscode-icons
+        eamodio.gitlens
+        github.copilot
+        github.copilot-chat
+      ])
+      ++ [
+        (pkgs.vscode-utils.buildVscodeMarketplaceExtension {
+          mktplcRef = {
+            publisher = "shd101wyy";
+            name = "markdown-preview-enhanced";
+            version = "0.8.25";
+            sha256 = "sha256-0yOtvHL24eJizmzXAC956Tx9eNJaWDPl/OAhmFv2KJk=";
+          };
+        })
+      ];
 
     profiles.default = {
       userSettings = {
@@ -31,6 +42,7 @@
         "terminal.integrated.defaultProfile.osx" = "nu";
         "scm.defaultViewMode" = "tree";
         "diffEditor.hideUnchangedRegions.enabled" = true;
+        "files.autoSave" = "onFocusChange";
         "terminal.integrated.profiles.osx" = {
           "nu" = {
             "path" = "/run/current-system/sw/bin/nu";

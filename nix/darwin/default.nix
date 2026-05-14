@@ -62,6 +62,7 @@
       Clicking = true;
       TrackpadThreeFingerDrag = true;
     };
+    NSGlobalDomain."com.apple.mouse.tapBehavior" = 1;
     controlcenter.Bluetooth = false;
   };
 

@@ -42,6 +42,10 @@ in
   };
 
   home.file.".claude/CLAUDE.md".source = ./configs/claude/CLAUDE.md;
+  home.file.".claude/commands/handoff.md".source = ./configs/claude/commands/handoff.md;
+  home.file.".claude/commands/decompose.md".source = ./configs/claude/commands/decompose.md;
+  home.file.".claude/commands/one-domain.md".source = ./configs/claude/commands/one-domain.md;
+  home.file.".claude/settings.json".source = ./configs/claude/settings.json;
 
   home.file.".config/ghostty/config".source = ./configs/ghostty/config;
   home.file.".gnupg/gpg-agent.conf" = {

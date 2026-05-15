@@ -3,6 +3,3 @@ local.nix
 
 # mdbook build output
 docs/book
-
-# ephemeral Claude Code session state
-.claude/handoff.md

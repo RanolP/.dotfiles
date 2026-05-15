@@ -13,6 +13,7 @@ in
     ./programs/zsh.nix
     ./programs/vscode.nix
     ./programs/git.nix
+    ./programs/zellij.nix
   ];
 
   home.username = "ranolp";

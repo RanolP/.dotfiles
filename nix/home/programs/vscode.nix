@@ -32,7 +32,7 @@
 
     profiles.default = {
       userSettings = {
-        "editor.fontFamily" = "Iosevka Nerd Font Mono";
+        "editor.fontFamily" = "Iosevka Nerd Font Mono, Pretendard";
         "editor.fontSize" = 14;
         "editor.fontLigatures" = true;
         "editor.formatOnSave" = true;

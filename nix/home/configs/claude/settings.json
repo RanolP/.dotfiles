@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "Bash(zellij run -n \"Claude Continue\"*)"
+    ],
+    "deny": [
+      "Bash(git push*)",
+      "Bash(git commit *--no-verify*)",
+      "Bash(git commit *-n *)"
+    ]
+  },
+  "model": "sonnet",
+  "effortLevel": "medium",
+  "theme": "dark",
+  "skipAutoPermissionPrompt": true,
+  "autoUpdaterStatus": "disabled",
+  "disableDeepLinkRegistration": "disable",
+  "feedbackSurveyRate": 0,
+  "language": "english",
+  "showClearContextOnPlanAccept": true,
+  "skipWebFetchPreflight": true,
+  "tui": "fullscreen",
+  "viewMode": "focus",
+  "worktree.symlinkDirectories": ["node_modules", "android", "ios"],
+  "preferredNotifChannel": "terminal_bell"
+}

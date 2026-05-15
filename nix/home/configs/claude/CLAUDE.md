@@ -15,10 +15,10 @@
 - DO: READ the file -> INFER from its actual content
 - NEVER: use filename alone as basis for judgment
 
-## Destructive operations go last
-- WHEN: an operation overwrites, resets, force-pushes, or drops data
-- DO: VERIFY intent explicitly with user -> ACT only after confirmation
-- NEVER: execute destructive operations without explicit user confirmation
+## Write operations go last
+- WHEN: an operation writes, edits, creates, or deletes files, or mutates any external state
+- DO: EXPLAIN the plan in plain text -> WAIT for explicit user approval -> ACT only after approval
+- NEVER: execute write operations without explicit user confirmation
 
 ## Cap at 3 attempts
 - WHEN: a tool call, command, or test fails
@@ -64,3 +64,28 @@
 - WHEN: user asks a question
 - DO: INFER whether an action was explicitly requested; if not, answer in text only
 - NEVER: call tools unless action was explicitly requested or a claim requires tool-based verification to be honest
+
+## Stop means stop
+- WHEN: user says stop, cancel, never mind, or interrupts with Esc
+- DO: HALT immediately -> output explanation only -> WAIT for new instructions
+- NEVER: include any tool call in the same response as acknowledging a stop; never finish "just one more step"
+
+## Separate evidence from premises
+- WHEN: analyzing any problem
+- DO: list observed facts (evidence) separately from assumptions (premises)
+- NEVER: mix evidence and premises in the same reasoning step
+
+## Minimize and surface premises
+- WHEN: a premise is unavoidable
+- DO: state it explicitly before proceeding
+- NEVER: silently carry an unstated assumption
+
+## Annotate change boundary
+- WHEN: scoping a problem
+- DO: explicitly label what is in-scope to change vs. fixed constraints (external services, APIs, hardware, org policy)
+- NEVER: treat a fixed constraint as changeable or an in-scope item as fixed without evidence
+
+## Define problem before solving
+- WHEN: about to propose or implement a solution
+- DO: confirm the problem space is fully defined first
+- NEVER: produce a solution before the problem is correctly defined; a wrong problem produces a wrong solution regardless of execution quality

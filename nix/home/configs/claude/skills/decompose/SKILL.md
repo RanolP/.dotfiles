@@ -1,8 +1,7 @@
-Decompose the current task and execute it using the orchestrator pattern.
-
-## WHEN to invoke
-- Non-trivial task with 2 or more independently meaningful steps
-- Invoke this before writing any code or running any commands
+---
+description: Decompose the current task and execute it using the orchestrator pattern.
+when_to_use: When a task has 2 or more independently meaningful steps. Invoke before writing any code or running any commands.
+---
 
 ## Phase 1: Decompose
 Break the task into the smallest independently meaningful sub-tasks. Each sub-task must have a single clear output.

@@ -1,8 +1,7 @@
-Present multi-domain information one domain at a time.
-
-## WHEN to invoke
-- Task involves 2 or more distinct domains (e.g., frontend + backend, config + code, auth + storage)
-- Invoke before presenting information that spans multiple concerns
+---
+description: Present multi-domain information one domain at a time.
+when_to_use: When a task involves 2 or more distinct domains (e.g., frontend + backend, config + code, auth + storage). Invoke before presenting information that spans multiple concerns.
+---
 
 ## Phase 1: Identify domains
 List all domains involved. Order by dependency or logical sequence.
@@ -11,7 +10,7 @@ List all domains involved. Order by dependency or logical sequence.
 Show the current domain: findings, recommendation, proposed action.
 
 ## Phase 3: Await
-REQUEST confirmation, modification, or "go back" before proceeding.
+Request confirmation, modification, or "go back" before proceeding.
 Every step must have an escape hatch -- the user drives.
 
 ## Phase 4: Proceed

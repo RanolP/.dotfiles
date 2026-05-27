@@ -1,8 +1,12 @@
-Prepare a handoff prompt for a new Claude Code session.
+---
+description: Prepare a handoff prompt for a new Claude Code session.
+disable-model-invocation: true
+argument-hint: "[goal for next session]"
+---
 
 ## Goal
 
-The argument passed to this command is the goal for the next session: $ARGUMENTS
+The argument passed to this skill is the goal for the next session: $ARGUMENTS
 
 If no argument is provided, ask the user what the next task is before proceeding.
 

@@ -16,18 +16,10 @@ git diff --stat
 git log --oneline -5
 ```
 
-## Phase 2: Extract from Conversation
+## Phase 2: Generate Handoff Document
 
-Pull out:
-- Original task and current goal
-- Every file read, created, or modified (with paths)
-- Key decisions and rationale
-- **What was tried and abandoned** -- critical; saves hours in the next session
-- Errors encountered and how resolved
-- Uncommitted changes summary
-- Any blockers or open questions
-
-## Phase 3: Generate Handoff Document
+Scan the conversation history and directly produce the document below.
+Do not emit a separate extraction step -- extract inline as you write each section.
 
 Produce a single fenced code block containing the following. Omit empty sections -- except **Failed Approaches** (write "None" if truly nothing failed).
 
@@ -72,7 +64,7 @@ Produce a single fenced code block containing the following. Omit empty sections
 [goal from $ARGUMENTS, stated precisely with acceptance criteria]
 ```
 
-## Phase 4: Save and Continue
+## Phase 3: Save and Continue
 
 1. Save to `.claude/handoff.md` in the repo root (create `.claude/` if needed).
 2. Copy to clipboard: `pbcopy < .claude/handoff.md`

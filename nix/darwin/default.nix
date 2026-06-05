@@ -91,22 +91,24 @@
         sudo -u ranolp defaults write com.apple.AppleMultitouchTrackpad Dragging -bool true
         sudo -u ranolp defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Dragging -bool true
         sudo -u ranolp defaults write com.apple.HIToolbox TISRomanSwitchState -int 0
-        # Liquid Glass 비활성화 (macOS 26 Tahoe)
-        mkdir -p /Library/Preferences/FeatureFlags/Domain
-        defaults write /Library/Preferences/FeatureFlags/Domain/IconServices.plist EnhancedGlass -dict Enabled -bool false
-        defaults write /Library/Preferences/FeatureFlags/Domain/IconServices.plist SolariumCornerRadius -dict Enabled -bool false
-        defaults write /Library/Preferences/FeatureFlags/Domain/IconServices.plist inject_solarium_assets -dict Enabled -bool false
-        defaults write /Library/Preferences/FeatureFlags/Domain/SwiftUI.plist Solarium -dict Enabled -bool false
+        # Liquid Glass 비활성화 (SwiftUI layer, macOS 26 Tahoe)
+        # FeatureFlags plist approach caused fully transparent UI on 26.4+; use per-user SwiftUI default instead
+        sudo -u ranolp defaults write -g com.apple.SwiftUI.DisableSolarium -bool YES
+        # Remove old FeatureFlags plists that caused transparent UI corruption
+        rm -f /Library/Preferences/FeatureFlags/Domain/SwiftUI.plist
+        rm -f /Library/Preferences/FeatureFlags/Domain/IconServices.plist
 
-        # Symbolic hotkeys: F18 → 한영 (ID 60), Spotlight Cmd+Space 비활성화 (ID 64)
+        # Symbolic hotkeys: F18 → 한영 (ID 60), Spotlight Cmd+Space 비활성화 (ID 64),
+        # Screenshot toolbar Cmd+Shift+S (ID 184, replaces default Cmd+Shift+5)
         sudo -u ranolp python3 - <<'EOF'
     import plistlib
     path = '/Users/ranolp/Library/Preferences/com.apple.symbolichotkeys.plist'
     with open(path, 'rb') as f:
         p = plistlib.load(f)
     h = p.setdefault('AppleSymbolicHotKeys', {})
-    h['60'] = {'enabled': True,  'value': {'parameters': [65535, 79, 0], 'type': 'standard'}}
-    h['64'] = {'enabled': False, 'value': {'parameters': [65535, 49, 1048576], 'type': 'standard'}}
+    h['60']  = {'enabled': True,  'value': {'parameters': [65535, 79, 0],       'type': 'standard'}}
+    h['64']  = {'enabled': False, 'value': {'parameters': [65535, 49, 1048576], 'type': 'standard'}}
+    h['184'] = {'enabled': True,  'value': {'parameters': [115, 1, 1179648],    'type': 'standard'}}
     with open(path, 'wb') as f:
         plistlib.dump(p, f)
     EOF

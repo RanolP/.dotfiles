@@ -23,7 +23,9 @@ DURATION_MS=$(echo "$input" | jq -r '.cost.total_duration_ms // 0')
 LINES_ADDED=$(echo "$input" | jq -r '.cost.total_lines_added // 0')
 LINES_REMOVED=$(echo "$input" | jq -r '.cost.total_lines_removed // 0')
 FIVE_H=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
+FIVE_H_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
 WEEK=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
+WEEK_RESET=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
 PR_NUM=$(echo "$input" | jq -r '.pr.number // empty')
 PR_STATE=$(echo "$input" | jq -r '.pr.review_state // empty')
 
@@ -50,7 +52,20 @@ IFS=$'\t' read -r GIT_BR GIT_ST GIT_MD < "$CACHE_FILE"
 GIT_ST=${GIT_ST:-0}
 GIT_MD=${GIT_MD:-0}
 
-COLS=${COLUMNS:-80}
+_real_cols() {
+    local pid=$$ tty dev cols
+    while [ "$pid" -gt 1 ]; do
+        tty=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ')
+        if [ -n "$tty" ] && [ "$tty" != "??" ]; then
+            dev="/dev/tty${tty}"
+            [ -c "$dev" ] && cols=$(stty size < "$dev" 2>/dev/null | awk '{print $2}')
+            [ -n "$cols" ] && [ "$cols" -gt 0 ] && { echo "$cols"; return; }
+        fi
+        pid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
+    done
+    echo 80
+}
+COLS=$(_real_cols)
 
 # ── LINE 1 ────────────────────────────────────────────────────────────────────
 
@@ -61,14 +76,14 @@ L1L="${C}${FOLDER}${RS}"
 L1L_W=${#FOLDER}
 
 if [ -n "$GIT_BR" ]; then
-    L1L+=" ${GIT_BR}"
-    L1L_W=$((L1L_W + 1 + ${#GIT_BR}))
+    L1L+=" on $(printf '\xee\x82\xa0') ${GIT_BR}"
+    L1L_W=$((L1L_W + 6 + ${#GIT_BR}))
     if [ "$GIT_ST" -gt 0 ]; then
         L1L+=" ${G}+${GIT_ST}${RS}"
         L1L_W=$((L1L_W + 2 + ${#GIT_ST}))
     fi
     if [ "$GIT_MD" -gt 0 ]; then
-        L1L+=" ${Y}~${GIT_MD}${RS}"
+        L1L+=" ${Y}-${GIT_MD}${RS}"
         L1L_W=$((L1L_W + 2 + ${#GIT_MD}))
     fi
 fi
@@ -93,18 +108,15 @@ fi
 # Right: 🧠 model effort
 L1R=""
 L1R_W=0
-
-if [ "$THINKING" = "true" ]; then
-    L1R+="🧠 "
-    L1R_W=$((L1R_W + 3))  # emoji=2 display cols + space=1
-fi
-
-L1R+="${W}${MODEL}${RS}"
-L1R_W=$((L1R_W + ${#MODEL}))
-
+L1R+="using ${W}${MODEL}${RS}"
+L1R_W=$((L1R_W + 6 + ${#MODEL}))
 if [ -n "$EFFORT" ]; then
     L1R+=" ${GR}${EFFORT}${RS}"
     L1R_W=$((L1R_W + 1 + ${#EFFORT}))
+fi
+if [ "$THINKING" = "true" ]; then
+    L1R+=" 🧠"
+    L1R_W=$((L1R_W + 3))
 fi
 
 GAP1=$((COLS - L1L_W - L1R_W))
@@ -114,13 +126,7 @@ printf '%s%s%s\n' "$L1L" "$PAD1" "$L1R"
 
 # ── LINE 2 ────────────────────────────────────────────────────────────────────
 
-# Context bar (10 wide, threshold-colored)
-BAR_W=10
 [ -z "$PCT" ] && PCT=0
-FILLED=$((PCT * BAR_W / 100))
-[ "$FILLED" -gt "$BAR_W" ] && FILLED=$BAR_W
-[ "$FILLED" -lt 0 ] && FILLED=0
-EMPTY=$((BAR_W - FILLED))
 
 if [ "$PCT" -ge 80 ]; then BAR_C="$R"
 elif [ "$PCT" -ge 60 ]; then BAR_C="$O"
@@ -128,25 +134,73 @@ elif [ "$PCT" -ge 40 ]; then BAR_C="$Y"
 else BAR_C="$G"
 fi
 
-BAR=""
-if [ "$FILLED" -gt 0 ]; then printf -v F '%*s' "$FILLED" ''; BAR="${F// /▓}"; fi
-if [ "$EMPTY" -gt 0 ]; then printf -v E '%*s' "$EMPTY" ''; BAR="${BAR}${E// /░}"; fi
-
 COST_FMT=$(printf '$%.2f' "$COST")
+RL_ICON=$(printf '\xf3\xb0\x91\x90')
 
-# Left: cost  [bar] pct%  5h:X%  7d:X%
-L2L="${Y}${COST_FMT}${RS} ${BAR_C}${BAR}${RS} ${PCT}%"
-L2L_W=$((${#COST_FMT} + 1 + BAR_W + 1 + ${#PCT} + 1))
+# Left: used $cost with N% contexts (5h N% icon in Xh, weekly N% icon at Day H:MM)
+L2L="${GR}used ${RS}${Y}${COST_FMT}${RS}${GR} with ${RS}${BAR_C}${PCT}%${RS}${GR} contexts${RS}"
+L2L_W=$((5 + ${#COST_FMT} + 6 + ${#PCT} + 10))
 
-if [ -n "$FIVE_H" ]; then
-    FH=$(printf '%.0f' "$FIVE_H")
-    L2L+=" 5h:${FH}%"
-    L2L_W=$((L2L_W + 1 + 3 + ${#FH} + 1))
-fi
-if [ -n "$WEEK" ]; then
-    WK=$(printf '%.0f' "$WEEK")
-    L2L+=" 7d:${WK}%"
-    L2L_W=$((L2L_W + 1 + 3 + ${#WK} + 1))
+if [ -n "$FIVE_H" ] || [ -n "$WEEK" ]; then
+    L2L+="${GR} (${RS}"
+    L2L_W=$((L2L_W + 2))
+    FIRST_PART=1
+
+    if [ -n "$FIVE_H" ]; then
+        FH=$(printf '%.0f' "$FIVE_H")
+        TIME_UNTIL=""
+        if [ -n "$FIVE_H_RESET" ]; then
+            NOW_TS=$(date +%s)
+            DIFF_SEC=$((FIVE_H_RESET - NOW_TS))
+            if [ "$DIFF_SEC" -le 0 ]; then
+                TIME_UNTIL="now"
+            elif [ "$DIFF_SEC" -lt 3600 ]; then
+                DIFF_M=$((DIFF_SEC / 60))
+                TIME_UNTIL="${DIFF_M}m"
+            else
+                DIFF_H=$((DIFF_SEC / 3600))
+                DIFF_M=$(((DIFF_SEC % 3600) / 60))
+                if [ "$DIFF_M" -gt 0 ]; then
+                    TIME_UNTIL="${DIFF_H}h${DIFF_M}m"
+                else
+                    TIME_UNTIL="${DIFF_H}h"
+                fi
+            fi
+        fi
+        L2L+="${GR}5h ${RS}${W}${FH}%${RS}${GR} ${RL_ICON}${RS}"
+        L2L_W=$((L2L_W + 3 + ${#FH} + 3))
+        if [ -n "$TIME_UNTIL" ]; then
+            L2L+="${GR} in ${RS}${W}${TIME_UNTIL}${RS}"
+            L2L_W=$((L2L_W + 4 + ${#TIME_UNTIL}))
+        fi
+        FIRST_PART=0
+    fi
+
+    if [ -n "$WEEK" ]; then
+        WK=$(printf '%.0f' "$WEEK")
+        WEEK_RESET_FMT=""
+        if [ -n "$WEEK_RESET" ]; then
+            WK_DOW=$(date -r "$WEEK_RESET" "+%a" 2>/dev/null)
+            WK_HR=$(date -r "$WEEK_RESET" "+%H" 2>/dev/null)
+            WK_MIN=$(date -r "$WEEK_RESET" "+%M" 2>/dev/null)
+            if [ -n "$WK_DOW" ]; then
+                WEEK_RESET_FMT="$WK_DOW $((10#$WK_HR)):$WK_MIN"
+            fi
+        fi
+        if [ "$FIRST_PART" -eq 0 ]; then
+            L2L+="${GR}, ${RS}"
+            L2L_W=$((L2L_W + 2))
+        fi
+        L2L+="${GR}weekly ${RS}${W}${WK}%${RS}${GR} ${RL_ICON}${RS}"
+        L2L_W=$((L2L_W + 7 + ${#WK} + 3))
+        if [ -n "$WEEK_RESET_FMT" ]; then
+            L2L+="${GR} at ${RS}${W}${WEEK_RESET_FMT}${RS}"
+            L2L_W=$((L2L_W + 4 + ${#WEEK_RESET_FMT}))
+        fi
+    fi
+
+    L2L+="${GR})${RS}"
+    L2L_W=$((L2L_W + 1))
 fi
 
 # Right: +added -removed  Xm Ys
@@ -156,7 +210,6 @@ SECS=$((DUR_SEC % 60))
 DUR="${MINS}m ${SECS}s"
 ADDED_STR="+${LINES_ADDED}"
 REMOVED_STR="-${LINES_REMOVED}"
-
 L2R="${G}${ADDED_STR}${RS} ${R}${REMOVED_STR}${RS} ${GR}${DUR}${RS}"
 L2R_W=$((${#ADDED_STR} + 1 + ${#REMOVED_STR} + 1 + ${#DUR}))
 

@@ -23,5 +23,9 @@
   "tui": "fullscreen",
   "viewMode": "focus",
   "worktree.symlinkDirectories": ["node_modules", "android", "ios"],
-  "preferredNotifChannel": "terminal_bell"
+  "preferredNotifChannel": "terminal_bell",
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  }
 }

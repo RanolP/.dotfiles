@@ -113,6 +113,13 @@
         plistlib.dump(p, f)
     EOF
         /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u
+
+        # sdkmanager uses bare 'awk' which isn't in PATH during nix-darwin activation;
+        # patch to absolute path — idempotent, re-applied after each brew upgrade
+        sdkmanager_real=$(readlink -f /opt/homebrew/bin/sdkmanager 2>/dev/null || true)
+        if [ -f "$sdkmanager_real" ] && grep -q ' awk ' "$sdkmanager_real"; then
+          sed -i ''' 's| awk | /usr/bin/awk |g' "$sdkmanager_real"
+        fi
   '';
 
   # Nix settings

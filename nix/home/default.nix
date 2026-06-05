@@ -42,6 +42,10 @@ in
   };
 
   home.file.".claude/CLAUDE.md".source = ./configs/claude/CLAUDE.md;
+  home.file.".claude/statusline.sh" = {
+    source = ./configs/claude/statusline.sh;
+    executable = true;
+  };
   home.file.".claude/skills/handoff/SKILL.md".source = ./configs/claude/skills/handoff/SKILL.md;
   home.file.".claude/skills/decompose/SKILL.md".source = ./configs/claude/skills/decompose/SKILL.md;
   home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;

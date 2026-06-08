@@ -30,11 +30,21 @@ in
     # nix shell integration for nushell
     nix-your-shell
 
+    # tool version manager (replaces brew mise)
+    mise
+
     # xcodes CLI (prebuilt — brew formula builds from source, needs xcbuild = Xcode 닭달걀 문제)
     (import ./packages/xcodes.nix { inherit pkgs; })
+
+    docker-compose
+
+    # required by cocoapods
+    gmp
+    libyaml
   ];
 
-  # mise is managed by homebrew — only write the config file
+  home.file.".docker/cli-plugins/docker-compose".source = "${pkgs.docker-compose}/bin/docker-compose";
+
   home.file.".config/mise/config.toml".source = ./configs/mise/config.toml;
 
   home.file.".config/karabiner/karabiner.json" = {
@@ -61,8 +71,8 @@ in
   services.syncthing.enable = true;
 
   home.activation.miseInstall = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    export PATH="$HOME/.local/share/mise/shims:/opt/homebrew/bin:$PATH"
-    /opt/homebrew/bin/mise install --quiet
+    export PATH="$HOME/.local/share/mise/shims:/etc/profiles/per-user/ranolp/bin:$PATH"
+    /etc/profiles/per-user/ranolp/bin/mise install --quiet
   '';
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
@@ -71,16 +81,23 @@ in
   '';
 
   home.activation.androidSdk = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    export ANDROID_HOME="$HOME/Library/Android/sdk"
-    export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home")
-    sdkmanager=/opt/homebrew/bin/sdkmanager
-    if [ -x "$sdkmanager" ]; then
-      yes | "$sdkmanager" --sdk_root="$ANDROID_HOME" --licenses > /dev/null 2>&1 || true
-      "$sdkmanager" --sdk_root="$ANDROID_HOME" \
-        "platform-tools" \
-        "platforms;android-35" \
-        "build-tools;35.0.0" \
-        "emulator"
-    fi
+    # Run in a subshell so the PATH/env additions don't leak to later
+    # activation steps (BSD readlink would break linkGeneration otherwise).
+    (
+      # sdkmanager is a bash script that shells out to awk/grep — needs /usr/bin
+      # on PATH since home-manager strips it during activation.
+      export PATH="/usr/bin:/bin:$PATH"
+      export ANDROID_HOME="$HOME/Library/Android/sdk"
+      export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home")
+      sdkmanager=/opt/homebrew/bin/sdkmanager
+      if [ -x "$sdkmanager" ]; then
+        yes | "$sdkmanager" --sdk_root="$ANDROID_HOME" --licenses > /dev/null 2>&1 || true
+        "$sdkmanager" --sdk_root="$ANDROID_HOME" \
+          "platform-tools" \
+          "platforms;android-35" \
+          "build-tools;35.0.0" \
+          "emulator"
+      fi
+    )
   '';
 }

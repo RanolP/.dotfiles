@@ -10,7 +10,6 @@
       #   anthropic.claude-code
       #   mermaidchart.vscode-mermaid-chart
       #   terrastruct.d2
-      #   thenuprojectcontributors.vscode-nushell-lang
       #   tintinweb.graphviz-interactive-preview
       extensions =
         (with pkgs.vscode-extensions; [
@@ -21,6 +20,7 @@
           eamodio.gitlens
           github.copilot
           github.copilot-chat
+          thenuprojectcontributors.vscode-nushell-lang
         ])
         ++ [
           (pkgs.vscode-utils.buildVscodeMarketplaceExtension {

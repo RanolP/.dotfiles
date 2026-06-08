@@ -8,6 +8,7 @@ in
 {
   imports = [
     ./programs/firefox.nix
+    ./programs/ghostty.nix
     ./programs/nushell.nix
     ./programs/starship.nix
     ./programs/zsh.nix
@@ -51,7 +52,6 @@ in
   home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;
   home.file.".claude/settings.json".source = ./configs/claude/settings.json;
 
-  home.file.".config/ghostty/config".source = ./configs/ghostty/config;
   home.file.".gnupg/gpg-agent.conf" = {
     source = ./configs/gnupg/gpg-agent.conf;
     onChange = "/etc/profiles/per-user/ranolp/bin/gpgconf --kill gpg-agent";

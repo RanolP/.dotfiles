@@ -1,7 +1,0 @@
-theme = Nord
-font-family = Iosevka Nerd Font Mono
-font-family = Pretendard
-font-size = 16
-command = /run/current-system/sw/bin/nu
-keybind = super+d=unbind
-keybind = super+shift+d=unbind

@@ -1,5 +1,5 @@
 {
-  "$schema" : "https:\/\/schema.linearmouse.app\/0.11.0",
+  "$schema" : "https://schema.linearmouse.app/0.11.0",
   "schemes" : [
     {
       "if" : {
@@ -15,6 +15,11 @@
       }
     },
     {
+      "if" : {
+        "device" : {
+          "category" : "mouse"
+        }
+      },
       "buttons" : {
         "gesture" : {
           "actions" : {
@@ -30,15 +35,6 @@
           }
         },
         "universalBackForward" : true
-      },
-      "if" : {
-        "device" : {
-          "category" : "mouse",
-          "productID" : "0xb015",
-          "productName" : "M720 Triathlon",
-          "serialNumber" : "5D2CF5193A6E4B8F",
-          "vendorID" : "0x46d"
-        }
       },
       "scrolling" : {
         "reverse" : {

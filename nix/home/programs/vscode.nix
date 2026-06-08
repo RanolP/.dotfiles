@@ -5,6 +5,13 @@
     package = pkgs.vscode;
 
     profiles.default = {
+      # TODO: audit these against current install (`code --list-extensions`).
+      # Currently installed but undeclared (decide later):
+      #   anthropic.claude-code
+      #   mermaidchart.vscode-mermaid-chart
+      #   terrastruct.d2
+      #   thenuprojectcontributors.vscode-nushell-lang
+      #   tintinweb.graphviz-interactive-preview
       extensions =
         (with pkgs.vscode-extensions; [
           dbaeumer.vscode-eslint

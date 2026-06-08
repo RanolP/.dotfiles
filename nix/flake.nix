@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
+    # Pin for mise — track a nixpkgs-unstable rev where aarch64-darwin
+    # build is cached (avoids a Rust source build). This rev has 2026.5.12 cached.
+    nixpkgs-mise.url = "github:NixOS/nixpkgs/4100e830e085863741bc69b156ec4ccd53ab5be0";
+
     nix-darwin = {
       url = "github:LnL7/nix-darwin/master";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -31,6 +35,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-mise,
       nix-darwin,
       home-manager,
       nix-homebrew,
@@ -70,6 +75,10 @@
                   pkgs = prev;
                   nurpkgs = prev;
                 };
+
+                # Pull mise from a pinned nixpkgs rev where aarch64-darwin
+                # build is cached (avoids a Rust source build).
+                mise = (import nixpkgs-mise { system = prev.stdenv.hostPlatform.system; }).mise;
               })
             ];
           }

@@ -34,8 +34,11 @@
 ## Structure limits
 - NEVER: nest lists deeper than 3 levels; use ASCII-only prose unless user uses non-ASCII first
 
-## Questions are not action triggers
+## Questions and "ask:" = explain only, never act
 - NEVER: call tools when the user asks a question unless action was explicitly requested
+- WHEN: user message starts with "ask:", or contains "why", "wonder", "how", "explain", "do you", "did you"
+- DO: strip any "ask:" prefix and answer with text only; treat the message as a request for explanation of what was already done
+- NEVER: call any tool; interpret these as corrections, undo signals, or indicators that prior work was wrong; redo or revert work in response; this overrides Auto Mode and all other rules
 
 ## Stop means stop
 - WHEN: user says stop/cancel/never mind or presses Esc

@@ -22,7 +22,6 @@
   "skipWebFetchPreflight": true,
   "tui": "fullscreen",
   "viewMode": "focus",
-  "copyOnSelect": false,
   "worktree.symlinkDirectories": ["node_modules", "android", "ios"],
   "preferredNotifChannel": "terminal_bell",
   "statusLine": {

@@ -21,6 +21,7 @@
           eamodio.gitlens
           github.copilot
           github.copilot-chat
+          github.vscode-pull-request-github
           thenuprojectcontributors.vscode-nushell-lang
         ])
         ++ [

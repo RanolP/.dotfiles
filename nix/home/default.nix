@@ -4,6 +4,13 @@ let
   # local.nix is gitignored.
   hasLocal = builtins.pathExists ./local.nix;
   local = if hasLocal then import ./local.nix else { };
+
+  anthropicsSkills = pkgs.fetchFromGitHub {
+    owner = "anthropics";
+    repo = "skills";
+    rev = "57546260929473d4e0d1c1bb75297be2fdfa1949";
+    hash = "sha256-1D9otXxDvmKASBu/vtAEWv6kE+U+jG4OxZpRLZbGEF0=";
+  };
 in
 {
   imports = [
@@ -30,9 +37,6 @@ in
     # nix shell integration for nushell
     nix-your-shell
 
-    # tool version manager (replaces brew mise)
-    mise
-
     # xcodes CLI (prebuilt — brew formula builds from source, needs xcbuild = Xcode 닭달걀 문제)
     (import ./packages/xcodes.nix { inherit pkgs; })
 
@@ -44,8 +48,6 @@ in
   ];
 
   home.file.".docker/cli-plugins/docker-compose".source = "${pkgs.docker-compose}/bin/docker-compose";
-
-  home.file.".config/mise/config.toml".source = ./configs/mise/config.toml;
 
   home.file.".config/karabiner/karabiner.json" = {
     force = true;
@@ -60,6 +62,8 @@ in
   home.file.".claude/skills/handoff/SKILL.md".source = ./configs/claude/skills/handoff/SKILL.md;
   home.file.".claude/skills/decompose/SKILL.md".source = ./configs/claude/skills/decompose/SKILL.md;
   home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;
+  home.file.".claude/skills/skill-creator".source = "${anthropicsSkills}/skills/skill-creator";
+  home.file.".claude/skills/frontend-design".source = "${anthropicsSkills}/skills/frontend-design";
   home.file.".claude/settings.json".source = ./configs/claude/settings.json;
 
   home.file.".gnupg/gpg-agent.conf" = {
@@ -70,10 +74,37 @@ in
 
   services.syncthing.enable = true;
 
-  home.activation.miseInstall = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    export PATH="$HOME/.local/share/mise/shims:/etc/profiles/per-user/ranolp/bin:$PATH"
-    /etc/profiles/per-user/ranolp/bin/mise install --quiet
-  '';
+  programs.mise = {
+    enable = true;
+    enableNushellIntegration = true;
+    globalConfig = {
+      settings = {
+        experimental = true;
+        pipx.uvx = true;
+      };
+      tools = {
+        node = "24.16.0";
+        python = "3.14.5";
+        uv = "0.11.14";
+        colima = "0.10.3";
+        lima = "2.1.2";
+        docker-cli = "29.5.3";
+        fzf = "0.73.1";
+        bat = "0.26.1";
+        eza = "0.23.4";
+        ripgrep = "15.1.0";
+        fd = "10.4.2";
+        jq = "1.8.1";
+        vim = "9.2.0623";
+        gh = "2.93.0";
+        delta = "0.19.2";
+        claude = "2.1.175";
+        "npm:@mariozechner/pi-coding-agent" = "0.73.1";
+        "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
+        "npm:@openai/codex" = "0.139.0";
+      };
+    };
+  };
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     mkdir -p "$HOME/.cache"

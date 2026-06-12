@@ -1,5 +1,8 @@
 # sensitive — never commit
 local.nix
 
+# macOS metadata
+.DS_Store
+
 # mdbook build output
 docs/book

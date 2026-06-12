@@ -11,7 +11,6 @@
       cleanup = "zap";
     };
     brews = [
-      "mise"
       "git-absorb"
       "git-filter-repo"
       "mdbook"

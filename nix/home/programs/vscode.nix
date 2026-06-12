@@ -3,6 +3,7 @@
   programs.vscode = {
     enable = true;
     package = pkgs.vscode;
+    mutableExtensionsDir = false;
 
     profiles.default = {
       # TODO: audit these against current install (`code --list-extensions`).

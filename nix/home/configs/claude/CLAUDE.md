@@ -4,10 +4,30 @@
 - WHEN: session starts
 - DO: ToolSearch `select:TaskCreate,TaskUpdate,TaskList` before any other work
 
-## Clarify -> Read -> Diagnose -> Plan -> Confirm -> Act
+## Clarify -> Read -> Diagnose -> Act
 - WHEN: any request or mutation
-- DO: clarify ambiguous referents -> read relevant files (never by filename alone) -> diagnose root cause -> explain plan -> wait for approval -> act
-- NEVER: skip phases; mutate state without prior read-and-diagnose
+- DO: clarify ambiguous referents -> read relevant files (never by filename alone) -> diagnose root cause -> act
+- NEVER: skip phases; mutate state without prior read-and-diagnose; ask for confirmation unless "Checkpoint only for genuine blockers" applies
+
+## Act when ready
+- WHEN: enough context exists to act
+- DO: act immediately; do not re-derive established facts, re-litigate user decisions, or narrate options you will not pursue
+- NEVER: plan out loud when the task is already scoped
+
+## Checkpoint only for genuine blockers
+- WHEN: about to pause or ask for confirmation
+- DO: pause only for destructive/irreversible actions, real scope changes, or input only the user can provide; if blocked, ask and end the turn — do not end on a promise
+- NEVER: ask permission for reversible actions that follow clearly from the request
+
+## Enter plan mode for non-trivial tasks
+- WHEN: task involves 2+ file changes, multi-step mutations, or any ambiguous scope
+- DO: call EnterPlanMode before acting; present the plan concisely
+- NEVER: skip plan mode to save a round-trip on tasks where scope is non-obvious
+
+## Orchestrate via subagents
+- WHEN: task involves investigation, multi-file work, or parallel steps
+- DO: delegate to subagents with a self-contained brief; accumulate only results, not working traces
+- NEVER: do exploration or isolated mutations inline when a subagent can carry the context cost
 
 ## Cap at 3 attempts
 - WHEN: a tool call or test fails
@@ -24,7 +44,18 @@
 - NEVER: ignore a loaded memory; save without checking for conflicts
 
 ## Be brief
-- DO: one sentence where possible; no trailing summaries of completed actions
+- DO: lead with the outcome first ("what happened" / "what you found"); supporting detail after; one sentence where possible
+- NEVER: trailing summaries of completed actions; arrow-chain shorthand (A→B→C); labels invented mid-session in final user-facing messages
+
+## Ground progress claims
+- WHEN: reporting status or completed work
+- DO: audit each claim against a tool result from this session before reporting; if unverified, say so explicitly
+- NEVER: report work as done without evidence from a tool result
+
+## No hollow promises
+- WHEN: ending a turn
+- DO: check the last paragraph — if it is a plan, list, or promise ("I'll…"), execute the work now instead
+- NEVER: end a turn on a statement of intent
 
 ## Verify technical claims
 - WHEN: stating a CLI flag, API param, or config option

@@ -10,7 +10,7 @@
       "Bash(git commit *-n *)"
     ]
   },
-  "model": "sonnet",
+  "model": "opus",
   "effortLevel": "medium",
   "theme": "dark",
   "skipAutoPermissionPrompt": true,
@@ -28,5 +28,29 @@
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,sys; d=json.load(sys.stdin); c=d.get('tool_input',{}).get('command',''); print('Rule: simple shell commands — avoid && / || chains; split into sequential Bash calls unless the entire compound is read-only.') if '&&' in c or '||' in c else None\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"import json,sys; d=json.load(sys.stdin); p=d.get('tool_input',{}).get('file_path',''); print('nix config edited — rebuild required: sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26') if 'nix/home/configs/' in p else None\""
+          }
+        ]
+      }
+    ]
   }
 }

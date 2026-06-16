@@ -49,6 +49,17 @@
     {
       formatter.aarch64-darwin = nixpkgs.legacyPackages.aarch64-darwin.nixfmt-rfc-style;
 
+      homeConfigurations."ranolp-archwsl" = home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs {
+          system = "x86_64-linux";
+          config.allowUnfree = true;
+        };
+        modules = [
+          ./home
+          ./home/linux
+        ];
+      };
+
       darwinConfigurations."ranolp-work-MBP-26" = nix-darwin.lib.darwinSystem {
         system = "aarch64-darwin";
         modules = [
@@ -66,7 +77,12 @@
               useGlobalPkgs = true;
               useUserPackages = true;
               backupFileExtension = "before-hm";
-              users.${username} = import ./home;
+              users.${username} = {
+                imports = [
+                  ./home
+                  ./home/darwin
+                ];
+              };
             };
 
             nixpkgs.overlays = [

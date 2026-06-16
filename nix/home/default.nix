@@ -36,6 +36,12 @@ in
   home.file.".claude/skills/handoff/SKILL.md".source = ./configs/claude/skills/handoff/SKILL.md;
   home.file.".claude/skills/decompose/SKILL.md".source = ./configs/claude/skills/decompose/SKILL.md;
   home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;
+  home.file.".claude/skills/codex-edit/SKILL.md".source = ./configs/claude/skills/codex-edit/SKILL.md;
+  home.file.".claude/skills/diagnose/SKILL.md".source = ./configs/claude/skills/diagnose/SKILL.md;
+  home.file.".claude/skills/tdd/SKILL.md".source = ./configs/claude/skills/tdd/SKILL.md;
+  home.file.".claude/skills/grill-me/SKILL.md".source = ./configs/claude/skills/grill-me/SKILL.md;
+  home.file.".claude/skills/prototype/SKILL.md".source = ./configs/claude/skills/prototype/SKILL.md;
+  home.file.".claude/skills/zoom-out/SKILL.md".source = ./configs/claude/skills/zoom-out/SKILL.md;
   home.file.".claude/skills/skill-creator".source = "${anthropicsSkills}/skills/skill-creator";
   home.file.".claude/skills/frontend-design".source = "${anthropicsSkills}/skills/frontend-design";
   home.file.".claude/settings.json".source = ./configs/claude/settings.json;
@@ -72,7 +78,8 @@ in
         "npm:@mariozechner/pi-coding-agent" = "0.73.1";
         "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
         "npm:@openai/codex" = "0.139.0";
-      } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+      }
+      // lib.optionalAttrs pkgs.stdenv.isDarwin {
         colima = "0.10.3";
         lima = "2.1.2";
         docker-cli = "29.5.3";

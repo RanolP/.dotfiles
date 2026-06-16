@@ -34,6 +34,11 @@
 - DO: use a distinct new hypothesis each retry; after 3 failures notify and stop
 - NEVER: retry the same approach
 
+## Delegate code edits to codex when scope is clear
+- WHEN: a code change touches 3+ files with a consistent pattern, or is mechanical (rename, interface rollout, test generation, uniform error handling)
+- DO: invoke the `codex-edit` skill; write a tight Goal/Context/Constraints/Done-when prompt; run `codex exec -s workspace-write`; review with `git diff HEAD`
+- NEVER: edit multi-file mechanical changes inline when codex can execute them more accurately; skip the checkpoint commit before running codex
+
 ## Minimum change, surgical precision
 - WHEN: modifying code
 - DO: change only the exact lines that fix the problem; touch no other files

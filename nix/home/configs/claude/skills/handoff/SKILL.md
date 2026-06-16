@@ -1,18 +1,16 @@
 ---
-description: Prepare a handoff prompt for a new Claude Code session.
+description: Write a handoff document for a new Claude Code session.
 disable-model-invocation: true
 argument-hint: "[goal for next session]"
 ---
 
 ## Goal
 
-The argument passed to this skill is the goal for the next session: $ARGUMENTS
+`$ARGUMENTS` is the goal for the next session. If empty, ask the user what the
+next task is before proceeding.
 
-If no argument is provided, ask the user what the next task is before proceeding.
-
-## Phase 1: Gather State
-
-Run these commands before analyzing anything:
+## Phase 1: Gather state
+Run before analyzing:
 
 ```bash
 git status
@@ -20,68 +18,48 @@ git diff --stat
 git log --oneline -5
 ```
 
-## Phase 2: Generate Handoff Document
+## Phase 2: Write the handoff
+Write the document to a file in the OS temp dir (`$TMPDIR` on macOS, `/tmp`
+otherwise), e.g. `"$TMPDIR/handoff-<short-slug>.md"`. Report the path to the user.
 
-Scan the conversation history and directly produce the document below.
-Do not emit a separate extraction step -- extract inline as you write each section.
-
-Produce a single fenced code block containing the following. Omit empty sections -- except **Failed Approaches** (write "None" if truly nothing failed).
+Reference existing artifacts (PRDs, plans, ADRs, issue links, commit hashes,
+diffs) by path or URL -- do not duplicate their content. Extract inline as you
+write; do not emit a separate extraction step. Omit empty sections.
 
 ```
 # Handoff: [brief title]
 
+## Goal
+[goal from $ARGUMENTS, with acceptance criteria]
+
 ## Context
-[repo root, stack, relevant files]
+[repo root, stack, the 2-4 files that matter most -- by path]
 
-## Completed
-- [x] [specific item]
-
-## Not Yet Done
-- [ ] [remaining task]
-
-## Failed Approaches (Do Not Repeat)
-[What was tried, why it failed, what replaced it. Be specific -- include error messages verbatim if relevant.]
-
-## Key Decisions
-| Decision | Rationale |
-|----------|-----------|
-| [choice] | [why] |
-
-## Current State
+## State
 **Working:** [what functions now]
 **Broken:** [what doesn't, with error if known]
-**Uncommitted changes:** [summary]
+**Uncommitted:** [summary, or reference `git diff`]
 
-## Files to Know
-| File | Why it matters |
-|------|----------------|
-| `path/to/file` | [description] |
+## Done / Not done
+- [x] [completed]
+- [ ] [remaining]
 
-## Resume Instructions
-[Step-by-step. Each step must include expected outcome and what to check if it fails.]
+## Failed approaches
+[What was tried, why it failed, what replaced it. "None" if nothing failed.]
 
-1. [action]
-   - Expected: [outcome]
-   - If it fails: [what to check]
+## Artifacts
+[Plans/PRDs/ADRs/issues/commits/diffs by path or URL -- not copied here.]
 
-## Your Task
-[goal from $ARGUMENTS, stated precisely with acceptance criteria]
+## Suggested skills
+[Skills the next session should invoke for this goal, e.g. /decompose,
+/diagnose, /tdd -- with one line on why each applies.]
+
+## Resume
+1. [first action] -- Expected: [outcome]; if it fails: [what to check]
 ```
 
-## Phase 3: Save and Continue
-
-1. Save to `.claude/handoff.md` in the repo root (create `.claude/` if needed).
-2. Copy to clipboard: `pbcopy < .claude/handoff.md`
-3. Spawn continuation session:
-   ```bash
-   zellij run -n "Claude Continue" -- bash -c "cd '$PWD' && $(which claude) '$PWD/.claude/handoff.md'"
-   ```
-   - Must use `$(which claude)` -- the `claude` alias is not available in new shell environments.
-   - Do NOT add `-c` -- it causes the pane to close immediately when Claude exits.
-4. If the spawn fails (not inside Zellij, or `$ZELLIJ` is unset):
-   - Report the error clearly.
-   - Tell the user: "Run manually: `claude .claude/handoff.md`"
-5. Close this pane (only if inside Zellij and the spawn succeeded):
-   ```bash
-   zellij action close-pane
-   ```
+## Constraints
+- NEVER write the handoff into the repo (no `.claude/handoff.md`) -- temp dir only
+- NEVER duplicate artifact content that can be referenced by path or URL
+- NEVER include secrets -- redact API keys, tokens, passwords, and PII
+- NEVER spawn a continuation session or copy to the clipboard -- just write the file and report its path

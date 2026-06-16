@@ -1,0 +1,14 @@
+version = 1
+
+[[annotations]]
+path = [
+    "nix/home/configs/claude/skills/diagnose/SKILL.md",
+    "nix/home/configs/claude/skills/tdd/SKILL.md",
+    "nix/home/configs/claude/skills/grill-me/SKILL.md",
+    "nix/home/configs/claude/skills/prototype/SKILL.md",
+    "nix/home/configs/claude/skills/zoom-out/SKILL.md",
+    "nix/home/configs/claude/skills/handoff/SKILL.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 Matt Pocock", "2026 RanolP"]
+SPDX-License-Identifier = "MIT"

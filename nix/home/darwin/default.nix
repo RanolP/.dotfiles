@@ -36,11 +36,11 @@
   services.syncthing.enable = true;
 
   programs.nushell.shellAliases = {
-    rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26";
+    rebuild = "sudo darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
   };
 
   programs.zsh.shellAliases = {
-    rebuild = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26";
+    rebuild = "sudo darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
   };
 
   home.activation.androidSdk = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

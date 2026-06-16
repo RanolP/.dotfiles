@@ -53,6 +53,8 @@ in
     ${pkgs.nix-your-shell}/bin/nix-your-shell nu > "$HOME/.cache/nix-your-shell.nu" 2>/dev/null || touch "$HOME/.cache/nix-your-shell.nu"
   '';
 
+  programs.home-manager.enable = true;
+
   programs.mise = {
     enable = true;
     enableNushellIntegration = true;

@@ -3,7 +3,7 @@
   # minimal zsh as fallback
   programs.zsh = {
     enable = true;
-    shellAliases = import ./aliases.nix;
+    shellAliases = import ../../programs/aliases.nix;
     autosuggestion.enable = false;
     syntaxHighlighting.enable = false;
     completionInit = "";

@@ -13,3 +13,7 @@ Or with the shell alias:
 ```sh
 rebuild
 ```
+
+## Secrets
+
+Copy `nix/home/local.nix.example` → `nix/home/local.nix` and fill in secrets (GPG signing key, etc.). `local.nix` is gitignored.

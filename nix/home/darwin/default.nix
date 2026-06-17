@@ -1,4 +1,12 @@
 { pkgs, lib, ... }:
+let
+  typsi = pkgs.fetchFromGitHub {
+    owner = "RanolP";
+    repo = "typsi";
+    rev = "b871faf98997bd0f49ef6170297ea0f34ea765d3";
+    hash = "sha256-Ui8y3oo/rMEW8eWGzG+ecJSdmfDk9ipQ6qwGFkVY5qo=";
+  };
+in
 {
   imports = [
     ./programs/firefox.nix
@@ -31,9 +39,25 @@
 
   home.file.".config/linearmouse/linearmouse.json".source = ./configs/linearmouse/linearmouse.json;
 
-  home.file.".gnupg/gpg-agent.conf".onChange = "/etc/profiles/per-user/ranolp/bin/gpgconf --kill gpg-agent";
+  home.file.".gnupg/gpg-agent.conf".onChange =
+    "/etc/profiles/per-user/ranolp/bin/gpgconf --kill gpg-agent";
 
   services.syncthing.enable = true;
+
+  services.espanso = {
+    enable = true;
+    matches = {
+      default.matches = [ ];
+    };
+  };
+
+  # Use `daemon` instead of `launcher` so espanso doesn't self-register a second plist
+  launchd.agents.espanso.config.ProgramArguments = lib.mkForce [
+    "${pkgs.espanso}/Applications/Espanso.app/Contents/MacOS/espanso"
+    "daemon"
+  ];
+
+  xdg.configFile."espanso/match/packages/typsi".source = "${typsi}/packages/typsi";
 
   programs.nushell.shellAliases = {
     rebuild = "sudo darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";

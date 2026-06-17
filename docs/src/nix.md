@@ -39,3 +39,4 @@ System configuration layer. Managed by nix-darwin with home-manager.
 | docker-compose | Compose CLI, linked into `~/.docker/cli-plugins/` |
 | gmp | Required by cocoapods |
 | libyaml | Required by cocoapods |
+| espanso | Text expander (via `services.espanso`) |

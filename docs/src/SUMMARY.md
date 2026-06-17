@@ -23,6 +23,7 @@
 - [Notion](./notion.md)
 - [Figma](./figma.md)
 - [Keybase](./keybase.md)
+- [Espanso](./espanso.md)
 - [Syncthing](./syncthing.md)
 - [Claude](./claude.md)
 - [Android SDK](./android.md)

@@ -48,7 +48,13 @@ if cache_stale; then
         printf '\t0\t0' > "$CACHE_FILE"
     fi
 fi
-IFS=$'\t' read -r GIT_BR GIT_ST GIT_MD < "$CACHE_FILE"
+# Read the whole cache line without IFS trimming — a leading empty branch
+# field (no branch / detached HEAD) must stay empty so the segment hides.
+IFS= read -rd '' GIT_CACHE < "$CACHE_FILE"
+GIT_BR="${GIT_CACHE%%$'\t'*}"
+GIT_REST="${GIT_CACHE#*$'\t'}"
+GIT_ST="${GIT_REST%%$'\t'*}"
+GIT_MD="${GIT_REST##*$'\t'}"
 GIT_ST=${GIT_ST:-0}
 GIT_MD=${GIT_MD:-0}
 

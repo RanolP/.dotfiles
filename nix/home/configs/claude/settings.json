@@ -5,7 +5,6 @@
       "Bash(zellij run -n \"Claude Continue\"*)"
     ],
     "deny": [
-      "Bash(git push*)",
       "Bash(git commit *--no-verify*)",
       "Bash(git commit *-n *)"
     ]
@@ -36,6 +35,10 @@
           {
             "type": "command",
             "command": "python3 -c \"import json,sys; d=json.load(sys.stdin); c=d.get('tool_input',{}).get('command',''); print('Rule: simple shell commands — avoid && / || chains; split into sequential Bash calls unless the entire compound is read-only.') if '&&' in c or '||' in c else None\""
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/git-push-guard.py"
           }
         ]
       }

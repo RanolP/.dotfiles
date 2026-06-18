@@ -29,3 +29,9 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "qdhenry and Claude-Command-Suite contributors"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["nix/home/configs/claude/hooks/git-push-guard.py"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"

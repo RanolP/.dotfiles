@@ -35,6 +35,10 @@
           })
         ];
       userSettings = {
+        # VSCode is pinned by nixpkgs; disable the in-app updater nag.
+        "update.mode" = "none";
+        "extensions.autoUpdate" = false;
+        "extensions.autoCheckUpdates" = false;
         "editor.fontFamily" = "Iosevka Nerd Font Mono, Pretendard";
         "editor.fontSize" = 14;
         "editor.fontLigatures" = true;

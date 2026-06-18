@@ -76,6 +76,11 @@
 - DO: strip any "ask:" prefix and answer with text only; treat the message as a request for explanation of what was already done
 - NEVER: call any tool; interpret these as corrections, undo signals, or indicators that prior work was wrong; redo or revert work in response; this overrides Auto Mode and all other rules
 
+## Push only to claude/* branches
+- WHEN: running `git push`
+- DO: push only to branches matching `claude/*` (e.g. `git push -u origin claude/<topic>`); other pushes are hard-blocked by the `git-push-guard` PreToolUse hook, not by a static deny rule
+- NEVER: push to `main` or any non-`claude/*` branch; never run bare `git push` or `git push origin` (no refspec) — both are blocked because the target is implicit; never chain a push with `&&`/`||`/`;`/`|` (the guard blocks compound pushes)
+
 ## Stop means stop
 - WHEN: user says stop/cancel/never mind or presses Esc
 - DO: halt immediately; output explanation only

@@ -33,6 +33,10 @@ in
     source = ./configs/claude/statusline.sh;
     executable = true;
   };
+  home.file.".claude/hooks/git-push-guard.py" = {
+    source = ./configs/claude/hooks/git-push-guard.py;
+    executable = true;
+  };
   home.file.".claude/skills/handoff/SKILL.md".source = ./configs/claude/skills/handoff/SKILL.md;
   home.file.".claude/skills/decompose/SKILL.md".source = ./configs/claude/skills/decompose/SKILL.md;
   home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;

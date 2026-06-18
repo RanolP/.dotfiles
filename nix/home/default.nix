@@ -42,6 +42,8 @@ in
   home.file.".claude/skills/grill-me/SKILL.md".source = ./configs/claude/skills/grill-me/SKILL.md;
   home.file.".claude/skills/prototype/SKILL.md".source = ./configs/claude/skills/prototype/SKILL.md;
   home.file.".claude/skills/zoom-out/SKILL.md".source = ./configs/claude/skills/zoom-out/SKILL.md;
+  home.file.".claude/skills/remove-dead-code".source = ./configs/claude/skills/remove-dead-code;
+  home.file.".claude/skills/audit-env-variables".source = ./configs/claude/skills/audit-env-variables;
   home.file.".claude/skills/skill-creator".source = "${anthropicsSkills}/skills/skill-creator";
   home.file.".claude/skills/frontend-design".source = "${anthropicsSkills}/skills/frontend-design";
   home.file.".claude/settings.json".source = ./configs/claude/settings.json;

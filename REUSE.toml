@@ -12,3 +12,20 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 Matt Pocock", "2026 RanolP"]
 SPDX-License-Identifier = "MIT"
+
+# Vendored verbatim from github.com/qdhenry/Claude-Command-Suite (MIT per its README).
+[[annotations]]
+path = [
+    "nix/home/configs/claude/skills/remove-dead-code/SKILL.md",
+    "nix/home/configs/claude/skills/remove-dead-code/references/agent-coordination.md",
+    "nix/home/configs/claude/skills/remove-dead-code/references/detection-patterns.md",
+    "nix/home/configs/claude/skills/remove-dead-code/workflows/remove-dead-code.md",
+    "nix/home/configs/claude/skills/remove-dead-code/workflows/scan-dead-code.md",
+    "nix/home/configs/claude/skills/remove-dead-code/workflows/validate-removal.md",
+    "nix/home/configs/claude/skills/audit-env-variables/SKILL.md",
+    "nix/home/configs/claude/skills/audit-env-variables/references/service-patterns.md",
+    "nix/home/configs/claude/skills/audit-env-variables/templates/env-audit-report.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "qdhenry and Claude-Command-Suite contributors"
+SPDX-License-Identifier = "MIT"

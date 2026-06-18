@@ -6,6 +6,7 @@ let
     rev = "b871faf98997bd0f49ef6170297ea0f34ea765d3";
     hash = "sha256-Ui8y3oo/rMEW8eWGzG+ecJSdmfDk9ipQ6qwGFkVY5qo=";
   };
+  rebuildCmd = "sudo darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
 in
 {
   imports = [
@@ -39,8 +40,7 @@ in
 
   home.file.".config/linearmouse/linearmouse.json".source = ./configs/linearmouse/linearmouse.json;
 
-  home.file.".gnupg/gpg-agent.conf".onChange =
-    "/etc/profiles/per-user/ranolp/bin/gpgconf --kill gpg-agent";
+  home.file.".gnupg/gpg-agent.conf".onChange = "${pkgs.gnupg}/bin/gpgconf --kill gpg-agent";
 
   services.syncthing.enable = true;
 
@@ -60,11 +60,11 @@ in
   xdg.configFile."espanso/match/packages/typsi".source = "${typsi}/packages/typsi";
 
   programs.nushell.shellAliases = {
-    rebuild = "sudo darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
+    rebuild = rebuildCmd;
   };
 
   programs.zsh.shellAliases = {
-    rebuild = "sudo darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
+    rebuild = rebuildCmd;
   };
 
   home.activation.androidSdk = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

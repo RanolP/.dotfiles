@@ -193,9 +193,7 @@ if [ -n "$WEEK" ]; then
     WK=$(printf '%.0f' "$WEEK")
     WEEK_RESET_FMT=""
     if [ -n "$WEEK_RESET" ]; then
-        WK_DOW=$(date -r "$WEEK_RESET" "+%a" 2>/dev/null)
-        WK_HR=$(date -r "$WEEK_RESET" "+%H" 2>/dev/null)
-        WK_MIN=$(date -r "$WEEK_RESET" "+%M" 2>/dev/null)
+        read -r WK_DOW WK_HR WK_MIN <<< "$(date -r "$WEEK_RESET" "+%a %H %M" 2>/dev/null)"
         if [ -n "$WK_DOW" ]; then
             WEEK_RESET_FMT="$WK_DOW $((10#$WK_HR)):$WK_MIN"
         fi

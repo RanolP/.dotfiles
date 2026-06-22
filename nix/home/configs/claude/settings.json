@@ -32,6 +32,17 @@
     "type": "command",
     "command": "~/.claude/statusline.sh"
   },
+  "extraKnownMarketplaces": {
+    "supermemory-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "supermemoryai/claude-supermemory"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "supermemory@supermemory-plugins": true
+  },
   "hooks": {
     "PreToolUse": [
       {

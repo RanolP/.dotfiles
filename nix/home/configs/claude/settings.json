@@ -38,10 +38,17 @@
         "source": "github",
         "repo": "supermemoryai/claude-supermemory"
       }
+    },
+    "im-not-ai": {
+      "source": {
+        "source": "github",
+        "repo": "epoko77-ai/im-not-ai"
+      }
     }
   },
   "enabledPlugins": {
-    "supermemory@supermemory-plugins": true
+    "supermemory@supermemory-plugins": true,
+    "humanize-korean@im-not-ai": true
   },
   "hooks": {
     "PreToolUse": [

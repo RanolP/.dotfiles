@@ -86,27 +86,27 @@ in
         pipx.uvx = true;
       };
       tools = {
-        node = "24.16.0";
-        python = "3.14.5";
-        uv = "0.11.14";
+        node = "24.17.0";
+        python = "3.14.6";
+        uv = "0.11.24";
         fzf = "0.73.1";
         bat = "0.26.1";
         eza = "0.23.4";
         ripgrep = "15.1.0";
         fd = "10.4.2";
-        jq = "1.8.1";
-        gh = "2.93.0";
+        jq = "1.8.2";
+        gh = "2.95.0";
         delta = "0.19.2";
-        claude = "2.1.175";
+        claude = "2.1.187";
         "npm:@mariozechner/pi-coding-agent" = "0.73.1";
         "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
-        "npm:@openai/codex" = "0.139.0";
+        "npm:@openai/codex" = "0.142.0";
         "npm:slopless" = "0.2.22";
       }
       // lib.optionalAttrs pkgs.stdenv.isDarwin {
         colima = "0.10.3";
-        lima = "2.1.2";
-        docker-cli = "29.5.3";
+        lima = "2.1.3";
+        docker-cli = "29.6.0";
       };
     };
   };

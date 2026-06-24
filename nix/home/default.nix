@@ -48,6 +48,7 @@ in
   home.file.".claude/skills/zoom-out/SKILL.md".source = ./configs/claude/skills/zoom-out/SKILL.md;
   home.file.".claude/skills/technical-writing/SKILL.md".source =
     ./configs/claude/skills/technical-writing/SKILL.md;
+  home.file.".claude/skills/slopless/SKILL.md".source = ./configs/claude/skills/slopless/SKILL.md;
   home.file.".claude/skills/remove-dead-code".source = ./configs/claude/skills/remove-dead-code;
   home.file.".claude/skills/audit-env-variables".source = ./configs/claude/skills/audit-env-variables;
   home.file.".claude/skills/skill-creator".source = "${anthropicsSkills}/skills/skill-creator";
@@ -87,6 +88,7 @@ in
         "npm:@mariozechner/pi-coding-agent" = "0.73.1";
         "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
         "npm:@openai/codex" = "0.139.0";
+        "npm:slopless" = "0.2.22";
       }
       // lib.optionalAttrs pkgs.stdenv.isDarwin {
         colima = "0.10.3";

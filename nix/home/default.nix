@@ -11,6 +11,13 @@ let
     rev = "57546260929473d4e0d1c1bb75297be2fdfa1949";
     hash = "sha256-1D9otXxDvmKASBu/vtAEWv6kE+U+jG4OxZpRLZbGEF0=";
   };
+
+  humanizeKorean = pkgs.fetchFromGitHub {
+    owner = "epoko77-ai";
+    repo = "im-not-ai";
+    rev = "14aeb52d13e737beb4e999cb7cb92275d0969689";
+    hash = "sha256-iadJGHavCEXPBYjeo5SyCSgn2yWIJ5YUvRG/2qbuVAY=";
+  };
 in
 {
   imports = [
@@ -53,6 +60,12 @@ in
   home.file.".claude/skills/audit-env-variables".source = ./configs/claude/skills/audit-env-variables;
   home.file.".claude/skills/skill-creator".source = "${anthropicsSkills}/skills/skill-creator";
   home.file.".claude/skills/frontend-design".source = "${anthropicsSkills}/skills/frontend-design";
+  # Humanize KR (epoko77-ai/im-not-ai): rewrites AI-sounding Korean to read human.
+  home.file.".claude/skills/humanize-korean".source =
+    "${humanizeKorean}/.claude/skills/humanize-korean";
+  home.file.".claude/skills/humanize".source = "${humanizeKorean}/.claude/skills/humanize";
+  home.file.".claude/skills/humanize-redo".source = "${humanizeKorean}/.claude/skills/humanize-redo";
+  home.file.".claude/agents".source = "${humanizeKorean}/agents";
   home.file.".claude/settings.json".source = ./configs/claude/settings.json;
 
   home.file.".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;

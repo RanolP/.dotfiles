@@ -7,7 +7,7 @@
   homebrew = {
     enable = true;
     onActivation = {
-      autoUpdate = true;
+      autoUpdate = false;
       cleanup = "zap";
     };
     brews = [
@@ -32,6 +32,7 @@
       "google-chrome"
       "notion"
       "keybase"
+      "shottr"
     ];
   };
 

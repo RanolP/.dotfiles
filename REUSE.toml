@@ -30,6 +30,13 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "qdhenry and Claude-Command-Suite contributors"
 SPDX-License-Identifier = "MIT"
 
+# Vendored from github.com/seochecks-ai/slopless (MIT); CLI invocation adapted to global install.
+[[annotations]]
+path = ["nix/home/configs/claude/skills/slopless/SKILL.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "seochecks-ai and slopless contributors"
+SPDX-License-Identifier = "MIT"
+
 # Distilled from github.com/toss/technical-writing (CC BY-NC-SA 4.0); ShareAlike applies.
 [[annotations]]
 path = ["nix/home/configs/claude/skills/technical-writing/SKILL.md"]

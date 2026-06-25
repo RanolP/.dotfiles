@@ -52,6 +52,12 @@ in
     source = ./configs/claude/hooks/git-push-guard.py;
     executable = true;
   };
+  # Codex reuses the same push guard (its PreToolUse hook schema matches Claude's:
+  # reads tool_input.command, denies via hookSpecificOutput.permissionDecision).
+  home.file.".codex/hooks/git-push-guard.py" = {
+    source = ./configs/claude/hooks/git-push-guard.py;
+    executable = true;
+  };
   home.file.".claude/skills/handoff/SKILL.md".source = ./configs/claude/skills/handoff/SKILL.md;
   home.file.".claude/skills/decompose/SKILL.md".source = ./configs/claude/skills/decompose/SKILL.md;
   home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;

@@ -14,6 +14,7 @@
       "git-absorb"
       "git-filter-repo"
       "mdbook"
+      "libmagic" # libmagic dylib for python-magic (reuse tool, via mise pipx)
     ];
     casks = [
       "claude"

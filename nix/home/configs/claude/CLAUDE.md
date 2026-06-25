@@ -6,7 +6,7 @@
 
 ## Clarify -> Read -> Diagnose -> Act
 - WHEN: any request or mutation
-- DO: clarify ambiguous referents -> read relevant files (never by filename alone) -> diagnose root cause -> act
+- DO: clarify ambiguous referents -> read relevant files (never by filename alone) -> diagnose root cause -> act; on a bug fix, grep every caller of the function you touch and fix the shared function once, not just the one path the report names
 - NEVER: skip phases; mutate state without prior read-and-diagnose; ask for confirmation unless "Checkpoint only for genuine blockers" applies
 
 ## Act when ready
@@ -43,6 +43,16 @@
 - WHEN: modifying code
 - DO: change only the exact lines that fix the problem; touch no other files
 - NEVER: refactor adjacent code; add unrequested features; rewrite whole files
+
+## Climb the YAGNI ladder before writing code
+- WHEN: about to write code, after you have understood the task and traced the real flow end to end
+- DO: stop at the first rung that holds -- (1) does this need to exist at all? skip it; (2) already in this codebase? reuse the helper/pattern; (3) in the standard library? use it; (4) native platform feature? use it; (5) already-installed dependency? use it; (6) can it be one line? make it one line; (7) only then write the minimum that works; prefer deletion over addition, boring over clever, fewest files; question complex requests ("do you need X, or does Y cover it?"); judge intentional simplifications by nuance, do not annotate them with a marker
+- NEVER: add abstractions, dependencies, or boilerplate nobody asked for; pick the smaller-but-flimsier algorithm when two stdlib approaches are the same size; be lazy about understanding the problem, input validation at trust boundaries, error handling that prevents data loss, security, accessibility, hardware calibration, or anything explicitly requested
+
+## Lazy code leaves one runnable check
+- WHEN: non-trivial logic was added or changed
+- DO: leave ONE runnable check -- the smallest thing that fails if the logic breaks (an assert-based self-check or one tiny test file; no frameworks, no fixtures)
+- NEVER: skip the check and call it lazy; trivial one-liners are the only exception
 
 ## Memory: load then save
 - DO: load relevant memories before responding; save immediately when user corrects or confirms, checking for staleness first

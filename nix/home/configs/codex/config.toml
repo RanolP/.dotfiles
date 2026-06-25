@@ -1,0 +1,12 @@
+# OpenAI Codex CLI config — settings only (managed by this repo).
+# On activation, home-manager writes ~/.codex/config.toml = this file plus the
+# [projects.*] trust blocks from the uncommitted ~/.codex/config.local.toml.
+# Trust entries are machine-specific absolute paths and stay out of git; add
+# them to config.local.toml, not here. Edit this file, then darwin-rebuild.
+
+service_tier = "fast"
+model = "gpt-5.5"
+model_reasoning_effort = "high"
+
+[plugins."github@openai-curated"]
+enabled = true

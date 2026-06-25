@@ -83,6 +83,29 @@ in
     ${pkgs.nix-your-shell}/bin/nix-your-shell nu > "$HOME/.cache/nix-your-shell.nu" 2>/dev/null || touch "$HOME/.cache/nix-your-shell.nu"
   '';
 
+  # Codex CLI config: not symlinked. Codex rewrites ~/.codex/config.toml at
+  # runtime (project trust, TUI state), and trust entries are absolute paths
+  # specific to this machine, so they must stay uncommitted. We generate
+  # config.toml on activation = repo settings + ONLY the [projects.*] trust
+  # blocks from the uncommitted ~/.codex/config.local.toml (other keys there are
+  # ignored, so repo settings always win). Edit config.local.toml by hand to add
+  # trusted projects; everything else in ~/.codex stays owned by Codex.
+  home.activation.codexConfig = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    codexDir="$HOME/.codex"
+    out="$codexDir/config.toml"
+    localTrust="$codexDir/config.local.toml"
+    run mkdir -p "$codexDir"
+    # Drop any leftover read-only symlink from previous management.
+    [ -L "$out" ] && run rm -f "$out"
+    run install -m 0644 ${./configs/codex/config.toml} "$out"
+    if [ -f "$localTrust" ]; then
+      {
+        echo ""
+        ${pkgs.gawk}/bin/awk '/^\[/ { keep = ($0 ~ /^\[projects\./) } keep' "$localTrust"
+      } >> "$out"
+    fi
+  '';
+
   programs.home-manager.enable = true;
 
   programs.mise = {

@@ -18,6 +18,14 @@ let
     rev = "14aeb52d13e737beb4e999cb7cb92275d0969689";
     hash = "sha256-iadJGHavCEXPBYjeo5SyCSgn2yWIJ5YUvRG/2qbuVAY=";
   };
+
+  # Merge the im-not-ai agents with local agent definitions so a sibling file
+  # (prose-editor) can live alongside the 12 vendored agents in ~/.claude/agents.
+  claudeAgents = pkgs.runCommand "claude-agents" { } ''
+    mkdir -p $out
+    cp ${humanizeKorean}/agents/*.md $out/
+    cp ${./configs/claude/agents}/*.md $out/
+  '';
 in
 {
   imports = [
@@ -65,7 +73,7 @@ in
     "${humanizeKorean}/.claude/skills/humanize-korean";
   home.file.".claude/skills/humanize".source = "${humanizeKorean}/.claude/skills/humanize";
   home.file.".claude/skills/humanize-redo".source = "${humanizeKorean}/.claude/skills/humanize-redo";
-  home.file.".claude/agents".source = "${humanizeKorean}/agents";
+  home.file.".claude/agents".source = claudeAgents;
   home.file.".claude/settings.json".source = ./configs/claude/settings.json;
 
   home.file.".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;

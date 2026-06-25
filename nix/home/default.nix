@@ -110,6 +110,7 @@ in
         "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
         "npm:@openai/codex" = "0.142.0";
         "npm:slopless" = "0.2.22";
+        "pipx:reuse" = "6.2.0";
       }
       // lib.optionalAttrs pkgs.stdenv.isDarwin {
         colima = "0.10.3";

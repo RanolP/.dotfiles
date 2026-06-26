@@ -52,6 +52,15 @@ SPDX-FileCopyrightText = ["2026 DietrichGebert", "2026 RanolP"]
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
+path = [
+    "nix/home/configs/claude/skills/git-master/SKILL.md",
+    "nix/home/configs/claude/skills/github-master/SKILL.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
 path = ["nix/home/configs/claude/hooks/git-push-guard.py"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

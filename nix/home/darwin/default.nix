@@ -1,4 +1,9 @@
-{ pkgs, lib, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
 let
   typsi = pkgs.fetchFromGitHub {
     owner = "RanolP";
@@ -58,6 +63,31 @@ in
   ];
 
   xdg.configFile."espanso/match/packages/typsi".source = "${typsi}/packages/typsi";
+
+  # Dependabot-style weekly mise pin bumper. Fires daily at 10:30; a 7-day guard
+  # inside the script gates real work to weekly (survives sleep/missed runs). No
+  # RunAtLoad so it doesn't fire on every rebuild/login.
+  launchd.agents.mise-bump = {
+    enable = true;
+    config = {
+      ProgramArguments = [
+        "${pkgs.python3}/bin/python3"
+        "${../configs/mise/bump.py}"
+      ];
+      StartCalendarInterval = [
+        {
+          Hour = 10;
+          Minute = 30;
+        }
+      ];
+      EnvironmentVariables = {
+        PATH = "${pkgs.mise}/bin:${pkgs.git}/bin:/usr/bin:/bin";
+        HOME = config.home.homeDirectory;
+      };
+      StandardOutPath = "${config.home.homeDirectory}/.local/state/mise-bump/launchd.out.log";
+      StandardErrorPath = "${config.home.homeDirectory}/.local/state/mise-bump/launchd.err.log";
+    };
+  };
 
   programs.nushell.shellAliases = {
     rebuild = rebuildCmd;

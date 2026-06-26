@@ -68,3 +68,9 @@ path = ["nix/home/configs/codex/config.toml"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["nix/home/configs/mise/bump.py"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"

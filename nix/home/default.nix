@@ -59,6 +59,9 @@ in
     executable = true;
   };
   home.file.".claude/skills/handoff/SKILL.md".source = ./configs/claude/skills/handoff/SKILL.md;
+  home.file.".claude/skills/git-master/SKILL.md".source = ./configs/claude/skills/git-master/SKILL.md;
+  home.file.".claude/skills/github-master/SKILL.md".source =
+    ./configs/claude/skills/github-master/SKILL.md;
   home.file.".claude/skills/decompose/SKILL.md".source = ./configs/claude/skills/decompose/SKILL.md;
   home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;
   home.file.".claude/skills/codex-edit/SKILL.md".source = ./configs/claude/skills/codex-edit/SKILL.md;

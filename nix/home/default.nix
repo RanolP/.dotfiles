@@ -73,7 +73,6 @@ in
   home.file.".claude/skills/remove-dead-code".source = ./configs/claude/skills/remove-dead-code;
   home.file.".claude/skills/audit-env-variables".source = ./configs/claude/skills/audit-env-variables;
   home.file.".claude/skills/skill-creator".source = "${anthropicsSkills}/skills/skill-creator";
-  home.file.".claude/skills/frontend-design".source = "${anthropicsSkills}/skills/frontend-design";
   # Humanize KR (epoko77-ai/im-not-ai): rewrites AI-sounding Korean to read human.
   home.file.".claude/skills/humanize-korean".source =
     "${humanizeKorean}/.claude/skills/humanize-korean";

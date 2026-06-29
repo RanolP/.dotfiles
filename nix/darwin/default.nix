@@ -1,4 +1,19 @@
 { pkgs, ... }:
+let
+  hostName = "ranolp-work-MBP-26";
+
+  # Casks installed only on a specific machine. Git-managed, but scoped by
+  # hostname so other Macs don't get them and re-imaging a host restores them.
+  # Add a new hostname key when onboarding another Mac.
+  casksByHost = {
+    "ranolp-work-MBP-26" = [
+      "displaylink" # external displays via USB-C dock
+      "obs" # screen recording / streaming
+      "steam" # games
+      "tailscale-app" # tailnet VPN
+    ];
+  };
+in
 {
   # Touch ID for sudo
   security.pam.services.sudo_local.touchIdAuth = true;
@@ -34,7 +49,8 @@
       "notion"
       "keybase"
       "shottr"
-    ];
+    ]
+    ++ (casksByHost.${hostName} or [ ]);
   };
 
   # macOS system defaults
@@ -134,8 +150,8 @@
   # Primary user (required for homebrew, dock, finder, NSGlobalDomain options)
   system.primaryUser = "ranolp";
 
-  networking.hostName = "ranolp-work-MBP-26";
-  networking.localHostName = "ranolp-work-MBP-26";
+  networking.hostName = hostName;
+  networking.localHostName = hostName;
 
   # User definition (needed for home-manager homeDirectory derivation)
   users.users.ranolp = {

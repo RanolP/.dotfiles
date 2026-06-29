@@ -49,6 +49,7 @@ in
       "notion"
       "keybase"
       "shottr"
+      "proxyman" # HTTP debugging proxy
     ]
     ++ (casksByHost.${hostName} or [ ]);
   };

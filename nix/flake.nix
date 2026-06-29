@@ -5,8 +5,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
     # Pin for mise — track a nixpkgs-unstable rev where aarch64-darwin
-    # build is cached (avoids a Rust source build). This rev has 2026.5.12 cached.
-    nixpkgs-mise.url = "github:NixOS/nixpkgs/4100e830e085863741bc69b156ec4ccd53ab5be0";
+    # build is cached (avoids a Rust source build). This rev has 2026.6.5 cached.
+    nixpkgs-mise.url = "github:NixOS/nixpkgs/3e41b24abd260e8f71dbe2f5737d24122f972158";
 
     nix-darwin = {
       url = "github:LnL7/nix-darwin/master";

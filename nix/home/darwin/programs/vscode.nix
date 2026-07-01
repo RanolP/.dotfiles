@@ -48,6 +48,8 @@
         "workbench.iconTheme" = "vscode-icons";
         "terminal.integrated.defaultProfile.osx" = "nu";
         "scm.defaultViewMode" = "tree";
+        "git.autofetch" = "all";
+        "git.autofetchPeriod" = 60;
         "diffEditor.hideUnchangedRegions.enabled" = true;
         "files.autoSave" = "onFocusChange";
         "terminal.integrated.profiles.osx" = {

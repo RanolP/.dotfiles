@@ -11,7 +11,8 @@ let
     rev = "b871faf98997bd0f49ef6170297ea0f34ea765d3";
     hash = "sha256-Ui8y3oo/rMEW8eWGzG+ecJSdmfDk9ipQ6qwGFkVY5qo=";
   };
-  rebuildCmd = "sudo darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
+  # Absolute path: sudo resets PATH, so bare `darwin-rebuild` isn't found.
+  rebuildCmd = "sudo /run/current-system/sw/bin/darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
 in
 {
   imports = [

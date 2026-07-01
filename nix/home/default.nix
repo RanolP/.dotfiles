@@ -125,7 +125,7 @@ in
         pipx.uvx = true;
       };
       tools = {
-        node = "24.17.0";
+        node = "24.18.0";
         python = "3.14.6";
         uv = "0.11.24";
         fzf = "0.73.1";

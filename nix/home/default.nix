@@ -26,6 +26,43 @@ let
     cp ${humanizeKorean}/agents/*.md $out/
     cp ${./configs/claude/agents}/*.md $out/
   '';
+
+  # Skills, defined once and linked into both tools' skill trees below. Local
+  # skills point at the whole directory (each holds SKILL.md plus optional
+  # references/); vendored ones point into their fetched store paths.
+  localSkill = name: ./configs/.agents/skills + "/${name}";
+  skills = {
+    handoff = localSkill "handoff";
+    git-master = localSkill "git-master";
+    github-master = localSkill "github-master";
+    decompose = localSkill "decompose";
+    one-domain = localSkill "one-domain";
+    codex-edit = localSkill "codex-edit";
+    diagnose = localSkill "diagnose";
+    tdd = localSkill "tdd";
+    grill-me = localSkill "grill-me";
+    prototype = localSkill "prototype";
+    zoom-out = localSkill "zoom-out";
+    technical-writing = localSkill "technical-writing";
+    slopless = localSkill "slopless";
+    remove-dead-code = localSkill "remove-dead-code";
+    audit-env-variables = localSkill "audit-env-variables";
+    skill-creator = "${anthropicsSkills}/skills/skill-creator";
+    humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
+    humanize = "${humanizeKorean}/.claude/skills/humanize";
+    humanize-redo = "${humanizeKorean}/.claude/skills/humanize-redo";
+  };
+
+  # Link every skill into both tools' trees: Claude reads ~/.claude/skills,
+  # Codex reads ~/.agents/skills (same SKILL.md format, follows symlinks).
+  skillFiles = lib.foldlAttrs (
+    acc: name: src:
+    acc
+    // {
+      ".claude/skills/${name}".source = src;
+      ".agents/skills/${name}".source = src;
+    }
+  ) { } skills;
 in
 {
   imports = [
@@ -43,48 +80,30 @@ in
     nix-your-shell
   ];
 
-  home.file.".claude/CLAUDE.md".source = ./configs/claude/CLAUDE.md;
-  home.file.".claude/statusline.sh" = {
-    source = ./configs/claude/statusline.sh;
-    executable = true;
-  };
-  home.file.".claude/hooks/git-push-guard.py" = {
-    source = ./configs/claude/hooks/git-push-guard.py;
-    executable = true;
-  };
-  # Codex reuses the same push guard (its PreToolUse hook schema matches Claude's:
-  # reads tool_input.command, denies via hookSpecificOutput.permissionDecision).
-  home.file.".codex/hooks/git-push-guard.py" = {
-    source = ./configs/claude/hooks/git-push-guard.py;
-    executable = true;
-  };
-  home.file.".claude/skills/handoff/SKILL.md".source = ./configs/claude/skills/handoff/SKILL.md;
-  home.file.".claude/skills/git-master/SKILL.md".source = ./configs/claude/skills/git-master/SKILL.md;
-  home.file.".claude/skills/github-master/SKILL.md".source =
-    ./configs/claude/skills/github-master/SKILL.md;
-  home.file.".claude/skills/decompose/SKILL.md".source = ./configs/claude/skills/decompose/SKILL.md;
-  home.file.".claude/skills/one-domain/SKILL.md".source = ./configs/claude/skills/one-domain/SKILL.md;
-  home.file.".claude/skills/codex-edit/SKILL.md".source = ./configs/claude/skills/codex-edit/SKILL.md;
-  home.file.".claude/skills/diagnose/SKILL.md".source = ./configs/claude/skills/diagnose/SKILL.md;
-  home.file.".claude/skills/tdd/SKILL.md".source = ./configs/claude/skills/tdd/SKILL.md;
-  home.file.".claude/skills/grill-me/SKILL.md".source = ./configs/claude/skills/grill-me/SKILL.md;
-  home.file.".claude/skills/prototype/SKILL.md".source = ./configs/claude/skills/prototype/SKILL.md;
-  home.file.".claude/skills/zoom-out/SKILL.md".source = ./configs/claude/skills/zoom-out/SKILL.md;
-  home.file.".claude/skills/technical-writing/SKILL.md".source =
-    ./configs/claude/skills/technical-writing/SKILL.md;
-  home.file.".claude/skills/slopless/SKILL.md".source = ./configs/claude/skills/slopless/SKILL.md;
-  home.file.".claude/skills/remove-dead-code".source = ./configs/claude/skills/remove-dead-code;
-  home.file.".claude/skills/audit-env-variables".source = ./configs/claude/skills/audit-env-variables;
-  home.file.".claude/skills/skill-creator".source = "${anthropicsSkills}/skills/skill-creator";
-  # Humanize KR (epoko77-ai/im-not-ai): rewrites AI-sounding Korean to read human.
-  home.file.".claude/skills/humanize-korean".source =
-    "${humanizeKorean}/.claude/skills/humanize-korean";
-  home.file.".claude/skills/humanize".source = "${humanizeKorean}/.claude/skills/humanize";
-  home.file.".claude/skills/humanize-redo".source = "${humanizeKorean}/.claude/skills/humanize-redo";
-  home.file.".claude/agents".source = claudeAgents;
-  home.file.".claude/settings.json".source = ./configs/claude/settings.json;
-
-  home.file.".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
+  home.file = lib.mkMerge [
+    {
+      ".claude/CLAUDE.md".source = ./configs/claude/CLAUDE.md;
+      ".claude/statusline.sh" = {
+        source = ./configs/claude/statusline.sh;
+        executable = true;
+      };
+      ".claude/hooks/git-push-guard.py" = {
+        source = ./configs/claude/hooks/git-push-guard.py;
+        executable = true;
+      };
+      # Codex reuses the same push guard (its PreToolUse hook schema matches Claude's:
+      # reads tool_input.command, denies via hookSpecificOutput.permissionDecision).
+      ".codex/hooks/git-push-guard.py" = {
+        source = ./configs/claude/hooks/git-push-guard.py;
+        executable = true;
+      };
+      ".claude/agents".source = claudeAgents;
+      ".claude/settings.json".source = ./configs/claude/settings.json;
+      ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
+    }
+    # humanize-korean vendored from epoko77-ai/im-not-ai.
+    skillFiles
+  ];
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     mkdir -p "$HOME/.cache"

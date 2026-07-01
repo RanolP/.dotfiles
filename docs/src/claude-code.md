@@ -19,17 +19,17 @@ Skills extend Claude Code with domain-specific workflows.
 
 | Skill | Source |
 |-------|--------|
-| handoff | `nix/home/configs/claude/skills/handoff/SKILL.md` |
-| decompose | `nix/home/configs/claude/skills/decompose/SKILL.md` |
-| one-domain | `nix/home/configs/claude/skills/one-domain/SKILL.md` |
-| codex-edit | `nix/home/configs/claude/skills/codex-edit/SKILL.md` |
-| diagnose | `nix/home/configs/claude/skills/diagnose/SKILL.md` |
-| tdd | `nix/home/configs/claude/skills/tdd/SKILL.md` |
-| grill-me | `nix/home/configs/claude/skills/grill-me/SKILL.md` |
-| prototype | `nix/home/configs/claude/skills/prototype/SKILL.md` |
-| zoom-out | `nix/home/configs/claude/skills/zoom-out/SKILL.md` |
-| remove-dead-code | `nix/home/configs/claude/skills/remove-dead-code/` (vendored from [qdhenry/Claude-Command-Suite](https://github.com/qdhenry/Claude-Command-Suite), MIT) |
-| audit-env-variables | `nix/home/configs/claude/skills/audit-env-variables/` (vendored from [qdhenry/Claude-Command-Suite](https://github.com/qdhenry/Claude-Command-Suite), MIT) |
+| handoff | `nix/home/configs/.agents/skills/handoff/SKILL.md` |
+| decompose | `nix/home/configs/.agents/skills/decompose/SKILL.md` |
+| one-domain | `nix/home/configs/.agents/skills/one-domain/SKILL.md` |
+| codex-edit | `nix/home/configs/.agents/skills/codex-edit/SKILL.md` |
+| diagnose | `nix/home/configs/.agents/skills/diagnose/SKILL.md` |
+| tdd | `nix/home/configs/.agents/skills/tdd/SKILL.md` |
+| grill-me | `nix/home/configs/.agents/skills/grill-me/SKILL.md` |
+| prototype | `nix/home/configs/.agents/skills/prototype/SKILL.md` |
+| zoom-out | `nix/home/configs/.agents/skills/zoom-out/SKILL.md` |
+| remove-dead-code | `nix/home/configs/.agents/skills/remove-dead-code/` (vendored from [qdhenry/Claude-Command-Suite](https://github.com/qdhenry/Claude-Command-Suite), MIT) |
+| audit-env-variables | `nix/home/configs/.agents/skills/audit-env-variables/` (vendored from [qdhenry/Claude-Command-Suite](https://github.com/qdhenry/Claude-Command-Suite), MIT) |
 | skill-creator | [anthropics/skills](https://github.com/anthropics/skills) (pinned rev) |
 | frontend-design | [anthropics/skills](https://github.com/anthropics/skills) (pinned rev) |
 

@@ -2,12 +2,12 @@ version = 1
 
 [[annotations]]
 path = [
-    "nix/home/configs/claude/skills/diagnose/SKILL.md",
-    "nix/home/configs/claude/skills/tdd/SKILL.md",
-    "nix/home/configs/claude/skills/grill-me/SKILL.md",
-    "nix/home/configs/claude/skills/prototype/SKILL.md",
-    "nix/home/configs/claude/skills/zoom-out/SKILL.md",
-    "nix/home/configs/claude/skills/handoff/SKILL.md",
+    "nix/home/configs/.agents/skills/diagnose/SKILL.md",
+    "nix/home/configs/.agents/skills/tdd/SKILL.md",
+    "nix/home/configs/.agents/skills/grill-me/SKILL.md",
+    "nix/home/configs/.agents/skills/prototype/SKILL.md",
+    "nix/home/configs/.agents/skills/zoom-out/SKILL.md",
+    "nix/home/configs/.agents/skills/handoff/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 Matt Pocock", "2026 RanolP"]
@@ -16,15 +16,15 @@ SPDX-License-Identifier = "MIT"
 # Vendored verbatim from github.com/qdhenry/Claude-Command-Suite (MIT per its README).
 [[annotations]]
 path = [
-    "nix/home/configs/claude/skills/remove-dead-code/SKILL.md",
-    "nix/home/configs/claude/skills/remove-dead-code/references/agent-coordination.md",
-    "nix/home/configs/claude/skills/remove-dead-code/references/detection-patterns.md",
-    "nix/home/configs/claude/skills/remove-dead-code/workflows/remove-dead-code.md",
-    "nix/home/configs/claude/skills/remove-dead-code/workflows/scan-dead-code.md",
-    "nix/home/configs/claude/skills/remove-dead-code/workflows/validate-removal.md",
-    "nix/home/configs/claude/skills/audit-env-variables/SKILL.md",
-    "nix/home/configs/claude/skills/audit-env-variables/references/service-patterns.md",
-    "nix/home/configs/claude/skills/audit-env-variables/templates/env-audit-report.md",
+    "nix/home/configs/.agents/skills/remove-dead-code/SKILL.md",
+    "nix/home/configs/.agents/skills/remove-dead-code/references/agent-coordination.md",
+    "nix/home/configs/.agents/skills/remove-dead-code/references/detection-patterns.md",
+    "nix/home/configs/.agents/skills/remove-dead-code/workflows/remove-dead-code.md",
+    "nix/home/configs/.agents/skills/remove-dead-code/workflows/scan-dead-code.md",
+    "nix/home/configs/.agents/skills/remove-dead-code/workflows/validate-removal.md",
+    "nix/home/configs/.agents/skills/audit-env-variables/SKILL.md",
+    "nix/home/configs/.agents/skills/audit-env-variables/references/service-patterns.md",
+    "nix/home/configs/.agents/skills/audit-env-variables/templates/env-audit-report.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "qdhenry and Claude-Command-Suite contributors"
@@ -32,14 +32,14 @@ SPDX-License-Identifier = "MIT"
 
 # Vendored from github.com/seochecks-ai/slopless (MIT); CLI invocation adapted to global install.
 [[annotations]]
-path = ["nix/home/configs/claude/skills/slopless/SKILL.md"]
+path = ["nix/home/configs/.agents/skills/slopless/SKILL.md"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "seochecks-ai and slopless contributors"
 SPDX-License-Identifier = "MIT"
 
 # Distilled from github.com/toss/technical-writing (CC BY-NC-SA 4.0); ShareAlike applies.
 [[annotations]]
-path = ["nix/home/configs/claude/skills/technical-writing/SKILL.md"]
+path = ["nix/home/configs/.agents/skills/technical-writing/SKILL.md"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 Viva Republica (Toss)", "2026 RanolP"]
 SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
@@ -53,8 +53,8 @@ SPDX-License-Identifier = "MIT"
 
 [[annotations]]
 path = [
-    "nix/home/configs/claude/skills/git-master/SKILL.md",
-    "nix/home/configs/claude/skills/github-master/SKILL.md",
+    "nix/home/configs/.agents/skills/git-master/SKILL.md",
+    "nix/home/configs/.agents/skills/github-master/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

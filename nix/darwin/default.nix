@@ -50,6 +50,7 @@ in
       "keybase"
       "shottr"
       "proxyman" # HTTP debugging proxy
+      "thaw" # menu bar utility
     ]
     ++ (casksByHost.${hostName} or [ ]);
   };

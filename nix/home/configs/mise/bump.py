@@ -44,8 +44,10 @@ WEEKLY_SECONDS = 7 * 24 * 60 * 60
 HTTP_TIMEOUT = 30
 USER_AGENT = "mise-pin-bumper/2 (+dotfiles)"
 
-# Repo layout: this file lives at <repo>/nix/home/configs/mise/bump.py.
-REPO_DIR = Path(__file__).resolve().parents[4]
+# Under launchd this script runs from the nix store, not the repo tree, so we
+# can't derive the repo from __file__. The dotfiles path is machine-fixed (see
+# rebuildCmd in darwin/default.nix); allow a DOTFILES_DIR override for other hosts.
+REPO_DIR = Path(os.environ.get("DOTFILES_DIR", Path.home() / ".dotfiles"))
 CONFIG_REL = "nix/home/default.nix"
 CONFIG_PATH = REPO_DIR / CONFIG_REL
 

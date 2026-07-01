@@ -2,6 +2,8 @@
 {
   programs.git = {
     enable = true;
+    # Global excludes (core.excludesFile) -- ignored in every repo.
+    ignores = [ ".nanno-workers.json" ];
     signing.format = null;
     settings = {
       user.name = "RanolP";

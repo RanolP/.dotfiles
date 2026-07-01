@@ -37,7 +37,7 @@ Primary interactive shell.
 |-------|-----------|
 | `cat` | `bat` |
 | `ls` | `eza --icons=auto --git --group-directories-first --header --time-style=relative` |
-| `rebuild` | `sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26` |
+| `rebuild` | `sudo /run/current-system/sw/bin/darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26` |
 | `pr` | `gh pr view -w` |
 | `repo` | `gh repo view -w` |
 | `g` | `git` |

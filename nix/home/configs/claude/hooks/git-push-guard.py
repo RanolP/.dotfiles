@@ -14,12 +14,34 @@ Fail-safe: anything we cannot confidently prove targets claude/* exclusively is
 denied. Some exotic push forms are therefore blocked by design.
 """
 import json
+import os
 import re
 import shlex
 import sys
 
 data = json.load(sys.stdin)
 cmd = data.get("tool_input", {}).get("command", "")
+
+
+def bypass_enabled(start):
+    """True if a `.nanno-workers.json` with `"git_push_guard_bypass": true` sits
+    at or above `start` (nearest wins). The file is globally gitignored, so it
+    lives per-worktree and never gets committed. Fail-closed: a missing,
+    unreadable, or malformed config never enables the bypass.
+    """
+    d = os.path.abspath(start or ".")
+    while True:
+        try:
+            with open(os.path.join(d, ".nanno-workers.json")) as fh:
+                cfg = json.load(fh)
+            if isinstance(cfg, dict) and cfg.get("git_push_guard_bypass") is True:
+                return True
+        except (OSError, ValueError):
+            pass
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
 
 # git global options that consume the following token as their argument.
 GLOBAL_OPT_WITH_ARG = {"-C", "-c", "--namespace", "--git-dir", "--work-tree",
@@ -91,6 +113,10 @@ for seg in segments_raw:
 # No git push subcommand anywhere -> no opinion, let normal permission flow run.
 if not push_segments:
     sys.exit(0)
+
+# Escape hatch: a .nanno-workers.json opting in bypasses every push restriction.
+if bypass_enabled(data.get("cwd") or os.getcwd()):
+    decide("allow", "Push guard bypassed via .nanno-workers.json (git_push_guard_bypass).")
 
 # A push mixed into a compound command is hard to reason about.
 if is_compound:

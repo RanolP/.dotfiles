@@ -156,7 +156,7 @@ in
         gh = "2.95.0";
         delta = "0.19.2";
         claude = "2.1.187";
-        "npm:@mariozechner/pi-coding-agent" = "0.73.1";
+        "npm:@earendil-works/pi-coding-agent" = "0.80.3";
         "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
         "npm:@openai/codex" = "0.142.0";
         "npm:slopless" = "0.2.22";

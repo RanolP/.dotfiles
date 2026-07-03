@@ -29,10 +29,10 @@
 - DO: call EnterPlanMode before acting; present the plan concisely
 - NEVER: skip plan mode to save a round-trip on tasks where scope is non-obvious
 
-## Orchestrate via subagents
-- WHEN: task involves investigation, multi-file work, or parallel steps
-- DO: delegate to subagents with a self-contained brief; accumulate only results, not working traces
-- NEVER: do exploration or isolated mutations inline when a subagent can carry the context cost
+## Orchestrate via subagents; size each subagent's model to the task
+- WHEN: any non-trivial task — investigation, multi-file work, parallel steps, or heavy execution
+- DO: treat the main thread as an orchestrator and delegate by default with a self-contained brief, so token-heavy working traces stay out of main context (accumulate results, not traces); match each subagent's model to the reasoning it needs — haiku for mechanical/search/formatting, sonnet for standard implementation, opus for deep reasoning/design/debugging; use `fork` when the subagent needs this thread's context (fork inherits the parent model, ignoring any override)
+- NEVER: do exploration or isolated mutations inline when a subagent can carry the context cost; spend a top-tier model on mechanical work or a cheap model on work that needs real reasoning
 
 ## Cap at 3 attempts
 - WHEN: a tool call or test fails

@@ -35,6 +35,26 @@ Skills extend Claude Code with domain-specific workflows.
 
 The `anthropics/skills` repo is fetched via `pkgs.fetchFromGitHub` at a pinned revision and linked into `~/.claude/skills/`. The two vendored multi-file skills are linked as whole directories rather than a single `SKILL.md`, and their MIT provenance is declared in `REUSE.toml`.
 
+## Statusline
+
+`~/.claude/statusline.sh` renders a custom 3-line statusline from the session JSON Claude Code pipes to it:
+
+- **Line 1:** folder / branch `+staged ~modified` / `#PR review_state` (color-coded) — right-aligned: model + effort + thinking (🧠)
+- **Line 2:** `used $cost with N% contexts` — right-aligned: `+added -removed` and session duration
+- **Line 3:** 5h and weekly rate-limit usage with time-to-reset (shown only when the data is present)
+
+Git info is cached per session under `/tmp` (5s TTL) to avoid lag on large repos, and segments are right-justified against the real terminal width.
+
+### Alternative considered: Starship native statusline
+
+Starship ships [`starship statusline claude-code`](https://starship.rs/advanced-config/#statusline-for-claude-code) as a drop-in Claude Code statusline. Evaluated 2026-07-03 and **not adopted** — it is not feature-complete against the script above:
+
+- Its three modules (`claude_model`, `claude_context`, `claude_cost`) cover only lines 1-2.
+- Rate limits (line 3) exist only in the unmerged, stalled upstream PR [starship#7442](https://github.com/starship/starship/pull/7442) (`claude_usage` module), with no maintainer review as of 2026-06-21.
+- There is no upstream module for effort/thinking, PR number + review state, or staged/modified file counts.
+
+Revisit if #7442 merges and effort/PR modules land upstream.
+
 ## Hooks
 
 ### git-push-guard

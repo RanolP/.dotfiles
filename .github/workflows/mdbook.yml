@@ -41,7 +41,25 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      ACTIONS_STEP_DEBUG: true
+      ACTIONS_RUNNER_DEBUG: true
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v5
+
+      - name: Dump Pages deployment status on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "::group::Pages config"
+          gh api "repos/${GITHUB_REPOSITORY}/pages" || true
+          echo "::endgroup::"
+          echo "::group::Latest deployment statuses for ${GITHUB_SHA}"
+          dep=$(gh api "repos/${GITHUB_REPOSITORY}/deployments?sha=${GITHUB_SHA}&environment=github-pages" --jq '.[0].id')
+          echo "deployment id: ${dep}"
+          gh api "repos/${GITHUB_REPOSITORY}/deployments/${dep}/statuses" \
+            --jq '.[] | {state, description, log_url, created_at}' || true
+          echo "::endgroup::"

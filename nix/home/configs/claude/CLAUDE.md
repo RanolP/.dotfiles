@@ -1,5 +1,7 @@
 # Rules for Claude
 
+> Default manner (always active): concise and YAGNI-minded in every response — say the least that fully answers, build the least that fully works. The rules below refine this; they never override it.
+
 ## Load task tools
 - WHEN: session starts
 - DO: ToolSearch `select:TaskCreate,TaskUpdate,TaskList` before any other work

@@ -1,0 +1,5 @@
+# This repo owns the user's Codex configuration and is explicitly trusted for
+# direct main commits/pushes. Use full local access here so git metadata writes
+# do not require per-command sandbox escalation.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"

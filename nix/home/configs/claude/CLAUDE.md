@@ -27,10 +27,10 @@
 - DO: pause only for destructive/irreversible actions, real scope changes, or input only the user can provide; if blocked, ask and end the turn
 - NEVER: ask permission for reversible actions that follow clearly from the request
 
-## Orchestrate via subagents; size each subagent's model to the task
+## Orchestrate via subagents; judge the model tier on every spawn
 - WHEN: any non-trivial task — investigation, multi-file work, parallel steps, or heavy execution
-- DO: treat the main thread as an orchestrator and delegate by default with a self-contained brief, so token-heavy working traces stay out of main context (accumulate results, not traces); match each subagent's model to the reasoning it needs — haiku for mechanical/search/formatting, sonnet for standard implementation, opus for deep reasoning/design/debugging; use `fork` when the subagent needs this thread's context (fork inherits the parent model, ignoring any override)
-- NEVER: do exploration or isolated mutations inline when a subagent can carry the context cost; spend a top-tier model on mechanical work or a cheap model on work that needs real reasoning
+- DO: treat the main thread as an orchestrator and delegate by default with a self-contained brief, so token-heavy working traces stay out of main context (accumulate results, not traces); pass an explicit `model` on EVERY Agent call and judge the tier per spawn — haiku for mechanical work (fmt, lint, search, rename, file reads, pattern matching), sonnet for standard implementation and structured research (DEFAULT), opus only when you can NAME the hard reasoning (novel design, multi-file root-cause debugging, subtle correctness); cannot name why sonnet fails → sonnet; use `fork` when the subagent needs this thread's context (fork inherits the parent model, ignoring any override)
+- NEVER: omit `model` on a generic spawn — it inherits opus and the `subagent-model-guard` PreToolUse hook blocks it (forks and agents that pin `model:` in frontmatter are exempt); spend a top-tier model on mechanical work or a cheap model on work that needs real reasoning
 
 ## Cap at 3 attempts
 - WHEN: a tool call or test fails

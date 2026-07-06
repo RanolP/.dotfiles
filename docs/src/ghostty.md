@@ -17,7 +17,7 @@ Terminal emulator.
 
 | Binding | Action |
 |---------|--------|
-| Super+D | unbound (handed to [Zellij](./zellij.md)) |
-| Super+Shift+D | unbound (handed to [Zellij](./zellij.md)) |
+| Super+D | New split to the right |
+| Super+Shift+D | New split below |
 
 `package = null` in home-manager — config is managed declaratively but the app binary comes from the Homebrew cask.

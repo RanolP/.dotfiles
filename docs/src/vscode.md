@@ -42,3 +42,10 @@ These are present but not yet declared in nix — they get wiped on rebuild:
 | scm.defaultViewMode | tree |
 | terminal.integrated.defaultProfile.osx | nu |
 | terminal.integrated.profiles.osx.nu.path | `/run/current-system/sw/bin/nu` |
+
+## Keybinds
+
+| Binding | Action |
+|---------|--------|
+| Cmd+D | Split focused terminal |
+| Cmd+Shift+D | Split focused terminal |

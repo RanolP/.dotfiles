@@ -12,8 +12,8 @@
       font-size = 16;
       command = "/etc/profiles/per-user/ranolp/bin/nu";
       keybind = [
-        "super+d=unbind"
-        "super+shift+d=unbind"
+        "super+d=new_split:right"
+        "super+shift+d=new_split:down"
       ];
     };
   };

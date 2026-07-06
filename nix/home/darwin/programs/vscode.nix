@@ -33,7 +33,19 @@
               sha256 = "sha256-0yOtvHL24eJizmzXAC956Tx9eNJaWDPl/OAhmFv2KJk=";
             };
           })
-        ];
+      ];
+      keybindings = [
+        {
+          key = "cmd+d";
+          command = "workbench.action.terminal.split";
+          when = "terminalFocus";
+        }
+        {
+          key = "cmd+shift+d";
+          command = "workbench.action.terminal.split";
+          when = "terminalFocus";
+        }
+      ];
       userSettings = {
         # VSCode is pinned by nixpkgs; disable the in-app updater nag.
         "update.mode" = "none";

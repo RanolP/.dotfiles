@@ -11,7 +11,7 @@ Terminal multiplexer.
 | Super+D | New pane to the right |
 | Super+Shift+D | New pane below |
 
-These mirror the bindings unbound in [Ghostty](./ghostty.md).
+These mirror the split bindings in [Ghostty](./ghostty.md).
 
 ## Behaviour
 

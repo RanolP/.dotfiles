@@ -64,6 +64,15 @@
             "command": "python3 ~/.claude/hooks/git-push-guard.py"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/subagent-model-guard.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -91,6 +91,10 @@ in
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;
       };
+      ".claude/hooks/subagent-model-guard.py" = {
+        source = ./configs/claude/hooks/subagent-model-guard.py;
+        executable = true;
+      };
       # Codex reuses the same push guard (its PreToolUse hook schema matches Claude's:
       # reads tool_input.command, denies via hookSpecificOutput.permissionDecision).
       ".codex/hooks/git-push-guard.py" = {

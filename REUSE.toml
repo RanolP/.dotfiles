@@ -61,7 +61,10 @@ SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["nix/home/configs/claude/hooks/git-push-guard.py"]
+path = [
+    "nix/home/configs/claude/hooks/git-push-guard.py",
+    "nix/home/configs/claude/hooks/subagent-model-guard.py",
+]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"

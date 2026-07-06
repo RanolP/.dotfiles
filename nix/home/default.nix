@@ -27,6 +27,12 @@ let
     cp ${./configs/claude/agents}/*.md $out/
   '';
 
+  sharedAgentRules = ./configs/.agents/AGENTS.md;
+  claudeSpecificRules = ./configs/claude/CLAUDE.md;
+  claudeUserRules = pkgs.writeText "CLAUDE.md" (
+    (builtins.readFile sharedAgentRules) + "\n" + (builtins.readFile claudeSpecificRules)
+  );
+
   # Skills, defined once and linked into both tools' skill trees below. Local
   # skills point at the whole directory (each holds SKILL.md plus optional
   # references/); vendored ones point into their fetched store paths.
@@ -82,7 +88,8 @@ in
 
   home.file = lib.mkMerge [
     {
-      ".claude/CLAUDE.md".source = ./configs/claude/CLAUDE.md;
+      ".codex/AGENTS.md".source = sharedAgentRules;
+      ".claude/CLAUDE.md".source = claudeUserRules;
       ".claude/statusline.sh" = {
         source = ./configs/claude/statusline.sh;
         executable = true;

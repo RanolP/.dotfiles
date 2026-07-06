@@ -16,7 +16,7 @@ file_opener = "vscode"
 personality = "pragmatic"
 check_for_update_on_startup = false
 commit_attribution = "Codex (gpt-5.5) <noreply@openai.com>"
-project_doc_fallback_filenames = ["CLAUDE.md"]
+project_doc_fallback_filenames = []
 
 [sandbox_workspace_write]
 network_access = true

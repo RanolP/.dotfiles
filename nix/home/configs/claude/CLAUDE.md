@@ -27,20 +27,19 @@
 - DO: pause only for destructive/irreversible actions, real scope changes, or input only the user can provide; if blocked, ask and end the turn
 - NEVER: ask permission for reversible actions that follow clearly from the request
 
-## Orchestrate via subagents; judge the model tier on every spawn
-- WHEN: any non-trivial task — investigation, multi-file work, parallel steps, or heavy execution
-- DO: treat the main thread as an orchestrator and delegate by default with a self-contained brief, so token-heavy working traces stay out of main context (accumulate results, not traces); pass an explicit `model` on EVERY Agent call and judge the tier per spawn — haiku for mechanical work (fmt, lint, search, rename, file reads, pattern matching), sonnet for standard implementation and structured research (DEFAULT), opus only when you can NAME the hard reasoning (novel design, multi-file root-cause debugging, subtle correctness); cannot name why sonnet fails → sonnet; use `fork` when the subagent needs this thread's context (fork inherits the parent model, ignoring any override)
-- NEVER: omit `model` on a generic spawn — it inherits opus and the `subagent-model-guard` PreToolUse hook blocks it (forks and agents that pin `model:` in frontmatter are exempt); spend a top-tier model on mechanical work or a cheap model on work that needs real reasoning
+## Orchestrate via subagents — Claude subagent or codex
+- WHEN: any non-trivial task — investigation, implementation, multi-file work, parallel steps, or heavy execution
+- DO: treat the main thread as an orchestrator; delegate by default with a self-contained brief so token-heavy traces stay out of main context (accumulate results, not traces); route each delegation to the right worker —
+  - native Claude subagent (investigation, research, review, design): pass an explicit `model` on EVERY Agent call — haiku for mechanical work (fmt, lint, search, rename, file reads, pattern matching), sonnet for structured research and review (DEFAULT), opus only when you can NAME the hard reasoning (novel design, multi-file root-cause debugging, subtle correctness); if you cannot name why sonnet fails, use sonnet; use `fork` when the subagent needs this thread's context (fork inherits the parent model, ignoring any override)
+  - codex (non-native; driven via `codex exec` / the `codex-edit` skill): DEFAULT implementer for well-scoped code changes (a feature, a multi-file rollout, a mechanical change) — higher quota and surgical at feature work; runs at xhigh via config; give it a tight Goal/Context/Constraints/Done-when prompt naming exact paths and forbidding adjacent refactors; checkpoint-commit first
+  - cross-review both ways (neither worker ships an unreviewed diff): after codex runs, review its `git diff HEAD` for over-editing (its main failure mode) and revert scope creep; after you author non-trivial code yourself, get codex's review via `codex exec review --uncommitted` and address findings before finishing
+- NEVER: do exploration or isolated work inline when a subagent can carry the context cost; omit `model` on a native spawn — it inherits opus and the `subagent-model-guard` PreToolUse hook blocks it (forks and agents that pin `model:` in frontmatter are exempt); use a Claude implementer subagent when codex can execute the change; ship any diff (codex's or your own) without the other worker's review; spend a top-tier model on mechanical work or a cheap model on work that needs real reasoning
+- EXCEPT: tiny one-liners, exploratory/uncertain scope, or active dialogue with the user — edit inline
 
 ## Cap at 3 attempts
 - WHEN: a tool call or test fails
 - DO: use a distinct new hypothesis each retry; after 3 failures notify and stop
 - NEVER: retry the same approach
-
-## Delegate code edits to codex when scope is clear
-- WHEN: a code change touches 3+ files with a consistent pattern, or is mechanical (rename, interface rollout, test generation, uniform error handling)
-- DO: invoke the `codex-edit` skill; write a tight Goal/Context/Constraints/Done-when prompt; run `codex exec -s workspace-write`; review with `git diff HEAD`
-- NEVER: edit multi-file mechanical changes inline when codex can execute them more accurately; skip the checkpoint commit before running codex
 
 ## Minimum change, surgical precision
 - WHEN: modifying code

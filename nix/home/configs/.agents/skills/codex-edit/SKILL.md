@@ -45,8 +45,12 @@ git diff HEAD | codex exec -s workspace-write "PROMPT"
 cat error.log | codex exec -s workspace-write "Diagnose and fix the cause in src/"
 
 # Model and reasoning effort come from ~/.codex/config.toml (gpt-5.5 at xhigh)
-# — you rarely override. Downgrade effort only for trivial mechanical edits:
-codex exec -c "model_reasoning_effort=medium" -s workspace-write "PROMPT"
+# for substantive implementation — you rarely override.
+
+# Fast tier: for mechanical/quick coding tasks (fmt, lint, rename, tiny edits)
+# prefer codex-spark — an ultra-fast coding model, the much-faster alternative
+# to a haiku subagent. Reach for this instead of downgrading effort:
+codex exec -m gpt-5.3-codex-spark -s workspace-write "PROMPT"
 
 # Save agent's final summary message
 codex exec -s workspace-write "PROMPT" -o /tmp/codex-summary.txt

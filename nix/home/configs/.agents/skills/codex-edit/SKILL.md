@@ -1,14 +1,16 @@
 ---
 name: codex-edit
 description: >
-  Use OpenAI Codex CLI (codex exec) to make code edits when execution accuracy
-  matters more than exploration. Invoke this skill when a task is well-scoped
-  but execution-heavy: renaming symbols across files, rolling out a new
-  interface, generating tests across a module, adding uniform error handling,
-  or any multi-file mechanical change. Also invoke when the user says "use
-  codex", "delegate to codex", or when a previous Claude edit attempt was
-  imprecise or missed files. Prefer this over inline editing whenever the
-  change touches 3+ files with a consistent pattern.
+  Use OpenAI Codex CLI (codex exec) as the DEFAULT implementer for non-trivial
+  code changes — codex has the higher quota and is surgical at feature work.
+  Invoke this skill for any well-scoped implementation: a new feature, renaming
+  symbols across files, rolling out a new interface, generating tests across a
+  module, adding uniform error handling, or any multi-file change. Also invoke
+  when the user says "use codex", "delegate to codex", or when a previous Claude
+  edit attempt was imprecise. Covers both directions of review: Claude reviews
+  codex's diff for over-editing, and `codex exec review` reviews Claude's work.
+  Prefer this over inline editing or a Claude implementer subagent whenever the
+  scope is clear. Edit inline only for tiny one-liners or exploratory scope.
 ---
 
 # codex-edit
@@ -20,13 +22,17 @@ back-and-forth.
 
 ## When to delegate vs edit inline
 
+codex is the default implementer — reach for it whenever the scope is clear,
+not only for multi-file changes. Prefer it over spawning a Claude implementer
+subagent (codex has the higher quota).
+
 | Delegate to codex exec | Edit inline |
 |---|---|
-| 3+ files with consistent pattern | Single targeted fix |
-| Cross-cutting rename / interface rollout | Exploratory, uncertain scope |
-| Generate tests across a module | Needs iterative reasoning |
-| Add logging / error handling uniformly | Quick one-liner change |
-| Previous Claude attempt missed files | Active dialogue with user |
+| A new, well-scoped feature | Single targeted fix / one-liner |
+| 3+ files with consistent pattern | Exploratory, uncertain scope |
+| Cross-cutting rename / interface rollout | Needs iterative reasoning |
+| Generate tests across a module | Active dialogue with user |
+| Add logging / error handling uniformly | Previous codex diff is being reviewed |
 
 ## Core invocation
 
@@ -38,11 +44,9 @@ codex exec -s workspace-write "PROMPT"
 git diff HEAD | codex exec -s workspace-write "PROMPT"
 cat error.log | codex exec -s workspace-write "Diagnose and fix the cause in src/"
 
-# Heavier tasks — more capable model
-codex exec -m gpt-4.1 -s workspace-write "PROMPT"
-
-# Upgrade reasoning effort without switching model
-codex exec -c "model_reasoning_effort=high" -s workspace-write "PROMPT"
+# Model and reasoning effort come from ~/.codex/config.toml (gpt-5.5 at xhigh)
+# — you rarely override. Downgrade effort only for trivial mechanical edits:
+codex exec -c "model_reasoning_effort=medium" -s workspace-write "PROMPT"
 
 # Save agent's final summary message
 codex exec -s workspace-write "PROMPT" -o /tmp/codex-summary.txt
@@ -58,9 +62,13 @@ Always include four parts — vague prompts cause codex to guess scope:
 ```
 Goal: <what to change>
 Context: <relevant files, error, or reproduction step>
-Constraints: <do not touch X, no new deps, keep API surface>
+Constraints: <touch ONLY these paths; no adjacent refactors; no new deps; keep API surface>
 Done when: <tests pass / build succeeds / specific behavior confirmed>
 ```
+
+codex's main failure mode is over-editing — refactoring code it wasn't asked
+to touch. Counter it in Constraints: name the exact files/paths it may modify
+and explicitly forbid touching anything else. Then verify in the review step.
 
 **Good:**
 ```
@@ -112,10 +120,35 @@ git add -p            # keep what looks good
 git checkout .        # revert everything if wrong
 ```
 
-## Claude + codex workflow
+## Cross-review — both directions
 
-1. Claude reads the task and decides this is a good codex candidate (3+ files, clear pattern)
-2. Claude writes a precise prompt using Goal/Context/Constraints/Done-when
-3. Claude runs `codex exec` via Bash and waits for it to finish
-4. Claude runs `git diff HEAD` and reports what changed
-5. If the result is wrong, Claude refines the prompt and reruns — or falls back to inline editing after two failed attempts
+The two agents check each other. Neither ships an unreviewed diff.
+
+### Claude reviews codex's work (default path)
+
+1. Claude decides this is a codex candidate and writes a precise prompt
+2. Checkpoint-commit, then run `codex exec -s workspace-write`
+3. `git diff HEAD` — read every hunk, specifically hunting codex's over-editing:
+   changes outside the named paths, unrequested refactors, drive-by renames
+4. Revert scope creep (`git checkout -- <path>` / `git add -p` to keep only the
+   in-scope hunks); keep only what the Goal asked for
+5. If the core change is wrong, refine the prompt and rerun — fall back to inline
+   editing after two failed attempts
+
+### codex reviews Claude's work (the vice-versa)
+
+After Claude implements something non-trivial itself, get codex's second pair of
+eyes before finishing:
+
+```bash
+# Review the working-tree changes Claude just made
+codex exec review --uncommitted
+
+# Or review against a base branch / a specific commit
+codex exec review --base main
+codex exec review --commit HEAD
+```
+
+Address codex's findings, or note why a finding is a deliberate choice. This is
+the counterpart to Claude reviewing codex — every change gets a review from the
+agent that did not write it.

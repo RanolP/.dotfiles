@@ -12,7 +12,25 @@
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true,
     "clangd-lsp@claude-plugins-official": true,
-    "laftel-backend-skills@laftel-backend-skills": true
+    "laftel-backend-skills@laftel-backend-skills": true,
+    "supermemory@supermemory-plugins": false,
+    "humanize-korean@im-not-ai": false
+  },
+  "skillOverrides": {
+    "humanize-korean": "user-invocable-only",
+    "humanize": "user-invocable-only",
+    "humanize-redo": "user-invocable-only",
+    "agents-sdk": "user-invocable-only",
+    "cloudflare": "user-invocable-only",
+    "cloudflare-email-service": "user-invocable-only",
+    "cloudflare-one": "user-invocable-only",
+    "cloudflare-one-migrations": "user-invocable-only",
+    "durable-objects": "user-invocable-only",
+    "sandbox-sdk": "user-invocable-only",
+    "turnstile-spin": "user-invocable-only",
+    "web-perf": "user-invocable-only",
+    "workers-best-practices": "user-invocable-only",
+    "wrangler": "user-invocable-only"
   },
   "model": "opus",
   "effortLevel": "medium",
@@ -45,10 +63,6 @@
         "repo": "epoko77-ai/im-not-ai"
       }
     }
-  },
-  "enabledPlugins": {
-    "supermemory@supermemory-plugins": true,
-    "humanize-korean@im-not-ai": true
   },
   "hooks": {
     "PreToolUse": [

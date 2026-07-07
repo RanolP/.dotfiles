@@ -19,11 +19,38 @@ let
     hash = "sha256-iadJGHavCEXPBYjeo5SyCSgn2yWIJ5YUvRG/2qbuVAY=";
   };
 
+  # Supermemory, manual-search-only. The plugin is disabled in settings.json:
+  # its SessionStart/UserPromptSubmit hooks inject recall context into every
+  # request, Claude Code has no per-hook disable, and the plugin's own
+  # injectProfile flag is dead config in v0.0.9. Only the search skill is
+  # vendored here; auth still reads ~/.supermemory-claude/credentials.json.
+  # Note: with the plugin's Stop hook gone, sessions are no longer auto-saved,
+  # so search only covers memories accumulated up to the disable date.
+  supermemoryPlugin = pkgs.fetchFromGitHub {
+    owner = "supermemoryai";
+    repo = "claude-supermemory";
+    rev = "42cc164e8f8f0f8485184c0db5d8d6723ad1fac1"; # v0.0.9
+    hash = "sha256-n+UjPRToN7OHWB1gXXu/+p8AuC41PkKAOTo9s5H9EA8=";
+  };
+  supermemorySearchSkill = pkgs.runCommand "supermemory-search-skill" { } ''
+    mkdir -p $out
+    sed 's|''${CLAUDE_PLUGIN_ROOT}|${supermemoryPlugin}/plugin|g' \
+      ${supermemoryPlugin}/plugin/skills/supermemory-search/SKILL.md > $out/SKILL.md
+  '';
+
   # Merge the im-not-ai agents with local agent definitions so a sibling file
   # (prose-editor) can live alongside the 12 vendored agents in ~/.claude/agents.
+  # The vendored agents' long Korean descriptions are collapsed to one short
+  # line: agent descriptions always load into the system prompt (there is no
+  # hidden-but-spawnable mode), and these agents are only ever spawned
+  # explicitly by the humanize skills, so the routing text is dead weight.
   claudeAgents = pkgs.runCommand "claude-agents" { } ''
     mkdir -p $out
     cp ${humanizeKorean}/agents/*.md $out/
+    chmod +w $out/*.md
+    for f in $out/*.md; do
+      sed -i 's/^description: .*/description: humanize-korean pipeline worker. Never auto-delegate — spawned by name from the humanize skills only./' "$f"
+    done
     cp ${./configs/claude/agents}/*.md $out/
   '';
 
@@ -57,6 +84,7 @@ let
     humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
     humanize = "${humanizeKorean}/.claude/skills/humanize";
     humanize-redo = "${humanizeKorean}/.claude/skills/humanize-redo";
+    supermemory-search = supermemorySearchSkill;
   };
 
   # Link every skill into both tools' trees: Claude reads ~/.claude/skills,

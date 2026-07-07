@@ -7,6 +7,8 @@ when_to_use: When the user says "website-explainer", "웹사이트로 설명해�
 
 Create an Apple-style Korean explainer website. Render it via the Artifact tool as a self-contained HTML file.
 
+**No external resources.** Artifacts run under a strict CSP — no CDN scripts, no external stylesheets, no web fonts. Everything must be inline.
+
 ## Design principles
 
 **One slide = one concept.** Each `<section>` is a self-contained content block — one idea, one emphasis, visually isolated from neighbors by background or spacing. Sections size to their content; they are not forced to full viewport height.
@@ -16,8 +18,8 @@ Create an Apple-style Korean explainer website. Render it via the Artifact tool 
 **Minimal text.** Body copy: ≤ 2 sentences. Subtext: ≤ 1 line. If it can be shown as a visual, number, or icon, remove the sentence.
 
 **Apple aesthetic.**
-- Font: `-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Noto Sans KR', sans-serif`
-- Palette: clean white / deep black / one accent (#0071e3 or user-supplied). No decorative gradients.
+- Font: `-apple-system, BlinkMacSystemFont, 'Noto Sans KR', sans-serif` — system font, no import needed.
+- Palette: clean white / deep black / one accent (`--accent: #0071e3` or user-supplied). No decorative gradients.
 - Space: generous padding. Elements breathe. Nothing is crowded.
 
 **Korean only.** Write in Korean. Short, declarative sentences. Never use: 이를 통해, 다양한, 최적화, 효율적인, 향상, 편리한, 스마트한, 강력한, 혁신적인.
@@ -32,7 +34,7 @@ Plan the slide count first (shoot for 5–8). More slides is better than crowded
 
 ## Starter template
 
-Start from this template exactly. Fill in the marked placeholders. Add slides by copying the existing `<section>` patterns.
+Start from this template exactly. It is fully self-contained — no external dependencies. Fill in the marked placeholders. Add slides by copying existing `<section>` patterns.
 
 ```html
 <!doctype html>
@@ -41,69 +43,113 @@ Start from this template exactly. Fill in the marked placeholders. Add slides by
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TITLE</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: { accent: '#0071e3' },
-        },
-      },
-    }
-  </script>
   <style>
-    * { -webkit-font-smoothing: antialiased; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans KR', sans-serif; }
+    :root {
+      --accent: #0071e3;
+      --gray-50: #f9f9f9;
+      --gray-200: #e5e5e5;
+      --gray-400: #9ca3af;
+      --gray-500: #6b7280;
+      --gray-900: #111;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans KR', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: #fff;
+      color: var(--gray-900);
+      line-height: 1.5;
+    }
     section {
       display: flex;
       flex-direction: column;
       align-items: center;
       text-align: center;
       padding: 6rem 2rem;
+      max-width: 900px;
+      margin: 0 auto;
     }
+    /* Typography scale */
+    .eyebrow { font-size: .875rem; letter-spacing: .15em; text-transform: uppercase; color: var(--gray-400); margin-bottom: 1.5rem; }
+    .h1 { font-size: clamp(3rem, 8vw, 5.5rem); font-weight: 700; letter-spacing: -.03em; line-height: 1; margin-bottom: 1.5rem; }
+    .h2 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; letter-spacing: -.02em; line-height: 1.1; margin-bottom: 2rem; }
+    .hero-number { font-size: clamp(5rem, 18vw, 9rem); font-weight: 700; line-height: 1; color: var(--accent); }
+    .lead { font-size: clamp(1.1rem, 2.5vw, 1.375rem); color: var(--gray-500); max-width: 36rem; }
+    .caption { font-size: 1rem; color: var(--gray-400); max-width: 30rem; margin-top: 1.5rem; }
+    /* Section backgrounds */
+    .bg-white  { background: #fff; }
+    .bg-muted  { background: var(--gray-50); }
+    .bg-dark   { background: var(--gray-900); color: #fff; }
+    .bg-dark .lead, .bg-dark .caption { color: var(--gray-400); }
+    .bg-accent-fill { background: var(--accent); color: #fff; }
+    .bg-accent-fill .lead { color: rgba(255,255,255,.75); }
+    /* Dividers between slides */
+    section + section { border-top: 1px solid var(--gray-200); }
+    .bg-dark + section, section + .bg-dark,
+    .bg-accent-fill + section, section + .bg-accent-fill { border-top: none; }
+    /* CTA button */
+    .btn {
+      display: inline-block;
+      margin-top: 2.5rem;
+      padding: .875rem 2.5rem;
+      border-radius: 9999px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      background: #fff;
+      color: var(--accent);
+      text-decoration: none;
+      transition: opacity .15s;
+    }
+    .btn:hover { opacity: .85; }
+    /* Spacing helpers */
+    .mt-sm { margin-top: 1rem; }
+    .mt-md { margin-top: 1.5rem; }
+    .mt-lg { margin-top: 2.5rem; }
+    .mb-sm { margin-bottom: 1rem; }
+    .mb-md { margin-bottom: 1.5rem; }
   </style>
 </head>
-<body class="bg-white text-gray-900">
+<body>
 
   <!-- Slide 1: Title -->
   <section class="bg-white">
-    <p class="text-base tracking-widest uppercase text-gray-400 mb-6">CATEGORY</p>
-    <h1 class="text-7xl md:text-8xl font-bold tracking-tight leading-none mb-6">TITLE</h1>
-    <p class="text-2xl text-gray-500 max-w-xl">ONE_LINE_HOOK</p>
+    <p class="eyebrow">CATEGORY</p>
+    <h1 class="h1">TITLE</h1>
+    <p class="lead">ONE_LINE_HOOK</p>
   </section>
 
-  <!-- Slide 2: Big number or stat — the ONE emphasis -->
-  <section class="bg-gray-50">
-    <p class="text-xl text-gray-400 mb-4">CONTEXT</p>
-    <p class="text-[9rem] font-bold leading-none text-accent">THE_NUMBER</p>
-    <p class="text-xl text-gray-500 mt-6 max-w-lg">WHAT_IT_MEANS</p>
+  <!-- Slide 2: Big number — the ONE emphasis -->
+  <section class="bg-muted">
+    <p class="eyebrow">CONTEXT</p>
+    <p class="hero-number">THE_NUMBER</p>
+    <p class="lead mt-md">WHAT_IT_MEANS</p>
   </section>
 
-  <!-- Slide 3: Concept with visual -->
+  <!-- Slide 3: Concept with SVG visual -->
   <section class="bg-white">
-    <h2 class="text-5xl font-bold mb-10">CONCEPT_TITLE</h2>
-    <!-- Replace this SVG with something relevant -->
-    <svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="100" cy="100" r="80" fill="#0071e3" opacity="0.1"/>
-      <circle cx="100" cy="100" r="50" fill="#0071e3" opacity="0.3"/>
-      <circle cx="100" cy="100" r="20" fill="#0071e3"/>
+    <h2 class="h2">CONCEPT_TITLE</h2>
+    <!-- Replace this SVG with something relevant to the topic -->
+    <svg width="160" height="160" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="80" cy="80" r="64" fill="var(--accent)" opacity=".1"/>
+      <circle cx="80" cy="80" r="40" fill="var(--accent)" opacity=".3"/>
+      <circle cx="80" cy="80" r="16" fill="var(--accent)"/>
     </svg>
-    <p class="text-xl text-gray-500 max-w-md mt-10">DESCRIPTION_MAX_2_SENTENCES</p>
+    <p class="caption">DESCRIPTION_MAX_2_SENTENCES</p>
   </section>
 
-  <!-- Slide 4: Contrast or comparison — dark background -->
-  <section class="bg-gray-900 text-white">
-    <p class="text-lg text-gray-400 mb-4">BEFORE_LABEL</p>
-    <h2 class="text-6xl font-bold mb-4">THE_KEY_POINT</h2>
-    <p class="text-xl text-gray-400 max-w-lg">BRIEF_EXPLANATION</p>
+  <!-- Slide 4: Dark contrast section -->
+  <section class="bg-dark">
+    <p class="eyebrow">BEFORE_LABEL</p>
+    <h2 class="h2">THE_KEY_POINT</h2>
+    <p class="lead">BRIEF_EXPLANATION</p>
   </section>
 
-  <!-- Last Slide: Closing / CTA -->
-  <section class="bg-accent text-white">
-    <h2 class="text-6xl font-bold mb-6">CLOSING_STATEMENT</h2>
-    <p class="text-xl opacity-75 max-w-lg mb-10">OPTIONAL_SUBTEXT</p>
-    <a href="#" class="inline-block bg-white text-accent font-semibold px-10 py-4 rounded-full text-lg hover:opacity-90 transition">CTA_TEXT</a>
+  <!-- Last slide: CTA -->
+  <section class="bg-accent-fill">
+    <h2 class="h2">CLOSING_STATEMENT</h2>
+    <p class="lead">OPTIONAL_SUBTEXT</p>
+    <a href="#" class="btn">CTA_TEXT</a>
   </section>
 
 </body>
@@ -114,11 +160,11 @@ Start from this template exactly. Fill in the marked placeholders. Add slides by
 
 | What to emphasize | How |
 |---|---|
-| A number / stat | `text-[9rem]` font, accent color |
-| A single word | `text-8xl font-bold`, contrasting bg |
-| A short phrase | `text-5xl font-bold`, dark section |
-| A visual / diagram | Full-width SVG, minimal caption below |
-| A contrast | Split: before (gray) / after (accent) |
+| A number / stat | `.hero-number` — huge, accent color |
+| A single word or phrase | `.h1` or `.h2` on a contrasting background |
+| A visual / diagram | Inline SVG, `.caption` below |
+| A before/after contrast | `.bg-dark` section |
+| A closing punch | `.bg-accent-fill` with `.btn` |
 
 Use each pattern at most twice across the whole page.
 
@@ -126,10 +172,9 @@ Use each pattern at most twice across the whole page.
 
 - Two things emphasized in one slide.
 - ≥ 3 body sentences on any slide.
+- Any `<link>`, `<script src>`, or `@import url(...)` — all external resources are blocked.
 - Generic Korean AI phrases (이를 통해 / 다양한 / 최적화 / 스마트한).
 - Slide titles that label instead of declare ("개요", "소개" → state the actual idea).
-- Gradient text on more than one heading.
-- Stock art descriptions in SVG comments.
 - Cookie banners, dark-mode toggles, nav bars, footers — none of these.
 
 ## Artifact output

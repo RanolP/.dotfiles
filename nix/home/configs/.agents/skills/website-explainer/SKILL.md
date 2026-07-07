@@ -9,7 +9,7 @@ Create an Apple-style Korean explainer website. Render it via the Artifact tool 
 
 ## Design principles
 
-**One slide = one concept.** Each `<section>` fills 100vh. One idea. Never more.
+**One slide = one concept.** Each `<section>` is a self-contained content block — one idea, one emphasis, visually isolated from neighbors by background or spacing. Sections size to their content; they are not forced to full viewport height.
 
 **One emphasis per slide.** Pick ONE element — a number, a word, a short phrase — and make it impossible to miss (oversized, bold, accent color). Everything else recedes visually.
 
@@ -56,13 +56,11 @@ Start from this template exactly. Fill in the marked placeholders. Add slides by
     body { font-family: -apple-system, BlinkMacSystemFont, 'Noto Sans KR', sans-serif; }
     html { scroll-behavior: smooth; }
     section {
-      min-height: 100vh;
       display: flex;
       flex-direction: column;
-      justify-content: center;
       align-items: center;
-      padding: 4rem 2rem;
       text-align: center;
+      padding: 6rem 2rem;
     }
   </style>
 </head>

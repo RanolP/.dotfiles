@@ -80,6 +80,7 @@ let
     slopless = localSkill "slopless";
     remove-dead-code = localSkill "remove-dead-code";
     audit-env-variables = localSkill "audit-env-variables";
+    website-explainer = localSkill "website-explainer";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
     humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
     humanize = "${humanizeKorean}/.claude/skills/humanize";

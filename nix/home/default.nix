@@ -168,7 +168,7 @@ in
     if [ -f "$localTrust" ]; then
       {
         echo ""
-        ${pkgs.gawk}/bin/awk '/^\[/ { keep = ($0 ~ /^\[projects\./) } keep' "$localTrust"
+        ${pkgs.gawk}/bin/awk '/^\[/ { keep = ($0 ~ /^\[projects\./ || $0 ~ /^\[mcp_servers\./) } keep' "$localTrust"
       } >> "$out"
     fi
   '';

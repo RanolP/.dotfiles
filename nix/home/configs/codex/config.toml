@@ -76,3 +76,6 @@ statusMessage = "Checking git push target"
 
 [plugins."github@openai-curated"]
 enabled = true
+
+[mcp_servers.atlassian]
+url = "https://mcp.atlassian.com/v1/mcp/authv2"

@@ -33,7 +33,7 @@
               sha256 = "sha256-0yOtvHL24eJizmzXAC956Tx9eNJaWDPl/OAhmFv2KJk=";
             };
           })
-      ];
+        ];
       keybindings = [
         {
           key = "cmd+d";

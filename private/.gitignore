@@ -1,0 +1,4 @@
+# Only the encrypted blob + scripts belong here. Never commit plaintext.
+*.plain/
+/staging/
+/*/SKILL.md

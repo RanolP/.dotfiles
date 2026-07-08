@@ -111,6 +111,7 @@ in
   home.stateVersion = "24.11";
 
   home.packages = with pkgs; [
+    age
     gnupg
     nix-your-shell
   ];

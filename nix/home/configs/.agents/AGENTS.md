@@ -81,8 +81,8 @@
 
 ## Simple shell commands
 - WHEN: running shell commands
-- DO: one purpose per call; split multi-step work into sequential calls
-- NEVER: chain with `|`, `&&`, `;`, `$()` unless the entire compound is read-only
+- DO: one purpose per call for mutating commands; batch read-only work freely -- chain read-only commands or issue independent read-only calls in one message (every extra turn re-reads the full conversation context)
+- NEVER: chain mutating commands with `|`, `&&`, `;`, `$()`; mix a mutation into a read-only chain
 
 ## Missing tools
 - WHEN: a command is missing, unavailable, or only present as an inactive shim

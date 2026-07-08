@@ -16,8 +16,8 @@ leaves alone the spawns where a deliberate choice already exists:
   * namespaced plugin agents (type contains ":") -- their model lives in the
     plugin, which this hook cannot read; trust it rather than false-positive.
 
-When an explicit model IS given and it is opus, the spawn is allowed but a
-non-blocking reminder asks Claude to confirm the escalation is warranted.
+An explicit opus model is DENIED outright: subagents run sonnet or haiku only;
+top-tier reasoning belongs in the main thread.
 
 Fail-open: any parse problem lets the normal permission flow run, so a bug here
 never blocks legitimate work.
@@ -33,14 +33,20 @@ AGENTS_DIR = os.path.expanduser("~/.claude/agents")
 MODEL_LINE_RE = re.compile(r"^\s*model\s*:\s*(.+?)\s*$", re.MULTILINE)
 
 RUBRIC = (
-    "Subagent spawned without an explicit `model` -- it would inherit opus. "
-    "Re-issue the Agent call with a deliberate tier:\n"
+    "Subagent spawned without an explicit `model` -- it would inherit the "
+    "expensive main-thread model. Re-issue the Agent call with a deliberate "
+    "tier:\n"
     "  - haiku  : mechanical work (fmt, lint, search, rename, file reads, "
-    "pattern matching)\n"
-    "  - sonnet : standard implementation / structured research (DEFAULT)\n"
-    "  - opus   : only when you can NAME the hard reasoning (novel design, "
-    "multi-file root-cause debugging, subtle correctness). Cannot name why "
-    "sonnet fails? Use sonnet."
+    "pattern matching, data collection)\n"
+    "  - sonnet : everything else (DEFAULT)\n"
+    "Nothing above sonnet is allowed for subagents -- hard reasoning belongs "
+    "in the main thread."
+)
+
+OPUS_DENY = (
+    "Subagents run sonnet or haiku only -- opus subagents are blocked. "
+    "Re-issue with model: sonnet (or haiku for mechanical work); if the task "
+    "truly needs top-tier reasoning, do it in the main thread."
 )
 
 
@@ -87,10 +93,7 @@ def main():
 
     if model:
         if any(tok in model for tok in OPUS_TOKENS):
-            # Explicit opus is allowed, but nudge Claude to confirm the tier.
-            print("opus subagent requested -- confirm this needs deep "
-                  "reasoning; if you cannot name why sonnet would fail, "
-                  "downgrade to sonnet.")
+            decide("deny", OPUS_DENY)
         sys.exit(0)
 
     # No explicit model from here on. Namespaced plugin agents carry their own
@@ -134,7 +137,7 @@ def _selftest():
     assert decision({"subagent_type": "fork"}) == (None, "")
     assert decision({"model": "sonnet"}) == (None, "")
     d, o = decision({"model": "opus"})
-    assert d is None and "opus" in o
+    assert d == "deny" and "opus" in o
     assert decision({"subagent_type": "x:y"}) == (None, "")
 
     global AGENTS_DIR

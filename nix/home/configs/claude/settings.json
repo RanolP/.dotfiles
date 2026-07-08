@@ -33,6 +33,9 @@
     "wrangler": "user-invocable-only"
   },
   "model": "opus",
+  "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+  },
   "effortLevel": "medium",
   "theme": "dark",
   "skipAutoPermissionPrompt": true,

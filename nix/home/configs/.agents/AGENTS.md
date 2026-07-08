@@ -83,3 +83,8 @@
 - WHEN: running shell commands
 - DO: one purpose per call; split multi-step work into sequential calls
 - NEVER: chain with `|`, `&&`, `;`, `$()` unless the entire compound is read-only
+
+## Missing tools
+- WHEN: a command is missing, unavailable, or only present as an inactive shim
+- DO: check repo and user toolchains before declaring it absent: `mise ls <tool>` for installed versions, `mise which <tool>` for the active binary, then project-local package-manager paths such as `pnpm exec <tool>` or package scripts
+- NEVER: install a global replacement, switch package managers, or report a tool as unavailable before checking mise and project-local shims

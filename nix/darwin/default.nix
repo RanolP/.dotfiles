@@ -33,6 +33,7 @@ in
     ];
     casks = [
       "claude"
+      "openusage"
       "ghostty"
       "raycast"
       "karabiner-elements"

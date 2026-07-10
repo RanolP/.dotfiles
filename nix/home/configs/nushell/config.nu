@@ -6,10 +6,14 @@ $env.config = ($env.config | upsert show_banner false)
 # Empty profile uses the default ~/.claude. Any other profile uses
 # ~/.claude-<profile>, which mirrors ~/.claude's config (settings, agents,
 # skills, plugins) but keeps its own auth token in that dir's .credentials.json.
-def ccc [
+def --wrapped ccc [
   profile: string = ""  # auth profile name; empty = default ~/.claude
-  ...rest               # extra args forwarded to claude
+  ...rest               # extra args and flags forwarded to claude
 ] {
+  # A leading flag (ccc --chrome) is an arg for claude, not a profile.
+  let flag_first = ($profile | str starts-with "-")
+  let rest = if $flag_first { [$profile] ++ $rest } else { $rest }
+  let profile = if $flag_first { "" } else { $profile }
   if ($profile | is-empty) {
     ^claude ...$rest
   } else {

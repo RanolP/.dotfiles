@@ -188,7 +188,7 @@ in
         node = "24.18.0";
         python = "3.14.6";
         rust = "1.96.1";
-        uv = "0.11.24";
+        uv = "0.11.26";
         fzf = "0.73.1";
         bat = "0.26.1";
         eza = "0.23.4";
@@ -202,7 +202,7 @@ in
         "npm:@earendil-works/pi-coding-agent" = "0.80.3";
         "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
         "npm:@openai/codex" = "0.144.2";
-        "npm:slopless" = "0.2.22";
+        "npm:slopless" = "0.2.23";
         "pipx:reuse" = "6.2.0";
       }
       // lib.optionalAttrs pkgs.stdenv.isDarwin {

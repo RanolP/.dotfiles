@@ -156,9 +156,13 @@ in
   networking.hostName = hostName;
   networking.localHostName = hostName;
 
+  environment.shells = [ pkgs.nushell ];
+
   # User definition (needed for home-manager homeDirectory derivation)
+  users.knownUsers = [ "ranolp" ];
   users.users.ranolp = {
     name = "ranolp";
+    uid = 501;
     home = "/Users/ranolp";
     shell = pkgs.nushell;
   };

@@ -11,6 +11,9 @@
     settings = {
       user.name = "RanolP";
       user.email = "me@ranolp.dev";
+      # Absolute path: nix-homebrew runs brew with a scrubbed PATH and a
+      # helper-less git-minimal, so a bare "osxkeychain" never resolves there.
+      credential.helper = "/etc/profiles/per-user/ranolp/bin/git-credential-osxkeychain";
       init.defaultBranch = "main";
       push.autoSetupRemote = true;
       pull.rebase = true;

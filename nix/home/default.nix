@@ -139,12 +139,26 @@ in
         executable = true;
       };
       ".claude/agents".source = claudeAgents;
-      ".claude/settings.json".source = ./configs/claude/settings.json;
       ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
     }
     # humanize-korean vendored from epoko77-ai/im-not-ai.
     skillFiles
   ];
+
+  # Claude Code rewrites ~/.claude/settings.json at runtime (model selection,
+  # approved permissions), so it can't be a read-only home.file symlink: the
+  # runtime write clobbers the symlink into a regular file, and the NEXT
+  # activation then hits that unexpected file and silently aborts the whole
+  # ~/.claude relink -- which is why edits to CLAUDE.md/agents stopped taking.
+  # Generate it as a writable copy instead (same rationale as codexConfig below):
+  # repo settings are the source of truth, re-asserted on every rebuild; Claude
+  # owns any runtime drift (e.g. model) in between rebuilds.
+  home.activation.claudeSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    out="$HOME/.claude/settings.json"
+    run mkdir -p "$HOME/.claude"
+    run rm -f "$out"
+    run install -m 0644 ${./configs/claude/settings.json} "$out"
+  '';
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     mkdir -p "$HOME/.cache"

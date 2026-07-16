@@ -34,7 +34,10 @@
   },
   "model": "opus",
   "env": {
-    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+    "GIT_PAGER": "cat",
+    "GH_PAGER": "cat",
+    "PAGER": "cat"
   },
   "effortLevel": "medium",
   "theme": "dark",

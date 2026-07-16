@@ -157,28 +157,19 @@ in
   networking.localHostName = hostName;
 
   # User definition (needed for home-manager homeDirectory derivation)
-  # Login shell is the macOS default (/bin/zsh). Nushell as the login shell made
-  # Claude Code's Bash tool spawn nu per command, whose heavy per-invocation
-  # startup hung the tool; run nu interactively via the terminal app instead.
+  # Login shell is /bin/sh. Both nushell and zsh as the login shell hung Claude
+  # Code's Bash tool at startup: nushell via heavy per-invocation startup, zsh via
+  # a job-control deadlock (interactive zsh blocks in acquire_pgrp/tcsetpgrp when
+  # spawned on a tty it isn't the foreground pgrp of). /bin/sh has a trivial,
+  # non-blocking startup. The terminal (Ghostty) still launches zsh interactively.
   users.users.ranolp = {
     name = "ranolp";
     home = "/Users/ranolp";
-    shell = "/bin/zsh";
+    shell = "/bin/sh";
   };
 
   # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
-
-  # direnv 테스트가 macOS Nix 샌드박스에서 hang함
-  # 원인: FSEvents/임시 디렉토리/프로세스 스폰이 샌드박스에서 차단됨
-  # 이벤트를 영원히 기다리며 빌드가 멈춤. upstream fix 없음, doCheck=false가 공식 workaround
-  nixpkgs.overlays = [
-    (final: prev: {
-      direnv = prev.direnv.overrideAttrs (_: {
-        doCheck = false;
-      });
-    })
-  ];
 
   nix.optimise.automatic = true;
 

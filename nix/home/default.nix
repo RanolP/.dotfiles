@@ -178,7 +178,11 @@ in
 
   programs.mise = {
     enable = true;
-    enableNushellIntegration = true;
+    # No `mise activate` hook in either shell: it deadlocks zsh at startup
+    # (blocks on a state lock). Tools resolve through the mise shims dir, which
+    # is already on PATH in both shells (.zshenv for zsh, env.common.nu for nu).
+    enableNushellIntegration = false;
+    enableZshIntegration = false;
     globalConfig = {
       settings = {
         experimental = true;

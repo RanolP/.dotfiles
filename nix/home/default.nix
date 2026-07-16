@@ -70,7 +70,6 @@ let
     github-master = localSkill "github-master";
     decompose = localSkill "decompose";
     one-domain = localSkill "one-domain";
-    codex-edit = localSkill "codex-edit";
     diagnose = localSkill "diagnose";
     tdd = localSkill "tdd";
     grill-me = localSkill "grill-me";

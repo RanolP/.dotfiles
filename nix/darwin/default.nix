@@ -157,10 +157,13 @@ in
   networking.localHostName = hostName;
 
   # User definition (needed for home-manager homeDirectory derivation)
+  # Login shell is the macOS default (/bin/zsh). Nushell as the login shell made
+  # Claude Code's Bash tool spawn nu per command, whose heavy per-invocation
+  # startup hung the tool; run nu interactively via the terminal app instead.
   users.users.ranolp = {
     name = "ranolp";
     home = "/Users/ranolp";
-    shell = pkgs.nushell;
+    shell = "/bin/zsh";
   };
 
   # Allow unfree packages

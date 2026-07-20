@@ -100,6 +100,10 @@
           },
           {
             "type": "command",
+            "command": "python3 ~/.claude/hooks/ssh-guard.py"
+          },
+          {
+            "type": "command",
             "command": "python3 ~/.claude/hooks/gpg-commit-guard.py"
           },
           {

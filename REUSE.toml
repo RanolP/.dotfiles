@@ -64,6 +64,7 @@ SPDX-License-Identifier = "MIT"
 path = [
     "nix/home/configs/claude/hooks/git-push-guard.py",
     "nix/home/configs/claude/hooks/subagent-model-guard.py",
+    "nix/home/configs/claude/hooks/ssh-guard.py",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

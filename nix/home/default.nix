@@ -127,6 +127,11 @@ in
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;
       };
+      # Hard-deny ssh: promote it to the user's own TTY via `! ssh ...`.
+      ".claude/hooks/ssh-guard.py" = {
+        source = ./configs/claude/hooks/ssh-guard.py;
+        executable = true;
+      };
       ".claude/hooks/subagent-model-guard.py" = {
         source = ./configs/claude/hooks/subagent-model-guard.py;
         executable = true;

@@ -26,5 +26,18 @@
       export ANDROID_HOME="$HOME/Library/Android/sdk"
       export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
     '';
+    # Static replacement for `eval "$(brew shellenv zsh)"` that used to live in
+    # an unmanaged ~/.zprofile. That command substitution forks during login-
+    # shell init; under bursts of parallel Claude Bash calls (zsh -c -l) the
+    # SIGCHLD gets lost and zsh blocks forever in waitforpid/signal_suspend
+    # inside run_init_scripts. Plain exports fork nothing, so the race is gone.
+    profileExtra = ''
+      export HOMEBREW_PREFIX="/opt/homebrew"
+      export HOMEBREW_CELLAR="/opt/homebrew/Cellar"
+      export HOMEBREW_REPOSITORY="/opt/homebrew/Library/.homebrew-is-managed-by-nix"
+      export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+      export INFOPATH="/opt/homebrew/share/info:''${INFOPATH:-}"
+      fpath[1,0]="/opt/homebrew/share/zsh/site-functions"
+    '';
   };
 }

@@ -16,7 +16,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: finish the current unit of work, then proactively offer a checkpoint (summary or checkpoint skill) and recommend the user /clear into a fresh session; above 200k context every call bills at a 2x long-context premium on [1m] models
 - NEVER: silently continue a marathon session deep into the long-context regime
 
-## Orchestrate via subagents -- native Claude subagents only
+## Orchestrate via subagents
 - WHEN: a task is genuinely too heavy for the main thread -- large multi-file investigation, wide parallel steps, or token-heavy execution whose trace would bloat main context; ALSO when main-thread context is already large (roughly 100k+) and a multi-step execution loop is starting (build-test-fix cycles, migrations, repetitive edit batches)
 - LAZY DEFAULT: work inline while main context is small. A spawn re-sends the whole system prompt and eats its own trace, so a needless spawn costs MORE tokens, not fewer; when one worker suffices, use one and do not fan out speculatively. BUT the economics flip once main context is large: every inline tool call re-reads the entire conversation, so a 30-call execution loop at 300k context costs ~9M cache-read tokens while the same loop in a fresh subagent runs at ~50k per call. At 100k+ context, delegate execution loops with a self-contained brief and keep only results in main.
 - DO (only once a spawn clears the bar above): treat the main thread as an orchestrator; delegate with a self-contained brief so token-heavy traces stay out of main context (accumulate results, not traces); route each delegation to the right worker --
@@ -24,6 +24,12 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
   - review non-trivial diffs before finishing: after you author non-trivial code yourself, review the full `git diff HEAD` for correctness and scope creep, or spawn a fresh sonnet reviewer with a self-contained brief, and address findings before finishing
 - NEVER: spawn a subagent for work the main thread can already hold inline; fan out wider than the task needs; omit `model` on a native spawn -- it inherits the (expensive) main-thread model and the `subagent-model-guard` PreToolUse hook blocks it (forks and agents that pin `model:` in frontmatter are exempt); pass any model above sonnet to a subagent; spend a top-tier model on mechanical work or a cheap model on work that needs real reasoning
 - EXCEPT: tiny one-liners, exploratory/uncertain scope, or active dialogue with the user -- edit inline
+
+## Typed handoffs between subagents
+- WHEN: a subagent's result feeds a next step -- another agent, a routing decision, or a synthesis pass -- rather than being a terminal answer to the user (this is a handoff, not a leaf)
+- DO: name the exact return shape in the brief (the fields and their types, or a fenced schema block) and require the worker to return ONLY that shape, no prose wrapper; validate on receipt -- on mismatch, `SendMessage` the same agent once to re-emit in shape (its context is intact, so this is cheaper than respawning), then parse what you have; for `Workflow` agents pass the `schema:` option so validation happens at the tool layer and the worker retries on mismatch instead of you parsing an essay; accumulate typed results, not narration
+- NEVER: chain free-form prose between subagents and then regex the fields back out; let the maker also grade its own handoff -- a checker is optional (most handoffs need none), but when one exists it is a separate node with its own typed verdict
+- EXCEPT: a terminal answer to the user, or a single one-shot worker whose entire output you read yourself -- prose is fine there
 
 ## Questions and "ask:" = explain only, never act
 - NEVER: call tools when the user asks a question unless action was explicitly requested

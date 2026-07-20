@@ -249,6 +249,9 @@ in
         "npm:@earendil-works/pi-coding-agent" = "0.80.3";
         "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
         "npm:@openai/codex" = "0.144.2";
+        # Argent: agentic toolkit / MCP server for iOS simulators, Android
+        # emulators, TV and Electron targets (argent.swmansion.com).
+        "npm:@swmansion/argent" = "0.16.0";
         "npm:slopless" = "0.2.23";
         "pipx:reuse" = "6.2.0";
       }

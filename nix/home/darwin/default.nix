@@ -48,6 +48,21 @@ in
 
   home.file.".gnupg/gpg-agent.conf".onChange = "${pkgs.gnupg}/bin/gpgconf --kill gpg-agent";
 
+  # Claude Code's Bash tool probes $SHELL/PATH for a zsh and picks the
+  # nix-built one, which (when spawned as a session leader with piped stdio,
+  # exactly how Claude Code spawns it) loses SIGCHLD during $(...) command
+  # substitution and blocks forever in sigsuspend -- ~50% repro. Apple's
+  # /bin/zsh is immune, reads the same ~/.zshenv//.zprofile, so force it via
+  # $SHELL, which short-circuits Claude Code's shell probing. ~/.local/bin
+  # precedes mise's claude on PATH, so this wrapper wins.
+  home.file.".local/bin/claude" = {
+    executable = true;
+    text = ''
+      #!/bin/sh
+      SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"
+    '';
+  };
+
   services.syncthing.enable = true;
 
   services.espanso = {

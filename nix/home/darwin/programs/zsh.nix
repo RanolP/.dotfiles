@@ -1,8 +1,22 @@
-{ ... }:
+{ pkgs, ... }:
 {
   # minimal zsh as fallback
   programs.zsh = {
     enable = true;
+    # Apple's /bin/zsh instead of the nix build: nix zsh 5.9 loses SIGCHLD
+    # during $(...) command substitution when spawned as a session leader with
+    # piped stdio (how Claude Code spawns its Bash-tool shell) and blocks
+    # forever in sigsuspend; Apple's build is immune. The stub keeps the nix
+    # package's share/ so HELPDIR and fpath entries stay valid. This makes
+    # /etc/profiles/per-user/ranolp/bin/zsh resolve to Apple's binary, which
+    # shadows the system-profile nix zsh everywhere on PATH (nix-darwin's
+    # programs.zsh has no package option, so /run/current-system/sw/bin/zsh
+    # stays the nix build -- nothing resolves zsh through it).
+    package = pkgs.runCommandLocal "zsh-apple-system" { } ''
+      mkdir -p $out/bin
+      ln -s /bin/zsh $out/bin/zsh
+      ln -s ${pkgs.zsh}/share $out/share
+    '';
     shellAliases = import ../../programs/aliases.nix;
     # SHARE_HISTORY makes every zsh lock+append the one shared HISTFILE after
     # each command; combined with HIST_FCNTL_LOCK that lock is a blocking

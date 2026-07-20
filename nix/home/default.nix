@@ -131,6 +131,36 @@ in
         source = ./configs/claude/hooks/subagent-model-guard.py;
         executable = true;
       };
+      # Unlock GPG before a signed commit so pinentry can't hijack the TTY.
+      ".claude/hooks/gpg-commit-guard.py" = {
+        source = ./configs/claude/hooks/gpg-commit-guard.py;
+        executable = true;
+      };
+      # Enforce the repo's declared package manager (npm/pnpm/yarn/bun).
+      ".claude/hooks/package-manager-guard.py" = {
+        source = ./configs/claude/hooks/package-manager-guard.py;
+        executable = true;
+      };
+      # Deny direct edits to ~/.claude/ -- the repo is the source of truth.
+      ".claude/hooks/claude-dir-edit-guard.py" = {
+        source = ./configs/claude/hooks/claude-dir-edit-guard.py;
+        executable = true;
+      };
+      # Block finishing a session with unapplied nix/home/configs edits.
+      ".claude/hooks/rebuild-enforcer.py" = {
+        source = ./configs/claude/hooks/rebuild-enforcer.py;
+        executable = true;
+      };
+      # `ask:` prompts become text-only turns: every tool call is denied.
+      ".claude/hooks/ask-mode-guard.py" = {
+        source = ./configs/claude/hooks/ask-mode-guard.py;
+        executable = true;
+      };
+      # On "command not found", point at mise/project shims before installs.
+      ".claude/hooks/missing-tool-hint.py" = {
+        source = ./configs/claude/hooks/missing-tool-hint.py;
+        executable = true;
+      };
       # Codex reuses the same push guard (its PreToolUse hook schema matches Claude's:
       # reads tool_input.command, denies via hookSpecificOutput.permissionDecision).
       ".codex/hooks/git-push-guard.py" = {

@@ -50,6 +50,7 @@ in
       "notion"
       "keybase"
       "shottr"
+      "menubarx" # menu bar browser
       "proxyman" # HTTP debugging proxy
       "thaw" # menu bar utility
     ]

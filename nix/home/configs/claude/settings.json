@@ -71,13 +71,40 @@
     }
   },
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/ask-mode-guard.py"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/ask-mode-guard.py"
+          }
+        ]
+      },
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/git-push-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/gpg-commit-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/package-manager-guard.py"
           }
         ]
       },
@@ -89,6 +116,15 @@
             "command": "python3 ~/.claude/hooks/subagent-model-guard.py"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/claude-dir-edit-guard.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -97,7 +133,30 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import json,sys; d=json.load(sys.stdin); p=d.get('tool_input',{}).get('file_path',''); print('nix config edited — rebuild required: sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26') if 'nix/home/configs/' in p else None\""
+            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/missing-tool-hint.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
           }
         ]
       }

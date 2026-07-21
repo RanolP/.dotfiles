@@ -16,7 +16,10 @@ def _folder-bg-color []: nothing -> string {
     "2e3b3b" "3b382e" "2e343f" "3b2e2e"
     "2e3b30" "34303b" "3b3630" "303b38"
   ]
-  let root = (try { ^git rev-parse --show-toplevel | str trim } catch { null })
+  # `complete` captures stderr into the record so "fatal: not a git repository"
+  # never leaks to the terminal when cd-ing into a non-repo.
+  let res = (^git rev-parse --show-toplevel | complete)
+  let root = (if $res.exit_code == 0 { $res.stdout | str trim } else { null })
   # Not inside a repo -> restore the default Nord background.
   if ($root | is-empty) { return "2e3440" }
   let hit = ($overrides | where path == $root)

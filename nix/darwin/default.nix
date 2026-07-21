@@ -36,6 +36,7 @@ in
       "libmagic" # libmagic dylib for python-magic (reuse tool, via mise pipx)
     ];
     casks = [
+      "espanso" # text expander -- prebuilt cask; nixpkgs only source-builds it on darwin
       "claude"
       "openusage"
       "ghostty"

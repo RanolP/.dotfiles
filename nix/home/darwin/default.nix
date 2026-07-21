@@ -13,6 +13,36 @@ let
   };
   # Absolute path: sudo resets PATH, so bare `darwin-rebuild` isn't found.
   rebuildCmd = "sudo /run/current-system/sw/bin/darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
+
+  # espanso ships its macOS build as an APFS .dmg nested inside a release .zip.
+  # nixpkgs only source-builds it on darwin (GOLDEN RULE: never compile) and the
+  # Homebrew cask's nested-dmg unpack is broken under nix-homebrew (Homebrew
+  # 5.1.7). So fetch the official prebuilt release and unpack it with 7zz --
+  # pure download, no build. Bump `version`/`hash` together on updates.
+  espanso = pkgs.stdenvNoCC.mkDerivation {
+    pname = "espanso";
+    version = "2.3.0";
+    src = pkgs.fetchurl {
+      url = "https://github.com/espanso/espanso/releases/download/v2.3.0/Espanso-Mac-Universal.zip";
+      hash = "sha256-54VUO8N+mGBDTi4AzMGKXfdAmrmyDR9Bv8SAG15UPq4=";
+    };
+    nativeBuildInputs = [
+      pkgs.unzip
+      pkgs._7zz
+    ];
+    dontConfigure = true;
+    dontBuild = true;
+    unpackPhase = ''
+      unzip -q "$src"
+      7zz x -y espanso/Espanso.dmg
+    '';
+    installPhase = ''
+      mkdir -p "$out/Applications" "$out/bin"
+      cp -R Espanso.app "$out/Applications/"
+      chmod +x "$out/Applications/Espanso.app/Contents/MacOS/espanso"
+      ln -s "$out/Applications/Espanso.app/Contents/MacOS/espanso" "$out/bin/espanso"
+    '';
+  };
 in
 {
   imports = [
@@ -67,15 +97,8 @@ in
 
   services.espanso = {
     enable = true;
-    # Binary comes from the Homebrew cask (prebuilt) -- espanso is only
-    # source-built by nixpkgs on darwin, and we never compile. This stub is
-    # pure symlinks to the cask app (builds instantly, no compilation), so
-    # `${pkgs.espanso}` and home.packages resolve to the cask binary.
-    package = pkgs.runCommand "espanso-cask-2.3.0" { version = "2.3.0"; } ''
-      mkdir -p $out/bin $out/Applications
-      ln -s /Applications/Espanso.app $out/Applications/Espanso.app
-      ln -s /Applications/Espanso.app/Contents/MacOS/espanso $out/bin/espanso
-    '';
+    # Prebuilt release unpacked above -- never compiled (see `espanso` in let).
+    package = espanso;
     matches = {
       default.matches = [ ];
     };
@@ -83,7 +106,7 @@ in
 
   # Use `daemon` instead of `launcher` so espanso doesn't self-register a second plist
   launchd.agents.espanso.config.ProgramArguments = lib.mkForce [
-    "/Applications/Espanso.app/Contents/MacOS/espanso"
+    "${espanso}/Applications/Espanso.app/Contents/MacOS/espanso"
     "daemon"
   ];
 

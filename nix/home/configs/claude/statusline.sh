@@ -29,8 +29,12 @@ WEEK_RESET=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
 PR_NUM=$(echo "$input" | jq -r '.pr.number // empty')
 PR_STATE=$(echo "$input" | jq -r '.pr.review_state // empty')
 
-# Logged-in account email (not in statusline input; read from the CLI config)
-EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' ~/.claude.json 2>/dev/null)
+# Logged-in account email (not in statusline input; read from the CLI config).
+# `ccc <profile>` runs claude under CLAUDE_CONFIG_DIR=~/.claude-<profile>, which
+# holds that profile's own .claude.json + auth. Read it so the active account
+# shows, not the default ~/.claude.json profile.
+CLAUDE_JSON="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' "$CLAUDE_JSON" 2>/dev/null)
 
 # Git info — cached per session to avoid lag on large repos
 CACHE_FILE="/tmp/claude-sl-git-${SESSION_ID}"
@@ -79,13 +83,21 @@ COLS=$(_real_cols)
 # ── LINE 1 ────────────────────────────────────────────────────────────────────
 
 FOLDER="${DIR##*/}"
+FOLDER_ICON=$(printf '\xef\x81\xbb')   # U+F07B nf-fa-folder
+BRANCH_ICON=$(printf '\xee\x82\xa0')   # U+E0A0 nf-pl-branch
 
-# Left: folder  branch +staged ~modified  #PR state
-L1L="${C}${FOLDER}${RS}"
-L1L_W=${#FOLDER}
+# Left: email in  folder on  branch +staged ~modified  #PR state
+L1L=""
+L1L_W=0
+if [ -n "$EMAIL" ]; then
+    L1L+="${W}${EMAIL}${RS} in "
+    L1L_W=$((L1L_W + ${#EMAIL} + 4))
+fi
+L1L+="${C}${FOLDER_ICON} ${FOLDER}${RS}"
+L1L_W=$((L1L_W + 2 + ${#FOLDER}))
 
 if [ -n "$GIT_BR" ]; then
-    L1L+=" on $(printf '\xee\x82\xa0') ${GIT_BR}"
+    L1L+=" on ${BRANCH_ICON} ${GIT_BR}"
     L1L_W=$((L1L_W + 6 + ${#GIT_BR}))
     if [ "$GIT_ST" -gt 0 ]; then
         L1L+=" ${G}+${GIT_ST}${RS}"
@@ -114,15 +126,9 @@ if [ -n "$PR_NUM" ]; then
     L1L_W=$((L1L_W + 1 + ${#PR_TXT}))
 fi
 
-# Right: email 🧠 model effort
-L1R=""
-L1R_W=0
-if [ -n "$EMAIL" ]; then
-    L1R+="${GR}${EMAIL}${RS} "
-    L1R_W=$((L1R_W + ${#EMAIL} + 1))
-fi
-L1R+="using ${W}${MODEL}${RS}"
-L1R_W=$((L1R_W + 6 + ${#MODEL}))
+# Right: using model effort 🧠
+L1R="using ${W}${MODEL}${RS}"
+L1R_W=$((6 + ${#MODEL}))
 if [ -n "$EFFORT" ]; then
     L1R+=" ${GR}${EFFORT}${RS}"
     L1R_W=$((L1R_W + 1 + ${#EFFORT}))

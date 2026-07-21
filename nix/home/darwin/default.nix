@@ -15,33 +15,26 @@ let
   rebuildCmd = "sudo /run/current-system/sw/bin/darwin-rebuild switch --flake /Users/ranolp/.dotfiles/nix#ranolp-work-MBP-26";
 
   # espanso ships its macOS build as an APFS .dmg nested inside a release .zip.
-  # nixpkgs only source-builds it on darwin (GOLDEN RULE: never compile) and the
+  # nixpkgs only source-builds it on darwin (GOLDEN RULE: never compile), the
   # Homebrew cask's nested-dmg unpack is broken under nix-homebrew (Homebrew
-  # 5.1.7). So fetch the official prebuilt release and unpack it with 7zz --
-  # pure download, no build. Bump `version`/`hash` together on updates.
-  espanso = pkgs.stdenvNoCC.mkDerivation {
-    pname = "espanso";
+  # 5.1.7), and unpacking the app with 7zz breaks its code signature ("Espanso
+  # is damaged"). So: fetch the release, keep the *intact* nested dmg here (pure
+  # download, no build), then mount + ditto the notarized app into place at
+  # activation (see home.activation.espanso below) -- exactly what the cask
+  # does, preserving the developer signature. Bump `version`/`hash` together.
+  espansoApp = "${config.home.homeDirectory}/Applications/Espanso.app";
+  espansoDmg = pkgs.stdenvNoCC.mkDerivation {
+    pname = "espanso-dmg";
     version = "2.3.0";
     src = pkgs.fetchurl {
       url = "https://github.com/espanso/espanso/releases/download/v2.3.0/Espanso-Mac-Universal.zip";
       hash = "sha256-54VUO8N+mGBDTi4AzMGKXfdAmrmyDR9Bv8SAG15UPq4=";
     };
-    nativeBuildInputs = [
-      pkgs.unzip
-      pkgs._7zz
-    ];
+    nativeBuildInputs = [ pkgs.unzip ];
     dontConfigure = true;
     dontBuild = true;
-    unpackPhase = ''
-      unzip -q "$src"
-      7zz x -y espanso/Espanso.dmg
-    '';
-    installPhase = ''
-      mkdir -p "$out/Applications" "$out/bin"
-      cp -R Espanso.app "$out/Applications/"
-      chmod +x "$out/Applications/Espanso.app/Contents/MacOS/espanso"
-      ln -s "$out/Applications/Espanso.app/Contents/MacOS/espanso" "$out/bin/espanso"
-    '';
+    unpackPhase = ''unzip -q "$src"'';
+    installPhase = ''install -Dm444 espanso/Espanso.dmg "$out/Espanso.dmg"'';
   };
 in
 {
@@ -97,16 +90,39 @@ in
 
   services.espanso = {
     enable = true;
-    # Prebuilt release unpacked above -- never compiled (see `espanso` in let).
-    package = espanso;
+    # The real binary is the notarized app ditto'd into ~/Applications at
+    # activation (below). This stub just points the HM module + PATH at it;
+    # it's pure symlinks (instant, no build). `version` satisfies the module.
+    package = pkgs.runCommand "espanso-2.3.0" { version = "2.3.0"; } ''
+      mkdir -p "$out/bin" "$out/Applications"
+      ln -s "${espansoApp}" "$out/Applications/Espanso.app"
+      ln -s "${espansoApp}/Contents/MacOS/espanso" "$out/bin/espanso"
+    '';
     matches = {
       default.matches = [ ];
     };
   };
 
+  # Install the notarized app from the intact dmg, preserving its signature
+  # (7zz/unzip extraction corrupts the seal; hdiutil+ditto does not). Idempotent:
+  # only re-mounts when the source dmg store path changes.
+  home.activation.espanso = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    dmg="${espansoDmg}/Espanso.dmg"
+    stamp="${config.home.homeDirectory}/Applications/.espanso-dmg-source"
+    if [ ! -d "${espansoApp}" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$dmg" ]; then
+      $DRY_RUN_CMD mkdir -p "${config.home.homeDirectory}/Applications"
+      mnt="$($DRY_RUN_CMD mktemp -d)"
+      $DRY_RUN_CMD /usr/bin/hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mnt"
+      $DRY_RUN_CMD rm -rf "${espansoApp}"
+      $DRY_RUN_CMD /usr/bin/ditto "$mnt/Espanso.app" "${espansoApp}"
+      $DRY_RUN_CMD /usr/bin/hdiutil detach "$mnt"
+      $DRY_RUN_CMD sh -c "printf '%s' '$dmg' > '$stamp'"
+    fi
+  '';
+
   # Use `daemon` instead of `launcher` so espanso doesn't self-register a second plist
   launchd.agents.espanso.config.ProgramArguments = lib.mkForce [
-    "${espanso}/Applications/Espanso.app/Contents/MacOS/espanso"
+    "${espansoApp}/Contents/MacOS/espanso"
     "daemon"
   ];
 

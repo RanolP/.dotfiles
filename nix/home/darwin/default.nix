@@ -125,7 +125,8 @@ in
           "platform-tools" \
           "platforms;android-35" \
           "build-tools;35.0.0" \
-          "emulator"
+          "emulator" \
+          "system-images;android-35;google_apis;arm64-v8a"
       fi
     )
   '';

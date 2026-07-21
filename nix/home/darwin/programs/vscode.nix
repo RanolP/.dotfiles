@@ -2,7 +2,16 @@
 {
   programs.vscode = {
     enable = true;
-    package = pkgs.vscode;
+    # nixpkgs' vscode generic.nix chmods the bundled ripgrep under
+    # `node_modules/`, but vscode 1.129.x ships it under
+    # `node_modules.asar.unpacked/`, so the stock path 404s and the darwin
+    # build fails in patchPhase. Re-point the chmod at wherever rg actually is.
+    package = pkgs.vscode.overrideAttrs (_: {
+      postPatch = ''
+        find 'Contents/Resources/app' -path '*@vscode/ripgrep-universal/bin/*/rg' \
+          -exec chmod +x {} +
+      '';
+    });
     mutableExtensionsDir = false;
 
     profiles.default = {

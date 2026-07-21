@@ -29,6 +29,9 @@ WEEK_RESET=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
 PR_NUM=$(echo "$input" | jq -r '.pr.number // empty')
 PR_STATE=$(echo "$input" | jq -r '.pr.review_state // empty')
 
+# Logged-in account email (not in statusline input; read from the CLI config)
+EMAIL=$(jq -r '.oauthAccount.emailAddress // empty' ~/.claude.json 2>/dev/null)
+
 # Git info — cached per session to avoid lag on large repos
 CACHE_FILE="/tmp/claude-sl-git-${SESSION_ID}"
 cache_stale() {
@@ -111,9 +114,13 @@ if [ -n "$PR_NUM" ]; then
     L1L_W=$((L1L_W + 1 + ${#PR_TXT}))
 fi
 
-# Right: 🧠 model effort
+# Right: email 🧠 model effort
 L1R=""
 L1R_W=0
+if [ -n "$EMAIL" ]; then
+    L1R+="${GR}${EMAIL}${RS} "
+    L1R_W=$((L1R_W + ${#EMAIL} + 1))
+fi
 L1R+="using ${W}${MODEL}${RS}"
 L1R_W=$((L1R_W + 6 + ${#MODEL}))
 if [ -n "$EFFORT" ]; then

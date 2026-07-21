@@ -67,6 +67,15 @@ in
 
   services.espanso = {
     enable = true;
+    # Binary comes from the Homebrew cask (prebuilt) -- espanso is only
+    # source-built by nixpkgs on darwin, and we never compile. This stub is
+    # pure symlinks to the cask app (builds instantly, no compilation), so
+    # `${pkgs.espanso}` and home.packages resolve to the cask binary.
+    package = pkgs.runCommand "espanso-cask-2.3.0" { version = "2.3.0"; } ''
+      mkdir -p $out/bin $out/Applications
+      ln -s /Applications/Espanso.app $out/Applications/Espanso.app
+      ln -s /Applications/Espanso.app/Contents/MacOS/espanso $out/bin/espanso
+    '';
     matches = {
       default.matches = [ ];
     };
@@ -74,7 +83,7 @@ in
 
   # Use `daemon` instead of `launcher` so espanso doesn't self-register a second plist
   launchd.agents.espanso.config.ProgramArguments = lib.mkForce [
-    "${pkgs.espanso}/Applications/Espanso.app/Contents/MacOS/espanso"
+    "/Applications/Espanso.app/Contents/MacOS/espanso"
     "daemon"
   ];
 

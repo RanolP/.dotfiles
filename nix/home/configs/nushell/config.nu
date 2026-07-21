@@ -38,17 +38,43 @@ $env.config.hooks.env_change.PWD = (
 )
 
 # Launch Claude Code under a named auth profile.
-# Empty profile uses the default ~/.claude. Any other profile uses
+# With no profile, prompt with a picker: (default) ~/.claude, any existing
+# ~/.claude-<profile>, or create a new one. A chosen profile uses
 # ~/.claude-<profile>, which mirrors ~/.claude's config (settings, agents,
 # skills, plugins) but keeps its own auth token in that dir's .credentials.json.
 def --wrapped ccc [
-  profile: string = ""  # auth profile name; empty = default ~/.claude
+  profile: string = ""  # auth profile name; empty = pick interactively
   ...rest               # extra args and flags forwarded to claude
 ] {
   # A leading flag (ccc --chrome) is an arg for claude, not a profile.
   let flag_first = ($profile | str starts-with "-")
   let rest = if $flag_first { [$profile] ++ $rest } else { $rest }
-  let profile = if $flag_first { "" } else { $profile }
+  mut profile = if $flag_first { "" } else { $profile }
+
+  # No profile named: pick one instead of silently using the default.
+  if ($profile | is-empty) {
+    let existing = (
+      glob ($env.HOME | path join ".claude-*")
+      | where ($it | path type) == "dir"
+      | path basename
+      | str replace ".claude-" ""
+      | sort
+    )
+    let default_label = "(default)"
+    let new_label = "+ new profile"
+    let choice = ([$default_label] ++ $existing ++ [$new_label] | input list --fuzzy "Claude profile")
+    if ($choice | is-empty) { return }  # Esc / no selection aborts
+    $profile = if $choice == $default_label {
+      ""
+    } else if $choice == $new_label {
+      let name = (input "New profile name: " | str trim)
+      if ($name | is-empty) { return }
+      $name
+    } else {
+      $choice
+    }
+  }
+
   if ($profile | is-empty) {
     ^claude ...$rest
   } else {
@@ -63,6 +89,19 @@ def --wrapped ccc [
         ^ln -sfn $src ($dir | path join $entry)
       }
     }
+    # Sessions live in projects/, so symlinking it into ~/.claude/projects
+    # makes /resume see every profile's sessions (dirs can't be hardlinked
+    # on macOS). Per-project memory lives inside projects/ and is shared too.
+    let shared = ($base | path join "projects")
+    let local = ($dir | path join "projects")
+    mkdir $shared
+    if ($local | path type) == "dir" {
+      # One-time merge of pre-existing per-profile sessions; on a filename
+      # clash the shared copy wins, and the original dir is kept as .bak.
+      ^rsync -a --ignore-existing ($local + "/") ($shared + "/")
+      ^mv $local ($local + ".merged.bak")
+    }
+    ^ln -sfn $shared $local
     with-env { CLAUDE_CONFIG_DIR: $dir } { ^claude ...$rest }
   }
 }

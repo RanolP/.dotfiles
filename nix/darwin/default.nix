@@ -24,6 +24,10 @@ in
     onActivation = {
       autoUpdate = false;
       cleanup = "zap";
+      # Silently zap anything not declared above -- no interactive prompt.
+      # Everything Homebrew-installed is declared here, so a leftover is always
+      # undeclared drift (manual `brew install`, orphan dep, renamed cask).
+      extraFlags = [ "--force" ];
     };
     brews = [
       "git-absorb"

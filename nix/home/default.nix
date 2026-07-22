@@ -84,7 +84,12 @@ let
     grill-me = localSkill "grill-me";
     prototype = localSkill "prototype";
     zoom-out = localSkill "zoom-out";
-    technical-writing = localSkill "technical-writing";
+    docs-write = localSkill "docs-write";
+    docs-write-tutorial = localSkill "docs-write-tutorial";
+    docs-write-concept = localSkill "docs-write-concept";
+    docs-write-howto = localSkill "docs-write-howto";
+    docs-write-reference = localSkill "docs-write-reference";
+    docs-write-status = localSkill "docs-write-status";
     slopless = localSkill "slopless";
     remove-dead-code = localSkill "remove-dead-code";
     audit-env-variables = localSkill "audit-env-variables";

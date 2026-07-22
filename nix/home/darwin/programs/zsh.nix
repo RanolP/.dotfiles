@@ -53,6 +53,17 @@
     # shell init; under bursts of parallel Claude Bash calls (zsh -c -l) the
     # SIGCHLD gets lost and zsh blocks forever in waitforpid/signal_suspend
     # inside run_init_scripts. Plain exports fork nothing, so the race is gone.
+    # Mirror of the .zshenv CLAUDECODE guard: Claude Code's shell snapshot
+    # sources .zshrc, whose home-manager history block re-sets HISTFILE after
+    # .zshenv ran. Dropping it again here keeps any snapshot-captured state
+    # history-free too.
+    initContent = ''
+      if [[ -n "''${CLAUDECODE:-}" ]]; then
+        unset HISTFILE
+        HISTSIZE=0
+        SAVEHIST=0
+      fi
+    '';
     profileExtra = ''
       export HOMEBREW_PREFIX="/opt/homebrew"
       export HOMEBREW_CELLAR="/opt/homebrew/Cellar"

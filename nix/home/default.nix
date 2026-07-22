@@ -19,6 +19,15 @@ let
     hash = "sha256-iadJGHavCEXPBYjeo5SyCSgn2yWIJ5YUvRG/2qbuVAY=";
   };
 
+  # Skill for the Orca IDE's CLI (the app itself is installed in darwin/).
+  # Declarative equivalent of `npx skills add stablyai/orca --skill orca-cli`.
+  orcaRepo = pkgs.fetchFromGitHub {
+    owner = "stablyai";
+    repo = "orca";
+    rev = "e60060039a7ca135c6e99574b89f4f56aebe202c";
+    hash = "sha256-6/v6zs5qY2+GwxXYC41sf2gntE11h68O2b5VWoe+08o=";
+  };
+
   # Supermemory, manual-search-only. The plugin is disabled in settings.json:
   # its SessionStart/UserPromptSubmit hooks inject recall context into every
   # request, Claude Code has no per-hook disable, and the plugin's own
@@ -85,6 +94,7 @@ let
     humanize = "${humanizeKorean}/.claude/skills/humanize";
     humanize-redo = "${humanizeKorean}/.claude/skills/humanize-redo";
     supermemory-search = supermemorySearchSkill;
+    orca-cli = "${orcaRepo}/skills/orca-cli";
   };
 
   # Link every skill into both tools' trees: Claude reads ~/.claude/skills,

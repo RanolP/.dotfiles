@@ -70,6 +70,14 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
 
+# Vendored from `argent init` (@swmansion/argent, Apache-2.0); frontmatter
+# modified here to path-scope the rule.
+[[annotations]]
+path = ["nix/home/configs/claude/rules/argent.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 Software Mansion", "2026 RanolP"]
+SPDX-License-Identifier = "Apache-2.0"
+
 [[annotations]]
 path = ["nix/home/configs/claude/agents/prose-editor.md"]
 precedence = "aggregate"

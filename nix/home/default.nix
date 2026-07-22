@@ -270,11 +270,15 @@ in
 
   programs.mise = {
     enable = true;
-    # No `mise activate` hook in either shell: it deadlocks zsh at startup
-    # (blocks on a state lock). Tools resolve through the mise shims dir, which
-    # is already on PATH in both shells (.zshenv for zsh, env.common.nu for nu).
+    # The zsh `mise activate` hook is back: its startup deadlock was the nix
+    # zsh 5.9 SIGCHLD race in $(...), gone since Apple's /bin/zsh is served
+    # from the user profile (4f85605). The shims dir stays on PATH in .zshenv
+    # as the tool source for NON-interactive zsh (Claude's Bash tool), which
+    # skips .zshrc and never runs the hook. Nushell keeps shims only
+    # (env.common.nu); its integration predates the same investigation and
+    # nu's prompt already works without the hook.
     enableNushellIntegration = false;
-    enableZshIntegration = false;
+    enableZshIntegration = true;
     globalConfig = {
       settings = {
         experimental = true;

@@ -39,6 +39,14 @@
       export PATH="/Users/ranolp/.local/bin:/Users/ranolp/.local/share/mise/shims:$PATH"
       export ANDROID_HOME="$HOME/Library/Android/sdk"
       export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+      # Claude Code shells (CLAUDECODE=1) keep zero history: no HISTFILE and
+      # zero sizes means no history-file open/lock can ever stall a tool call,
+      # regardless of what setopts the shell snapshot replays.
+      if [[ -n "''${CLAUDECODE:-}" ]]; then
+        unset HISTFILE
+        HISTSIZE=0
+        SAVEHIST=0
+      fi
     '';
     # Static replacement for `eval "$(brew shellenv zsh)"` that used to live in
     # an unmanaged ~/.zprofile. That command substitution forks during login-

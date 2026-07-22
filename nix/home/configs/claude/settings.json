@@ -108,6 +108,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/package-manager-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/gh-guard.py"
           }
         ]
       },

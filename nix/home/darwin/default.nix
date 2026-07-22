@@ -153,6 +153,26 @@ in
 
   xdg.configFile."espanso/match/packages/typsi".source = "${typsi}/packages/typsi";
 
+  # GUI apps inherit $SHELL from the login shell, which is deliberately /bin/sh
+  # (the Claude Code hang guard in nix/darwin/default.nix) -- so Orca, whose
+  # macOS terminals spawn `$SHELL || /bin/zsh` with no shell setting of its own,
+  # opened bare sh. Set the GUI session's SHELL to Apple's zsh at login: Orca
+  # fully supports zsh (shell-ready markers, env scan), /bin/zsh is immune to
+  # the nix-zsh SIGCHLD hang, and the ~/.local/bin/claude wrapper already pins
+  # the same value. Login shell itself stays /bin/sh.
+  launchd.agents.gui-shell = {
+    enable = true;
+    config = {
+      ProgramArguments = [
+        "/bin/launchctl"
+        "setenv"
+        "SHELL"
+        "/bin/zsh"
+      ];
+      RunAtLoad = true;
+    };
+  };
+
   # Dependabot-style weekly mise pin bumper. Fires daily at 10:30; a 7-day guard
   # inside the script gates real work to weekly (survives sleep/missed runs). No
   # RunAtLoad so it doesn't fire on every rebuild/login.

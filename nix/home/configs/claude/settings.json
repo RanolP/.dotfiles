@@ -17,6 +17,11 @@
     "humanize-korean@im-not-ai": false
   },
   "skillOverrides": {
+    "docs-write-tutorial": "name-only",
+    "docs-write-concept": "name-only",
+    "docs-write-howto": "name-only",
+    "docs-write-reference": "name-only",
+    "docs-write-status": "name-only",
     "humanize-korean": "user-invocable-only",
     "humanize": "user-invocable-only",
     "humanize-redo": "user-invocable-only",

@@ -146,6 +146,11 @@ in
         source = ./configs/claude/hooks/package-manager-guard.py;
         executable = true;
       };
+      # Force-inject github-master guides on mutating gh pr/issue commands.
+      ".claude/hooks/gh-guard.py" = {
+        source = ./configs/claude/hooks/gh-guard.py;
+        executable = true;
+      };
       # Deny direct edits to ~/.claude/ -- the repo is the source of truth.
       ".claude/hooks/claude-dir-edit-guard.py" = {
         source = ./configs/claude/hooks/claude-dir-edit-guard.py;

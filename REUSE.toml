@@ -55,6 +55,8 @@ SPDX-License-Identifier = "MIT"
 path = [
     "nix/home/configs/.agents/skills/git-master/SKILL.md",
     "nix/home/configs/.agents/skills/github-master/SKILL.md",
+    "nix/home/configs/.agents/skills/github-master/guides/pr.md",
+    "nix/home/configs/.agents/skills/github-master/guides/issue.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
@@ -65,6 +67,7 @@ path = [
     "nix/home/configs/claude/hooks/git-push-guard.py",
     "nix/home/configs/claude/hooks/subagent-model-guard.py",
     "nix/home/configs/claude/hooks/ssh-guard.py",
+    "nix/home/configs/claude/hooks/gh-guard.py",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

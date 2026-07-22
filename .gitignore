@@ -6,3 +6,6 @@ local.nix
 
 # mdbook build output
 docs/book
+
+# nix build output symlink
+/result

@@ -4,12 +4,14 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 
 ## Load task tools
 - WHEN: session starts
-- DO: ToolSearch `select:TaskCreate,TaskUpdate,TaskList` before any other work
+- DO: ToolSearch `select:TaskCreate,TaskUpdate,TaskList,EnterPlanMode,ExitPlanMode` before any other work -- a deferred EnterPlanMode is invisible at decision time, so it must be loaded up front
 
 ## Plan mode
-- WHEN: a task is non-trivial: 2+ files, multi-step, or ambiguous scope
-- DO: EnterPlanMode, research there, and present the plan concisely before acting
-- NEVER: skip plan mode when scope is non-obvious
+- WHEN: a task is confirmed non-trivial (2+ files, multi-step, or ambiguous scope) and its FIRST mutation (Edit/Write/mutating Bash) has not happened yet
+- DO: scout inline first -- read the named targets until the shape of the work is clear -- THEN call EnterPlanMode, do the deep research there, and present the plan via ExitPlanMode before any mutation; this is the Claude Code form of "present the plan" in the shared "Plan after research, then act" rule -- an inline plan paragraph does not count as presenting a plan
+- DO: treat the ExitPlanMode approval as the ONE expected checkpoint of a non-trivial task -- autonomy pressure against blocking questions applies to mid-task asks, not to this gate
+- EXCEPT: the user handed a ready-made plan or spec to implement, explicitly said to skip planning, or the change is a few-line fix -- act directly
+- NEVER: enter plan mode as a reflexive first action before scouting the request; talk yourself out of it once scope is confirmed non-trivial -- when unsure, scout more, then enter
 
 ## Keep context lean
 - WHEN: main-thread context grows past ~150k tokens, or a new independent task starts inside an old session

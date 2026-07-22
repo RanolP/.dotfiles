@@ -32,9 +32,9 @@
     # Bash tool spawns a NON-interactive zsh, which reads .zshenv but skips
     # .zshrc. Keeping the mise shims here is what lets Claude find rg/fd/jq/gh/
     # node/etc. by bare name. Plain exports (no subprocess) so per-call shell
-    # init stays cheap. The `mise activate` hook is disabled everywhere (it
-    # deadlocked zsh at startup), so these shims are the sole tool source in
-    # both interactive and non-interactive zsh.
+    # init stays cheap. Interactive zsh additionally runs the `mise activate`
+    # hook from .zshrc (safe again on Apple's /bin/zsh); these shims remain the
+    # sole tool source for non-interactive zsh.
     envExtra = ''
       export PATH="/Users/ranolp/.local/bin:/Users/ranolp/.local/share/mise/shims:$PATH"
       export ANDROID_HOME="$HOME/Library/Android/sdk"

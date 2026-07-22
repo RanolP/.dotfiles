@@ -36,6 +36,14 @@ let
     unpackPhase = ''unzip -q "$src"'';
     installPhase = ''install -Dm444 espanso/Espanso.dmg "$out/Espanso.dmg"'';
   };
+  # Orca (onorca.dev) Agent IDE: no Homebrew cask and not in nixpkgs, so fetch
+  # the notarized release dmg (pure download, GOLDEN RULE) and mount + ditto it
+  # into ~/Applications at activation, same as espanso. Bump url/hash together.
+  orcaApp = "${config.home.homeDirectory}/Applications/Orca.app";
+  orcaDmg = pkgs.fetchurl {
+    url = "https://github.com/stablyai/orca/releases/download/v1.4.150/orca-macos-arm64.dmg";
+    hash = "sha256-s5eJFMv6fdPam29rt1aixbmZI9yXaA5F9HyiGirqum4=";
+  };
 in
 {
   imports = [
@@ -115,6 +123,23 @@ in
       $DRY_RUN_CMD /usr/bin/hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mnt"
       $DRY_RUN_CMD rm -rf "${espansoApp}"
       $DRY_RUN_CMD /usr/bin/ditto "$mnt/Espanso.app" "${espansoApp}"
+      $DRY_RUN_CMD /usr/bin/hdiutil detach "$mnt"
+      $DRY_RUN_CMD sh -c "printf '%s' '$dmg' > '$stamp'"
+    fi
+  '';
+
+  # Same mount + ditto install as espanso above: preserves the notarized
+  # signature and only re-runs when the pinned dmg store path changes (an
+  # in-app auto-update is left alone until the pin bumps).
+  home.activation.orca = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    dmg="${orcaDmg}"
+    stamp="${config.home.homeDirectory}/Applications/.orca-dmg-source"
+    if [ ! -d "${orcaApp}" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$dmg" ]; then
+      $DRY_RUN_CMD mkdir -p "${config.home.homeDirectory}/Applications"
+      mnt="$($DRY_RUN_CMD mktemp -d)"
+      $DRY_RUN_CMD /usr/bin/hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mnt"
+      $DRY_RUN_CMD rm -rf "${orcaApp}"
+      $DRY_RUN_CMD /usr/bin/ditto "$mnt/Orca.app" "${orcaApp}"
       $DRY_RUN_CMD /usr/bin/hdiutil detach "$mnt"
       $DRY_RUN_CMD sh -c "printf '%s' '$dmg' > '$stamp'"
     fi

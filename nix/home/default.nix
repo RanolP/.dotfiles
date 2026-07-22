@@ -94,7 +94,6 @@ let
     humanize = "${humanizeKorean}/.claude/skills/humanize";
     humanize-redo = "${humanizeKorean}/.claude/skills/humanize-redo";
     supermemory-search = supermemorySearchSkill;
-    orca-cli = "${orcaRepo}/skills/orca-cli";
   };
 
   # Link every skill into both tools' trees: Claude reads ~/.claude/skills,
@@ -219,6 +218,21 @@ in
     run mkdir -p "$HOME/.claude/rules"
     run rm -f "$out"
     run install -m 0644 ${./configs/claude/rules/argent.md} "$out"
+  '';
+
+  # The Orca app's skill panel classifies installs by topology, and only the
+  # layout `npx skills add --global` produces is fully recognized: a REAL
+  # canonical directory at ~/.agents/skills/<name> ('canonical-copy') with
+  # per-provider symlinks pointing at it ('provider-alias'). A symlink into the
+  # nix store is an unsupported 'external-link' topology, so it can't live in
+  # the skills set above -- reproduce the npx layout declaratively instead.
+  home.activation.orcaCliSkill = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    canonical="$HOME/.agents/skills/orca-cli"
+    run rm -rf "$canonical"
+    run mkdir -p "$canonical"
+    run install -m 0644 ${orcaRepo}/skills/orca-cli/SKILL.md "$canonical/SKILL.md"
+    run mkdir -p "$HOME/.claude/skills"
+    run ln -sfn "$canonical" "$HOME/.claude/skills/orca-cli"
   '';
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

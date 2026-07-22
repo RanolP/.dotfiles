@@ -226,13 +226,16 @@ in
   # per-provider symlinks pointing at it ('provider-alias'). A symlink into the
   # nix store is an unsupported 'external-link' topology, so it can't live in
   # the skills set above -- reproduce the npx layout declaratively instead.
-  home.activation.orcaCliSkill = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    canonical="$HOME/.agents/skills/orca-cli"
-    run rm -rf "$canonical"
-    run mkdir -p "$canonical"
-    run install -m 0644 ${orcaRepo}/skills/orca-cli/SKILL.md "$canonical/SKILL.md"
-    run mkdir -p "$HOME/.claude/skills"
-    run ln -sfn "$canonical" "$HOME/.claude/skills/orca-cli"
+  home.activation.orcaSkills = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    for name in orca-cli computer-use; do
+      canonical="$HOME/.agents/skills/$name"
+      run rm -rf "$canonical"
+      run mkdir -p "$canonical"
+      run cp -R "${orcaRepo}/skills/$name/." "$canonical/"
+      run chmod -R u+w "$canonical"
+      run mkdir -p "$HOME/.claude/skills"
+      run ln -sfn "$canonical" "$HOME/.claude/skills/$name"
+    done
   '';
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

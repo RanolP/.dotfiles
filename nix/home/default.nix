@@ -227,7 +227,7 @@ in
   # nix store is an unsupported 'external-link' topology, so it can't live in
   # the skills set above -- reproduce the npx layout declaratively instead.
   home.activation.orcaSkills = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    for name in orca-cli computer-use; do
+    for name in orca-cli computer-use orchestration; do
       canonical="$HOME/.agents/skills/$name"
       run rm -rf "$canonical"
       run mkdir -p "$canonical"

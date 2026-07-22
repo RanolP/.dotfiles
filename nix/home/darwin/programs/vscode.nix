@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 {
   programs.vscode = {
     enable = true;
@@ -74,8 +74,11 @@
         "diffEditor.hideUnchangedRegions.enabled" = true;
         "files.autoSave" = "onFocusChange";
         "terminal.integrated.profiles.osx" = {
+          # nushell is installed per-user by home-manager, not into the system
+          # profile — /run/current-system/sw/bin/nu does not exist, and VSCode
+          # silently falls back to the login shell (/bin/sh) on a bad path.
           "nu" = {
-            "path" = "/run/current-system/sw/bin/nu";
+            "path" = "${config.home.profileDirectory}/bin/nu";
           };
         };
       };

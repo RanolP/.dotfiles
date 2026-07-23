@@ -21,6 +21,7 @@
 ## Checkpoint only for genuine blockers
 - WHEN: about to pause or ask for confirmation
 - DO: pause only for destructive/irreversible actions, real scope changes, or input only the user can provide; if blocked, ask and end the turn
+- NOTE: the plan-approval gate of a non-trivial task (ExitPlanMode in Claude Code) is the ONE expected checkpoint -- this rule governs mid-task asks, not that gate
 - NEVER: ask permission for reversible actions that follow clearly from the request
 
 ## Cap at 3 attempts

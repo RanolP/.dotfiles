@@ -2,13 +2,15 @@
 """Plan mode is distill-only: research happens BEFORE EnterPlanMode, so once
 the session is in plan mode every tool except writing the plan file and
 presenting it (ExitPlanMode) is denied. AskUserQuestion stays available for
-requirement clarification, which is not research.
+requirement clarification, and ToolSearch for loading the deferred
+ExitPlanMode schema -- without it a session already in plan mode could never
+exit; neither is research.
 """
 
 import json
 import sys
 
-ALLOWED = {"ExitPlanMode", "Write", "Edit", "AskUserQuestion"}
+ALLOWED = {"ExitPlanMode", "Write", "Edit", "AskUserQuestion", "ToolSearch"}
 
 
 def main():

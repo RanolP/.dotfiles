@@ -3,14 +3,12 @@
     "defaultMode": "auto",
     "allow": [
       "Bash(zellij run -n \"Claude Continue\"*)",
-      "Edit(~/.claude-personal/projects/**/memory/**)",
-      "Write(~/.claude-personal/projects/**/memory/**)"
+      "Edit(~/.claude-personal/projects/**/memory/**)"
     ],
     "deny": [
       "Bash(git commit *--no-verify*)",
       "Bash(git commit *-n *)",
-      "Edit(**/.nanno-workers.json)",
-      "Write(**/.nanno-workers.json)"
+      "Edit(**/.nanno-workers.json)"
     ]
   },
   "enabledPlugins": {

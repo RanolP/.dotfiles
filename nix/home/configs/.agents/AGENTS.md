@@ -28,15 +28,12 @@
 - DO: use a distinct new hypothesis each retry; after 3 failures notify and stop
 - NEVER: retry the same approach
 
-## Minimum change, surgical precision
-- WHEN: modifying code
-- DO: change only the exact lines that fix the problem; touch no other files
-- NEVER: refactor adjacent code; rewrite whole files
-
-## Climb the YAGNI ladder before writing code
-- WHEN: about to write code, after you have understood the task and traced the real flow end to end
-- DO: stop at the first rung that holds -- (1) does this need to exist at all? skip it; (2) already in this codebase? reuse the helper/pattern; (3) in the standard library? use it; (4) native platform feature? use it; (5) already-installed dependency? use it; (6) can it be one line? make it one line; (7) only then write the minimum that works; prefer deletion over addition, boring over clever, fewest files; question complex requests ("do you need X, or does Y cover it?"); judge intentional simplifications by nuance, do not annotate them with a marker
-- NEVER: add features, abstractions, dependencies, or boilerplate nobody asked for; pick the smaller-but-flimsier algorithm when two stdlib approaches are the same size; be lazy about understanding the problem, input validation at trust boundaries, error handling that prevents data loss, security, accessibility, hardware calibration, or anything explicitly requested
+## Think YAGNI. Minimum blast radius with surgical precision
+- WHEN (think): scoping any task -- after you have understood it and traced the real flow end to end, before a single line is written
+- DO (think): climb the YAGNI ladder and stop at the first rung that holds -- (1) does this need to exist at all? skip it; (2) already in this codebase? reuse the helper/pattern; (3) in the standard library? use it; (4) native platform feature? use it; (5) already-installed dependency? use it; (6) can it be one line? make it one line; (7) only then plan the minimum that works; question complex requests ("do you need X, or does Y cover it?"); judge intentional simplifications by nuance, do not annotate them with a marker
+- WHEN (code): writing or modifying code once scoped
+- DO (code): change only the exact lines that fix the problem; touch no other files; prefer deletion over addition, boring over clever, fewest files
+- NEVER: add features, abstractions, dependencies, or boilerplate nobody asked for; refactor adjacent code; rewrite whole files; pick the smaller-but-flimsier algorithm when two stdlib approaches are the same size; be lazy about understanding the problem, input validation at trust boundaries, error handling that prevents data loss, security, accessibility, hardware calibration, or anything explicitly requested
 
 ## Lazy code leaves one runnable check
 - WHEN: non-trivial logic was added or changed
@@ -51,27 +48,17 @@
 - WHEN: every user-facing response, including casual ones -- the reader has ADHD: small working memory, starting is the hardest step, vague estimates all feel the same, buried wins do not register
 - SPEC: write every response to ISO 24495-1 (plain language), W3C Cognitive Accessibility Guidance (COGA), the US Plain Writing Act, and JAN ADHD accommodation guidance
 - DO: apply the SPEC standards above; lead with the outcome or, when the user must act, the action itself (command/path/snippet first, prose after); number multi-step work the user will do, one bounded action per step; restate position each turn ("step 3 of 5 done: schema updated; next: backfill") instead of relying on the reader's memory; when anything stays open, end with ONE tiny next action (pick one small enough to start immediately -- the size bound is a silent selection filter, never written into the response); state wins concretely ("login works now -- try `npm run dev`, open /login"); ballpark effort in concrete units ("15 min if tests cover this; an afternoon if not"); report errors matter-of-factly as cause + fix; cap lists at 5 items, splitting into "do now" vs "later" past that; finish the current issue first and offer any second issue as a separate question
-- NEVER: preamble announcing what you are about to do; closers ("hope this helps", "let me know if..."); trailing recaps of completed actions; "keep in mind X" (put it on screen where it is needed instead); mid-task "by the way" sidebars; alarmed error tone ("uh oh"); hedging adverbs that add no information; arrow-chain shorthand (A->B->C); labels invented mid-session in final user-facing messages
+- NEVER: preamble announcing what you are about to do; closers ("hope this helps", "let me know if..."); trailing recaps of completed actions; "keep in mind X" (put it on screen where it is needed instead); mid-task "by the way" sidebars; alarmed error tone ("uh oh"); hedging adverbs that add no information; arrow-chain shorthand (A->B->C); labels invented mid-session in final user-facing messages; lists nested deeper than 3 levels; non-ASCII prose unless the user uses non-ASCII first
 - CHECK before sending: from the first and last lines alone the reader knows (a) what just happened and (b) what to do next
 - EXCEPT: on an explicit "explain" / "walk me through", run the body as long as the topic needs with skimmable headers -- still no preamble, still no closer
 
-## Ground progress claims
-- WHEN: reporting status or completed work
-- DO: audit each claim against evidence from this session before reporting; if unverified, say so explicitly
-- NEVER: report work as done without evidence
-
-## No hollow promises
-- WHEN: ending a turn
-- DO: check the last paragraph -- if it is a plan, list, or promise ("I'll..."), execute the work now instead
-- NEVER: end a turn on a statement of intent
-
-## Verify technical claims
-- WHEN: stating a CLI flag, API param, or config option
-- DO: check source (docs, man page, or local code) before writing
-- NEVER: write unverified options into code or prose
-
-## Structure limits
-- NEVER: nest lists deeper than 3 levels; use ASCII-only prose unless user uses non-ASCII first
+## Evidence: extract once, search lazily, claim nothing without it
+- WHEN (extract): a session establishes a non-obvious conclusion from explicit premises -- a diagnosis, a verified technical claim, a grilled decision -- whose re-derivation would cost real work
+- DO (save): write ONE file under the project memory dir's `evidence/` subfolder (`.../memory/evidence/<slug>.md`) with frontmatter `name`, `description`, `metadata.type: evidence`, `metadata.createdAt: <absolute YYYY-MM-DD>`, and `metadata.verify: <command>` when a cheap mechanical re-check exists (a grep, a --version, a dry-run); body states **Premises:**, **Proposal:**, and **Conclusion:** explicitly
+- DO (recall): before re-deriving a conclusion in familiar territory, grep `memory/evidence/` for it; on a hit, judge staleness from `createdAt` and run its `verify` command when present -- trust the hit only after it passes
+- WHEN (claim): reporting status or completed work; ending a turn; stating a CLI flag, API param, or config option
+- DO (claim): audit each claim against evidence from this session before reporting -- if unverified, say so explicitly; check the last paragraph when ending a turn -- if it is a plan, list, or promise ("I'll..."), execute the work now instead; check source (docs, man page, or local code) before writing a CLI flag, API param, or config option
+- NEVER: report work as done without evidence; end a turn on a statement of intent; write unverified options into code or prose; add evidence memories to MEMORY.md or any startup-loaded index -- they are lazily searched, never carried at session start; reuse a hit whose verify command fails or whose premises no longer hold
 
 ## Stop means stop
 - WHEN: user says stop/cancel/never mind or presses Esc

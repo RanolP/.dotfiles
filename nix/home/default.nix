@@ -176,6 +176,12 @@ in
         source = ./configs/claude/hooks/rebuild-enforcer.py;
         executable = true;
       };
+      # Plan mode is distill-only: deny every tool except plan-file writes
+      # and ExitPlanMode once permission_mode is "plan".
+      ".claude/hooks/plan-mode-guard.py" = {
+        source = ./configs/claude/hooks/plan-mode-guard.py;
+        executable = true;
+      };
       # `ask:` prompts become text-only turns: every tool call is denied.
       ".claude/hooks/ask-mode-guard.py" = {
         source = ./configs/claude/hooks/ask-mode-guard.py;

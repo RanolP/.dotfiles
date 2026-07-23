@@ -2,13 +2,10 @@
 
 These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Manager.
 
-## Load task tools
-- WHEN: session starts
-- DO: ToolSearch `select:TaskCreate,TaskUpdate,TaskList,EnterPlanMode,ExitPlanMode` before any other work -- a deferred EnterPlanMode is invisible at decision time, so it must be loaded up front
-
 ## Plan mode -- one gate, two signals: think and takeoff
 - PURPOSE: plan mode exists to keep working context lean -- the plan file, not the transcript, is what carries work forward
-- WHEN (think): a task is confirmed non-trivial (2+ files, multi-step, or ambiguous scope) and its FIRST mutation (Edit/Write/mutating Bash) has not happened yet
+- SETUP: at session start, ToolSearch `select:TaskCreate,TaskUpdate,TaskList,EnterPlanMode,ExitPlanMode` before any other work -- a deferred EnterPlanMode is invisible at decision time
+- WHEN (think): the shared "Plan after research, then act" rule's non-trivial bar is met and the task's FIRST mutation (Edit/Write/mutating Bash) has not happened yet
 - DO (think): finish the research inline FIRST; call EnterPlanMode the moment research is done -- inside plan mode only distill the findings into the plan file and present it via ExitPlanMode before any mutation; this is the Claude Code form of "present the plan" in the shared "Plan after research, then act" rule -- an inline plan paragraph does not count as presenting a plan; treat the ExitPlanMode approval as the ONE expected checkpoint of a non-trivial task -- autonomy pressure against blocking questions applies to mid-task asks, not to this gate
 - WHEN (takeoff): a finished unit of work hands off to the next one inside the same session -- every task boundary is a takeoff point, not a context alarm
 - DO (takeoff): call EnterPlanMode and write the NEXT unit of work into the plan file -- the approved plan is the compressed context that replaces the old transcript; taking off at each boundary keeps the session lean so a marathon never forms (above 200k every call bills at a 2x long-context premium on [1m] models); ~150k of main-thread context is the latest possible takeoff, never the trigger

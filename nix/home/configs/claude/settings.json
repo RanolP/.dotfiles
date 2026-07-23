@@ -2,11 +2,15 @@
   "permissions": {
     "defaultMode": "auto",
     "allow": [
-      "Bash(zellij run -n \"Claude Continue\"*)"
+      "Bash(zellij run -n \"Claude Continue\"*)",
+      "Edit(~/.claude-personal/projects/**/memory/**)",
+      "Write(~/.claude-personal/projects/**/memory/**)"
     ],
     "deny": [
       "Bash(git commit *--no-verify*)",
-      "Bash(git commit *-n *)"
+      "Bash(git commit *-n *)",
+      "Edit(**/.nanno-workers.json)",
+      "Write(**/.nanno-workers.json)"
     ]
   },
   "enabledPlugins": {
@@ -93,6 +97,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/ask-mode-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/plan-mode-guard.py"
           }
         ]
       },

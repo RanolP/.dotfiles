@@ -86,10 +86,39 @@ in
   # /bin/zsh is immune, reads the same ~/.zshenv//.zprofile, so force it via
   # $SHELL, which short-circuits Claude Code's shell probing. ~/.local/bin
   # precedes mise's claude on PATH, so this wrapper wins.
+  # The wrapper also wires named auth profiles (~/.claude-<profile>): shell
+  # functions like nushell's `ccc` are baked into running shells at startup
+  # and go stale after a rebuild, so the wiring lives here, resolved fresh at
+  # every launch. `ccc` only picks the profile and sets CLAUDE_CONFIG_DIR.
   home.file.".local/bin/claude" = {
     executable = true;
     text = ''
       #!/bin/sh
+      case "$CLAUDE_CONFIG_DIR" in
+        "$HOME/.claude-"*)
+          base="$HOME/.claude"
+          dir="$CLAUDE_CONFIG_DIR"
+          mkdir -p "$dir"
+          # Config mirrors ~/.claude so nix updates track; runtime state and
+          # the auth token stay per-profile in $dir.
+          for entry in settings.json CLAUDE.md agents skills plugins; do
+            [ -e "$base/$entry" ] && ln -sfn "$base/$entry" "$dir/$entry"
+          done
+          # Sessions live in projects/; symlinking it into ~/.claude/projects
+          # makes /resume see every profile's sessions. One-time merge of any
+          # pre-existing per-profile dir (shared copy wins on clash); mv only
+          # after rsync succeeds so a failed merge leaves the real dir in
+          # place and the ln below fails loudly instead of hiding data.
+          shared="$base/projects"
+          proj="$dir/projects"
+          mkdir -p "$shared"
+          if [ -d "$proj" ] && [ ! -L "$proj" ]; then
+            rsync -a --ignore-existing "$proj/" "$shared/" \
+              && mv "$proj" "$proj.merged.bak"
+          fi
+          ln -sfn "$shared" "$proj"
+          ;;
+      esac
       SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"
     '';
   };

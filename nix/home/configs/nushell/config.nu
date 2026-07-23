@@ -40,8 +40,11 @@ $env.config.hooks.env_change.PWD = (
 # Launch Claude Code under a named auth profile.
 # With no profile, prompt with a picker: (default) ~/.claude, any existing
 # ~/.claude-<profile>, or create a new one. A chosen profile uses
-# ~/.claude-<profile>, which mirrors ~/.claude's config (settings, agents,
-# skills, plugins) but keeps its own auth token in that dir's .credentials.json.
+# ~/.claude-<profile>, which mirrors ~/.claude's config but keeps its own
+# auth token in that dir's .credentials.json. All profile-dir wiring (config
+# symlinks, shared projects/) lives in the ~/.local/bin/claude wrapper
+# (nix/home/darwin/default.nix), resolved fresh at every launch -- this
+# function only picks the profile and sets CLAUDE_CONFIG_DIR.
 def --wrapped ccc [
   profile: string = ""  # auth profile name; empty = pick interactively
   ...rest               # extra args and flags forwarded to claude
@@ -78,30 +81,6 @@ def --wrapped ccc [
   if ($profile | is-empty) {
     ^claude ...$rest
   } else {
-    let base = ($env.HOME | path join ".claude")
-    let dir = ($env.HOME | path join $".claude-($profile)")
-    mkdir $dir
-    # Config Claude reads from CLAUDE_CONFIG_DIR; runtime state and the auth
-    # token stay per-profile. Links point at ~/.claude/* so nix updates track.
-    for entry in [settings.json CLAUDE.md agents skills plugins] {
-      let src = ($base | path join $entry)
-      if ($src | path exists) {
-        ^ln -sfn $src ($dir | path join $entry)
-      }
-    }
-    # Sessions live in projects/, so symlinking it into ~/.claude/projects
-    # makes /resume see every profile's sessions (dirs can't be hardlinked
-    # on macOS). Per-project memory lives inside projects/ and is shared too.
-    let shared = ($base | path join "projects")
-    let local = ($dir | path join "projects")
-    mkdir $shared
-    if ($local | path type) == "dir" {
-      # One-time merge of pre-existing per-profile sessions; on a filename
-      # clash the shared copy wins, and the original dir is kept as .bak.
-      ^rsync -a --ignore-existing ($local + "/") ($shared + "/")
-      ^mv $local ($local + ".merged.bak")
-    }
-    ^ln -sfn $shared $local
-    with-env { CLAUDE_CONFIG_DIR: $dir } { ^claude ...$rest }
+    with-env { CLAUDE_CONFIG_DIR: ($env.HOME | path join $".claude-($profile)") } { ^claude ...$rest }
   }
 }

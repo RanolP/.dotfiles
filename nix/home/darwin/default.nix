@@ -105,18 +105,10 @@ in
             [ -e "$base/$entry" ] && ln -sfn "$base/$entry" "$dir/$entry"
           done
           # Sessions live in projects/; symlinking it into ~/.claude/projects
-          # makes /resume see every profile's sessions. One-time merge of any
-          # pre-existing per-profile dir (shared copy wins on clash); mv only
-          # after rsync succeeds so a failed merge leaves the real dir in
-          # place and the ln below fails loudly instead of hiding data.
-          shared="$base/projects"
-          proj="$dir/projects"
-          mkdir -p "$shared"
-          if [ -d "$proj" ] && [ ! -L "$proj" ]; then
-            rsync -a --ignore-existing "$proj/" "$shared/" \
-              && mv "$proj" "$proj.merged.bak"
-          fi
-          ln -sfn "$shared" "$proj"
+          # makes /resume see every profile's sessions. If a real dir ever
+          # lands here, ln fails loudly instead of hiding data.
+          mkdir -p "$base/projects"
+          ln -sfn "$base/projects" "$dir/projects"
           ;;
       esac
       SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"

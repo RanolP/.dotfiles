@@ -57,6 +57,7 @@ path = [
     "nix/home/configs/.agents/skills/github-master/SKILL.md",
     "nix/home/configs/.agents/skills/github-master/guides/pr.md",
     "nix/home/configs/.agents/skills/github-master/guides/issue.md",
+    "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

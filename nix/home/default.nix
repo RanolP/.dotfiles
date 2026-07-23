@@ -90,6 +90,7 @@ let
     docs-write-howto = localSkill "docs-write-howto";
     docs-write-reference = localSkill "docs-write-reference";
     docs-write-status = localSkill "docs-write-status";
+    modularize-by-domain = localSkill "modularize-by-domain";
     slopless = localSkill "slopless";
     remove-dead-code = localSkill "remove-dead-code";
     audit-env-variables = localSkill "audit-env-variables";

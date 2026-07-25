@@ -16,7 +16,8 @@ leaves alone the spawns where a deliberate choice already exists:
   * namespaced plugin agents (type contains ":") -- their model lives in the
     plugin, which this hook cannot read; trust it rather than false-positive.
 
-An explicit opus model is DENIED outright: subagents run sonnet or haiku only;
+An explicit opus or fable model is DENIED outright: subagents run sonnet or
+haiku only;
 top-tier reasoning belongs in the main thread.
 
 Fail-open: any parse problem lets the normal permission flow run, so a bug here
@@ -28,7 +29,9 @@ import re
 import signal
 import sys
 
-OPUS_TOKENS = ("opus",)  # alias or full id like claude-opus-4-8
+# Tiers a subagent may not run. Matched as substrings so both the alias and the
+# full id are caught (`opus`, `claude-opus-5`; `fable`, `claude-fable-5`).
+BLOCKED_TOKENS = ("opus", "fable")
 AGENTS_DIR = os.path.expanduser("~/.claude/agents")
 # Matches a frontmatter `model:` line, capturing its value.
 MODEL_LINE_RE = re.compile(r"^\s*model\s*:\s*(.+?)\s*$", re.MULTILINE)
@@ -44,8 +47,8 @@ RUBRIC = (
     "in the main thread."
 )
 
-OPUS_DENY = (
-    "Subagents run sonnet or haiku only -- opus subagents are blocked. "
+TIER_DENY = (
+    "Subagents run sonnet or haiku only -- opus and fable are blocked. "
     "Re-issue with model: sonnet (or haiku for mechanical work); if the task "
     "truly needs top-tier reasoning, do it in the main thread."
 )
@@ -100,8 +103,8 @@ def main():
         sys.exit(0)
 
     if model:
-        if any(tok in model for tok in OPUS_TOKENS):
-            decide("deny", OPUS_DENY)
+        if any(tok in model for tok in BLOCKED_TOKENS):
+            decide("deny", TIER_DENY)
         sys.exit(0)
 
     # No explicit model from here on. Namespaced plugin agents carry their own
@@ -144,8 +147,10 @@ def _selftest():
     assert decision({})[0] == "deny"
     assert decision({"subagent_type": "fork"}) == (None, "")
     assert decision({"model": "sonnet"}) == (None, "")
-    d, o = decision({"model": "opus"})
-    assert d == "deny" and "opus" in o
+    assert decision({"model": "haiku"}) == (None, "")
+    for blocked in ("opus", "claude-opus-5", "fable", "claude-fable-5"):
+        d, o = decision({"model": blocked})
+        assert d == "deny" and "sonnet or haiku only" in o, blocked
     assert decision({"subagent_type": "x:y"}) == (None, "")
 
     global AGENTS_DIR

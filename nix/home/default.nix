@@ -77,7 +77,6 @@ let
     handoff = localSkill "handoff";
     git-master = localSkill "git-master";
     github-master = localSkill "github-master";
-    decompose = localSkill "decompose";
     one-domain = localSkill "one-domain";
     diagnose = localSkill "diagnose";
     tdd = localSkill "tdd";

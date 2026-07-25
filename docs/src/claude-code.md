@@ -20,7 +20,6 @@ Skills extend Claude Code with domain-specific workflows.
 | Skill | Source |
 |-------|--------|
 | handoff | `nix/home/configs/.agents/skills/handoff/SKILL.md` |
-| decompose | `nix/home/configs/.agents/skills/decompose/SKILL.md` |
 | one-domain | `nix/home/configs/.agents/skills/one-domain/SKILL.md` |
 | codex-edit | `nix/home/configs/.agents/skills/codex-edit/SKILL.md` |
 | diagnose | `nix/home/configs/.agents/skills/diagnose/SKILL.md` |

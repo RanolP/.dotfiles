@@ -22,6 +22,13 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - NEVER: spawn a subagent for work the main thread can already hold inline; fan out wider than the task needs; omit `model` on a native spawn -- it inherits the (expensive) main-thread model and the `subagent-model-guard` PreToolUse hook blocks it (forks and agents that pin `model:` in frontmatter are exempt); pass any model above sonnet to a subagent; spend a top-tier model on mechanical work or a cheap model on work that needs real reasoning; chain free-form prose between subagents and then regex the fields back out
 - EXCEPT: tiny one-liners, exploratory/uncertain scope, or active dialogue with the user -- edit inline
 
+## Multi-step work: register it, then run it by dependency
+- WHEN: a task has 2+ independently meaningful steps -- whether or not any step is delegated
+- DO: register every step with TaskCreate before the first one starts, so the whole shape is visible up front; mark a step `in_progress` as it begins and `completed` only once its result is confirmed -- the SETUP line above loads these tools for exactly this
+- DO: run steps in dependency order -- everything with no unmet dependency goes out together (independent Agent spawns belong in ONE message so they run concurrently), dependent steps wait and receive only (goal + relevant files), never the thread history
+- DO: keep long-running or destructive Bash in the foreground where its output lands in context; reserve `run_in_background` for work the user asked to background
+- NEVER: start executing while the step list is still half-registered; treat this as a second planning gate -- it is bookkeeping the user can watch, not an approval checkpoint
+
 ## Questions and "ask:" = explain only, never act
 - NEVER: call tools when the user asks a question unless action was explicitly requested
 - WHEN: message starts with "ask:", or is purely a question about work already done (leads with "why"/"wonder"/"explain"/"did you", or "how"/"do you" with no follow-up instruction -- a verb inside the question like "run"/"add" does not count)

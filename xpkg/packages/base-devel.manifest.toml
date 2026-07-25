@@ -1,0 +1,7 @@
+[mise]
+linux.pacman = "mise"
+platform = "@unix"
+
+[github-cli]
+windows.winget = "GitHub.cli"
+linux.pacman = "github-cli"

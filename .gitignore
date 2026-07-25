@@ -12,3 +12,7 @@ docs/book
 
 # local fonts
 apps/@fonts/.fonts
+
+# python bytecode (claude hooks)
+__pycache__/
+*.pyc

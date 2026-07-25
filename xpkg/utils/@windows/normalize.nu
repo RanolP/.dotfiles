@@ -1,4 +1,4 @@
-use ~/.dotfiles/utils/@windows/git-bash.nu
+use ~/.dotfiles/xpkg/utils/@windows/git-bash.nu
 
 #!/usr/bin/env nu
 export alias ln = coreutils ln

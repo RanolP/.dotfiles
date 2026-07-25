@@ -1,0 +1,185 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "Bash(zellij run -n \"Claude Continue\"*)",
+      "Edit(~/.claude-personal/projects/**/memory/**)"
+    ],
+    "deny": [
+      "Bash(git commit *--no-verify*)",
+      "Bash(git commit *-n *)",
+      "Edit(**/.nanno-workers.json)"
+    ]
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true,
+    "clangd-lsp@claude-plugins-official": true,
+    "laftel-backend-skills@laftel-backend-skills": true,
+    "supermemory@supermemory-plugins": false,
+    "humanize-korean@im-not-ai": false
+  },
+  "skillOverrides": {
+    "docs-write-tutorial": "name-only",
+    "docs-write-concept": "name-only",
+    "docs-write-howto": "name-only",
+    "docs-write-reference": "name-only",
+    "docs-write-status": "name-only",
+    "one-domain": "user-invocable-only",
+    "humanize-korean": "user-invocable-only",
+    "humanize": "user-invocable-only",
+    "humanize-redo": "user-invocable-only",
+    "agents-sdk": "user-invocable-only",
+    "cloudflare": "user-invocable-only",
+    "cloudflare-email-service": "user-invocable-only",
+    "cloudflare-one": "user-invocable-only",
+    "cloudflare-one-migrations": "user-invocable-only",
+    "durable-objects": "user-invocable-only",
+    "sandbox-sdk": "user-invocable-only",
+    "turnstile-spin": "user-invocable-only",
+    "web-perf": "user-invocable-only",
+    "workers-best-practices": "user-invocable-only",
+    "wrangler": "user-invocable-only"
+  },
+  "model": "opus",
+  "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+    "GIT_PAGER": "cat",
+    "GH_PAGER": "cat",
+    "PAGER": "cat"
+  },
+  "effortLevel": "medium",
+  "theme": "dark",
+  "skipAutoPermissionPrompt": true,
+  "autoUpdaterStatus": "disabled",
+  "disableDeepLinkRegistration": "disable",
+  "feedbackSurveyRate": 0,
+  "language": "english",
+  "showClearContextOnPlanAccept": true,
+  "skipWebFetchPreflight": true,
+  "tui": "fullscreen",
+  "viewMode": "focus",
+  "worktree.symlinkDirectories": ["node_modules", "android", "ios"],
+  "preferredNotifChannel": "terminal_bell",
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  },
+  "extraKnownMarketplaces": {
+    "supermemory-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "supermemoryai/claude-supermemory"
+      }
+    },
+    "im-not-ai": {
+      "source": {
+        "source": "github",
+        "repo": "epoko77-ai/im-not-ai"
+      }
+    }
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/ask-mode-guard.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/ask-mode-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/plan-mode-guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/git-push-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/ssh-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/gpg-commit-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/package-manager-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/gh-guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/subagent-model-guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/claude-dir-edit-guard.py"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/missing-tool-hint.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          }
+        ]
+      }
+    ]
+  }
+}

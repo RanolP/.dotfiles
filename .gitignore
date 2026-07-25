@@ -1,1 +1,14 @@
+# sensitive — never commit
+local.nix
+
+# macOS metadata
+.DS_Store
+
+# mdbook build output
+docs/book
+
+# nix build output symlink
+/result
+
+# local fonts
 apps/@fonts/.fonts

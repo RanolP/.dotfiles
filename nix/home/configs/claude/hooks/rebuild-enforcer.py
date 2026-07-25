@@ -8,8 +8,10 @@ Wired to three events in settings.json, dispatched on hook_event_name:
       additionalContext reminder. (Plain PostToolUse stdout is debug-log-only;
       only the JSON hookSpecificOutput form reaches Claude -- the previous
       inline reminder in settings.json printed plain text and was invisible.)
-  PostToolUse Bash       : a `darwin-rebuild ... switch` invocation clears the
-      pending state. Attempt-based: tool_response carries no reliable exit
+  PostToolUse Bash       : a `darwin-rebuild ... switch` / `home-manager
+      ... switch` invocation clears the pending state (which of the two applies
+      is the host's business -- either one counts).
+      Attempt-based: tool_response carries no reliable exit
       status, so a failed rebuild also clears -- the failure output itself is
       in context for Claude to act on.
   Stop                   : while edits are pending, block the stop ONCE with
@@ -32,7 +34,18 @@ import tempfile
 import time
 
 CONFIGS_DIR = os.path.expanduser("~/.dotfiles/nix/home/configs") + os.sep
-REBUILD_CMD = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26"
+
+# The apply command differs per host: darwin runs the whole system config,
+# linux runs home-manager standalone. Naming the wrong one is not a cosmetic
+# slip -- the Stop hook below refuses to let the session finish until it sees
+# this command run, so a darwin-only string wedges every linux session.
+DARWIN_REBUILD_CMD = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26"
+LINUX_REBUILD_CMD = "home-manager switch --flake ~/.dotfiles/nix#ranolp-archwsl -b before-hm"
+REBUILD_CMD = DARWIN_REBUILD_CMD if sys.platform == "darwin" else LINUX_REBUILD_CMD
+
+# Either host's switch clears the pending state -- the tool name that matters
+# is whichever one this machine actually has.
+REBUILD_TOOLS = ("darwin-rebuild", "home-manager")
 
 
 def state_path(session_id):
@@ -67,12 +80,13 @@ def is_config_edit(file_path):
 
 
 def is_rebuild(command):
-    """True when the command invokes the darwin-rebuild `switch` subcommand."""
+    """True when the command invokes a rebuild tool's `switch` subcommand."""
     try:
         toks = shlex.split(command or "")
     except ValueError:
         return False
-    return any(t.rsplit("/", 1)[-1] == "darwin-rebuild" for t in toks) and "switch" in toks
+    return (any(t.rsplit("/", 1)[-1] in REBUILD_TOOLS for t in toks)
+            and "switch" in toks)
 
 
 def pending(st):
@@ -186,8 +200,13 @@ def selftest():
     assert handle(ev(hook_event_name="Stop"), 12) is None
     # Rebuild detection.
     assert is_rebuild("sudo darwin-rebuild switch --flake ~/.dotfiles/nix#x")
+    assert is_rebuild("home-manager switch --flake ~/.dotfiles/nix#x -b before-hm")
     assert not is_rebuild("darwin-rebuild build")
+    assert not is_rebuild("home-manager build --flake ~/.dotfiles/nix#x")
     assert not is_rebuild("git switch main")
+    # The nagged command must be the one this host can actually run.
+    assert REBUILD_CMD == (DARWIN_REBUILD_CMD if sys.platform == "darwin"
+                           else LINUX_REBUILD_CMD)
     os.remove(state_path(sid))
     print("rebuild-enforcer selftest ok")
 

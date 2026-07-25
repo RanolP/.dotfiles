@@ -51,8 +51,8 @@ write; do not emit a separate extraction step. Omit empty sections.
 [Plans/PRDs/ADRs/issues/commits/diffs by path or URL -- not copied here.]
 
 ## Suggested skills
-[Skills the next session should invoke for this goal, e.g. /decompose,
-/diagnose, /tdd -- with one line on why each applies.]
+[Skills the next session should invoke for this goal, e.g. /diagnose,
+/tdd, /grill-me -- with one line on why each applies.]
 
 ## Resume
 1. [first action] -- Expected: [outcome]; if it fails: [what to check]

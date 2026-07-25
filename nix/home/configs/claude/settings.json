@@ -23,6 +23,7 @@
     "docs-write-howto": "name-only",
     "docs-write-reference": "name-only",
     "docs-write-status": "name-only",
+    "one-domain": "user-invocable-only",
     "humanize-korean": "user-invocable-only",
     "humanize": "user-invocable-only",
     "humanize-redo": "user-invocable-only",

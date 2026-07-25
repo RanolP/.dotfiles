@@ -19,16 +19,17 @@ does not fire, so this hook enforces it at the tool layer:
 import json
 import os
 import re
-import signal
 import sys
+import threading
 import time
 
-signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-signal.alarm(5)
+_stdin_timer = threading.Timer(5, os._exit, args=(0,))
+_stdin_timer.daemon = True
+_stdin_timer.start()
 try:
     data = json.load(sys.stdin)
 finally:
-    signal.alarm(0)
+    _stdin_timer.cancel()
 
 cmd = data.get("tool_input", {}).get("command", "")
 if not cmd or data.get("tool_name") not in (None, "Bash"):

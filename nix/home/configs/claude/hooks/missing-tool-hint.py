@@ -11,9 +11,10 @@ error. Fail-open on any parse problem.
 Self-check: `python3 missing-tool-hint.py --selftest`.
 """
 import json
+import os
 import re
-import signal
 import sys
+import threading
 
 NAME = r"([A-Za-z0-9._+-]+)"
 NOT_FOUND_RES = (
@@ -44,14 +45,15 @@ def hint(name):
 
 def main():
     # Bound the stdin read so a stalled harness pipe can never hang the tool.
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
+    timer = threading.Timer(5, os._exit, args=(0,))
+    timer.daemon = True
+    timer.start()
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
     finally:
-        signal.alarm(0)
+        timer.cancel()
 
     if data.get("tool_name") != "Bash":
         sys.exit(0)

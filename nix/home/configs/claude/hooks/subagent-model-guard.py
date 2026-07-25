@@ -26,8 +26,8 @@ never blocks legitimate work.
 import json
 import os
 import re
-import signal
 import sys
+import threading
 
 # Tiers a subagent may not run. Matched as substrings so both the alias and the
 # full id are caught (`opus`, `claude-opus-5`; `fable`, `claude-fable-5`).
@@ -85,14 +85,15 @@ def main():
     # A per-call PreToolUse hook must never hang the tool: bound the stdin read
     # (a stalled harness pipe would otherwise block json.load until timeout) and
     # fail open. selftest feeds an in-memory stdin, so the alarm never fires.
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
+    timer = threading.Timer(5, os._exit, args=(0,))
+    timer.daemon = True
+    timer.start()
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
     finally:
-        signal.alarm(0)
+        timer.cancel()
 
     ti = data.get("tool_input", {}) or {}
     agent_type = (ti.get("subagent_type") or "").strip()

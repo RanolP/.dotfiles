@@ -13,9 +13,10 @@ alone. Fail open on a parse error (no opinion).
 Self-check: `python3 ssh-guard.py --selftest`.
 """
 import json
+import os
 import shlex
-import signal
 import sys
+import threading
 
 
 def is_env_assign(tok):
@@ -54,12 +55,13 @@ def deny(reason):
 
 
 def main():
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
+    timer = threading.Timer(5, os._exit, args=(0,))
+    timer.daemon = True
+    timer.start()
     try:
         data = json.load(sys.stdin)
     finally:
-        signal.alarm(0)
+        timer.cancel()
 
     cmd = data.get("tool_input", {}).get("command", "")
     if not starts_with_ssh(cmd):

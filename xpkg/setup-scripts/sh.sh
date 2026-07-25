@@ -6,7 +6,7 @@ if [[ `uname -s` == 'Linux' ]]; then
     case `(cat /etc/os-release 2>/dev/null || cat /etc/lsb-release 2>/dev/null) | grep ^ID=` in
     ID=arch)
         echo "Environment : Arch Linux + Unix Shell"
-        curl -L dotfiles.ranolp.dev/setup-scripts/linux/arch.sh | sh
+        curl -L dotfiles.ranolp.dev/xpkg/setup-scripts/linux/arch.sh | sh
         ;;
     *)
         echo "Environment : ?Unknown Linux? + Unix Shell"

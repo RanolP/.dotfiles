@@ -9,4 +9,4 @@ echo $ sudo pacman -Sy --needed --noconfirm nushell
 sudo pacman -Sy --needed --noconfirm nushell
 
 # run common windows setup script
-nu -c "nu -c (http get https://dotfiles.ranolp.dev/setup-scripts/nu.nu)"
+nu -c "nu -c (http get https://dotfiles.ranolp.dev/xpkg/setup-scripts/nu.nu)"

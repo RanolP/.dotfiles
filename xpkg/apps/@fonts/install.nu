@@ -1,4 +1,4 @@
-use ~/.dotfiles/utils/yesno.nu
+use ~/.dotfiles/xpkg/utils/yesno.nu
 
 let file = (open $"($env.FILE_PWD)/fonts.toml")
 for $fontname in ($file | columns) {

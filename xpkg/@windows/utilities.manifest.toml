@@ -1,5 +1,0 @@
-[share-x]
-windows.winget = "ShareX.ShareX"
-
-[nearby-share]
-windows.winget = "Google.NearbyShare"

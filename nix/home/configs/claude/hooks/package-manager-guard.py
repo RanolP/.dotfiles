@@ -19,7 +19,6 @@ import json
 import os
 import shlex
 import sys
-import threading
 
 PMS = {"npm", "pnpm", "yarn", "bun"}
 OPS = {"&&", "||", ";", "&", "|", "|&", "(", ")", "{", "}"}
@@ -115,13 +114,7 @@ def deny(reason):
 
 
 def main():
-    timer = threading.Timer(5, os._exit, args=(0,))
-    timer.daemon = True
-    timer.start()
-    try:
-        data = json.load(sys.stdin)
-    finally:
-        timer.cancel()
+    data = json.load(sys.stdin)
 
     cmd = data.get("tool_input", {}).get("command", "")
     cwd = data.get("cwd") or os.getcwd()

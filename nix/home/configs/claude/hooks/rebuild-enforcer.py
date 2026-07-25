@@ -30,7 +30,6 @@ import re
 import shlex
 import sys
 import tempfile
-import threading
 import time
 
 CONFIGS_DIR = os.path.expanduser("~/.dotfiles/nix/home/configs") + os.sep
@@ -144,16 +143,10 @@ def handle(data, now):
 
 
 def main():
-    # Bound the stdin read so a stalled harness pipe can never hang the tool.
-    timer = threading.Timer(5, os._exit, args=(0,))
-    timer.daemon = True
-    timer.start()
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
-    finally:
-        timer.cancel()
 
     try:
         payload = handle(data, time.time())

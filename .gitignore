@@ -11,7 +11,7 @@ docs/book
 /result
 
 # local fonts
-apps/@fonts/.fonts
+xpkg/apps/@fonts/.fonts
 
 # python bytecode (claude hooks)
 __pycache__/

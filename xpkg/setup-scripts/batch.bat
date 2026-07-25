@@ -24,4 +24,4 @@ curl -L dotfiles.ranolp.dev/utils/@windows/refresh-path.bat > %Temp%\refresh-pat
 call %Temp%\refresh-path.bat
 
 :: run common windows setup script
-nu -c "nu -c (http get https://dotfiles.ranolp.dev/setup-scripts/nu.nu)"
+nu -c "nu -c (http get https://dotfiles.ranolp.dev/xpkg/setup-scripts/nu.nu)"

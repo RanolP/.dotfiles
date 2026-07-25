@@ -20,16 +20,9 @@ import json
 import os
 import re
 import sys
-import threading
 import time
 
-_stdin_timer = threading.Timer(5, os._exit, args=(0,))
-_stdin_timer.daemon = True
-_stdin_timer.start()
-try:
-    data = json.load(sys.stdin)
-finally:
-    _stdin_timer.cancel()
+data = json.load(sys.stdin)
 
 cmd = data.get("tool_input", {}).get("command", "")
 if not cmd or data.get("tool_name") not in (None, "Bash"):

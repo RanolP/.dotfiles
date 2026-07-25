@@ -19,7 +19,6 @@ import os
 import shlex
 import subprocess
 import sys
-import threading
 
 # git global options that consume the following token as their argument, so that
 # `git -C path commit` resolves its subcommand to `commit`.
@@ -108,13 +107,7 @@ def deny(reason):
 
 
 def main():
-    timer = threading.Timer(5, os._exit, args=(0,))
-    timer.daemon = True
-    timer.start()
-    try:
-        data = json.load(sys.stdin)
-    finally:
-        timer.cancel()
+    data = json.load(sys.stdin)
 
     cmd = data.get("tool_input", {}).get("command", "")
     cwd = data.get("cwd") or os.getcwd()

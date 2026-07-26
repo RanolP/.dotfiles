@@ -1,0 +1,34 @@
+# Shared mise global config -- the single source of truth for tool versions
+# across every host. nix/home/default.nix imports this into
+# `programs.mise.globalConfig` (adding darwin-only tools on top), and
+# xpkg/configs/install.nu merges the Windows overlay
+# (xpkg/configs/mise/config.toml) on top of it for Windows machines.
+#
+# Kept OUTSIDE nix/home/configs/ on purpose: editing configs/ trips the
+# rebuild-enforcer Stop hook, which can't be satisfied from Windows.
+
+[settings]
+experimental = true
+pipx.uvx = true
+
+[tools]
+node = "24.18.0"
+python = "3.14.6"
+rust = "1.96.1"
+uv = "0.11.26"
+fzf = "0.73.1"
+bat = "0.26.1"
+eza = "0.23.4"
+ripgrep = "15.1.0"
+fd = "10.4.2"
+jq = "1.8.2"
+duckdb = "1.5.4"
+gh = "2.95.0"
+delta = "0.19.2"
+claude = "2.1.215"
+"npm:@earendil-works/pi-coding-agent" = "0.80.3"
+"npm:@getgrit/cli" = "0.1.0-alpha.1743007075"
+"npm:@openai/codex" = "0.144.2"
+"npm:@swmansion/argent" = "0.16.0"
+"npm:slopless" = "0.2.23"
+"pipx:reuse" = "6.2.0"

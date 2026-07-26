@@ -1,0 +1,22 @@
+# Windows mise overlay -- merged ON TOP of the shared nix source
+# (nix/home/mise-global.toml) by xpkg/configs/install.nu, which writes the
+# result to ~/.config/mise/config.toml. Keys here add Windows-only tools and
+# override the shared `claude` entry with its Windows binary. Everything else
+# (node, python, rust, bat, ripgrep, ... versions) comes from the shared source
+# so the toolchain matches the nix hosts.
+
+[tools]
+"aqua:arxanas/git-branchless" = "latest"
+"cargo:html-query" = "latest"
+claude = { version = "latest", bin = "claude", platforms = """
+[windows-x64]
+bin = "claude.exe"
+url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{{ version }}/win32-x64/claude.exe"
+""", url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{{ version }}/windows-x64/claude", version_list_url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest" }
+deno = "2"
+go = "latest"
+java = "temurin-25"
+"npm:@google/gemini-cli" = "latest"
+"npm:opencode-ai" = "latest"
+pnpm = "latest"
+typst = "latest"

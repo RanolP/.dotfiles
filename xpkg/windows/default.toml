@@ -1,9 +1,20 @@
 # Windows packages for xpkg -- the Windows counterpart to nix.
-# A flat winget block, modeled on the homebrew block in nix/darwin/default.nix:
-# just declare the winget IDs, no per-app files, no DSC ceremony.
+# Declarative and nix-style (mirrors the homebrew block + casksByHost in
+# nix/darwin/default.nix): a common [winget] set installed on every machine,
+# plus per-profile ([profiles.<hostname>]) additions for a specific machine.
+#
+# No "optional"/prompts. The installer reads `winget list` once, skips whatever
+# is already installed, installs the rest, and only WARNS about winget packages
+# that are installed but not declared here -- it never uninstalls (no zap).
 
+skip_dependencies = ["Nvidia.CUDA"]
+
+# Not on winget -- printed as a manual-install reminder.
+[manual]
+ftb-app = "https://feed-the-beast.com/ftb-app"
+
+# Installed on every Windows profile.
 [winget]
-# Installed non-interactively.
 packages = [
   "7zip.7zip",
   "Bandisoft.Bandizip",
@@ -25,19 +36,12 @@ packages = [
   "Valve.Steam",
 ]
 
-# Prompted per-item before install (opt-in extras).
-optional = [
-  "Corsair.iCUE.4",
+# Per-machine additions (profile = hostname). Seeded from what this machine
+# actually has installed; add other machines' peripherals/vendor tools under
+# their own [profiles.<hostname>] as needed (e.g. Corsair.iCUE.4,
+# Nvidia.GeForceExperience on a machine that has them).
+[profiles.RanolP-Desktop]
+packages = [
   "Gyan.FFmpeg",
   "Logitech.GHUB",
-  "Nvidia.GeForceExperience",
 ]
-
-# Installed with --skip-dependencies (subset of the lists above).
-skip_dependencies = [
-  "Nvidia.CUDA",
-]
-
-# Not on winget -- printed as a manual-install reminder.
-[manual]
-ftb-app = "https://feed-the-beast.com/ftb-app"

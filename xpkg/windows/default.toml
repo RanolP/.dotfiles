@@ -26,6 +26,7 @@ packages = [
   "Git.Git",
   "GitHub.cli",
   "Google.QuickShare",
+  "jdx.mise",
   "JetBrains.Toolbox",
   "Kakao.KakaoTalk",
   "Keybase.Keybase",
@@ -42,8 +43,10 @@ packages = [
   "ShareX.ShareX",
   "Smilegate.Stove",
   "Telegram.TelegramDesktop",
+  "uutils.coreutils",
   "Valve.Steam",
   "VideoLAN.VLC",
+  "voidtools.Everything",
 ]
 
 # Per-machine additions (profile = hostname). Seeded from what this machine

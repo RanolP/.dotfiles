@@ -22,7 +22,7 @@ packages = [
   "Discord.Discord",
   "EclipseAdoptium.Temurin.21.JDK",
   "GitHub.cli",
-  "Google.NearbyShare",
+  "Google.QuickShare",
   "JetBrains.Toolbox",
   "Keybase.Keybase",
   "Microsoft.VisualStudioCode",

@@ -290,40 +290,21 @@ in
     # nu's prompt already works without the hook.
     enableNushellIntegration = false;
     enableZshIntegration = true;
-    globalConfig = {
-      settings = {
-        experimental = true;
-        pipx.uvx = true;
+    # Shared tool versions live in ./mise-global.toml (single source, also read
+    # by the Windows xpkg installer). Darwin-only tools are layered on here.
+    globalConfig =
+      let
+        base = builtins.fromTOML (builtins.readFile ./mise-global.toml);
+      in
+      base
+      // {
+        tools =
+          base.tools
+          // lib.optionalAttrs pkgs.stdenv.isDarwin {
+            colima = "0.10.3";
+            lima = "2.1.3";
+            docker-cli = "29.6.0";
+          };
       };
-      tools = {
-        node = "24.18.0";
-        python = "3.14.6";
-        rust = "1.96.1";
-        uv = "0.11.26";
-        fzf = "0.73.1";
-        bat = "0.26.1";
-        eza = "0.23.4";
-        ripgrep = "15.1.0";
-        fd = "10.4.2";
-        jq = "1.8.2";
-        duckdb = "1.5.4";
-        gh = "2.95.0";
-        delta = "0.19.2";
-        claude = "2.1.215";
-        "npm:@earendil-works/pi-coding-agent" = "0.80.3";
-        "npm:@getgrit/cli" = "0.1.0-alpha.1743007075";
-        "npm:@openai/codex" = "0.144.2";
-        # Argent: agentic toolkit / MCP server for iOS simulators, Android
-        # emulators, TV and Electron targets (argent.swmansion.com).
-        "npm:@swmansion/argent" = "0.16.0";
-        "npm:slopless" = "0.2.23";
-        "pipx:reuse" = "6.2.0";
-      }
-      // lib.optionalAttrs pkgs.stdenv.isDarwin {
-        colima = "0.10.3";
-        lima = "2.1.3";
-        docker-cli = "29.6.0";
-      };
-    };
   };
 }

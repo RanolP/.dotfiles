@@ -13,6 +13,18 @@ echo $"(ansi purple)>>(ansi reset) Hardlinking nushell configs"
 do -i { ln -P -f $'($configs)/nushell/config.nu' $nu.config-path }
 do -i { ln -P -f $'($configs)/nushell/env.nu' $nu.env-path }
 
+# mise: merge the shared nix source (single source of truth for tool versions)
+# with the Windows overlay, then write ~/.config/mise/config.toml. Overlay keys
+# win, so it adds Windows-only tools and swaps in the Windows `claude` binary.
+echo $"(ansi purple)>>(ansi reset) Merging mise config \(shared nix + Windows overlay\)"
+let mise_shared = (open ($nu.home-path | path join '.dotfiles' 'nix' 'home' 'mise-global.toml'))
+let mise_overlay = (open $'($configs)/mise/config.toml')
+do -i { mkdir ($nu.home-path | path join '.config' 'mise') }
+{
+    tools: ($mise_shared.tools? | default {} | merge ($mise_overlay.tools? | default {}))
+    settings: ($mise_shared.settings? | default {} | merge ($mise_overlay.settings? | default {}))
+} | save -f ($nu.home-path | path join '.config' 'mise' 'config.toml')
+
 echo $"(ansi purple)>>(ansi reset) Updating .gitconfig"
 nu $'($configs)/gitconfig.nu'
 

@@ -9,31 +9,41 @@
 
 skip_dependencies = ["Nvidia.CUDA"]
 
-# Not on winget -- printed as a manual-install reminder.
-[manual]
-ftb-app = "https://feed-the-beast.com/ftb-app"
-
 # Installed on every Windows profile.
 [winget]
 packages = [
   "7zip.7zip",
+  "AntibodySoftware.WizTree",
   "Bandisoft.Bandizip",
   "Bitwarden.Bitwarden",
+  "Canva.Affinity",
+  "CrystalDewWorld.CrystalDiskInfo.ShizukuEdition",
+  "DigitalScholar.Zotero",
   "Discord.Discord",
   "EclipseAdoptium.Temurin.21.JDK",
+  "Espanso.Espanso",
+  "FTB.App",
+  "Git.Git",
   "GitHub.cli",
   "Google.QuickShare",
   "JetBrains.Toolbox",
+  "Kakao.KakaoTalk",
   "Keybase.Keybase",
+  "M2Team.NanaZip",
   "Microsoft.VisualStudioCode",
+  "Microsoft.WSL",
+  "Microsoft.WindowsTerminal",
   "Mozilla.Firefox.DeveloperEdition",
+  "Nushell.Nushell",
   "Nvidia.CUDA",
+  "OBSProject.OBSStudio",
   "Obsidian.Obsidian",
   "PrismLauncher.PrismLauncher",
   "ShareX.ShareX",
   "Smilegate.Stove",
   "Telegram.TelegramDesktop",
   "Valve.Steam",
+  "VideoLAN.VLC",
 ]
 
 # Per-machine additions (profile = hostname). Seeded from what this machine

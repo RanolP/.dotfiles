@@ -1,0 +1,43 @@
+# Windows packages for xpkg -- the Windows counterpart to nix.
+# A flat winget block, modeled on the homebrew block in nix/darwin/default.nix:
+# just declare the winget IDs, no per-app files, no DSC ceremony.
+
+[winget]
+# Installed non-interactively.
+packages = [
+  "7zip.7zip",
+  "Bandisoft.Bandizip",
+  "Bitwarden.Bitwarden",
+  "Discord.Discord",
+  "EclipseAdoptium.Temurin.21.JDK",
+  "GitHub.cli",
+  "Google.NearbyShare",
+  "JetBrains.Toolbox",
+  "Keybase.Keybase",
+  "Microsoft.VisualStudioCode",
+  "Mozilla.Firefox.DeveloperEdition",
+  "Nvidia.CUDA",
+  "Obsidian.Obsidian",
+  "PrismLauncher.PrismLauncher",
+  "ShareX.ShareX",
+  "Smilegate.Stove",
+  "Telegram.TelegramDesktop",
+  "Valve.Steam",
+]
+
+# Prompted per-item before install (opt-in extras).
+optional = [
+  "Corsair.iCUE.4",
+  "Gyan.FFmpeg",
+  "Logitech.GHUB",
+  "Nvidia.GeForceExperience",
+]
+
+# Installed with --skip-dependencies (subset of the lists above).
+skip_dependencies = [
+  "Nvidia.CUDA",
+]
+
+# Not on winget -- printed as a manual-install reminder.
+[manual]
+ftb-app = "https://feed-the-beast.com/ftb-app"

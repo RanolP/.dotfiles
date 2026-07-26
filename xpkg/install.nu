@@ -11,7 +11,7 @@ if ($nu.os-info.name == windows) and (not (is-admin)) {
 }
 
 echo $"(ansi green)==(ansi reset) Packages"
-nu ~/.dotfiles/xpkg/packages/install.nu
+nu ~/.dotfiles/xpkg/windows/install.nu
 
 echo $"(ansi green)==(ansi reset) Configs"
 nu ~/.dotfiles/xpkg/configs/install.nu

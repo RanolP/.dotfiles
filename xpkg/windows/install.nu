@@ -6,10 +6,23 @@
 use ~/.dotfiles/xpkg/utils/yesno.nu
 
 def install-winget [id: string, skip_deps: bool, allow_upgrade: bool] {
-    echo $"     (ansi green)++(ansi reset) ($id)"
-    nu -c $"do -i { winget install -eh --accept-package-agreements --accept-source-agreements --id ($id) (
-        if $skip_deps { '--skip-dependencies' } else { '' }
-    ) (if $allow_upgrade { '' } else { '--no-upgrade' }) }"
+    mut args = ["install" "-eh" "--disable-interactivity" "--accept-package-agreements" "--accept-source-agreements" "--id" $id]
+    if $skip_deps { $args = ($args | append "--skip-dependencies") }
+    if not $allow_upgrade { $args = ($args | append "--no-upgrade") }
+
+    # winget is extremely noisy (progress bars, source-update retries, "already
+    # installed" spam). Capture all of it; surface only a one-line status.
+    let r = (^winget ...$args | complete)
+    let out = $"($r.stdout)($r.stderr)"
+
+    if ($out | str contains --ignore-case "already installed") {
+        print $"     (ansi dark_gray)==(ansi reset) ($id) (ansi dark_gray)already installed(ansi reset)"
+    } else if $r.exit_code == 0 {
+        print $"     (ansi green)++(ansi reset) ($id)"
+    } else {
+        print $"     (ansi red)!!(ansi reset) ($id) (ansi red)\(exit ($r.exit_code)\)(ansi reset)"
+        for l in ($out | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+    }
 }
 
 export def main [--allow-upgrade = false] {

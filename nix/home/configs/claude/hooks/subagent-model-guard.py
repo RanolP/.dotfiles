@@ -26,7 +26,6 @@ never blocks legitimate work.
 import json
 import os
 import re
-import signal
 import sys
 
 # Tiers a subagent may not run. Matched as substrings so both the alias and the
@@ -82,17 +81,10 @@ def pinned_model(agent_type):
 
 
 def main():
-    # A per-call PreToolUse hook must never hang the tool: bound the stdin read
-    # (a stalled harness pipe would otherwise block json.load until timeout) and
-    # fail open. selftest feeds an in-memory stdin, so the alarm never fires.
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
-    finally:
-        signal.alarm(0)
 
     ti = data.get("tool_input", {}) or {}
     agent_type = (ti.get("subagent_type") or "").strip()

@@ -28,7 +28,6 @@ import json
 import os
 import re
 import shlex
-import signal
 import sys
 import tempfile
 import time
@@ -144,15 +143,10 @@ def handle(data, now):
 
 
 def main():
-    # Bound the stdin read so a stalled harness pipe can never hang the tool.
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
-    finally:
-        signal.alarm(0)
 
     try:
         payload = handle(data, time.time())

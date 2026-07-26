@@ -19,7 +19,6 @@ Self-check: `python3 claude-dir-edit-guard.py --selftest`.
 """
 import json
 import os
-import signal
 import sys
 
 CLAUDE_DIR = os.path.join(os.path.expanduser("~"), ".claude") + os.sep
@@ -73,15 +72,10 @@ def deny(reason):
 
 
 def main():
-    # Bound the stdin read so a stalled harness pipe can never hang the tool.
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
-    finally:
-        signal.alarm(0)
 
     file_path = (data.get("tool_input", {}) or {}).get("file_path", "")
     if is_claude_path(file_path, data.get("cwd")):

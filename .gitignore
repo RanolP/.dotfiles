@@ -9,3 +9,10 @@ docs/book
 
 # nix build output symlink
 /result
+
+# local fonts
+xpkg/apps/@fonts/.fonts
+
+# python bytecode (claude hooks)
+__pycache__/
+*.pyc

@@ -762,3 +762,8 @@ if not (which mise | is-empty) {
     mise activate nu | save -f $mise_path
     source $mise_path
 }
+
+# rebuild: apply the local dotfiles (xpkg packages + configs) from any directory.
+# The Windows counterpart to `darwin-rebuild switch` / `home-manager switch` on
+# nix hosts. Absolute path so it works from anywhere; install.nu self-elevates.
+alias rebuild = nu ~/.dotfiles/xpkg/install.nu

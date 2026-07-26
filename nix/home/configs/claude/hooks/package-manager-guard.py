@@ -18,7 +18,6 @@ Self-check: `python3 package-manager-guard.py --selftest`.
 import json
 import os
 import shlex
-import signal
 import sys
 
 PMS = {"npm", "pnpm", "yarn", "bun"}
@@ -115,12 +114,7 @@ def deny(reason):
 
 
 def main():
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
-    try:
-        data = json.load(sys.stdin)
-    finally:
-        signal.alarm(0)
+    data = json.load(sys.stdin)
 
     cmd = data.get("tool_input", {}).get("command", "")
     cwd = data.get("cwd") or os.getcwd()

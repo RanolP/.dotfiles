@@ -17,7 +17,6 @@ Self-check: `python3 ask-mode-guard.py --selftest`.
 import json
 import os
 import re
-import signal
 import sys
 import tempfile
 
@@ -67,15 +66,10 @@ def handle(data):
 
 
 def main():
-    # Bound the stdin read so a stalled harness pipe can never hang the tool.
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
-    finally:
-        signal.alarm(0)
 
     try:
         out, _ = handle(data)

@@ -21,19 +21,9 @@ denied. Some exotic push forms are therefore blocked by design.
 """
 import json
 import os
-import signal
 import sys
 
-# A per-call PreToolUse hook must never be able to hang the Bash tool. If the
-# harness ever stalls delivering/closing the stdin payload, json.load would
-# block until the 2-minute tool timeout; bound the read and fail open (let the
-# normal permission flow decide) instead of hanging.
-signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-signal.alarm(5)
-try:
-    data = json.load(sys.stdin)
-finally:
-    signal.alarm(0)
+data = json.load(sys.stdin)
 cmd = data.get("tool_input", {}).get("command", "")
 
 # git global options that consume the following token as their argument.

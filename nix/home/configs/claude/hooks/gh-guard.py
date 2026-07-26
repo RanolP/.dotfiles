@@ -19,16 +19,10 @@ does not fire, so this hook enforces it at the tool layer:
 import json
 import os
 import re
-import signal
 import sys
 import time
 
-signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-signal.alarm(5)
-try:
-    data = json.load(sys.stdin)
-finally:
-    signal.alarm(0)
+data = json.load(sys.stdin)
 
 cmd = data.get("tool_input", {}).get("command", "")
 if not cmd or data.get("tool_name") not in (None, "Bash"):

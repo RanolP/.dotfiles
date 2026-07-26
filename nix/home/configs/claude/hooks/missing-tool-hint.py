@@ -12,7 +12,6 @@ Self-check: `python3 missing-tool-hint.py --selftest`.
 """
 import json
 import re
-import signal
 import sys
 
 NAME = r"([A-Za-z0-9._+-]+)"
@@ -43,15 +42,10 @@ def hint(name):
 
 
 def main():
-    # Bound the stdin read so a stalled harness pipe can never hang the tool.
-    signal.signal(signal.SIGALRM, lambda *_: sys.exit(0))
-    signal.alarm(5)
     try:
         data = json.load(sys.stdin)
     except (OSError, ValueError):
         sys.exit(0)  # fail-open
-    finally:
-        signal.alarm(0)
 
     if data.get("tool_name") != "Bash":
         sys.exit(0)

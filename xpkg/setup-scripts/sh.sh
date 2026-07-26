@@ -1,17 +1,15 @@
 #!/usr/bin/env sh
 clear
-echo "You are now installing RanolP's dotfiles..."
-if [[ `uname -s` == 'Linux' ]]; then
-    # ref: https://github.com/GuillaumeGomez/sysinfo/blob/43a12462624ce0c97105561775af059c5e4c0e35/src/unix/linux/system.rs#L389-L395
-    case `(cat /etc/os-release 2>/dev/null || cat /etc/lsb-release 2>/dev/null) | grep ^ID=` in
-    ID=arch)
-        echo "Environment : Arch Linux + Unix Shell"
-        curl -L dotfiles.ranolp.dev/xpkg/setup-scripts/linux/arch.sh | sh
-        ;;
-    *)
-        echo "Environment : ?Unknown Linux? + Unix Shell"
-        ;;
-    esac
-else
-    echo "Environment : ?Unknown? + Unix Shell"
-fi
+echo "RanolP's dotfiles use nix on macOS/Linux."
+echo "xpkg (the Windows installer) does not apply here."
+echo
+echo "Set this machine up with nix:"
+echo "  1. Install nix:"
+echo "     sh <(curl --proto '=https' --tlsv1.2 -L https://nixos.org/nix/install)"
+echo "  2. Clone the dotfiles:"
+echo "     git clone https://github.com/RanolP/.dotfiles.git ~/.dotfiles"
+echo "  3. Apply the flake:"
+echo "     # macOS: sudo nix run nix-darwin -- switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26"
+echo "     # Linux: nix run home-manager -- switch --flake ~/.dotfiles/nix#ranolp-archwsl -b before-hm"
+echo
+echo "See https://dotfiles.ranolp.dev for the full guide."

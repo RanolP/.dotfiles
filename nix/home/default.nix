@@ -204,6 +204,33 @@ in
     skillFiles
   ];
 
+  # Herdr (terminal workspace manager, installed via mise) spawns new panes with
+  # $SHELL, which is zsh. Point it at nushell instead -- absolute path because
+  # herdr execs the binary directly, and nu is not on the PATH of the process
+  # that launched the herdr server. shell_mode stays "auto" (login shell on
+  # macOS); nu supports --login. Run `herdr server reload-config` after a
+  # rebuild to pick up the new store path without restarting the session.
+  # Tabs are turned off by unbinding every tab action ("" is accepted by
+  # `herdr config check`) -- herdr 0.7.5 has no single "disable tabs" switch.
+  # With no way to create a second tab, every workspace stays at one tab, so
+  # hide_tab_bar_when_single_tab hides the tab row permanently. Workspaces
+  # (prefix+shift+n) remain the only grouping level.
+  xdg.configFile."herdr/config.toml".text = ''
+    [terminal]
+    default_shell = "${lib.getExe pkgs.nushell}"
+
+    [keys]
+    new_tab = ""
+    rename_tab = ""
+    previous_tab = ""
+    next_tab = ""
+    switch_tab = ""
+    close_tab = ""
+
+    [ui]
+    hide_tab_bar_when_single_tab = true
+  '';
+
   # Claude Code rewrites ~/.claude/settings.json at runtime (model selection,
   # approved permissions), so it can't be a read-only home.file symlink: the
   # runtime write clobbers the symlink into a regular file, and the NEXT

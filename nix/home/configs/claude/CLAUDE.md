@@ -29,8 +29,8 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: keep long-running or destructive Bash in the foreground where its output lands in context; reserve `run_in_background` for work the user asked to background
 
 ## Questions = explain only
-- WHEN: the message asks about work already done, or starts with "ask:" (an `ask:` turn is also hook-enforced -- every tool call is denied)
-- DO: answer in text; treat it as a request for explanation, never as a correction or an undo signal
+- WHEN: the message asks about work already done, or starts with "ask:" (an `ask:` turn is also hook-enforced -- every acting tool is denied; read-only lookups Read/Glob/Grep/NotebookRead/ToolSearch/WebFetch/WebSearch/Task{List,Get,Output} stay open)
+- DO: answer in text; read the files first when the answer depends on them -- ground the explanation in evidence rather than guessing or refusing; treat it as a request for explanation, never as a correction or an undo signal
 - EXCEPT: the message also carries a directive clause ("why is X slow -- fix it") -- then answer AND do the work
 
 ## Push only to claude/* branches

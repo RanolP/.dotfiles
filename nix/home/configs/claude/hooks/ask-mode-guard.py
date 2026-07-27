@@ -7,8 +7,10 @@ Wired to two events in settings.json, dispatched on hook_event_name:
       case-insensitive) drops a per-session flag file and prints a text-only
       reminder (plain UserPromptSubmit stdout is model-visible context). Any
       other prompt clears the flag, ending the text-only turn.
-  PreToolUse (matcher *) : while the flag exists, EVERY tool call is denied,
-      so "never call any tool" holds mechanically instead of by goodwill.
+  PreToolUse (matcher *) : while the flag exists, every tool call outside the
+      read-only allowlist (READ_ONLY) is denied, so "explain, never act" holds
+      mechanically instead of by goodwill. Read-only lookups stay open so an
+      answer can cite files instead of guessing.
 
 Fail-open on parse problems -- a bug here must never block normal work.
 
@@ -22,15 +24,34 @@ import tempfile
 
 ASK_RE = re.compile(r"^\s*ask:", re.IGNORECASE)
 
+# Tools that only observe. Everything else (Bash, Edit/Write, Agent, Skill,
+# MCP, ...) stays denied: Bash and subagents can mutate, so allowlisting them
+# would need per-command parsing the guard deliberately does not do.
+READ_ONLY = frozenset({
+    "Read",
+    "Glob",
+    "Grep",
+    "NotebookRead",
+    "ToolSearch",
+    "WebFetch",
+    "WebSearch",
+    "TaskList",
+    "TaskGet",
+    "TaskOutput",
+})
+
 CONTEXT = (
-    "ask-mode-guard: this is an `ask:` turn -- answer with text only. Every "
-    "tool call is blocked until the next user prompt."
+    "ask-mode-guard: this is an `ask:` turn -- answer with text only. "
+    "Read-only lookups (Read/Glob/Grep/WebFetch/WebSearch) are allowed so the "
+    "answer can cite evidence; every acting tool is blocked until the next "
+    "user prompt."
 )
 
 DENY = (
-    "ask: turn -- tools are blocked; explain with text only. If action is "
-    "genuinely required, tell the user to resend the request without the "
-    "`ask:` prefix."
+    "ask: turn -- acting tools are blocked; explain with text only. Read-only "
+    "lookups (Read/Glob/Grep/WebFetch/WebSearch) are available if you need "
+    "evidence. If action is genuinely required, tell the user to resend the "
+    "request without the `ask:` prefix."
 )
 
 
@@ -55,7 +76,11 @@ def handle(data):
             pass
         return None, False
 
-    if event == "PreToolUse" and os.path.exists(path):
+    if (
+        event == "PreToolUse"
+        and data.get("tool_name", "") not in READ_ONLY
+        and os.path.exists(path)
+    ):
         return json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
@@ -97,6 +122,9 @@ def selftest():
     assert out == CONTEXT
     out, _ = handle(ev(hook_event_name="PreToolUse", tool_name="Bash"))
     assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # Read-only tools stay usable inside an ask: turn.
+    assert handle(ev(hook_event_name="PreToolUse", tool_name="Grep")) == (None, True)
+    assert handle(ev(hook_event_name="PreToolUse", tool_name="Read")) == (None, True)
     # Case/whitespace variants match; a plain prompt clears the flag.
     assert handle(ev(hook_event_name="UserPromptSubmit", prompt="  ASK: hm"))[0] == CONTEXT
     assert handle(ev(hook_event_name="UserPromptSubmit", prompt="fix the bug")) == (None, False)

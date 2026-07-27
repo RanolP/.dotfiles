@@ -1,13 +1,13 @@
 ---
-description: Write a handoff document for a new Claude Code session.
+description: Hand off to the next unit of work through plan mode.
 disable-model-invocation: true
 argument-hint: "[goal for next session]"
 ---
 
 ## Goal
 
-`$ARGUMENTS` is the goal for the next session. If empty, ask the user what the
-next task is before proceeding.
+`$ARGUMENTS` is the goal for the next unit of work. If empty, ask the user what
+the next task is before proceeding.
 
 ## Phase 1: Gather state
 Run before analyzing:
@@ -18,9 +18,13 @@ git diff --stat
 git log --oneline -5
 ```
 
-## Phase 2: Write the handoff
-Write the document to a file in the OS temp dir (`$TMPDIR` on macOS, `/tmp`
-otherwise), e.g. `"$TMPDIR/handoff-<short-slug>.md"`. Report the path to the user.
+## Phase 2: Enter plan mode
+Call `EnterPlanMode` (load it with `ToolSearch` `select:EnterPlanMode,ExitPlanMode`
+first if deferred). The plan file IS the handoff document -- it is the compressed
+context that replaces this session's transcript.
+
+## Phase 3: Write the handoff into the plan, then present it
+Fill the plan file with the template below, then present it via `ExitPlanMode`.
 
 Reference existing artifacts (PRDs, plans, ADRs, issue links, commit hashes,
 diffs) by path or URL -- do not duplicate their content. Extract inline as you
@@ -59,7 +63,11 @@ write; do not emit a separate extraction step. Omit empty sections.
 ```
 
 ## Constraints
-- NEVER write the handoff into the repo (no `.claude/handoff.md`) -- temp dir only
+- ALWAYS hand off through `EnterPlanMode` + `ExitPlanMode` -- the plan file is the
+  only handoff surface
+- NEVER write the handoff to any other file -- no `Write`/`Edit` to a temp path,
+  `.claude/handoff.md`, or anywhere in the repo
 - NEVER duplicate artifact content that can be referenced by path or URL
 - NEVER include secrets -- redact API keys, tokens, passwords, and PII
-- NEVER spawn a continuation session or copy to the clipboard -- just write the file and report its path
+- NEVER spawn a continuation session or copy to the clipboard -- the approved plan
+  carries the work forward in this session

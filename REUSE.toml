@@ -63,6 +63,14 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
 
+# Original prose; the failure taxonomy is credited to Justin Le,
+# blog.jle.im/entry/llms-and-haskell-1-constraint-evading-behavior.html
+[[annotations]]
+path = ["nix/home/configs/.agents/skills/constraint-evasion/SKILL.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"
+
 [[annotations]]
 path = [
     "nix/home/configs/claude/hooks/git-push-guard.py",
@@ -84,7 +92,10 @@ SPDX-FileCopyrightText = ["2026 Software Mansion", "2026 RanolP"]
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
-path = ["nix/home/configs/claude/agents/prose-editor.md"]
+path = [
+    "nix/home/configs/claude/agents/prose-editor.md",
+    "nix/home/configs/claude/agents/code-reviewer.md",
+]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"

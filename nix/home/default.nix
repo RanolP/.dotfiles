@@ -119,6 +119,7 @@ let
     remove-dead-code = localSkill "remove-dead-code";
     audit-env-variables = localSkill "audit-env-variables";
     website-explainer = localSkill "website-explainer";
+    constraint-evasion = localSkill "constraint-evasion";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
     humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
     humanize = "${humanizeKorean}/.claude/skills/humanize";

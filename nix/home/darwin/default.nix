@@ -83,7 +83,8 @@ in
   # here: Ghostty's own window title is "<cwd>> <foreground command>", which
   # reads "> herdr" exactly while the herdr client owns that window -- programs
   # inside herdr set pane titles, not the outer window title. herdr window ->
-  # drive herdr over its socket API; anything else -> hand the action back to
+  # drive herdr over its socket API (pane split/close, workspace create);
+  # anything else -> hand the action back to
   # Ghostty on the alt chord Karabiner leaves alone (see programs/ghostty.nix).
   home.file.".local/bin/herdr-key" = {
     executable = true;
@@ -100,9 +101,10 @@ in
             # herdr's sidebar "+ new workspace" button, not "+ new tab".
             new)   exec "$herdr" workspace create --focus ;;
             close)
-              # workspace close takes an explicit id, so read the focused one.
-              ws=$("$herdr" api snapshot | sed -n 's/.*"focused_workspace_id":"\([^"]*\)".*/\1/p')
-              [ -n "$ws" ] && exec "$herdr" workspace close "$ws"
+              # pane close takes an explicit id, and Karabiner runs this outside
+              # any pane, so `pane current` resolves to the focused one.
+              pane=$("$herdr" pane current | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p')
+              [ -n "$pane" ] && exec "$herdr" pane close "$pane"
               exit 0
               ;;
           esac

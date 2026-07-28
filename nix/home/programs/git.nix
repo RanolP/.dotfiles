@@ -11,9 +11,19 @@
     settings = {
       user.name = "RanolP";
       user.email = "me@ranolp.dev";
-      # Absolute path: nix-homebrew runs brew with a scrubbed PATH and a
-      # helper-less git-minimal, so a bare "osxkeychain" never resolves there.
-      credential.helper = "/etc/profiles/per-user/ranolp/bin/git-credential-osxkeychain";
+      # Apple's CLT helper, not nix's: nix/brew builds are ad-hoc signed, so their
+      # designated requirement is a bare cdhash that rotates on every rebuild and
+      # invalidates the "always allow" Keychain ACL. Apple's DR is
+      # `identifier "com.apple.git-credential-osxkeychain" and anchor apple` --
+      # no cdhash, so the grant survives updates.
+      # The leading "" resets the helper list: nix git's own etc/gitconfig sets
+      # `helper = osxkeychain`, which would otherwise run first.
+      # Absolute path also covers nix-homebrew, which runs brew with a scrubbed
+      # PATH and a helper-less git-minimal.
+      credential.helper = [
+        ""
+        "/Library/Developer/CommandLineTools/usr/libexec/git-core/git-credential-osxkeychain"
+      ];
       init.defaultBranch = "main";
       push.autoSetupRemote = true;
       pull.rebase = true;

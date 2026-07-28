@@ -16,9 +16,11 @@ leaves alone the spawns where a deliberate choice already exists:
   * namespaced plugin agents (type contains ":") -- their model lives in the
     plugin, which this hook cannot read; trust it rather than false-positive.
 
-An explicit opus or fable model is DENIED outright: subagents run sonnet or
-haiku only;
-top-tier reasoning belongs in the main thread.
+An explicit `fable` model is DENIED outright. `opus` is denied too -- but only
+while the main thread itself runs opus, where top-tier reasoning belongs in the
+main thread. When the main thread runs Fable it is the architect, not the top
+tier, so an opus subagent IS the implementer and is allowed. The main model is
+read back from the transcript (PreToolUse stdin carries no model field).
 
 Fail-open: any parse problem lets the normal permission flow run, so a bug here
 never blocks legitimate work.
@@ -28,12 +30,17 @@ import os
 import re
 import sys
 
-# Tiers a subagent may not run. Matched as substrings so both the alias and the
-# full id are caught (`opus`, `claude-opus-5`; `fable`, `claude-fable-5`).
-BLOCKED_TOKENS = ("opus", "fable")
+# Tier a subagent may never run, whatever the main thread is. Matched as a
+# substring so alias and full id both hit (`fable`, `claude-fable-5`).
+ALWAYS_BLOCKED = "fable"
+# Tier a subagent may run only under a Fable main thread (`opus`,
+# `claude-opus-5`).
+OPUS_TOKEN = "opus"
 AGENTS_DIR = os.path.expanduser("~/.claude/agents")
 # Matches a frontmatter `model:` line, capturing its value.
 MODEL_LINE_RE = re.compile(r"^\s*model\s*:\s*(.+?)\s*$", re.MULTILINE)
+# Tail of the transcript to scan for the last assistant model, in bytes.
+TRANSCRIPT_TAIL = 32768
 
 RUBRIC = (
     "Subagent spawned without an explicit `model` -- it would inherit the "
@@ -43,13 +50,21 @@ RUBRIC = (
     "pattern matching, data collection)\n"
     "  - sonnet : everything else (DEFAULT)\n"
     "Nothing above sonnet is allowed for subagents -- hard reasoning belongs "
-    "in the main thread."
+    "in the main thread.\n"
+    "Under a Fable main thread the tiers shift up: opus is the implementer / "
+    "hard-reasoning tier, sonnet the default, haiku mechanical."
 )
 
 TIER_DENY = (
     "Subagents run sonnet or haiku only -- opus and fable are blocked. "
     "Re-issue with model: sonnet (or haiku for mechanical work); if the task "
     "truly needs top-tier reasoning, do it in the main thread."
+)
+
+FABLE_DENY = (
+    "Fable is the architect tier and runs in the main thread only. Re-issue "
+    "with model: opus (implementation / hard reasoning), sonnet (default), or "
+    "haiku (mechanical work)."
 )
 
 
@@ -80,6 +95,35 @@ def pinned_model(agent_type):
     return None if val in ("", "inherit") else val
 
 
+def session_model(data):
+    """Return the main thread's model, lowercased, or None if it can't be read.
+
+    PreToolUse stdin carries no model field -- only SessionStart does -- so the
+    model is recovered from the transcript: the last `assistant` entry's
+    `message.model`. Only the tail is read; entries are scanned newest-first."""
+    path = data.get("transcript_path")
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - TRANSCRIPT_TAIL))
+            lines = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue  # partial first line, or a non-JSON line
+        if entry.get("type") != "assistant":
+            continue
+        model = (entry.get("message") or {}).get("model")
+        if model:
+            return model.strip().lower()
+    return None
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -95,8 +139,14 @@ def main():
         sys.exit(0)
 
     if model:
-        if any(tok in model for tok in BLOCKED_TOKENS):
-            decide("deny", TIER_DENY)
+        if ALWAYS_BLOCKED in model:
+            decide("deny", FABLE_DENY)
+        # Opus is the architect's implementer under Fable, and off-limits
+        # otherwise. An unreadable main model reads as "not fable" -- fail-safe.
+        if OPUS_TOKEN in model:
+            main_model = session_model(data) or ""
+            if ALWAYS_BLOCKED not in main_model:
+                decide("deny", TIER_DENY)
         sys.exit(0)
 
     # No explicit model from here on. Namespaced plugin agents carry their own
@@ -119,11 +169,14 @@ def _selftest():
     import tempfile
     from contextlib import redirect_stdout
 
-    def decision(ti):
+    def decision(ti, transcript=None):
         buf = io.StringIO()
+        payload = {"tool_input": ti}
+        if transcript:
+            payload["transcript_path"] = transcript
         try:
             with redirect_stdout(buf):
-                json_in = json.dumps({"tool_input": ti})
+                json_in = json.dumps(payload)
                 sys.stdin = io.StringIO(json_in)
                 main()
         except SystemExit:
@@ -140,10 +193,38 @@ def _selftest():
     assert decision({"subagent_type": "fork"}) == (None, "")
     assert decision({"model": "sonnet"}) == (None, "")
     assert decision({"model": "haiku"}) == (None, "")
-    for blocked in ("opus", "claude-opus-5", "fable", "claude-fable-5"):
+    # No transcript to read -> main model unknown -> both tiers stay blocked.
+    for blocked in ("opus", "claude-opus-5"):
         d, o = decision({"model": blocked})
         assert d == "deny" and "sonnet or haiku only" in o, blocked
+    for blocked in ("fable", "claude-fable-5"):
+        d, o = decision({"model": blocked})
+        assert d == "deny" and "architect tier" in o, blocked
     assert decision({"subagent_type": "x:y"}) == (None, "")
+
+    def transcript(td, name, model):
+        path = os.path.join(td, name)
+        with open(path, "w") as f:
+            f.write(json.dumps({"type": "user", "message": {}}) + "\n")
+            f.write(json.dumps(
+                {"type": "assistant", "message": {"model": model}}) + "\n")
+        return path
+
+    with tempfile.TemporaryDirectory() as td:
+        as_fable = transcript(td, "fable.jsonl", "claude-fable-5")
+        as_opus = transcript(td, "opus.jsonl", "claude-opus-5")
+        missing = os.path.join(td, "nope.jsonl")
+        # Fable main thread: opus is the implementer tier.
+        for m in ("opus", "claude-opus-5"):
+            assert decision({"model": m}, as_fable) == (None, ""), m
+        # Opus main thread, and an unreadable transcript, keep the block.
+        for path in (as_opus, missing):
+            d, o = decision({"model": "opus"}, path)
+            assert d == "deny" and "sonnet or haiku only" in o, path
+        # Fable subagents stay denied whatever the main thread is.
+        for path in (as_fable, as_opus, missing):
+            d, o = decision({"model": "fable"}, path)
+            assert d == "deny" and "architect tier" in o, path
 
     global AGENTS_DIR
     with tempfile.TemporaryDirectory() as td:

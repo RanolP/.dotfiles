@@ -63,6 +63,31 @@ let
     cp ${./configs/claude/agents}/*.md $out/
   '';
 
+  # herdr-browser renders a Chromium view inside a herdr pane over CDP. herdr
+  # has no way to declare plugins in config.toml -- registration only happens
+  # through `herdr plugin install` (git-clones into a mutable data dir) or
+  # `herdr plugin link <PATH>` (registers a local dir, runs no build). The
+  # manifest declares no build step and package.json has devDependencies only,
+  # so a plain source fetch is enough -- nothing compiles.
+  # The manifest's commands invoke bare `bun`; rewrite them to an absolute
+  # store path for the same reason as nushell below -- herdr execs the binary
+  # directly and bun is not on the PATH of the process that launched the
+  # herdr server. Upstream tags no releases, so the rev is a pinned commit.
+  herdrBrowser =
+    let
+      src = pkgs.fetchFromGitHub {
+        owner = "ogulcancelik";
+        repo = "herdr-browser";
+        rev = "f05ae7a61ead89685eef5a7365f01f81110ba777";
+        hash = "sha256-33/ihmGVKh/vP2/KuQ7uj5iMGuVQ0dypBf0NQ78H77A=";
+      };
+    in
+    pkgs.runCommand "herdr-browser" { } ''
+      cp -R ${src} $out
+      chmod -R u+w $out
+      sed -i 's|command = \["bun"|command = ["${lib.getExe pkgs.bun}"|' $out/herdr-plugin.toml
+    '';
+
   sharedAgentRules = ./configs/.agents/AGENTS.md;
   claudeSpecificRules = ./configs/claude/CLAUDE.md;
   claudeUserRules = pkgs.writeText "CLAUDE.md" (
@@ -125,6 +150,8 @@ in
 
   home.packages = with pkgs; [
     age
+    # Runtime for the herdr-browser plugin (see herdrBrowser above).
+    bun
     gnupg
     nix-your-shell
   ];
@@ -198,6 +225,9 @@ in
         executable = true;
       };
       ".claude/agents".source = claudeAgents;
+      # Pins the herdr-browser store path as a GC root: the plugin registry
+      # holds a bare path in herdr's own mutable state, which nix can't see.
+      ".local/share/herdr-plugins/herdr-browser".source = herdrBrowser;
       ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
     }
     # humanize-korean vendored from epoko77-ai/im-not-ai.
@@ -227,8 +257,13 @@ in
     switch_tab = ""
     close_tab = ""
 
+    [theme]
+    name = "nord"
+
     [ui]
     hide_tab_bar_when_single_tab = true
+    # "spaces" (default, grouped by space) or "priority" (attention queue).
+    agent_panel_sort = "priority"
   '';
 
   # Claude Code rewrites ~/.claude/settings.json at runtime (model selection,
@@ -274,6 +309,20 @@ in
       run mkdir -p "$HOME/.claude/skills"
       run ln -sfn "$canonical" "$HOME/.claude/skills/$name"
     done
+  '';
+
+  # Register herdr-browser (fetched above) with herdr. `plugin link` is the only
+  # declarative-friendly entry point: it takes a local dir and runs no build.
+  # Unlink first so a rev bump re-points the registry at the new store path
+  # instead of leaving the old one behind. herdr comes from mise, not nix, so
+  # skip silently when it is not installed yet (fresh machine). The registry is
+  # server state -- run `herdr server reload-config` after a rebuild.
+  home.activation.herdrBrowserPlugin = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    herdrBin="$HOME/.local/share/mise/shims/herdr"
+    if [ -x "$herdrBin" ]; then
+      "$herdrBin" plugin unlink official.browser >/dev/null 2>&1 || true
+      run "$herdrBin" plugin link ${herdrBrowser} --enabled
+    fi
   '';
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

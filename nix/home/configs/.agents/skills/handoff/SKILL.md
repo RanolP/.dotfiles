@@ -6,11 +6,16 @@ argument-hint: "[goal for next session]"
 
 ## Goal
 
-`$ARGUMENTS` is the goal for the next unit of work. If empty, ask the user what
-the next task is before proceeding.
+`$ARGUMENTS` is the goal for the next unit of work, and it is what this skill
+serves. If empty, ask the user what the next task is before proceeding.
+
+Everything below -- the state gathering, the template, the plan-mode dance -- is
+only machinery for capturing the context that goal needs. Judge every line you
+write by one test: does the next session need this to reach the goal? Carry what
+passes, drop what does not, however complete the session's history feels.
 
 ## Phase 1: Gather state
-Run before analyzing:
+Run before analyzing, then keep only what bears on the goal:
 
 ```bash
 git status
@@ -19,7 +24,7 @@ git log --oneline -5
 ```
 
 ## Phase 2: Draft the whole handoff BEFORE plan mode
-Stay in normal mode. Finish every lookup the handoff needs here -- read the files,
+Stay in normal mode. Finish every lookup the GOAL needs here -- read the files,
 resolve the paths, confirm the commit hashes, check what still fails. Then compose
 the FULL document from the template below in your head -- complete enough to paste
 as-is. Keep it in this turn's reasoning only: no file, no message to the user, no
@@ -44,9 +49,11 @@ At the approval prompt, the intended choice is the context-clearing one: the pla
 file is the compressed context that replaces this session's transcript.
 
 ## Template
-Reference existing artifacts (PRDs, plans, ADRs, issue links, commit hashes,
-diffs) by path or URL -- do not duplicate their content. Extract inline as you
-write; do not emit a separate extraction step. Omit empty sections.
+The goal leads; every other section exists to support it. Reference existing
+artifacts (PRDs, plans, ADRs, issue links, commit hashes, diffs) by path or URL
+-- do not duplicate their content. Extract inline as you write; do not emit a
+separate extraction step. Omit sections that are empty or that the goal does not
+depend on.
 
 ```
 # Handoff: [brief title]
@@ -81,6 +88,9 @@ write; do not emit a separate extraction step. Omit empty sections.
 ```
 
 ## Constraints
+- ALWAYS treat `$ARGUMENTS` as the purpose and everything else as context capture
+  serving it -- a section that does not move the next session toward that goal
+  does not belong in the document
 - ALWAYS finish drafting the full document before `EnterPlanMode` -- inside plan
   mode, write the plan file and exit, nothing else
 - ALWAYS consume the draft with `EnterPlanMode` in the same turn it is written --

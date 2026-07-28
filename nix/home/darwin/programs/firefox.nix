@@ -49,10 +49,10 @@
           })
           (addons.buildFirefoxXpiAddon {
             pname = "multi-account-containers";
-            version = "8.3.7";
+            version = "8.3.8";
             addonId = "@testpilot-containers";
             url = "https://addons.mozilla.org/firefox/downloads/latest/multi-account-containers/latest.xpi";
-            sha256 = "0rai82dlwfbqkydzwlhq9dw7zl3540xfbifjk4dkvlq6n7vmwvvz";
+            sha256 = "0is4q4bgzgr74f7809w711higsli7ys215lf8ykiagrn8m42jsih";
             meta = { };
           })
         ];

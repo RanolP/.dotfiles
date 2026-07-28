@@ -18,14 +18,32 @@ git diff --stat
 git log --oneline -5
 ```
 
-## Phase 2: Enter plan mode
-Call `EnterPlanMode` (load it with `ToolSearch` `select:EnterPlanMode,ExitPlanMode`
-first if deferred). The plan file IS the handoff document -- it is the compressed
-context that replaces this session's transcript.
+## Phase 2: Draft the whole handoff BEFORE plan mode
+Stay in normal mode. Finish every lookup the handoff needs here -- read the files,
+resolve the paths, confirm the commit hashes, check what still fails. Then compose
+the FULL document from the template below in your head -- complete enough to paste
+as-is. Keep it in this turn's reasoning only: no file, no message to the user, no
+stopping. A drafted handoff that is not immediately consumed by plan mode is a
+failed handoff.
 
-## Phase 3: Write the handoff into the plan, then present it
-Fill the plan file with the template below, then present it via `ExitPlanMode`.
+Plan mode is not a research phase in this skill; it is only the surface that
+carries the finished document forward with a cleared context. Entering it before
+the document is written wastes the very context reset it exists for.
 
+## Phase 3: Enter plan mode, paste, exit
+The moment the document is complete, in the SAME turn, without pausing for the
+user:
+
+1. Call `EnterPlanMode` (load it with `ToolSearch`
+   `select:EnterPlanMode,ExitPlanMode` first if deferred).
+2. Write the already-drafted document into the plan file verbatim -- no new
+   research, no new tool calls beyond that write.
+3. Call `ExitPlanMode` immediately.
+
+At the approval prompt, the intended choice is the context-clearing one: the plan
+file is the compressed context that replaces this session's transcript.
+
+## Template
 Reference existing artifacts (PRDs, plans, ADRs, issue links, commit hashes,
 diffs) by path or URL -- do not duplicate their content. Extract inline as you
 write; do not emit a separate extraction step. Omit empty sections.
@@ -63,6 +81,10 @@ write; do not emit a separate extraction step. Omit empty sections.
 ```
 
 ## Constraints
+- ALWAYS finish drafting the full document before `EnterPlanMode` -- inside plan
+  mode, write the plan file and exit, nothing else
+- ALWAYS consume the draft with `EnterPlanMode` in the same turn it is written --
+  ending the turn with the handoff sitting in a file or a chat message is a failure
 - ALWAYS hand off through `EnterPlanMode` + `ExitPlanMode` -- the plan file is the
   only handoff surface
 - NEVER write the handoff to any other file -- no `Write`/`Edit` to a temp path,

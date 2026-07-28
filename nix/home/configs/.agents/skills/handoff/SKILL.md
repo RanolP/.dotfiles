@@ -55,17 +55,27 @@ artifacts (PRDs, plans, ADRs, issue links, commit hashes, diffs) by path or URL
 separate extraction step. Omit sections that are empty or that the goal does not
 depend on.
 
+Writing rules:
+- Short isolated bullets, no narrative prose -- a coherent narrative is what hides facts from a fresh thread's attention.
+- Before finalizing, re-scan the tail of the session for late user corrections and fold them into User constraints / Decisions -- recent context is what default summarization compresses hardest.
+- Size budget: the whole handoff fits in ~100 lines / ~1-2k tokens; 3-5 sentences max per entry. Compression pressure drops prose, never the User constraints section -- it is copied verbatim regardless.
+
 ```
 # Handoff: [brief title]
 
 ## Goal
 [goal from $ARGUMENTS, with acceptance criteria]
 
+## User constraints
+[Verbatim quotes of user-stated constraints, preferences, and corrections from this session -- exact words, never paraphrased. "None" if none.]
+
 ## Context
 [repo root, stack, the 2-4 files that matter most -- by path]
 
 ## State
-**Working:** [what functions now]
+**Anchor:** [branch @ short-SHA, dirty/clean, pushed/unpushed]
+**Working:** [what functions now -- and HOW verified (test/command run)]
+**Untested:** [changes made but never exercised]
 **Broken:** [what doesn't, with error if known]
 **Uncommitted:** [summary, or reference `git diff`]
 
@@ -73,8 +83,14 @@ depend on.
 - [x] [completed]
 - [ ] [remaining]
 
+## Decisions
+- [decision] -- rejected: [alternatives]; why: [reason, one line]
+
 ## Failed approaches
 [What was tried, why it failed, what replaced it. "None" if nothing failed.]
+
+## Open questions
+[Pending decisions awaiting user input.]
 
 ## Artifacts
 [Plans/PRDs/ADRs/issues/commits/diffs by path or URL -- not copied here.]
@@ -86,6 +102,9 @@ depend on.
 ## Resume
 1. [first action] -- Expected: [outcome]; if it fails: [what to check]
 ```
+
+## Phase 4: Exit plan mode
+Call `ExitPlanMode`. The approval dialog is the user's choice, not yours: the handoff relies on the user picking "clear context and use auto mode" so the old transcript is dropped and the next thread runs on just the handoff -- state that expectation to the user when presenting the plan.
 
 ## Constraints
 - ALWAYS treat `$ARGUMENTS` as the purpose and everything else as context capture
@@ -103,3 +122,5 @@ depend on.
 - NEVER include secrets -- redact API keys, tokens, passwords, and PII
 - NEVER spawn a continuation session or copy to the clipboard -- the approved plan
   carries the work forward in this session
+- NEVER hand off a summary of the transcript -- extract only the resume-critical state and the next goal; the point is a focused thread, not a lossy digest
+- NEVER paraphrase user-stated constraints -- quote them verbatim in User constraints

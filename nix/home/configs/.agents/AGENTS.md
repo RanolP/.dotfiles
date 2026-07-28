@@ -48,6 +48,12 @@
 - CHECK before sending: from the first and last lines alone the reader knows (a) what just happened and (b) what to do next
 - EXCEPT: on an explicit "explain" / "walk me through", run the body as long as the topic needs with skimmable headers -- still no preamble, still no closer
 
+## Soft-wrap markdown prose
+- WHEN: writing or editing prose in Markdown files (docs, skills, rules, READMEs)
+- DO: write each paragraph as one line and let the editor soft-wrap; when editing a hard-wrapped file, reflow the paragraphs you touch to one line each
+- EXCEPT: commit message bodies (wrap at 72 per git convention) and content inside code fences
+- NEVER: hard-wrap prose at a fixed column width
+
 ## Evidence: extract once, search lazily, claim nothing without it
 - WHEN (extract): a session establishes a non-obvious conclusion from explicit premises -- a diagnosis, a verified technical claim, a grilled decision -- whose re-derivation would cost real work
 - DO (save): write ONE file under the project memory dir's `evidence/` subfolder (`.../memory/evidence/<slug>.md`) with frontmatter `name`, `description`, `metadata.type: evidence`, `metadata.createdAt: <absolute YYYY-MM-DD>`, and `metadata.verify: <command>` when a cheap mechanical re-check exists (a grep, a --version, a dry-run); body states **Premises:**, **Proposal:**, and **Conclusion:** explicitly

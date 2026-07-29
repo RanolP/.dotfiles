@@ -37,6 +37,13 @@
 - WHEN: non-trivial logic was added or changed
 - DO: leave ONE runnable check -- the smallest thing that fails if the logic breaks (an assert-based self-check or one tiny test file; no frameworks, no fixtures); trivial one-liners are the only exception
 
+## Documentation: code says what, comments say why, docs/ says how it all fits
+- WHEN: writing, reviewing, or reading past any comment, docstring, or documentation file
+- DO (comment): keep a doc-comment only when it carries what the code cannot -- the intention behind the choice, how a caller is meant to use it, or the tricky part that makes the goal reachable (the mathematics, the invariant, the upstream bug worked around, the reason the obvious version fails)
+- DO (delete): treat the code as the primary doc -- when a comment restates the name, signature, types, or control flow beside it, delete the comment; when the code is what actually reads badly, fix the code (rename, extract, retype) instead of annotating it
+- DO (docs/): put every explanation wider than the function it sits on -- architecture, data flow, module boundaries, why the design is shaped this way -- in a `docs/` file that holds the bird's-eye view in one place, and reference that file from code only where a reader would otherwise be stranded
+- NEVER: leave a keyhole view narrated in-place at a call site; write a doc-comment because a symbol is public or a linter wants one; describe the trivial
+
 ## Memory: load then save
 - DO: load relevant persistent context before responding when available; save durable corrections or confirmations through the configured memory workflow after checking for staleness and conflicts
 

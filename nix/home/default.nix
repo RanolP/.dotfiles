@@ -65,6 +65,39 @@ let
       sed -i 's|command = \["bun"|command = ["${lib.getExe pkgs.bun}"|' $out/herdr-plugin.toml
     '';
 
+  # herdr-handsfree (voice dictation + webcam gaze mouse) is registered the same
+  # way as herdrBrowser above, with one extra step: its manifest carries a
+  # [[build]] block that curls the release tarball into ./target/release. A
+  # linked store path is read-only and `plugin link` runs no build anyway, so
+  # fetch that same prebuilt binary here (never compile -- the crate needs rust
+  # + cmake), drop the build block, and point every command at the absolute
+  # store path instead of the relative target/release/ one.
+  herdrHandsfree =
+    let
+      src = pkgs.fetchFromGitHub {
+        owner = "RanolP";
+        repo = "herdr-handsfree";
+        rev = "0b7b3f8eeab28ae4b49ad2187fde421205804f76";
+        hash = "sha256-xEv6HqVdDdW/dksFnXhPYQmskXkLlDWyieip+tsgn+k=";
+      };
+      bin = pkgs.fetchurl {
+        url = "https://github.com/RanolP/herdr-handsfree/releases/download/v0.1.0/herdr-handsfree-v0.1.0-aarch64-apple-darwin.tar.gz";
+        hash = "sha256-Q4HJq3UhDlycRDDlPjLqd73D6F+/ROoUzbDpdtJi2IY=";
+      };
+    in
+    pkgs.runCommand "herdr-handsfree" { } ''
+      mkdir -p $out/bin
+      tar xzf ${bin} -C $out/bin
+      chmod +x $out/bin/herdr-handsfree
+      cp ${src}/herdr-plugin.toml $out/herdr-plugin.toml
+      chmod u+w $out/herdr-plugin.toml
+      sed -i 's|"target/release/herdr-handsfree"|"'"$out"'/bin/herdr-handsfree"|g' $out/herdr-plugin.toml
+      sed -i '/^# Fetches the prebuilt binary/,/^$/d' $out/herdr-plugin.toml
+      grep -q 'target/release' $out/herdr-plugin.toml && exit 1
+      grep -q '^\[\[build\]\]' $out/herdr-plugin.toml && exit 1
+      true
+    '';
+
   sharedAgentRules = ./configs/.agents/AGENTS.md;
   claudeSpecificRules = ./configs/claude/CLAUDE.md;
   claudeUserRules = pkgs.writeText "CLAUDE.md" (
@@ -350,6 +383,7 @@ in
       # Pins the herdr-browser store path as a GC root: the plugin registry
       # holds a bare path in herdr's own mutable state, which nix can't see.
       ".local/share/herdr-plugins/herdr-browser".source = herdrBrowser;
+      ".local/share/herdr-plugins/herdr-handsfree".source = herdrHandsfree;
       ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
     }
     skillFiles
@@ -377,6 +411,19 @@ in
     next_tab = ""
     switch_tab = ""
     close_tab = ""
+
+    # herdr-handsfree toggles (plugin pinned as herdrHandsfree above).
+    [[keys.command]]
+    key = "prefix+d"
+    type = "plugin_action"
+    command = "ranolp.handsfree.toggle-dictation"
+    description = "toggle dictation"
+
+    [[keys.command]]
+    key = "prefix+g"
+    type = "plugin_action"
+    command = "ranolp.handsfree.toggle-gaze"
+    description = "toggle gaze mouse"
 
     [theme]
     name = "nord"
@@ -430,6 +477,19 @@ in
     if [ -x "$herdrBin" ]; then
       "$herdrBin" plugin unlink official.browser >/dev/null 2>&1 || true
       run "$herdrBin" plugin link ${herdrBrowser} --enabled
+    fi
+  '';
+
+  # Same registration as herdrBrowserPlugin above. `plugin uninstall` first: the
+  # plugin was originally added with `plugin install RanolP/herdr-handsfree`,
+  # which git-clones into ~/.config/herdr/plugins/github/ and would keep shadowing
+  # the linked store path under the same id.
+  home.activation.herdrHandsfreePlugin = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    herdrBin="$HOME/.local/share/mise/shims/herdr"
+    if [ -x "$herdrBin" ]; then
+      "$herdrBin" plugin uninstall ranolp.handsfree >/dev/null 2>&1 || true
+      "$herdrBin" plugin unlink ranolp.handsfree >/dev/null 2>&1 || true
+      run "$herdrBin" plugin link ${herdrHandsfree} --enabled
     fi
   '';
 

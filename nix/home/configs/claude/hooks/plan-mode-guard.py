@@ -17,7 +17,8 @@ and re-enter with the plan complete.
 A Write/Edit of the plan file itself is auto-allowed rather than merely
 permitted: distilling the plan is the ONE thing plan mode is for, so prompting
 for it is pure friction. Any other Write/Edit still falls through to the normal
-permission flow.
+permission flow. Read of that same file is the one lookup left open -- see the
+comment on the Read branch in main().
 
 The plan directory is per auth profile, so it is resolved rather than fixed.
 `ccc <profile>` (nix/home/configs/nushell/config.nu) runs claude under
@@ -114,6 +115,14 @@ def main():
         (data.get("tool_input", {}) or {}).get("file_path", ""), data.get("cwd")
     ):
         decide("allow", "Writing the plan file is what plan mode is for.")
+        return
+    # Write/Edit refuse to touch an existing file this context has not Read, so
+    # denying Read outright deadlocks the second EnterPlanMode of a session: the
+    # plan path is reused and already on disk, Write demands a Read, and the
+    # Read is denied. Reading back the plan file is distillation, not research.
+    if tool == "Read" and is_plan_file(
+        (data.get("tool_input", {}) or {}).get("file_path", ""), data.get("cwd")
+    ):
         return
     if tool in ALLOWED:
         return

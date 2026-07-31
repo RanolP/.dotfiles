@@ -384,6 +384,7 @@ in
         tools =
           base.tools
           // lib.optionalAttrs pkgs.stdenv.isDarwin {
+            herdr = "0.7.5";
             colima = "0.10.3";
             lima = "2.1.4";
             docker-cli = "29.6.0";

@@ -78,6 +78,8 @@ path = [
     "nix/home/configs/claude/hooks/ssh-guard.py",
     "nix/home/configs/claude/hooks/gh-guard.py",
     "nix/home/configs/claude/hooks/plan-mode-guard.py",
+    "nix/home/configs/claude/hooks/output-shape-reminder.py",
+    "nix/home/configs/.agents/skills/claude-hook-management/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

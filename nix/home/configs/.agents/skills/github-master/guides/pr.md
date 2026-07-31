@@ -35,10 +35,30 @@ Use exact closing keywords so the issue auto-closes on merge: `close`/`closes`/`
 - Cross-repo: `Fixes owner/repo#N`.
 - Inside lists, a bare `#N` renders with the issue title on GitHub — don't hand-write a duplicate summary next to it.
 
+## Before you create — find the PR this task already has
+
+Always check first. Scope the search by what the user said:
+
+- **User named a specific PR** → that PR is the target, whoever authored it. Read it and continue it.
+- **User named none** → search the user's own PRs only, with `--author @me`. Other people's PRs never decide where your work belongs.
+
+`gh pr list --head <branch>` misses the real duplicate: it arrives on a NEW branch, usually after a context reset. Match by content instead:
+
+```sh
+gh pr list --state open --author @me --limit 30 --json number,title,headRefName,files \
+  --jq '.[] | "\(.number) \(.headRefName) — \(.title) | \([.files[].path] | join(", "))"'
+```
+
+Compare that file list against `git diff --name-only origin/<default-branch>...HEAD`, then follow the first case that applies:
+
+1. **A found PR covers this same task** → it owns the work. Name it to the user — number, title, head branch — and ask whether to continue it. Wait for the answer, then commit onto its head branch and push. Create nothing.
+2. **Work builds on an unmerged PR** → ask the user which base to use, and wait for the answer. Open a stacked PR only when the user asks for one.
+3. **Work needs more than one PR** → present the split and get approval before you write any of the code.
+4. **No overlap, single PR** → create it against the repo default branch.
+
 ## PR hygiene
 
 - `--draft` for work in progress.
 - Keep PRs small and single-purpose.
-- Check for an existing PR first: `gh pr list --head <branch>`.
 - Self-review the diff before requesting review.
 - Ensure the branch is clean and rebased before opening (defer to `git-master`).

@@ -120,6 +120,7 @@ let
     audit-env-variables = localSkill "audit-env-variables";
     website-explainer = localSkill "website-explainer";
     constraint-evasion = localSkill "constraint-evasion";
+    claude-hook-management = localSkill "claude-hook-management";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
     humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
     humanize = "${humanizeKorean}/.claude/skills/humanize";
@@ -212,6 +213,11 @@ in
       # `ask:` prompts become text-only turns: every tool call is denied.
       ".claude/hooks/ask-mode-guard.py" = {
         source = ./configs/claude/hooks/ask-mode-guard.py;
+        executable = true;
+      };
+      # Restate the output-shape check next to generation, where it applies.
+      ".claude/hooks/output-shape-reminder.py" = {
+        source = ./configs/claude/hooks/output-shape-reminder.py;
         executable = true;
       };
       # On "command not found", point at mise/project shims before installs.

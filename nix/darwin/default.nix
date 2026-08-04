@@ -36,7 +36,6 @@ in
       "libmagic" # libmagic dylib for python-magic (reuse tool, via mise pipx)
     ];
     casks = [
-      "claude"
       "openusage"
       "ghostty"
       "raycast"

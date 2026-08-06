@@ -55,7 +55,3 @@ for skill in (ls ($'($nix)/.agents/skills/*' | into glob) | where type == dir) {
     do -i { rm -rf $dest }
     do -i { cp --recursive $skill.name $dest }
 }
-
-# argent's self-update rewrites this file at runtime, so keep it a writable copy.
-echo $"     (ansi blue)Copy(ansi reset) rules/argent.md"
-cp --force $'($nix)/claude/rules/argent.md' $'($home)/.claude/rules/argent.md'

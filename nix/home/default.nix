@@ -288,18 +288,6 @@ in
     run install -m 0644 ${./configs/claude/settings.json} "$out"
   '';
 
-  # argent's self-update rewrites ~/.claude/rules/argent.md at runtime (same
-  # problem as settings.json above: a rewrite would clobber a read-only symlink
-  # and abort the next ~/.claude relink), so install a writable copy. The repo
-  # version path-scopes the rule (paths: frontmatter) so its ~4.6k tokens load
-  # only in mobile projects; re-asserted over any argent drift on each rebuild.
-  home.activation.claudeRules = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    out="$HOME/.claude/rules/argent.md"
-    run mkdir -p "$HOME/.claude/rules"
-    run rm -f "$out"
-    run install -m 0644 ${./configs/claude/rules/argent.md} "$out"
-  '';
-
   # The Orca app's skill panel classifies installs by topology, and only the
   # layout `npx skills add --global` produces is fully recognized: a REAL
   # canonical directory at ~/.agents/skills/<name> ('canonical-copy') with

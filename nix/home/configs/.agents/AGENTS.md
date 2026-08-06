@@ -81,3 +81,18 @@
 ## Simple shell commands
 - WHEN: running shell commands
 - DO: run mutating commands standalone -- no `|`, `&&`, `;`, `$()` and no mutation mixed into a read-only chain; batch read-only work freely -- chain read-only commands or issue independent read-only calls in one message (every extra turn re-reads the full conversation context)
+
+## Wait inside one blocking call
+- WHEN: a command or job needs time to finish (build, rebuild, deploy, test suite, external job)
+- DO: contain the whole wait in ONE tool call -- run the command foreground with a timeout sized to its real duration, or use the harness's background mechanism that re-invokes you on completion; when only an external system can signal readiness, size a single re-check to that system's real cadence instead of looping
+- NEVER: emit `sleep` or an `until`/`while` re-check as its own tool call -- each iteration buys a full model round-trip; measured 2026-08-05 (782 sessions, 37,761 calls): 89 poll loops burned 2.4h (p90 301s) and 176 sleeps burned 1.2h, all replaceable by one blocking wait
+
+## A tool call must earn its round-trip
+- WHEN: about to emit a tool call
+- DO: spend the call only when its result is both unknown and needed -- address the user in response text, write file content with the file-write tool, and trust an edit the tool already confirmed instead of re-reading it
+- NEVER: spend a round-trip on a call whose outcome you already know (`echo` to display text, confirmation re-reads, a repeated `git status`) -- measured 2026-08-05: 36% of all model-turn waiting (79h) followed a tool call that itself finished in under 1s, and `echo` alone was 747 calls / 1.6h
+
+## Batch edits before an expensive apply
+- WHEN: a project requires a costly apply/verify step after edits (nix rebuild, container restart, full test suite)
+- DO: finish every related edit first, then run the apply step once for the whole batch
+- NEVER: re-run the apply after each individual edit -- measured 2026-08-05: `sudo darwin-rebuild switch` alone ran 114 times for 1.6h; one run per edit-batch covers the same verification

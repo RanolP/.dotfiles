@@ -1,6 +1,6 @@
 ---
 name: git-master
-description: Disciplined git workflow — inspect before acting, Conventional-Commits messages, atomic commits, deliberate staging, commit and push as separate steps, always fetch and check remote branches before integrating/pushing, and fail-closed guardrails on destructive ops. Use when staging, committing, branching, pushing, pulling, rebasing, or rewriting history.
+description: Disciplined git workflow — inspect before acting, Conventional-Commits messages, atomic commits, deliberate staging, commit and push as separate steps, fetch-first preflights that branch off the remote base and catch a stale base, a merged/deleted upstream, or an accidental push from main, and fail-closed guardrails on destructive ops. Use when staging, committing, branching, pushing, pulling, rebasing, or rewriting history.
 ---
 
 # Git master
@@ -40,19 +40,31 @@ One logical change per commit. The working tree should build/pass after each com
 
 Never chain `git commit … && git push` (also blocked by the hook). A local commit is private and reversible; a push is shared and effectively permanent. Commit, verify the result, then push as its own deliberate command — and only when asked.
 
-## Check remote branches before integrating or pushing
+## Branch preflight — fetch, then branch off the remote base
 
-1. `git fetch` first — every pull/rebase/push starts here. Ahead/behind counts are stale until you fetch.
-2. Read the ahead/behind line *after* fetching (`git status` or `git status -sb`).
-3. Before pushing, list exactly what goes up: `git log @{u}..HEAD` and `git diff @{u}..HEAD`. Know your payload.
-4. Integrate with `git pull --rebase` (keeps history linear; no merge bubbles for routine syncs).
-5. Push only to `claude/*` branches (`git push -u origin claude/<topic>`), unless project CLAUDE.md says otherwise (this repo: dotfiles commits land on `main`, push is the user's call). Never bare `git push` / `git push origin` — the target must be explicit.
+Your local `main` is stale the moment someone else merges. Branching off it buys a rebase later. Run this before you create any branch:
 
-## Branch discipline
+```sh
+git fetch --prune                                          # 1. refresh remotes + drop deleted ones
+git symbolic-ref --short refs/remotes/origin/HEAD          # 2. the real default branch (origin/main, origin/master, …)
+git switch -c feat/topic origin/main                       # 3. branch off the REMOTE base, never local main
+```
 
-- Branch feature work from a clean, freshly fetched base.
+If step 2 fails, run `git remote set-head origin -a` once, then retry.
+
 - Name branches kebab-case `type/desc` (`feat/skill-loader`, `fix/push-guard`).
-- Don't start work on a dirty or unrebased branch — stash or commit first, then rebase onto the current base.
+- Working tree must be clean first — `git status` then stash or commit; never branch out of a dirty tree.
+- Already committed onto a stale base? `git rebase --onto origin/main <old-base> HEAD` rather than merging the base in.
+
+## Push preflight — fetch, then answer three questions
+
+Every push starts with `git fetch --prune`. Ahead/behind and `[gone]` markers are lies until you fetch. Then check, in order:
+
+1. **Am I on a branch I may push?** `git branch --show-current`. If it prints `main`/`master`, stop — you never made a branch. Create one off the remote base (`git switch -c <name> origin/main` keeps the commits you already made on main), then push that.
+2. **Is my upstream still alive?** `git status -sb`. A `[gone]` upstream means the remote branch was deleted — usually because its PR merged. Confirm with `gh pr list --head <branch> --state all --json number,state,mergedAt`. If it merged, that branch is finished: start a fresh branch off `origin/main` for the new work instead of resurrecting the dead one.
+3. **What exactly goes up?** `git log @{u}..HEAD` and `git diff @{u}..HEAD`. If `git status -sb` says behind, run `git pull --rebase` first (linear history, no merge bubbles for routine syncs).
+
+Push only to `claude/*` branches (`git push -u origin claude/<topic>`), unless project CLAUDE.md says otherwise (this repo: dotfiles commits land on `main`, push is the user's call). Never bare `git push` / `git push origin` — the target must be explicit.
 
 ## Destructive-op guardrails — fail closed: confirm + back up first
 

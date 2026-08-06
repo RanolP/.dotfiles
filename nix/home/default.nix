@@ -102,6 +102,7 @@ let
     handoff = localSkill "handoff";
     git-master = localSkill "git-master";
     github-master = localSkill "github-master";
+    worktree-cleanup = localSkill "worktree-cleanup";
     one-domain = localSkill "one-domain";
     diagnose = localSkill "diagnose";
     tdd = localSkill "tdd";

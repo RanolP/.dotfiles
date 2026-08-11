@@ -36,14 +36,6 @@ let
     unpackPhase = ''unzip -q "$src"'';
     installPhase = ''install -Dm444 espanso/Espanso.dmg "$out/Espanso.dmg"'';
   };
-  # Orca (onorca.dev) Agent IDE: no Homebrew cask and not in nixpkgs, so fetch
-  # the notarized release dmg (pure download, GOLDEN RULE) and mount + ditto it
-  # into ~/Applications at activation, same as espanso. Bump url/hash together.
-  orcaApp = "${config.home.homeDirectory}/Applications/Orca.app";
-  orcaDmg = pkgs.fetchurl {
-    url = "https://github.com/stablyai/orca/releases/download/v1.4.150/orca-macos-arm64.dmg";
-    hash = "sha256-s5eJFMv6fdPam29rt1aixbmZI9yXaA5F9HyiGirqum4=";
-  };
 in
 {
   imports = [
@@ -155,7 +147,26 @@ in
           ln -sfn "$base/projects" "$dir/projects"
           ;;
       esac
-      SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"
+      # MCP servers otherwise live only in the mutable per-profile
+      # ~/.claude.json, so declare the shared ones here instead. --mcp-config
+      # is variadic: it must come LAST or it swallows the prompt as extra
+      # config paths, and the subcommands below reject it outright.
+      #
+      # Treat each server's type/url/headers in mcp.json as frozen once it is
+      # authenticated: the stored OAuth token is keyed by
+      # `<name>|sha256({type,url,headers}).slice(0,16)`, so editing any of the
+      # three orphans the token and forces a fresh browser login. The store
+      # path of mcp.json is NOT part of the key, so a plain rebuild keeps the
+      # login. Tokens also live per profile, in the macOS keychain item
+      # `Claude Code-credentials-<sha256($CLAUDE_CONFIG_DIR).slice(0,8)>`, so
+      # each ~/.claude-* profile authenticates once on its own.
+      case "$1" in
+        agents|auth|auto-mode|config|doctor|gateway|install|mcp|migrate-installer|plugin|plugins|project|setup-token|ultrareview|update|upgrade)
+          SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"
+          ;;
+      esac
+      SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@" \
+        --mcp-config ${./../configs/claude/mcp.json}
     '';
   };
 
@@ -193,23 +204,6 @@ in
     fi
   '';
 
-  # Same mount + ditto install as espanso above: preserves the notarized
-  # signature and only re-runs when the pinned dmg store path changes (an
-  # in-app auto-update is left alone until the pin bumps).
-  home.activation.orca = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    dmg="${orcaDmg}"
-    stamp="${config.home.homeDirectory}/Applications/.orca-dmg-source"
-    if [ ! -d "${orcaApp}" ] || [ "$(cat "$stamp" 2>/dev/null)" != "$dmg" ]; then
-      $DRY_RUN_CMD mkdir -p "${config.home.homeDirectory}/Applications"
-      mnt="$($DRY_RUN_CMD mktemp -d)"
-      $DRY_RUN_CMD /usr/bin/hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mnt"
-      $DRY_RUN_CMD rm -rf "${orcaApp}"
-      $DRY_RUN_CMD /usr/bin/ditto "$mnt/Orca.app" "${orcaApp}"
-      $DRY_RUN_CMD /usr/bin/hdiutil detach "$mnt"
-      $DRY_RUN_CMD sh -c "printf '%s' '$dmg' > '$stamp'"
-    fi
-  '';
-
   # Use `daemon` instead of `launcher` so espanso doesn't self-register a second plist
   launchd.agents.espanso.config.ProgramArguments = lib.mkForce [
     "${espansoApp}/Contents/MacOS/espanso"
@@ -217,26 +211,6 @@ in
   ];
 
   xdg.configFile."espanso/match/packages/typsi".source = "${typsi}/packages/typsi";
-
-  # GUI apps inherit $SHELL from the login shell, which is deliberately /bin/sh
-  # (the Claude Code hang guard in nix/darwin/default.nix) -- so Orca, whose
-  # macOS terminals spawn `$SHELL || /bin/zsh` with no shell setting of its own,
-  # opened bare sh. Set the GUI session's SHELL to Apple's zsh at login: Orca
-  # fully supports zsh (shell-ready markers, env scan), /bin/zsh is immune to
-  # the nix-zsh SIGCHLD hang, and the ~/.local/bin/claude wrapper already pins
-  # the same value. Login shell itself stays /bin/sh.
-  launchd.agents.gui-shell = {
-    enable = true;
-    config = {
-      ProgramArguments = [
-        "/bin/launchctl"
-        "setenv"
-        "SHELL"
-        "/bin/zsh"
-      ];
-      RunAtLoad = true;
-    };
-  };
 
   # Dependabot-style weekly mise pin bumper. Fires daily at 10:30; a 7-day guard
   # inside the script gates real work to weekly (survives sleep/missed runs). No

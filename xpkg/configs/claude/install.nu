@@ -46,7 +46,7 @@ for agent in (ls ($'($nix)/claude/agents/*.md' | into glob)) {
 }
 
 # Local skills only: each is a directory under the shared .agents/skills tree.
-# The flake-input skills (skill-creator, humanize-*, orca, ...) come from the
+# The flake-input skills (skill-creator, humanize-*, ...) come from the
 # nix store and aren't available without nix, so Windows gets the local set.
 echo $"     (ansi blue)Copy(ansi reset) skills"
 for skill in (ls ($'($nix)/.agents/skills/*' | into glob) | where type == dir) {

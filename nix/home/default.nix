@@ -19,13 +19,13 @@ let
     hash = "sha256-iadJGHavCEXPBYjeo5SyCSgn2yWIJ5YUvRG/2qbuVAY=";
   };
 
-  # Skill for the Orca IDE's CLI (the app itself is installed in darwin/).
-  # Declarative equivalent of `npx skills add stablyai/orca --skill orca-cli`.
-  orcaRepo = pkgs.fetchFromGitHub {
-    owner = "stablyai";
-    repo = "orca";
-    rev = "e60060039a7ca135c6e99574b89f4f56aebe202c";
-    hash = "sha256-6/v6zs5qY2+GwxXYC41sf2gntE11h68O2b5VWoe+08o=";
+  # Official Notion agent skills; only notion-cli exists so far. Declarative
+  # equivalent of `npx skills add makenotion/skills --skill notion-cli`.
+  notionSkills = pkgs.fetchFromGitHub {
+    owner = "makenotion";
+    repo = "skills";
+    rev = "423af2bf546cd0354e5cc871017251945d9ad14f";
+    hash = "sha256-rzT+jXI+hwoXvqS/ln6PT2juxzFsDoKGIOygkJWCM94=";
   };
 
   # Supermemory, manual-search-only. The plugin is disabled in settings.json:
@@ -123,6 +123,7 @@ let
     constraint-evasion = localSkill "constraint-evasion";
     claude-hook-management = localSkill "claude-hook-management";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
+    notion-cli = "${notionSkills}/skills/notion-cli";
     humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
     humanize = "${humanizeKorean}/.claude/skills/humanize";
     humanize-redo = "${humanizeKorean}/.claude/skills/humanize-redo";
@@ -287,24 +288,6 @@ in
     run mkdir -p "$HOME/.claude"
     run rm -f "$out"
     run install -m 0644 ${./configs/claude/settings.json} "$out"
-  '';
-
-  # The Orca app's skill panel classifies installs by topology, and only the
-  # layout `npx skills add --global` produces is fully recognized: a REAL
-  # canonical directory at ~/.agents/skills/<name> ('canonical-copy') with
-  # per-provider symlinks pointing at it ('provider-alias'). A symlink into the
-  # nix store is an unsupported 'external-link' topology, so it can't live in
-  # the skills set above -- reproduce the npx layout declaratively instead.
-  home.activation.orcaSkills = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    for name in orca-cli computer-use orchestration; do
-      canonical="$HOME/.agents/skills/$name"
-      run rm -rf "$canonical"
-      run mkdir -p "$canonical"
-      run cp -R "${orcaRepo}/skills/$name/." "$canonical/"
-      run chmod -R u+w "$canonical"
-      run mkdir -p "$HOME/.claude/skills"
-      run ln -sfn "$canonical" "$HOME/.claude/skills/$name"
-    done
   '';
 
   # Register herdr-browser (fetched above) with herdr. `plugin link` is the only

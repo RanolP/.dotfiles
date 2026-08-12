@@ -91,6 +91,7 @@ SPDX-License-Identifier = "MIT"
 path = [
     "nix/home/configs/claude/agents/prose-editor.md",
     "nix/home/configs/claude/agents/code-reviewer.md",
+    "nix/home/configs/claude/agents/oracle.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

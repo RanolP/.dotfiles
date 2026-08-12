@@ -12,15 +12,17 @@ leaves alone the spawns where a deliberate choice already exists:
   * forks (subagent_type == "fork") -- inherit the parent model by design; the
     `model` param is ignored, so requiring one is meaningless.
   * named agents that pin a concrete `model:` in their own frontmatter -- the
-    choice lives in the agent file, so an omitted param is fine.
+    choice lives in the agent file, so an omitted param is fine, except a Fable
+    pin is allowed only for the `oracle` agent.
   * namespaced plugin agents (type contains ":") -- their model lives in the
     plugin, which this hook cannot read; trust it rather than false-positive.
 
-An explicit `fable` model is DENIED outright. `opus` is denied too -- but only
-while the main thread itself runs opus, where top-tier reasoning belongs in the
-main thread. When the main thread runs Fable it is the architect, not the top
-tier, so an opus subagent IS the implementer and is allowed. The main model is
-read back from the transcript (PreToolUse stdin carries no model field).
+An explicit `fable` model is DENIED outright. A pinned Fable agent is allowed
+only when its subagent_type is `oracle`. `opus` is denied too -- but only while
+the main thread itself runs opus, where top-tier reasoning belongs in the main
+thread. When the main thread runs Fable it is the architect, not the top tier,
+so an opus subagent IS the implementer and is allowed. The main model is read
+back from the transcript (PreToolUse stdin carries no model field).
 
 Fail-open: any parse problem lets the normal permission flow run, so a bug here
 never blocks legitimate work.
@@ -33,6 +35,8 @@ import sys
 # Tier a subagent may never run, whatever the main thread is. Matched as a
 # substring so alias and full id both hit (`fable`, `claude-fable-5`).
 ALWAYS_BLOCKED = "fable"
+# The only named agent allowed to pin Fable in frontmatter.
+FABLE_AGENT = "oracle"
 # Tier a subagent may run only under a Fable main thread (`opus`,
 # `claude-opus-5`).
 OPUS_TOKEN = "opus"
@@ -62,9 +66,15 @@ TIER_DENY = (
 )
 
 FABLE_DENY = (
-    "Fable is the architect tier and runs in the main thread only. Re-issue "
-    "with model: opus (implementation / hard reasoning), sonnet (default), or "
-    "haiku (mechanical work)."
+    "Fable subagents run only through the `oracle` agent. Re-issue with "
+    "subagent_type: oracle, omit the model param, and pass one question plus "
+    "enough context to judge."
+)
+
+PINNED_FABLE_DENY = (
+    "Only the `oracle` agent may pin Fable in agent frontmatter. Use "
+    "subagent_type: oracle with no model param, or choose opus, sonnet, or "
+    "haiku for this agent."
 )
 
 
@@ -154,8 +164,12 @@ def main():
     if ":" in agent_type:
         sys.exit(0)
 
-    # A named user agent that pins a concrete model needs no param.
-    if agent_type and pinned_model(agent_type):
+    # A named user agent that pins a concrete model needs no param. Fable is
+    # the only exception: it is allowed through oracle and nowhere else.
+    pinned = pinned_model(agent_type) if agent_type else None
+    if pinned:
+        if ALWAYS_BLOCKED in pinned and agent_type != FABLE_AGENT:
+            decide("deny", PINNED_FABLE_DENY)
         sys.exit(0)
 
     # Generic/built-in spawn with no model -> would inherit opus. Force a choice.
@@ -199,7 +213,7 @@ def _selftest():
         assert d == "deny" and "sonnet or haiku only" in o, blocked
     for blocked in ("fable", "claude-fable-5"):
         d, o = decision({"model": blocked})
-        assert d == "deny" and "architect tier" in o, blocked
+        assert d == "deny" and "only through the `oracle` agent" in o, blocked
     assert decision({"subagent_type": "x:y"}) == (None, "")
 
     def transcript(td, name, model):
@@ -224,7 +238,7 @@ def _selftest():
         # Fable subagents stay denied whatever the main thread is.
         for path in (as_fable, as_opus, missing):
             d, o = decision({"model": "fable"}, path)
-            assert d == "deny" and "architect tier" in o, path
+            assert d == "deny" and "only through the `oracle` agent" in o, path
 
     global AGENTS_DIR
     with tempfile.TemporaryDirectory() as td:
@@ -233,8 +247,15 @@ def _selftest():
             f.write("---\nname: pinned\nmodel: haiku\n---\n")
         with open(os.path.join(td, "loose.md"), "w") as f:
             f.write("---\nname: loose\nmodel: inherit\n---\n")
+        with open(os.path.join(td, "oracle.md"), "w") as f:
+            f.write("---\nname: oracle\nmodel: fable\n---\n")
+        with open(os.path.join(td, "other-fable.md"), "w") as f:
+            f.write("---\nname: other-fable\nmodel: fable\n---\n")
         assert decision({"subagent_type": "pinned"}) == (None, "")
         assert decision({"subagent_type": "loose"})[0] == "deny"
+        assert decision({"subagent_type": "oracle"}) == (None, "")
+        d, o = decision({"subagent_type": "other-fable"})
+        assert d == "deny" and "Only the `oracle` agent may pin Fable" in o
     print("all guard checks passed")
 
 

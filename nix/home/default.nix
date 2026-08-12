@@ -172,6 +172,12 @@ in
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;
       };
+      # Deny --no-verify and force-push. Separate from git-push-guard because
+      # that hook's .nanno-workers.json bypass must not reach these two.
+      ".claude/hooks/git-integrity-guard.py" = {
+        source = ./configs/claude/hooks/git-integrity-guard.py;
+        executable = true;
+      };
       # Hard-deny ssh: promote it to the user's own TTY via `! ssh ...`.
       ".claude/hooks/ssh-guard.py" = {
         source = ./configs/claude/hooks/ssh-guard.py;

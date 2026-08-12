@@ -24,11 +24,11 @@ that broke in practice:
 Wired to two events in settings.json, dispatched on hook_event_name:
 
   PostToolUse Edit|Write : an edit under ~/.dotfiles/nix/home/configs/ injects
-      an additionalContext reminder, once per (session, generation). (Plain
+      an additionalContext reminder, once per generation. (Plain
       PostToolUse stdout is debug-log-only; only the JSON hookSpecificOutput
       form reaches Claude.)
   Stop                   : while a rebuild is pending, show the user a
-      `systemMessage` ONCE per (session, generation), naming the unapplied
+      `systemMessage` ONCE per generation, naming the unapplied
       files and the command -- but only in a session whose cwd is inside
       ~/.dotfiles, since the pending state is machine-wide and an unrelated
       project's session should not answer for it. After the user rebuilds, the
@@ -42,31 +42,30 @@ third ask arrived angry. `systemMessage` prints to the user's terminal without
 entering the conversation at all, so the answer survives and the reminder still
 lands.
 
-The only state kept is "which generation did this session already speak up
-for", one JSON file per session under $TMPDIR -- a dedupe marker, never the
-source of truth. Fail-open everywhere: a bug here must never wedge a session,
+The only state kept is "which generation was already spoken for", one JSON
+file under $TMPDIR for the whole machine -- a dedupe marker, never the source
+of truth. Fail-open everywhere: a bug here must never wedge a session,
 and an unreadable generation link means silence, not a block.
 
 Self-check: `python3 rebuild-enforcer.py --selftest`.
 """
 import json
 import os
-import re
 import sys
 import tempfile
 
 CONFIGS_DIR = os.path.expanduser("~/.dotfiles/nix/home/configs") + os.sep
 
-# The Stop block only fires in a session working inside the dotfiles repo. The
-# pending state is machine-wide (see the generation comparison below), so
-# without this an edit made here would block the stop of an unrelated session
-# in another project -- a repo whose work has nothing to do with the rebuild.
+# The Stop reminder only fires in a session working inside the dotfiles repo.
+# The pending state is machine-wide (see the generation comparison below), so
+# without this an edit made here would surface in an unrelated session in
+# another project -- a repo whose work has nothing to do with the rebuild.
 DOTFILES_DIR = os.path.expanduser("~/.dotfiles") + os.sep
 
 # The apply command differs per host: darwin runs the whole system config,
 # linux runs home-manager standalone. Naming the wrong one is not a cosmetic
-# slip -- the Stop hook below refuses to let the session finish until the
-# generation moves, so a darwin-only string strands every linux session.
+# slip -- it is the one command the user is told to run, so a darwin-only
+# string strands every linux session with an unrunnable instruction.
 DARWIN_REBUILD_CMD = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26"
 LINUX_REBUILD_CMD = "home-manager switch --flake ~/.dotfiles/nix#ranolp-archwsl -b before-hm"
 
@@ -103,9 +102,16 @@ def unapplied_files(since, root=None):
     return sorted(out)
 
 
-def state_path(session_id):
-    slug = re.sub(r"[^A-Za-z0-9._-]", "_", session_id or "default")
-    return os.path.join(tempfile.gettempdir(), f"claude-rebuild-state-{slug}.json")
+def state_path(_session_id=None):
+    """One file for the whole machine -- the pending state is machine-wide too.
+
+    The version this replaces keyed the file on session_id, and session_id is
+    not stable across a conversation: two Stop events one conversation apart
+    wrote claude-rebuild-state-cab10e63-...json and
+    claude-rebuild-state-0417390e-...json, so "speak once per generation"
+    silently became "speak every time" and the user got nagged twice.
+    """
+    return os.path.join(tempfile.gettempdir(), "claude-rebuild-state.json")
 
 
 def load_state(path):
@@ -128,7 +134,7 @@ def save_state(path, st):
 
 
 def spoke_for(st, key, gen):
-    """True when this session already said `key` for this exact generation."""
+    """True when `key` was already said for this exact generation."""
     return st.get(key) == gen
 
 

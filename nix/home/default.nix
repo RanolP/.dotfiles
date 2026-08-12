@@ -122,6 +122,8 @@ let
     website-explainer = localSkill "website-explainer";
     constraint-evasion = localSkill "constraint-evasion";
     claude-hook-management = localSkill "claude-hook-management";
+    memory-review = localSkill "memory-review";
+    memory-internalize = localSkill "memory-internalize";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
     notion-cli = "${notionSkills}/skills/notion-cli";
     humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";

@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Plan mode is distill-only: research happens BEFORE EnterPlanMode, so once
-the session is in plan mode every tool except writing the plan file and
-presenting it (ExitPlanMode) is denied. AskUserQuestion stays available for
-requirement clarification, and ToolSearch for loading the deferred
-ExitPlanMode schema -- without it a session already in plan mode could never
-exit; neither is research.
+the session is in plan mode every tool that ACTS is denied. Writing the plan
+file and presenting it (ExitPlanMode) is the point; AskUserQuestion stays
+available for requirement clarification, and ToolSearch for loading the
+deferred ExitPlanMode schema -- without it a session already in plan mode
+could never exit.
+
+Read-only lookups (READ_ONLY, the same set ask-mode-guard.py allows) stay open
+too: distilling a plan surfaces gaps the up-front research missed, and reading
+a file to close one is cheaper than exiting plan mode and re-entering. Bash is
+NOT in that set -- it can mutate, and no cheap check tells which invocation
+will.
 
 A Write/Edit of the plan file itself (~/.claude/plans/) is auto-allowed rather
 than merely permitted: distilling the plan is the ONE thing plan mode is for,
@@ -18,7 +24,20 @@ import json
 import os
 import sys
 
-ALLOWED = {"ExitPlanMode", "Write", "Edit", "AskUserQuestion", "ToolSearch"}
+READ_ONLY = frozenset({
+    "Read",
+    "Glob",
+    "Grep",
+    "NotebookRead",
+    "ToolSearch",
+    "WebFetch",
+    "WebSearch",
+    "TaskList",
+    "TaskGet",
+    "TaskOutput",
+})
+
+ALLOWED = READ_ONLY | {"ExitPlanMode", "Write", "Edit", "AskUserQuestion"}
 PLANS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "plans") + os.sep
 
 
@@ -74,6 +93,8 @@ def selftest():
     assert not is_plan_file(home + "/.claude/settings.json", None)
     assert not is_plan_file(home + "/.dotfiles/nix/flake.nix", None)
     assert not is_plan_file("", None)
+    assert READ_ONLY <= ALLOWED
+    assert "Bash" not in ALLOWED and "Agent" not in ALLOWED
     print("plan-mode-guard selftest ok")
 
 

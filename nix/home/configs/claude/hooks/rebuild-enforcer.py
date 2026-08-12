@@ -27,13 +27,20 @@ Wired to two events in settings.json, dispatched on hook_event_name:
       an additionalContext reminder, once per (session, generation). (Plain
       PostToolUse stdout is debug-log-only; only the JSON hookSpecificOutput
       form reaches Claude.)
-  Stop                   : while a rebuild is pending, block the stop ONCE per
-      (session, generation), naming the unapplied files and the command to
-      hand over -- but only in a session whose cwd is inside ~/.dotfiles,
-      since the pending state is machine-wide and an unrelated project's
-      session should not answer for it. stop_hook_active guards against loops;
-      after the user rebuilds, the generation mtime changes and the next round
-      of edits is free to block again.
+  Stop                   : while a rebuild is pending, show the user a
+      `systemMessage` ONCE per (session, generation), naming the unapplied
+      files and the command -- but only in a session whose cwd is inside
+      ~/.dotfiles, since the pending state is machine-wide and an unrelated
+      project's session should not answer for it. After the user rebuilds, the
+      generation mtime changes and the next round of edits speaks up again.
+
+The Stop branch used to return `decision: "block"`, and blocking is what made
+it a menace: the block discards the turn and forces another one, so the answer
+the user was reading got replaced by the rebuild demand. Asked twice what a
+rules-file line contained, the session sent the rebuild line both times and the
+third ask arrived angry. `systemMessage` prints to the user's terminal without
+entering the conversation at all, so the answer survives and the reminder still
+lands.
 
 The only state kept is "which generation did this session already speak up
 for", one JSON file per session under $TMPDIR -- a dedupe marker, never the
@@ -167,13 +174,11 @@ def handle(data, profile=None, root=None):
             "additionalContext": (
                 "nix config edited -- changes apply only after "
                 f"`{REBUILD_CMD}`, which the user runs in their own shell. "
-                "The Stop hook blocks finishing while the rebuild is "
-                "outstanding."),
+                "Hand that command over once, in the message that finishes "
+                "the work -- never in place of what the user asked for."),
         }}
 
     if event == "Stop":
-        if data.get("stop_hook_active"):
-            return None
         if not in_dotfiles(data.get("cwd")):
             return None
         if spoke_for(st, "nagged", gen):
@@ -183,11 +188,9 @@ def handle(data, profile=None, root=None):
             return None
         st["nagged"] = gen
         save_state(path, st)
-        return {"decision": "block", "reason": (
-            f"Edited without applying: {', '.join(files)}. The user runs the "
-            f"rebuild, not you: hand them `! {REBUILD_CMD}` to run in their "
-            "own shell, say the change is pending until they run it, then "
-            "stop.")}
+        return {"systemMessage": (
+            f"Rebuild pending -- edited without applying: {', '.join(files)}. "
+            f"Run it yourself: {REBUILD_CMD}")}
 
     return None
 
@@ -242,15 +245,17 @@ def selftest():
     assert unapplied_files(generation_mtime(profile), root) == []
     assert handle(ev(hook_event_name="Stop"), profile, root) is None
 
-    # An edit after the generation is pending, and Stop blocks once.
+    # An edit after the generation is pending, and Stop speaks up once. It
+    # tells the USER via systemMessage and never blocks -- a block would throw
+    # away the turn the user was actually reading.
     touch("claude/settings.json", 3000)
     assert unapplied_files(generation_mtime(profile), root) == ["claude/settings.json"]
     out = handle(ev(hook_event_name="Stop"), profile, root)
-    assert out and out["decision"] == "block"
-    assert "claude/settings.json" in out["reason"] and "! " in out["reason"]
+    assert out and "decision" not in out
+    assert "claude/settings.json" in out["systemMessage"]
+    assert REBUILD_CMD in out["systemMessage"]
     # Same generation, same session: silent from here on.
     assert handle(ev(hook_event_name="Stop"), profile, root) is None
-    assert handle(ev(hook_event_name="Stop", stop_hook_active=True), profile, root) is None
 
     # A session outside the dotfiles repo never gets blocked, however pending
     # the machine is -- another project's work is not this repo's rebuild.
@@ -261,15 +266,15 @@ def selftest():
     assert in_dotfiles(os.path.expanduser("~/.dotfiles/nix/home"))
     assert not in_dotfiles(os.path.expanduser("~/.dotfiles-other"))
     # Still pending for a session that IS in the repo: the gate is cwd, not state.
-    assert handle(ev(hook_event_name="Stop"), profile, root)["decision"] == "block"
+    assert "systemMessage" in handle(ev(hook_event_name="Stop"), profile, root)
 
     # The user rebuilds in their own shell -- no tool call, but the generation
     # moves, so the state clears without the hook seeing anything.
     set_generation(4000)
     assert handle(ev(hook_event_name="Stop"), profile, root) is None
-    # A fresh edit after that rebuild re-arms the block.
+    # A fresh edit after that rebuild re-arms the reminder.
     touch("claude/.agents-AGENTS.md", 5000)
-    assert handle(ev(hook_event_name="Stop"), profile, root)["decision"] == "block"
+    assert "systemMessage" in handle(ev(hook_event_name="Stop"), profile, root)
 
     # PostToolUse: config edits remind once per generation; other paths never.
     os.remove(spath)

@@ -1,6 +1,10 @@
 # sensitive — never commit
 local.nix
 
+# 시말서: verbatim incident records (internal paths, tickets, quoted work).
+# apology-leak-guard.py blocks the non-git channels this line cannot reach.
+.apologies/
+
 # macOS metadata
 .DS_Store
 

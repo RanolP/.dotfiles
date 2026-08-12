@@ -85,6 +85,8 @@ path = [
     "nix/home/configs/.agents/skills/claude-hook-management/SKILL.md",
     "nix/home/configs/.agents/skills/memory-review/SKILL.md",
     "nix/home/configs/.agents/skills/memory-internalize/SKILL.md",
+    "nix/home/configs/.agents/skills/apology/SKILL.md",
+    "nix/home/configs/claude/hooks/apology-leak-guard.py",
     "nix/home/configs/claude/mcp.json",
 ]
 precedence = "aggregate"

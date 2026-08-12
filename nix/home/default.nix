@@ -124,6 +124,11 @@ let
     claude-hook-management = localSkill "claude-hook-management";
     memory-review = localSkill "memory-review";
     memory-internalize = localSkill "memory-internalize";
+    apology = localSkill "apology";
+    # Same skill under the name the user actually types. Slash-command
+    # resolution uses the linked directory name, so the alias is a second link
+    # to one source, not a copy.
+    "시말서" = localSkill "apology";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
     notion-cli = "${notionSkills}/skills/notion-cli";
     humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
@@ -207,6 +212,11 @@ in
       # Keep a PR body from losing remote lines or shipping a broken mermaid fence.
       ".claude/hooks/pr-body-guard.py" = {
         source = ./configs/claude/hooks/pr-body-guard.py;
+        executable = true;
+      };
+      # Keep 시말서 records in .apologies/ from reaching any outbound channel.
+      ".claude/hooks/apology-leak-guard.py" = {
+        source = ./configs/claude/hooks/apology-leak-guard.py;
         executable = true;
       };
       # Deny direct edits to ~/.claude/ -- the repo is the source of truth.

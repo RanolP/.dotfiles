@@ -23,6 +23,8 @@
     "docs-write-howto": "name-only",
     "docs-write-reference": "name-only",
     "docs-write-status": "name-only",
+    "apology": "user-invocable-only",
+    "시말서": "user-invocable-only",
     "one-domain": "user-invocable-only",
     "claude-hook-management": "user-invocable-only",
     "humanize-korean": "user-invocable-only",
@@ -106,6 +108,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/plan-mode-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/apology-leak-guard.py"
           }
         ]
       },

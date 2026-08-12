@@ -190,6 +190,14 @@ in
   # Install the notarized app from the intact dmg, preserving its signature
   # (7zz/unzip extraction corrupts the seal; hdiutil+ditto does not). Idempotent:
   # only re-mounts when the source dmg store path changes.
+  #
+  # Preserving the seal is also what keeps the Accessibility grant across bumps:
+  # TCC pins a grant made to a broken-signature app to that build's cdhash, so
+  # every reinstall silently voids it (the toggle still reads on). Granted to a
+  # validly signed app, the requirement is identifier + team 6424323YUH, which
+  # any later release satisfies. If a bump ever loses the permission again,
+  # `sudo tccutil reset Accessibility com.federicoterzi.espanso` and re-grant --
+  # never re-grant while a signature-broken copy is the one installed.
   home.activation.espanso = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     dmg="${espansoDmg}/Espanso.dmg"
     stamp="${config.home.homeDirectory}/Applications/.espanso-dmg-source"

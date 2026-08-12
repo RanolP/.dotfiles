@@ -40,8 +40,10 @@
     "workers-best-practices": "user-invocable-only",
     "wrangler": "user-invocable-only"
   },
-  "model": "opus",
+  "model": "sonnet",
   "env": {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-fable-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-5",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "GIT_PAGER": "cat",
     "GH_PAGER": "cat",

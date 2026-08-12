@@ -56,4 +56,6 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 ## Push only to claude/* branches
 - WHEN: running `git push`
 - DO: push to `claude/*` only, as an explicit `origin claude/<branch>` refspec, standalone -- a PreToolUse guard blocks everything else and explains itself
+- DO (`~/.dotfiles`): work on `main` in this one repo -- commit on `main` and run `git push origin main` when the user asks for it, because `~/.dotfiles/.nanno-workers.json` carries `{"git_push_guard_bypass": true}` and `git-push-guard.py` honors it by searching cwd upward; the user's words were "you must not make any branch here. just work with main."
 - NEVER: create or modify `.nanno-workers.json` through any channel -- the guard bypass exists only when the user grants it
+- NEVER: create a `claude/*` branch inside `~/.dotfiles` -- the branch itself is what the user rejected there

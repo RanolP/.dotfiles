@@ -2,7 +2,9 @@
 {
   programs.firefox = {
     enable = true;
-    package = pkgs.firefox-devedition;
+    # The app itself comes from the `firefox@developer-edition` Homebrew cask, so it
+    # lands in /Applications and self-updates. Home Manager manages only the profile.
+    package = null;
     profiles.dev-edition-default = {
       id = 0;
       isDefault = true;

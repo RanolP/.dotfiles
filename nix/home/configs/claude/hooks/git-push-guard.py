@@ -21,6 +21,8 @@ denied. Some exotic push forms are therefore blocked by design.
 """
 import json
 import os
+import re
+import subprocess
 import sys
 
 data = json.load(sys.stdin)
@@ -240,4 +242,51 @@ bad = [r for r in refspecs if not dest(r).startswith("claude/")]
 if bad:
     decide("deny", "Only claude/* branches may be pushed. Offending refspec(s): " + ", ".join(bad))
 
-decide("allow", "Push to claude/* branch permitted.")
+
+SHA_IN_TEXT = re.compile(r"\b[0-9a-f]{7,40}\b")
+
+
+def body_sha_drift(cwd, branch):
+    """Reminder text when the open PR's body names commits the branch no longer has.
+
+    A PR body whose 작업 내역 items are keyed by commit sha goes stale the moment
+    the stack is rebased, and a body pointing at a dead hash is worse than one
+    with no hash at all. This never denies: the user granted standing permission
+    to refresh hashes on every push ("해시는 허락 받지 말고 푸시 될 때마다 고치쇼"),
+    so the guard only makes the delta visible. Fails silent on anything odd.
+    """
+    def run(argv):
+        return subprocess.run(argv, capture_output=True, text=True, timeout=15, cwd=cwd)
+
+    try:
+        p = run(["gh", "pr", "view", branch, "--json", "body,number,baseRefName"])
+        if p.returncode:
+            return ""
+        pr = json.loads(p.stdout)
+        body, base = pr.get("body") or "", pr.get("baseRefName") or ""
+        if not body or not base:
+            return ""
+        q = run(["git", "log", "--format=%H", "origin/%s..%s" % (base, branch)])
+        if q.returncode:
+            return ""
+        commits = q.stdout.split()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return ""
+
+    named = set(SHA_IN_TEXT.findall(body))
+    if not named or not commits:
+        return ""
+    stale = sorted(s for s in named if not any(c.startswith(s) for c in commits))
+    unlisted = [c[:9] for c in commits if not any(c.startswith(s) for s in named)]
+    if not stale and not unlisted:
+        return ""
+    lines = ["PR #%s body drift — refresh it after this push:" % pr.get("number")]
+    if stale:
+        lines.append("  named in the body but not on the branch: " + ", ".join(stale[:8]))
+    if unlisted:
+        lines.append("  on the branch but not named in the body: " + ", ".join(unlisted[:8]))
+    return "\n".join(lines)
+
+
+note = body_sha_drift(data.get("cwd") or os.getcwd(), dest(refspecs[0]))
+decide("allow", "Push to claude/* branch permitted." + ("\n\n" + note if note else ""))

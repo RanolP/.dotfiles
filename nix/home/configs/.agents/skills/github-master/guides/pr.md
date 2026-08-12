@@ -12,9 +12,54 @@
 
 Conventional Commits, imperative mood — same rules as commit subjects (see `git-master`).
 
+## PR body — the shape
+
+The body answers one question: **리뷰어가 진정으로 궁금해할 게 뭘까.** Everything below follows from that.
+
+**Sections = the repo template, verbatim.** In `internal-web` and `internal-app` that is exactly four headers, checklist boilerplate included:
+
+```
+## 개요
+## 작업 내역
+## 관련 카드
+## 변경 체크리스트
+- [ ] 변경 후 확인이 필요한 기능을 명시해주세요
+- [ ] Ex) 작품이 iOS에서 재생
+```
+
+Add no section of your own. A PR body has no meta section, no "이 PR은 …" preamble, no apology, no 사족 — `리뷰에에게 절이 왜 필요해 ㅋㅋ`.
+
+**작업 내역 = one numbered item per commit**, in commit order, each opening with the short sha and the commit subject. Under it, one sub-bullet stating the **intent** of the change, and a `리뷰 포인트:` sub-bullet when a decision is non-obvious — name the decision and the evidence behind it:
+
+```markdown
+3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현한다
+   - 표현 전용 배지 — 쌓인 개수는 주입받고, 탭 시 꼬리 복귀만 위임
+4. e1b01069a feat: 채팅 리스트 컴포넌트를 구현한다
+   - 비반전 Animated.FlatList + 꼬리 500행 상주 창 — 스크롤 핸들러는 UI 스레드
+   - 리뷰 포인트: 창 고정 앵커를 길이가 아닌 머리 행 id로 잡은 이유(포화 시 길이 파생
+     창은 읽던 행이 밀림, getWindowStart 순수 함수 + 테스트)
+```
+
+Never re-paste a commit body under its own item. The reviewer clicks the sha for that; the item exists to say *why*, not *what again*.
+
+**~25 lines.** A body that restates every commit message is the failure this replaces.
+
+**Show, don't narrate.** A diagram or a rendered screenshot goes *inside* the numbered item it belongs to:
+
+- **Mermaid** for flow, state, and sequence — GitHub renders ` ```mermaid ` fences natively. Diagram only what this PR does.
+- **Screenshot / rendered output** instead of describing UI in prose.
+- Where mermaid does not render (Jira ADF), precompile to SVG and leave a placeholder region for the human to upload.
+- A fence that fails to parse shows the reader "Unable to render rich display" and nothing else. The `pr-body-guard` hook lints every fence before `gh pr create|edit` runs — inside a backtick markdown-string label, use a real newline, never `<br/>`.
+
+**Link instead of duplicating.** 피그마에 이미 있는 정보를 중복해서 적지 말자 — link it properly. A bare `TICKET-####` auto-links and renders the card title, so never hand-write the title beside it, and never leave a raw Jira URL in a body.
+
+**Plain and honest over defensive.** Say the limitation outright: "PR 전체는 완전한 코드지만, 개별적인 커밋은 Lint/Typecheck가 실패할 수 있다" — not a hedged clause about 과도기.
+
+**Title**: one short line with the description merged in, not a bare ticket key.
+
 ## PR body — Korean, 개조식 위주
 
-Write the body in Korean, terse outline style (개조식): noun-phrase or `-함`/`-됨` bullets, not full paragraphs. Typical sections (only when the repo has no template): 요약 · 변경사항 · 테스트 · 관련 이슈.
+Write the body in Korean, terse outline style (개조식): noun-phrase or `-함`/`-됨` bullets, not full paragraphs.
 
 Apply inline prose rules (from technical-writing's Korean rules):
 

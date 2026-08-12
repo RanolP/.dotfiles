@@ -204,6 +204,11 @@ in
         source = ./configs/claude/hooks/gh-guard.py;
         executable = true;
       };
+      # Keep a PR body from losing remote lines or shipping a broken mermaid fence.
+      ".claude/hooks/pr-body-guard.py" = {
+        source = ./configs/claude/hooks/pr-body-guard.py;
+        executable = true;
+      };
       # Deny direct edits to ~/.claude/ -- the repo is the source of truth.
       ".claude/hooks/claude-dir-edit-guard.py" = {
         source = ./configs/claude/hooks/claude-dir-edit-guard.py;

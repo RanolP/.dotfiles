@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 {
   programs.firefox = {
     enable = true;
@@ -60,4 +60,41 @@
         ];
     };
   };
+
+  # Keep exactly one Firefox reachable: the Homebrew /Applications build.
+  #
+  # `package = null` stopped Home Manager from installing new nix Firefoxes, but
+  # the ones it installed before are still in the nix store and still registered
+  # with LaunchServices under `org.nixos.firefoxdeveloperedition`. That is how
+  # two copies ended up running at once, and how the https handler stayed
+  # pointed at a nix-store app. So: unregister every nix-store Firefox first,
+  # then claim the handler.
+  #
+  # macOS refuses a third-party setter for https -- `duti -s
+  # org.mozilla.firefoxdeveloperedition https` fails with error -54 (permErr) --
+  # so the browser itself has to ask, via Firefox's own `-setDefaultBrowser`.
+  home.activation.firefoxDefaultBrowser = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    ffBin="/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox"
+    lsregister=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
+
+    for app in /nix/store/*-firefox*/Applications/*.app; do
+      [ -d "$app" ] || continue
+      echo "unregistering stale Firefox copy: $app"
+      $DRY_RUN_CMD "$lsregister" -u "$app" || true
+    done
+
+    current="$(/usr/bin/defaults read com.apple.LaunchServices/com.apple.launchservices.secure 2>/dev/null \
+      | /usr/bin/grep -B4 'LSHandlerURLScheme = https;' \
+      | /usr/bin/sed -n 's/.*LSHandlerRoleAll = "\(.*\)";/\1/p' | /usr/bin/tail -1)"
+    [ -n "$current" ] || current=none
+    if [ "$current" != "org.mozilla.firefoxdeveloperedition" ]; then
+      if [ -x "$ffBin" ]; then
+        echo "default browser: $current -> org.mozilla.firefoxdeveloperedition"
+        $DRY_RUN_CMD "$ffBin" -setDefaultBrowser
+      else
+        echo "default browser: left at $current; $ffBin is missing (brew cask firefox@developer-edition)" >&2
+      fi
+    fi
+  '';
+
 }

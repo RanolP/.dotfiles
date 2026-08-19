@@ -58,7 +58,10 @@
       userSettings = {
         # VSCode is pinned by nixpkgs; disable the in-app updater nag.
         "update.mode" = "none";
-        "extensions.autoUpdate" = false;
+        # VSCode deprecated the boolean form; leaving it as `false` makes VSCode
+        # rewrite the file to "off" on every launch, which fails against the
+        # read-only nix store symlink.
+        "extensions.autoUpdate" = "off";
         "extensions.autoCheckUpdates" = false;
         "editor.fontFamily" = "Iosevka Nerd Font Mono, Pretendard";
         "editor.fontSize" = 14;

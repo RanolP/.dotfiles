@@ -29,3 +29,4 @@
 - [Android SDK](./android.md)
 - [Xcodes](./xcodes.md)
 - [GnuPG](./gnupg.md)
+- [jira-cli](./jira-cli.md)

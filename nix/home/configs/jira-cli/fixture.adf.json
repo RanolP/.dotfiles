@@ -1,0 +1,92 @@
+{
+  "type": "doc",
+  "version": 1,
+  "content": [
+    {
+      "type": "paragraph",
+      "content": [{ "type": "text", "text": "셀프체크용 고정 문서입니다." }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 1 },
+      "content": [{ "type": "text", "text": "제목" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "평범한 " },
+        {
+          "type": "text",
+          "text": "강조",
+          "marks": [{ "type": "strong" }, { "type": "em" }]
+        },
+        { "type": "text", "text": " 텍스트" }
+      ]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "두 번째 단계" }]
+    },
+    {
+      "type": "codeBlock",
+      "attrs": { "language": "python" },
+      "content": [{ "type": "text", "text": "print('hi')\n" }]
+    },
+    {
+      "type": "table",
+      "attrs": { "isNumberColumnEnabled": false, "layout": "default" },
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "A" }] }]
+            },
+            {
+              "type": "tableHeader",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "B" }] }]
+            },
+            {
+              "type": "tableHeader",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "C" }] }]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "1" }] }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "2" }] }]
+            },
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "3" }] }]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [{ "type": "text", "text": "마무리" }]
+    },
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "부록" }]
+    }
+  ]
+}

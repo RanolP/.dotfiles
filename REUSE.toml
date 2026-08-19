@@ -117,3 +117,21 @@ path = ["nix/home/configs/mise/bump.py"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = [
+    "nix/home/configs/jira-cli/jira.py",
+    "nix/home/configs/jira-cli/fixture.adf.json",
+    "nix/home/programs/jira-cli.nix",
+    "docs/src/jira-cli.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"
+
+# Vendored verbatim from npm @atlaskit/adf-schema@56.7.3 (dist/json-schema/v1/full.json).
+[[annotations]]
+path = ["nix/home/configs/jira-cli/adf-schema-56.7.3.json"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Atlassian Pty Ltd"
+SPDX-License-Identifier = "Apache-2.0"

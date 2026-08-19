@@ -171,6 +171,14 @@
 - DO (bookkeeping follows the artifact): keep an already-published body true to what shipped -- once a stack is rewritten and pushed, refresh the commit hashes, branch names, and diff links that name it, because a body pointing at a dead hash is worse than one with no hash
 - NEVER: treat finishing the code as permission to publish it
 
+## Jira card bodies: edit the ADF with `jira`, never through markdown
+- WHEN: changing the body of a Jira card -- one heading, one table cell, one list item, or a whole description
+- DO: drive the `jira` CLI (`nix/home/programs/jira-cli.nix` wraps `nix/home/configs/jira-cli/jira.py`); `jira --help` carries the staging workflow, the selector cheat sheet, and the safety rules, and `docs/src/jira-cli.md` in `~/.dotfiles` explains why each one exists
+- DO: read the body with `jira show -i KEY` (the selector's XML view) or `jira show -i KEY --rendered` (plain text, cheapest), and author every write as raw ADF taken from `jira show -i KEY --json` -- the CLI never asks Jira for markdown, because a markdown read degrades an attached image to a `blob:https://media.staging.atl-paas.net/...` URL and the round-trip back silently destroys it
+- DO: answer "what is this card" with `jira info -i KEY` (status, assignee, parent, labels) and "which cards" with `jira search '<JQL>'` -- both are read-only and neither needs the body
+- DO: reference an image rather than upload one -- the Atlassian MCP surface has no attachment tool, and its access token answers HTTP 401 on `api.atlassian.com/ex/jira/<cloudId>/rest/api/3/*`, so no REST fallback exists; `jira media ls -i KEY` prints the ids already on the card, and a `media` node with `type: "external"` plus a `url` stores verbatim
+- DO: ask the user to upload the file through the Jira web UI when a genuinely new file is needed, then reference the id `jira media ls` reports
+
 ## A denied tool call is a stop, not an obstacle
 - WHEN: the user or a hook denies, rejects, or interrupts a tool call
 - DO: halt that line of work and tell the user what was denied and what you were trying to do

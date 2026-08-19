@@ -48,7 +48,7 @@ Never re-paste a commit body under its own item. The reviewer clicks the sha for
 
 - **Mermaid** for flow, state, and sequence — GitHub renders ` ```mermaid ` fences natively. Diagram only what this PR does.
 - **Screenshot / rendered output** instead of describing UI in prose.
-- Where mermaid does not render (Jira ADF), precompile to SVG and leave a placeholder region for the human to upload.
+- Where mermaid does not render (Jira ADF), precompile to SVG and place it with the `jira` CLI. A hosted image goes in as a `media` node with `type: "external"` through `jira edit queue`. A local file needs the human to upload it through the Jira web UI first, because the CLI has no upload path; `jira media ls -i KEY` then prints the id to position.
 - A fence that fails to parse shows the reader "Unable to render rich display" and nothing else. The `pr-body-guard` hook lints every fence before `gh pr create|edit` runs — inside a backtick markdown-string label, use a real newline, never `<br/>`.
 
 **Link instead of duplicating.** 피그마에 이미 있는 정보를 중복해서 적지 말자 — link it properly. A bare `TICKET-####` auto-links and renders the card title, so never hand-write the title beside it, and never leave a raw Jira URL in a body.

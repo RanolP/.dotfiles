@@ -151,6 +151,7 @@ in
 {
   imports = [
     ./programs/git.nix
+    ./programs/jira-cli.nix
     ./programs/nushell.nix
     ./programs/starship.nix
     ./programs/zellij.nix

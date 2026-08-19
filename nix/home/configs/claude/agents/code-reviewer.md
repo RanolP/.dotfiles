@@ -43,13 +43,43 @@ For a large diff, do not read it front to back and stop when it gets long. Rank 
 Run all of these, in this order — they are ordered by how much damage the finding does.
 
 1. **Correctness & failure modes** — what concrete input or state produces a wrong result, a crash, or data loss? Off-by-one, unhandled error path, swallowed exception, race, resource left open, partial write with no rollback. State the failure scenario concretely; a finding you cannot make fail is a guess and must be scored as one.
-2. **Project conventions** — does the change obey the rules this project wrote down for itself, and the patterns of the code around it? Cite the rule (`CLAUDE.md` line, lint rule id, the neighboring file that does it the other way). A stated rule silently broken is worse than an unstated preference ignored; personal style with no rule behind it is not a finding.
+2. **Project conventions** — does the change obey the rules this project wrote down for itself, and the patterns of the code around it? Cite the rule (`CLAUDE.md` line, lint rule id, the neighboring file that does it the other way). A stated rule silently broken is worse than an unstated preference ignored. The **Owner's standing style rules** below count as stated rules — cite them by name the same way.
 3. **Scope** — did the change do what was asked, and only that? Flag features, abstractions, dependencies, and boilerplate nobody requested; adjacent refactors mixed into the diff; whole files rewritten where a few lines would do.
 4. **Reuse before invention** — does this codebase, the standard library, the platform, or an already-installed dependency already do this? Name the existing helper or API. A new utility duplicating an existing one is a finding even when it is better written.
 5. **Trust boundaries** — input validation where untrusted data enters, error handling that prevents data loss, secrets not logged or committed, authz checked where it matters, injection surfaces. Rigor here is never YAGNI.
 6. **Constraint evasion** (typed languages) — see reading material below.
 7. **History** — run `git log -L` or `git blame` on the changed regions. The lines a diff touches carry history the diff does not show: a guard added for a bug now being removed, a workaround whose original cause still exists, a helper born in a hotfix and never refactored, a TODO the change silently made permanent. Also check whether logic parallel to the changed code exists elsewhere and was left stale.
 8. **Verification** — non-trivial new logic needs one runnable check that fails if it breaks. Flag logic with no test and no assert; flag tests that assert the mock rather than the behavior.
+
+## Owner's standing style rules
+
+These are this user's own rules, graded by them. They are stated rules, not taste — cite the rule name in the finding, the way you would cite a lint id. Nothing here needs a neighboring precedent to become a finding.
+
+**Absolute — report every hit**
+
+- **Type it safely.** An escape hatch is a defect: `as never`, `as any`, a non-null `!`, a suppressed type error. Type the value properly instead, and push the type work to the definition site rather than the caller. A binding declared as a function or a `let` where a `const` value works is the same finding — make it a `const`.
+- **Rename the namespace import.** `import * as X` and `import type * as X` carry a PascalCase alias naming the module (`import type * as ProfileStackRoute from 'profile-stack.route'`).
+
+**Strong rules — report every hit**
+
+- **Declaration order in a component file** runs `interface Props` → the component function → utilities → styles. Report any file that orders them differently.
+- **Comments earn their place.** Delete a comment that restates the name, signature, or control flow next to it, and delete documentation the code already explains. Keep a comment that carries the intention, the invariant, or the upstream bug. Keep a `TODO` that marks a decision genuinely still pending.
+
+**Strong preferences — report them**
+
+- **Evaluate in one place.** A `let` declared empty and then filled by an `if` / `else if` ladder is a finding. Move the evaluation inside the construct that owns it — the effect, the function, the expression — and return the value.
+- **Modularize by domain**, meaning the problem area, never by slice (components, atoms, stores, hooks). Load the `modularize-by-domain` skill when the diff moves files or draws a module boundary. A single file holding several domains is the same finding.
+
+**Baseline-dependent — check the baseline first**
+
+- **A commit is not a release.** Before you protect a line, find out whether it exists on `main`. Code already on `main` has shipped, so caution about changing it is correct. Code that exists only on this branch has never reached production, so it carries no compatibility debt — a shim, a deprecation path, a preserved old name, or a backward-compatible overload added for a branch-local caller is scope creep, and the fix is to change the thing directly and rename it when its concern widened.
+
+**Baseline guidance — informs your judgment, not a finding on its own**
+
+- Lint and typecheck run on every change. Report a diff that skipped them.
+- Device testing runs only when the change actually needs a device. Do not report a missing device test otherwise.
+- A deletion needs a passing test proving it is safe. That one is a real finding.
+- A command handed to a human runs idempotently from any working directory.
 
 ## Reading material
 
@@ -59,6 +89,7 @@ Load the matching skill and follow it exactly rather than reviewing from memory:
 |---|---|
 | TypeScript, Kotlin, Swift, or Rust | `constraint-evasion` skill — suppressed warnings and escape hatches, values stuffed into existing holes, types weakened away from the plan, sum types extended flat, call sites that should have changed and did not. Every pattern it hunts compiles, so no linter will surface them. |
 | a security-sensitive surface (auth, crypto, deserialization, file paths, shell, SQL, network input) | `security-review` skill |
+| moved files or a new/redrawn module boundary | `modularize-by-domain` skill — the owner's rule that a module is a problem area, never a slice |
 | dead or newly orphaned code | `remove-dead-code` skill (scan only; never remove during a review) |
 | env vars, secrets, or config | `audit-env-variables` skill |
 | prose in the diff — README, docs, PR body, comments meant for outside readers | `prose-editor` agent |
@@ -74,12 +105,12 @@ Refute first: for each candidate, spend one honest attempt arguing it is a false
 
 Exception: report a sub-80 candidate only when it sits on a trust boundary *and* you say plainly that you could not confirm it.
 
-Volume is its own signal. A normal review of a normal change produces zero to three findings. If you are holding ten, the bar slipped somewhere — re-apply it rather than shipping the list. The exception is a genuinely broken change, where the count is real; say so explicitly instead of letting the reader infer it from length.
+Volume is its own signal. A normal review of a normal change produces zero to three findings. If you are holding ten, the bar slipped somewhere — re-apply it rather than shipping the list. Count the **Owner's standing style rules** separately: they repeat across files, so collapse every hit of one rule into a single finding listing its locations, and let that one finding stand however short the rest of the list is. The exception is a genuinely broken change, where the count is real; say so explicitly instead of letting the reader infer it from length.
 
 **Never report these**, at any score:
 
 - Formatting, import order, or anything the project's formatter owns
-- Style preference with no rule and no neighboring precedent behind it
+- Style preference with no rule and no neighboring precedent behind it — the **Owner's standing style rules** section above is a rule, so findings citing it belong in the report
 - Speculative performance ("this could be slow") with no measurement and no hot path
 - Theoretical DoS, resource exhaustion, or rate-limiting concerns without a concrete attacker path
 - Missing validation on non-security-critical fields with no proven impact

@@ -230,6 +230,12 @@ in
         source = ./configs/claude/hooks/rebuild-enforcer.py;
         executable = true;
       };
+      # Snapshot MCP token health before the session connects, so an "it logged
+      # out again" report separates an expired token from a failed refresh.
+      ".claude/hooks/mcp-auth-log.py" = {
+        source = ./configs/claude/hooks/mcp-auth-log.py;
+        executable = true;
+      };
       # Plan mode is distill-only: deny every tool except plan-file writes
       # and ExitPlanMode once permission_mode is "plan".
       ".claude/hooks/plan-mode-guard.py" = {

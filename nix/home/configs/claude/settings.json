@@ -187,6 +187,16 @@
         ]
       }
     ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/mcp-auth-log.py"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

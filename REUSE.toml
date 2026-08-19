@@ -82,6 +82,7 @@ path = [
     "nix/home/configs/claude/hooks/pr-body-guard.py",
     "nix/home/configs/claude/hooks/plan-mode-guard.py",
     "nix/home/configs/claude/hooks/output-shape-reminder.py",
+    "nix/home/configs/claude/hooks/mcp-auth-log.py",
     "nix/home/configs/.agents/skills/claude-hook-management/SKILL.md",
     "nix/home/configs/.agents/skills/memory-review/SKILL.md",
     "nix/home/configs/.agents/skills/memory-internalize/SKILL.md",

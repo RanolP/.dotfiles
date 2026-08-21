@@ -91,7 +91,7 @@ Each `queue` flag maps to exactly one RFC 6902 operation: replace, `add` at inde
 
 ```
 $ jira edit apply
-✗ TICKET-7758  /content/3  큐에 담을 때와 내용이 다릅니다
+✗ PLAYGROUND-157  /content/3  큐에 담을 때와 내용이 다릅니다
 
     큐 스냅샷 : "설계 포인트 — 상태 모델"
     현재 카드 : "설계 포인트 — 상태 모델 (v2)"

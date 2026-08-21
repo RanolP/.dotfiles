@@ -102,6 +102,7 @@ let
     handoff = localSkill "handoff";
     git-master = localSkill "git-master";
     github-master = localSkill "github-master";
+    jira-master = localSkill "jira-master";
     worktree-cleanup = localSkill "worktree-cleanup";
     one-domain = localSkill "one-domain";
     diagnose = localSkill "diagnose";
@@ -208,6 +209,11 @@ in
       # Force-inject github-master guides on mutating gh pr/issue commands.
       ".claude/hooks/gh-guard.py" = {
         source = ./configs/claude/hooks/gh-guard.py;
+        executable = true;
+      };
+      # Force-inject the jira-master skill on mutating `jira edit` commands.
+      ".claude/hooks/jira-guard.py" = {
+        source = ./configs/claude/hooks/jira-guard.py;
         executable = true;
       };
       # Keep a PR body from losing remote lines or shipping a broken mermaid fence.

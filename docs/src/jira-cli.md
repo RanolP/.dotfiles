@@ -21,6 +21,7 @@ Two constraints shaped the design: no OAuth app registration, and no credential 
 | Selector | Projects the ADF onto an `lxml` tree — one element per node, tag = the node's `type`, `attrs` as XML attributes, and a `ptr` attribute holding the RFC 6901 pointer. `cssselect` translates the selector to XPath. |
 | Queue | `~/.config/jira-cli/queue.json`. Each entry holds the issue key, the selector, the operation, the new content, the resolved pointers, and a deep snapshot of every matched node. |
 | Apply | Dry-runs every queued card, then writes. `editJiraIssue` with `contentFormat: "adf"`, one call per card. |
+| Workflow | `~/.config/jira-cli/workflow.json`, one entry per `project:issuetype`, holding the sampled status graph. |
 
 ## Commands
 
@@ -42,6 +43,8 @@ jira show  -i KEY --json                               # raw ADF, the shape stdi
 jira show  -i KEY --rendered                           # lossy plain text, cheapest to read
 jira search 'project = PROJ AND status != Done'        # JQL, one row per card
 jira info  -i KEY                                      # status, assignee, parent, labels
+jira flow  -i KEY [--refresh]                          # every reachable status, and the route to each
+jira move  -i KEY 'Dev Done'                           # walk that route for real, hop by hop
 jira types [NAME]                                      # ADF vocabulary, from the schema
 jira media ls -i KEY
 jira schema update
@@ -108,10 +111,31 @@ The token is the first 8 hex of a SHA-256 over the drifted state, not a random s
     /content/0: Additional properties are not allowed ('content' was unexpected)
 ```
 
+
+## Status transitions
+
+Jira's transitions endpoint answers for a card's **current** status only, so a card can never show a chain longer than one hop — `To Do → In Progress → Dev Done` is invisible from a card sitting in `To Do`. `jira flow` samples the graph instead: for every status it does not yet know, one JQL query finds a card of the same project and issue type sitting in that status, and that card's transitions become the edges leaving it. Every call is a read, and the graph is cached per `project:issuetype` in `~/.config/jira-cli/workflow.json`. `--refresh` re-samples.
+
+`jira flow -i <KEY>` prints the card's current status, then one row per reachable status, cheapest route first. A row is a route and its transition ids: `--<id>-->` is a single transition, `==<id>==<id>==>` is a chain in the order `move` will fire them, and `~~???~~>` is a status Jira can reach that this graph has no route to. The card's own status is never a row, even where the workflow defines a self-loop back to it, because listing it would say nothing.
+
+Coverage is every status the sample reached, not every status the project defines — Jira's MCP surface has no call that enumerates a workflow's statuses. Rows come from two places: a status any sampled transition points at, and a status already in the cache from an earlier card. A status that no sampled transition points at, and that no inspected card has ever sat in, is invisible; there is no `~~???~~>` row for it, because its name was never learned. A status holding no card at all cannot be sampled, so it can only ever be seen as somebody's destination, and anything behind it prints as `~~???~~>`. The closing line says the same thing from the other side: the graph is a sample, not the workflow definition. A sample is also one specific card, so a transition open to it may be closed to yours.
+
+`jira move` walks the route for real. The sampled graph decides *where* to go; the card's own transition list is re-read before every hop and decides whether *this* card may go there. A refused hop stops the walk, names how far it got, and leaves the earlier hops applied — Jira has no transaction over a status change, so there is nothing to roll back to. After the last hop the card's status is re-read and compared with the target, which is what catches a workflow post function moving it somewhere else.
+
 ## Schema
 
 `nix/home/configs/jira-cli/adf-schema-56.7.3.json` is vendored verbatim from npm `@atlaskit/adf-schema@56.7.3` (`dist/json-schema/v1/full.json`), Apache-2.0, Atlassian Pty Ltd. `jira schema update` downloads the current upstream schema to `~/.config/jira-cli/adf-schema.json`, which takes precedence over the vendored copy when it exists. Delete that file to fall back to the pinned version.
 
 ## Known limits
 
-Markdown is a lossy view of a card and is never used as a write path — reading a card as markdown degrades an attached image to a `blob:` URL on a staging host. The MCP access token returns 401 against `api.atlassian.com/.../rest/api/3/*`, so there is no REST fallback for anything the MCP surface omits. File upload, bulk edit across cards from one selector, sprint and board operations, and Confluence are all out of scope. `--rendered` is a read path only: it has no pointers, so no edit can be expressed against it.
+Markdown is a lossy view of a card and is never used as a write path — reading a card as markdown degrades an attached image to a `blob:` URL on a staging host. The MCP access token buys nothing on the REST gateway, so there is no REST fallback for anything the MCP surface omits. It is not a flat rejection, which is what makes it easy to misread — measured 2026-08-20 against `api.atlassian.com/ex/jira/<cloudId>/rest/api/3/*`:
+
+| Endpoint | Result |
+|---|---|
+| `issue/{key}` | 404 `이슈가 존재하지 않거나 이를 볼 수 있는 권한이 없습니다` — while the same token reads that same card fine through `getJiraIssue` |
+| `project/search` | 200, `total: 0` |
+| `status` | 200, `[]` |
+| `project/{key}/statuses` | 404 project not found |
+| `myself`, `statuscategory` | 401 |
+
+The token authenticates at the gateway but carries no user identity there, so every project and issue reads as invisible rather than forbidden. The MCP endpoint applies the identity server-side; REST does not. One consequence shapes `jira flow`: `project/{key}/statuses` is the only call that enumerates a workflow's status set, and it is unreachable, so sampling real cards is the ceiling. File upload, bulk edit across cards from one selector, sprint and board operations, and Confluence are all out of scope. `--rendered` is a read path only: it has no pointers, so no edit can be expressed against it.

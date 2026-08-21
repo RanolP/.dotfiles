@@ -151,6 +151,10 @@
           },
           {
             "type": "command",
+            "command": "python3 ~/.claude/hooks/jira-guard.py"
+          },
+          {
+            "type": "command",
             "command": "python3 ~/.claude/hooks/pr-body-guard.py"
           }
         ]

@@ -79,6 +79,7 @@ path = [
     "nix/home/configs/claude/hooks/git-integrity-guard.py",
     "nix/home/configs/claude/hooks/subagent-model-guard.py",
     "nix/home/configs/claude/hooks/ssh-guard.py",
+    "nix/home/configs/claude/hooks/agent-tooling-guard.py",
     "nix/home/configs/claude/hooks/gh-guard.py",
     "nix/home/configs/claude/hooks/jira-guard.py",
     "nix/home/configs/claude/hooks/pr-body-guard.py",

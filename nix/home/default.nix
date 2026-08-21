@@ -226,6 +226,12 @@ in
         source = ./configs/claude/hooks/package-manager-guard.py;
         executable = true;
       };
+      # Nudge UI automation toward agent-browser / agent-device: one prompt
+      # per session per family, then out of the way.
+      ".claude/hooks/agent-tooling-guard.py" = {
+        source = ./configs/claude/hooks/agent-tooling-guard.py;
+        executable = true;
+      };
       # Force-inject github-master guides on mutating gh pr/issue commands.
       ".claude/hooks/gh-guard.py" = {
         source = ./configs/claude/hooks/gh-guard.py;

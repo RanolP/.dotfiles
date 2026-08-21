@@ -226,6 +226,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/draft-scan-guard.py"
           }
         ]
       }

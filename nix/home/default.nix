@@ -125,6 +125,8 @@ let
     claude-hook-management = localSkill "claude-hook-management";
     memory-review = localSkill "memory-review";
     memory-internalize = localSkill "memory-internalize";
+    subagent-orchestration = localSkill "subagent-orchestration";
+    prompt-authoring = localSkill "prompt-authoring";
     apology = localSkill "apology";
     # Same skill under the name the user actually types. Slash-command
     # resolution uses the linked directory name, so the alias is a second link
@@ -194,6 +196,24 @@ in
       };
       ".claude/hooks/subagent-model-guard.py" = {
         source = ./configs/claude/hooks/subagent-model-guard.py;
+        executable = true;
+      };
+      # The positive-form authoring rules arrive when behavior text is edited,
+      # not in every session's CLAUDE.md.
+      ".claude/hooks/prompt-authoring-guard.py" = {
+        source = ./configs/claude/hooks/prompt-authoring-guard.py;
+        executable = true;
+      };
+      # The spawn mechanics live in the subagent-orchestration skill and arrive
+      # at the first Agent/Task call, not in every session's CLAUDE.md.
+      ".claude/hooks/orchestration-guard.py" = {
+        source = ./configs/claude/hooks/orchestration-guard.py;
+        executable = true;
+      };
+      # The Fable-only rules load at SessionStart when the model is Fable, so a
+      # non-Fable session does not carry them in CLAUDE.md.
+      ".claude/hooks/fable-rules.py" = {
+        source = ./configs/claude/hooks/fable-rules.py;
         executable = true;
       };
       # Unlock GPG before a signed commit so pinentry can't hijack the TTY.

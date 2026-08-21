@@ -70,7 +70,7 @@ Push only to `claude/*` branches (`git push -u origin claude/<topic>`), unless p
 
 Default to the non-destructive option. For each below, confirm with the user and create a backup (branch/stash/tag) before running:
 
-- **Force-push**: only `git push --force-with-lease --force-if-includes`, never plain `--force`. Never force-push a shared or default branch.
+- **Force-push**: never, in any form -- `git-integrity-guard.py` denies `--force`, `-f`, `--force-with-lease` and `--force-if-includes` with no bypass. Resolve a rejected push by fetching and rebasing.
 - **`reset --hard`**: `git stash` (or branch) first — it discards uncommitted work irrecoverably.
 - **`clean -fd`**: run `git clean -nd` (dry-run) first and read the list before deleting.
 - **Amend / rebase of *pushed* commits**: prefer `git revert` over amend, and `git merge` over rebasing a shared branch. Rewriting published history breaks everyone downstream.

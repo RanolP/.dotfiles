@@ -113,6 +113,20 @@ in
     '';
   };
 
+  # `ntn` is the official Notion CLI name, and every agent reaching for it
+  # types `notion` instead. This shim keeps the wrong name working on PATH for
+  # every shell, hook and subprocess -- a zsh alias would cover only
+  # interactive zsh -- and names `ntn` on stderr at each call, so a model
+  # reading the output learns the official name instead of relying on the door.
+  home.file.".local/bin/notion" = {
+    executable = true;
+    text = ''
+      #!/bin/sh
+      echo "notion: the official command is 'ntn' -- this is a local shim. Use 'ntn' next time." >&2
+      exec "$HOME/.local/share/mise/shims/ntn" "$@"
+    '';
+  };
+
   home.file.".gnupg/gpg-agent.conf".onChange = "${pkgs.gnupg}/bin/gpgconf --kill gpg-agent";
 
   # Claude Code's Bash tool probes $SHELL/PATH for a zsh and picks the

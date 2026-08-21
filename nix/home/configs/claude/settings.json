@@ -15,7 +15,8 @@
     "frontend-design@claude-plugins-official": true,
     "clangd-lsp@claude-plugins-official": true,
     "supermemory@supermemory-plugins": false,
-    "humanize-korean@im-not-ai": false
+    "humanize-korean@im-not-ai": false,
+    "claude-code-wakatime@wakatime": true
   },
   "skillOverrides": {
     "docs-write-tutorial": "name-only",
@@ -47,6 +48,7 @@
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-fable-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-5",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+    "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1",
     "GIT_PAGER": "cat",
     "GH_PAGER": "cat",
     "PAGER": "cat"
@@ -57,7 +59,6 @@
   "autoUpdaterStatus": "disabled",
   "disableDeepLinkRegistration": "disable",
   "feedbackSurveyRate": 0,
-  "language": "english",
   "showClearContextOnPlanAccept": true,
   "skipWebFetchPreflight": true,
   "tui": "fullscreen",
@@ -79,6 +80,12 @@
       "source": {
         "source": "github",
         "repo": "epoko77-ai/im-not-ai"
+      }
+    },
+    "wakatime": {
+      "source": {
+        "source": "github",
+        "repo": "wakatime/claude-code-wakatime"
       }
     }
   },

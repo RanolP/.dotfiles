@@ -2,9 +2,9 @@ source ~/.cache/nix-your-shell.nu
 
 $env.config = ($env.config | upsert show_banner false)
 
-# --- Per-folder terminal background (Ghostty, OSC 11) ---
-# Tints the Ghostty background per project so it's obvious which repo you're in.
-# Only active in bare Ghostty; Zellij owns its own rendering, so it's skipped there.
+# --- Per-folder terminal background (Ghostty / Windows Terminal, OSC 11) ---
+# Tints the terminal background per project so it's obvious which repo you're in.
+# Active in bare Ghostty and Windows Terminal; Zellij owns its own rendering, so it's skipped there.
 # Backgrounds stay dark so the Nord foreground keeps its contrast.
 def _folder-bg-color []: nothing -> string {
   # Explicit overrides win; matched against the absolute project-root path.
@@ -28,10 +28,26 @@ def _folder-bg-color []: nothing -> string {
   $palette | get $idx
 }
 
+# Report WSL CWD to Windows Terminal so duplicate tabs/panes inherit it.
+# WT >=1.22 no longer exports WT_SESSION, so detect it as "WSL, and no
+# terminal that names itself via TERM_PROGRAM (ghostty/wezterm would
+# misread OSC 9;9)".
+def _windows-terminal-cwd []: nothing -> nothing {
+  if ($env.WSL_DISTRO_NAME? | is-not-empty) and ($env.TERM_PROGRAM? | is-empty) {
+    let cwd = (^wslpath -w $env.PWD | str trim)
+    print -n $"(char -u '1b')]9;9;($cwd)(char -u '07')"
+  }
+}
+
+$env.config.hooks.pre_prompt = (
+  ($env.config.hooks?.pre_prompt? | default [])
+  | append {|| _windows-terminal-cwd }
+)
+
 $env.config.hooks.env_change.PWD = (
   ($env.config.hooks?.env_change?.PWD? | default [])
   | append {|before, after|
-      if ($env.TERM_PROGRAM? == "ghostty") and ($env.ZELLIJ? | is-empty) {
+      if (($env.TERM_PROGRAM? == "ghostty") or ($env.WSL_DISTRO_NAME? | is-not-empty)) and ($env.ZELLIJ? | is-empty) {
         print -n $"(char -u '1b')]11;#(_folder-bg-color)(char -u '07')"
       }
     }

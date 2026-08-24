@@ -175,6 +175,9 @@ in
   home.file = lib.mkMerge [
     {
       ".codex/AGENTS.md".source = sharedAgentRules;
+      ".profile".text = ''
+        export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+      '';
       ".claude/CLAUDE.md".source = claudeUserRules;
       ".claude/statusline.sh" = {
         source = ./configs/claude/statusline.sh;

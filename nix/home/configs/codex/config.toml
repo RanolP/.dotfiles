@@ -21,6 +21,9 @@ project_doc_fallback_filenames = []
 [sandbox_workspace_write]
 network_access = true
 
+[shell_environment_policy]
+experimental_use_profile = true
+
 [tools]
 web_search = true
 view_image = true

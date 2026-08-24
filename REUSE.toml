@@ -146,3 +146,9 @@ path = ["nix/home/configs/jira-cli/adf-schema-56.7.3.json"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "Atlassian Pty Ltd"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = ["docs/proposals/260821-named-resource-purpose.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"

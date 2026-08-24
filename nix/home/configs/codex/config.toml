@@ -5,11 +5,13 @@
 # them to config.local.toml, not here. Edit this file, then darwin-rebuild.
 
 service_tier = "fast"
-model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
 model_verbosity = "low"
 plan_mode_reasoning_effort = "xhigh"
 approval_policy = "on-request"
+bypass_hook_trust = true
+approvals_reviewer = "auto_review"
 sandbox_mode = "workspace-write"
 web_search = "live"
 file_opener = "vscode"
@@ -82,3 +84,6 @@ enabled = true
 
 [mcp_servers.atlassian]
 url = "https://mcp.atlassian.com/v1/mcp/authv2"
+
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"

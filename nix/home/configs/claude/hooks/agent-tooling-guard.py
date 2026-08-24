@@ -16,8 +16,13 @@ reflex path is a decision rather than a habit. Every later call of that family
 in the same session falls through untouched: a 20-step browser or device task
 must not cost 20 prompts, so the reminder fires once and gets out of the way.
 
-The two families are tracked separately, so a browser prompt never swallows the
-device one.
+A third family covers the CLIs themselves: the first `agent-browser` or
+`agent-device` command of a session that drives UI is denied once, with the
+`ui-automation` skill inlined, so the model re-plans the whole scenario as ONE
+batch call before it starts firing single steps. Reading commands (`help`,
+`skills`, `devices`, ...) and an already-batched call pass through.
+
+The three families are tracked separately, so one prompt never swallows another.
 
 Only the LEADING Bash token is checked, after any `NAME=val` env assignments, so
 `echo adb`, `grep simctl log.txt`, or a path containing "adb" is left alone.
@@ -32,6 +37,17 @@ import sys
 
 CHROME_TOOL_PREFIX = "mcp__claude-in-chrome__"
 STATE_DIR = os.path.expanduser("~/.claude-personal/state/agent-tooling-guard")
+SKILL_PATH = os.environ.get(
+    "AGENT_TOOLING_GUARD_SKILL",
+    os.path.expanduser("~/.agents/skills/ui-automation/SKILL.md"),
+)
+
+SCENARIO_BINS = ("agent-browser", "agent-device")
+# Subcommands that read rather than drive: no scenario to batch.
+SCENARIO_EXEMPT = {
+    "help", "--help", "-h", "skills", "version", "--version", "-v",
+    "devices", "sessions", "doctor", "batch", "replay", "test",
+}
 
 # Leading Bash token -> the agent-device command family that replaces it.
 DEVICE_BINS = {
@@ -113,6 +129,30 @@ def reflex_binary(cmd):
     return None
 
 
+def scenario_binary(cmd):
+    """Name of the UI-driving agent-* CLI this command runs, or None."""
+    toks = leading_tokens(cmd)
+    if not toks:
+        return None
+    head = os.path.basename(toks[0])
+    if head not in SCENARIO_BINS:
+        return None
+    # A read, a help lookup, or an already-batched call needs no nudge.
+    for tok in toks[1:]:
+        if tok.startswith("--session") or tok in ("--json", "-j"):
+            continue
+        return None if tok in SCENARIO_EXEMPT else head
+    return None
+
+
+def read_skill(path):
+    try:
+        with open(path) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""  # not deployed yet (pre-rebuild): nothing to inject
+
+
 def decision(kind, reason):
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -161,7 +201,7 @@ def ask_once(state_dir, session_id, family, reason):
     return decision("ask", reason)
 
 
-def handle(data, state_dir=None):
+def handle(data, state_dir=None, skill_path=None):
     """Process one PreToolUse event; returns the payload to emit, or None."""
     tool = data.get("tool_name", "")
     sdir = state_dir or STATE_DIR
@@ -177,6 +217,21 @@ def handle(data, state_dir=None):
     binary = reflex_binary(cmd)
     if binary:
         return ask_once(sdir, session, "device", device_reason(binary, cmd))
+
+    binary = scenario_binary(cmd)
+    if binary and not already_asked(sdir, session, "scenario"):
+        skill = read_skill(skill_path or SKILL_PATH)
+        if not skill:
+            return None
+        mark_asked(sdir, session, "scenario")
+        return decision("deny", (
+            "[agent-tooling-guard] ui-automation skill injected -- this "
+            f"session's first UI-driving `{binary}` command. A single step per "
+            "Bash call puts a model turn between every interaction, so any "
+            "timing-bound UX (a toast, an animation, a debounce) is already "
+            "gone by the next call. Plan the whole scenario and send it as ONE "
+            "batch, per the skill below, then run that batch; it will pass.\n\n"
+            + skill))
     return None
 
 
@@ -242,6 +297,38 @@ def selftest():
         assert bash("adb devices", session="s3") is None
         assert bash("git status") is None
         assert handle({"tool_name": "Read", "tool_input": {}}, state_dir=td) is None
+
+    assert scenario_binary("agent-browser click @e7") == "agent-browser"
+    assert scenario_binary("agent-device press 'id=\"ok\"'") == "agent-device"
+    assert scenario_binary("agent-browser --session s open /") == "agent-browser"
+    assert scenario_binary("agent-device help commands") is None
+    assert scenario_binary("agent-browser skills get core --full") is None
+    assert scenario_binary("agent-device batch --steps '[]'") is None
+    assert scenario_binary("agent-device") is None
+    assert scenario_binary("git status") is None
+
+    with tempfile.TemporaryDirectory() as td:
+        skill = os.path.join(td, "SKILL.md")
+        with open(skill, "w") as fh:
+            fh.write("# UI automation\nbatch the scenario\n")
+
+        def ui(cmd, session="s1"):
+            return handle({"tool_name": "Bash", "session_id": session,
+                           "tool_input": {"command": cmd}},
+                          state_dir=td, skill_path=skill)
+
+        first = ui("agent-browser click @e7")
+        assert first["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "batch the scenario" in \
+            first["hookSpecificOutput"]["permissionDecisionReason"]
+        # The re-run, and every later call this session, passes.
+        assert ui("agent-browser click @e7") is None
+        assert ui("agent-device press ok") is None
+        assert ui("agent-browser click @e7", session="s4") is not None
+        # An undeployed skill file blocks nothing.
+        assert handle({"tool_name": "Bash", "session_id": "s5",
+                       "tool_input": {"command": "agent-browser click @e7"}},
+                      state_dir=td, skill_path=os.path.join(td, "gone.md")) is None
 
     print("agent-tooling-guard selftest ok")
 

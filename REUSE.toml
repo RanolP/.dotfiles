@@ -92,6 +92,7 @@ path = [
     "nix/home/configs/.agents/skills/subagent-orchestration/SKILL.md",
     "nix/home/configs/claude/hooks/prompt-authoring-guard.py",
     "nix/home/configs/.agents/skills/prompt-authoring/SKILL.md",
+    "nix/home/configs/.agents/skills/ui-automation/SKILL.md",
     "nix/home/configs/.agents/skills/claude-hook-management/SKILL.md",
     "nix/home/configs/.agents/skills/memory-review/SKILL.md",
     "nix/home/configs/.agents/skills/memory-internalize/SKILL.md",

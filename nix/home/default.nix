@@ -127,6 +127,7 @@ let
     memory-internalize = localSkill "memory-internalize";
     subagent-orchestration = localSkill "subagent-orchestration";
     prompt-authoring = localSkill "prompt-authoring";
+    ui-automation = localSkill "ui-automation";
     apology = localSkill "apology";
     # Same skill under the name the user actually types. Slash-command
     # resolution uses the linked directory name, so the alias is a second link

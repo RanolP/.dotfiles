@@ -283,11 +283,6 @@ in
         source = ./configs/claude/hooks/ask-mode-guard.py;
         executable = true;
       };
-      # Run the ADHD-rule draft scan as a machine check, once per turn.
-      ".claude/hooks/draft-scan-guard.py" = {
-        source = ./configs/claude/hooks/draft-scan-guard.py;
-        executable = true;
-      };
       # Restate the output-shape check next to generation, where it applies.
       ".claude/hooks/output-shape-reminder.py" = {
         source = ./configs/claude/hooks/output-shape-reminder.py;

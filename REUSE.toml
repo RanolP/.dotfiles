@@ -85,7 +85,6 @@ path = [
     "nix/home/configs/claude/hooks/pr-body-guard.py",
     "nix/home/configs/claude/hooks/plan-mode-guard.py",
     "nix/home/configs/claude/hooks/output-shape-reminder.py",
-    "nix/home/configs/claude/hooks/draft-scan-guard.py",
     "nix/home/configs/claude/hooks/mcp-auth-log.py",
     "nix/home/configs/claude/hooks/fable-rules.py",
     "nix/home/configs/claude/hooks/orchestration-guard.py",

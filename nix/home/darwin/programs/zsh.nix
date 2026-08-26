@@ -39,6 +39,11 @@
       export PATH="/Users/ranolp/.local/bin:/Users/ranolp/.local/share/mise/shims:$PATH"
       export ANDROID_HOME="$HOME/Library/Android/sdk"
       export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+      # BrowserStack credentials for `agent-device connect browserstack`. They
+      # stay in an unmanaged file because anything set from local.nix lands in
+      # /nix/store, which is world-readable. A guarded source of two exports
+      # forks nothing, so non-interactive shell init stays cheap.
+      [[ -r "$HOME/.config/agent-device/browserstack.env" ]] && source "$HOME/.config/agent-device/browserstack.env"
       # Claude Code shells (CLAUDECODE=1) keep zero history: no HISTFILE and
       # zero sizes means no history-file open/lock can ever stall a tool call,
       # regardless of what setopts the shell snapshot replays.

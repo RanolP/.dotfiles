@@ -242,6 +242,21 @@ bad = [r for r in refspecs if not dest(r).startswith("claude/")]
 if bad:
     decide("deny", "Only claude/* branches may be pushed. Offending refspec(s): " + ", ".join(bad))
 
+# `claude/local-dev` clears the claude/* test but must never be published. It is
+# the local checkpoint stack -- a stash replacement that holds a stack instead of
+# a pile -- and it is rewritten freely precisely because nothing downstream reads
+# it. One push would make that rewriting a history rewrite, so the name is denied
+# here even though the prefix rule above admits it.
+LOCAL_ONLY = "claude/local-dev"
+local_only = [
+    r for r in refspecs
+    if dest(r) == LOCAL_ONLY or dest(r).startswith(LOCAL_ONLY + "/")
+]
+if local_only:
+    decide("deny", "claude/local-dev is the local checkpoint stack and stays on this "
+                   "machine. Publish a rebuilt stack on a claude/<topic> branch instead. "
+                   "Offending refspec(s): " + ", ".join(local_only))
+
 
 SHA_IN_TEXT = re.compile(r"\b[0-9a-f]{7,40}\b")
 

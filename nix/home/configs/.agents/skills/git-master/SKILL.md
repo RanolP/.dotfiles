@@ -5,7 +5,7 @@ description: Disciplined git workflow — inspect before acting, Conventional-Co
 
 # Git master
 
-Apply these whenever you touch git. Project CLAUDE.md always wins where it differs (this repo: commits go to `main`; pushes only to `claude/*`). A `git-push-guard` hook independently blocks non-`claude/*` pushes and compound pushes — these rules teach the workflow that satisfies it, they don't replace it.
+Apply these whenever you touch git. The nearest `.nanno-workers.json` at or above the working directory decides the workflow: `"git_push_guard_bypass": true` means this checkout may push its own default branch, so commits go straight there. In every other case work lands on `claude/local-dev` and gets republished as a rebuilt stack. Project CLAUDE.md always wins where it differs (this repo: commits go to `main`; pushes only to `claude/*`). A `git-push-guard` hook independently blocks non-`claude/*` pushes and compound pushes — these rules teach the workflow that satisfies it, they don't replace it.
 
 ## Inspect before acting
 
@@ -66,6 +66,28 @@ Every push starts with `git fetch --prune`. Ahead/behind and `[gone]` markers ar
 
 Push only to `claude/*` branches (`git push -u origin claude/<topic>`), unless project CLAUDE.md says otherwise (this repo: dotfiles commits land on `main`, push is the user's call). Never bare `git push` / `git push origin` — the target must be explicit.
 
+## Publishing a `claude/local-dev` stack
+
+`claude/local-dev` holds checkpoint commits in the order the work happened. A reviewer needs the opposite: one concern per commit, in the order that explains the change. So publishing rebuilds the stack instead of moving it.
+
+`git rebase -i` and `git add -p` are the human tools for this, and neither runs here -- the Bash tool refuses interactive flags. Rebuild by writing the intermediate states yourself:
+
+```sh
+git fetch --prune
+git switch -c claude/<topic> origin/main   # fresh base, never local main
+# then, for each concern in reviewer order:
+#   edit the files to that concern's intended state
+#   git add <explicit paths>
+#   git commit
+git diff --exit-code claude/local-dev      # final tree matches, byte for byte
+git rebase --exec '<lint and typecheck>' origin/main   # every commit green on its own
+```
+
+- Split below the hunk. When one line carries two concerns, write that line's intermediate form in the first commit and its final form in the second.
+- The `git diff --exit-code` check is the whole-branch case. Publishing a subset instead? Diff against the tree that subset was meant to reach.
+- `--exec` checks out each commit in turn, so a commit that passes only once a later commit lands fails here. That is what the check is for.
+- Take the lint and typecheck commands from the repo -- `package.json` scripts, the `Makefile`, or the CI workflow.
+
 ## Destructive-op guardrails — fail closed: confirm + back up first
 
 Default to the non-destructive option. For each below, confirm with the user and create a backup (branch/stash/tag) before running:
@@ -76,7 +98,7 @@ Default to the non-destructive option. For each below, confirm with the user and
 - **Amend / rebase of *pushed* commits**: prefer `git revert` over amend, and `git merge` over rebasing a shared branch. Rewriting published history breaks everyone downstream.
 - **Branch delete**: prefer `git branch -d` (refuses if unmerged) over `git branch -D` (force).
 
-Never use `--no-verify` or otherwise skip hooks by default. Never use interactive flags (`-i` — unsupported here). Never commit unless asked. Never modify `git config`.
+Never use `--no-verify` or otherwise skip hooks by default. Never use interactive flags (`-i` — unsupported here). Commit onto a shared branch only when asked; checkpoint commits onto `claude/local-dev` need no ask. Never modify `git config`.
 
 ---
 

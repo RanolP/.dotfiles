@@ -8,7 +8,7 @@ A discipline for hard bugs. Skip a phase only with explicit justification.
 ## Phase 1: Build a feedback loop
 This is the skill -- a fast, deterministic, agent-runnable pass/fail signal for the bug. Everything else just consumes it. Spend disproportionate effort here; be aggressive, refuse to give up.
 
-Construct one, in roughly this order:
+Construct one, in roughly this order. Whichever you pick, it lives in a FILE you re-run, never a command you retype -- see the `record-replay` skill:
 1. Failing test at whatever seam reaches the bug (unit/integration/e2e)
 2. curl/HTTP script against a running dev server
 3. CLI invocation on a fixture, diffing stdout vs known-good snapshot

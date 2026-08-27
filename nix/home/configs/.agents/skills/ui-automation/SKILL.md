@@ -83,7 +83,7 @@ A batch reaches exactly as far as the scenario you can decide without looking. T
 
 Two or three batches for a long journey is the shape to aim for. A stable, known path needs no split at all: `agent-device` refs stay valid until the app state changes, and a known label or id survives a mutation, so a scenario written against ids and labels batches end to end.
 
-For a journey you will run again, publish it instead of rebuilding the batch: arm `agent-device open <app> --relaunch --save-script=<name>.ad`, walk the journey, verify the destination with a selector wait, then `agent-device session save-script` and `agent-device replay <name>.ad` afterwards. Keep a browser scenario in a JSON file and pipe it into `agent-browser batch`.
+A batch is for the journey you are walking now. For one you will run again, record it to a file and replay that file -- the `record-replay` skill carries the arm-and-publish shape, the secret-safe `--record-as` fill, the `agent-browser` JSON scenario, and the divergence-resume loop.
 
 ## Ordering facts
 

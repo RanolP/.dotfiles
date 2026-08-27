@@ -187,6 +187,12 @@ in
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;
       };
+      # A flake reads the git tree, so a new file that was never staged is
+      # invisible to the rebuild. Stage the untracked ones before it runs.
+      ".claude/hooks/flake-stage-guard.py" = {
+        source = ./configs/claude/hooks/flake-stage-guard.py;
+        executable = true;
+      };
       # Deny --no-verify and force-push. Separate from git-push-guard because
       # that hook's .nanno-workers.json bypass must not reach these two.
       ".claude/hooks/git-integrity-guard.py" = {

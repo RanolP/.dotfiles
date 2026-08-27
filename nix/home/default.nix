@@ -359,9 +359,16 @@ in
   # owns any runtime drift (e.g. model) in between rebuilds.
   home.activation.claudeSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     out="$HOME/.claude/settings.json"
+    priv="$HOME/.claude-personal/settings.private.json"
     run mkdir -p "$HOME/.claude"
     run rm -f "$out"
     run install -m 0644 ${./configs/claude/settings.json} "$out"
+    # This repo is public, so employer-internal names (plugin ids, marketplace
+    # ids) stay out of it and live in the private overlay instead. Recursive
+    # merge, overlay wins, so it adds keys without restating the repo's.
+    if [ -f "$priv" ]; then
+      run sh -c '${pkgs.jq}/bin/jq -s ".[0] * .[1]" "$0" "$1" > "$0.merged" && mv "$0.merged" "$0"' "$out" "$priv"
+    fi
   '';
 
   # Register herdr-browser (fetched above) with herdr. `plugin link` is the only

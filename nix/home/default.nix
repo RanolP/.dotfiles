@@ -216,8 +216,8 @@ in
       };
       # The Fable-only rules load at SessionStart when the model is Fable, so a
       # non-Fable session does not carry them in CLAUDE.md.
-      ".claude/hooks/fable-rules.py" = {
-        source = ./configs/claude/hooks/fable-rules.py;
+      ".claude/hooks/architect-rules.py" = {
+        source = ./configs/claude/hooks/architect-rules.py;
         executable = true;
       };
       # Unlock GPG before a signed commit so pinentry can't hijack the TTY.

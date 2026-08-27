@@ -48,6 +48,7 @@
   "env": {
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-fable-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-5",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_CODE_ENABLE_TODO_TOOLS": "1",
     "GIT_PAGER": "cat",
@@ -220,7 +221,7 @@
           },
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/fable-rules.py"
+            "command": "python3 ~/.claude/hooks/architect-rules.py"
           }
         ]
       }

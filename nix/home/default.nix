@@ -313,6 +313,17 @@ in
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;
       };
+      # The three-day transcript audit behind file-edit-guard.py counted 414
+      # throwaway python3 file edits at a 2.45s median against 88 Edit calls at
+      # a 0.11s median. Where the work genuinely has to stay in the shell, this
+      # gives it an edit primitive with the safety properties of the Edit tool
+      # -- exactly one match or a loud refusal, an atomic write, and a diff of
+      # what changed -- computed locally, with no model call, no network, and
+      # no file contents leaving the machine.
+      ".local/bin/fast-apply" = {
+        source = ./configs/bin/fast-apply;
+        executable = true;
+      };
       ".claude/agents".source = claudeAgents;
       # Pins the herdr-browser store path as a GC root: the plugin registry
       # holds a bare path in herdr's own mutable state, which nix can't see.

@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+"""Deterministic local file-edit primitive for the shell route.
+
+Why this exists
+---------------
+Claude Code's `auto` permission mode injects a directive telling the model to do
+file work through `Bash` -- sed, heredocs, short throwaway scripts -- rather than
+through the dedicated `Edit`/`Write` tools. Measured over three days of
+transcripts: 414 file edits written as throwaway `python3` scripts at a 2.45s
+median (31.7 minutes of wall clock in total), against 88 `Edit` tool calls at a
+0.11s median. That is a 22x gap per call, and the shell route pays a second time
+in correctness -- quote and heredoc escaping bugs, and the silent wrong-line
+rewrites `sed` produces where `Edit` would have failed loudly.
+
+`fast-apply` borrows the core idea behind the LLM "fast apply" products (the
+agent emits a minimal, lazy edit; a separate cheap layer merges it into the
+file) but implements that merge layer **deterministically and locally**: no model
+call, no network, no API key, and no file contents leaving the machine. It gives
+the shell route an edit primitive with `Edit`'s safety properties -- exactly-one
+match or a loud refusal, an atomic write, and a diff of what actually changed.
+
+Modes
+-----
+1. Exact replace -- `fast-apply FILE --old OLD --new NEW`
+   Replaces exactly one occurrence. Zero or more than one is a refusal with the
+   file untouched; `--all` opts into every occurrence and reports the count.
+   Either `--old` or `--new` (not both) may be `-` to read that value from stdin.
+
+2. Lazy block merge -- `fast-apply FILE --lazy`, snippet on stdin
+   The snippet is split on marker lines (`...` or `... existing code ...`, with
+   an optional comment prefix and closer). Every block between markers must be
+   found in FILE by exact match, in order and non-overlapping; a block that
+   matches zero times, more than once, or out of order is a refusal naming the
+   1-indexed block and quoting its first line.
+
+   A marker stands for the file's own text at that position and is reproduced
+   verbatim: a leading marker keeps everything before the first block, a trailing
+   marker keeps everything after the last block, and an interior marker keeps the
+   region between the two blocks it separates. Content therefore changes exactly
+   where the snippet declines to guard a region -- omitting the leading marker
+   drops the file's head before the first block, omitting the trailing marker
+   drops its tail. A snippet with no marker at all replaces the whole file, the
+   same as `Write`.
+
+   Preserving what a marker names is the deliberate choice: a marker literally
+   reads "existing code", so treating it as a deletion would reintroduce exactly
+   the silent destructive rewrite this tool exists to prevent. New content that
+   is not already in the file belongs in `--old`/`--new`, which refuses loudly
+   when its anchor is not unique.
+
+Shared behavior: atomic write (temp file in the same directory, then
+`os.replace`), preserved trailing-newline state and line endings (LF vs CRLF), a
+2-line-context unified diff on stdout, the refusal reason on stderr, `--dry-run`
+to see the diff without writing.
+
+Exit codes: 0 success, 1 no match / ambiguous match / out of order, 2 usage or
+I/O error.
+
+Self-check: `python3 fast-apply --selftest`.
+"""
+import difflib
+import os
+import stat
+import sys
+import tempfile
+
+EXIT_OK = 0
+EXIT_NO_MATCH = 1
+EXIT_USAGE = 2
+
+MARKER_BODIES = frozenset({"...", "... existing code ..."})
+# Longest-first, so "<!--" is not read as "-" noise and "/*" beats a bare "*".
+COMMENT_PREFIXES = ("<!--", "/*", "//", "--", "#", "*")
+COMMENT_SUFFIXES = ("-->", "*/")
+
+
+class Refusal(Exception):
+    """A precise reason the edit was not applied. The file stays untouched."""
+
+    def __init__(self, message, code=EXIT_NO_MATCH):
+        super().__init__(message)
+        self.code = code
+
+
+# --------------------------------------------------------------------------- #
+# File I/O: line endings and trailing newline survive the round trip.
+# --------------------------------------------------------------------------- #
+
+def load(path):
+    """Return (text with LF endings, file used CRLF, file ended with a newline)."""
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise Refusal("%s: cannot read -- %s" % (path, exc), EXIT_USAGE)
+    except UnicodeDecodeError as exc:
+        raise Refusal("%s: not UTF-8 text -- %s" % (path, exc), EXIT_USAGE)
+    crlf = "\r\n" in raw
+    return raw.replace("\r\n", "\n"), crlf, raw.endswith(("\n", "\r"))
+
+
+def store(path, text, crlf, trailing_newline, was_empty):
+    """Write text atomically, restoring the file's own newline conventions."""
+    if not was_empty:
+        if trailing_newline and text and not text.endswith("\n"):
+            text += "\n"
+        elif not trailing_newline and text.endswith("\n"):
+            text = text[:-1]
+    payload = text.replace("\n", "\r\n") if crlf else text
+
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".fast-apply-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
+            fh.write(payload)
+        try:
+            os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def diff_text(path, old, new):
+    return "".join(difflib.unified_diff(
+        old.splitlines(True), new.splitlines(True),
+        fromfile=path, tofile=path, n=2))
+
+
+# --------------------------------------------------------------------------- #
+# Mode 1: exact replace
+# --------------------------------------------------------------------------- #
+
+def exact_replace(content, path, old, new, replace_all):
+    if not old:
+        raise Refusal("--old is empty; nothing to match.", EXIT_USAGE)
+    count = content.count(old)
+    if count == 0:
+        raise Refusal(
+            "%s: --old matched 0 times. Nothing written. First line looked for: %s"
+            % (path, quote_first_line(old)))
+    if count > 1 and not replace_all:
+        raise Refusal(
+            "%s: --old matched %d times and must match exactly 1. Nothing written. "
+            "Extend --old with surrounding lines to make it unique, or pass --all "
+            "to replace every occurrence. First line looked for: %s"
+            % (path, count, quote_first_line(old)))
+    if replace_all:
+        return content.replace(old, new), count
+    return content.replace(old, new, 1), 1
+
+
+# --------------------------------------------------------------------------- #
+# Mode 2: lazy block merge
+# --------------------------------------------------------------------------- #
+
+def is_marker(line):
+    body = line.strip()
+    for prefix in COMMENT_PREFIXES:
+        if body.startswith(prefix):
+            body = body[len(prefix):].strip()
+            break
+    for suffix in COMMENT_SUFFIXES:
+        if body.endswith(suffix):
+            body = body[:-len(suffix)].strip()
+            break
+    return body in MARKER_BODIES
+
+
+def parse_snippet(snippet):
+    """Split a snippet into an alternating ('marker',) / ('block', text) sequence.
+
+    Blank lines hugging a marker are formatting around the elision rather than
+    file content, so they are trimmed off each block. Runs of markers collapse
+    into one, because two markers in a row name the same region twice.
+    """
+    items = []
+    run = []
+
+    def flush_block():
+        while run and not run[0].strip():
+            run.pop(0)
+        while run and not run[-1].strip():
+            run.pop()
+        if run:
+            items.append(("block", "".join(run)))
+        run.clear()
+
+    for line in snippet.splitlines(True):
+        if is_marker(line):
+            flush_block()
+            if not items or items[-1][0] != "marker":
+                items.append(("marker",))
+        else:
+            run.append(line)
+    flush_block()
+    return items
+
+
+def quote_first_line(text):
+    first = text.split("\n", 1)[0].rstrip("\r")
+    if len(first) > 120:
+        first = first[:117] + "..."
+    return repr(first)
+
+
+def anchor_blocks(content, items):
+    """Locate every block in order. Returns spans parallel to the block items."""
+    spans = []
+    cursor = 0
+    number = 0
+    for kind, *payload in items:
+        if kind != "block":
+            continue
+        number += 1
+        block = payload[0]
+        occurrences = content.count(block, cursor)
+        if occurrences == 0:
+            if block in content:
+                raise Refusal(
+                    "%s: block %d matches only earlier in the file, so the blocks "
+                    "are out of order. Nothing written. Its first line: %s"
+                    % (PATH_FOR_ERRORS[0], number, quote_first_line(block)))
+            raise Refusal(
+                "%s: block %d matched 0 times. Nothing written. Its first line: %s"
+                % (PATH_FOR_ERRORS[0], number, quote_first_line(block)))
+        if occurrences > 1:
+            raise Refusal(
+                "%s: block %d matched %d times and must match exactly 1. Nothing "
+                "written. Add surrounding lines to make it unique. Its first "
+                "line: %s"
+                % (PATH_FOR_ERRORS[0], number, occurrences, quote_first_line(block)))
+        start = content.index(block, cursor)
+        spans.append((start, start + len(block)))
+        cursor = start + len(block)
+    return spans
+
+
+# `anchor_blocks` reports the path in every message; threading it through as an
+# argument buys nothing over one module-level slot the CLI sets once per run.
+PATH_FOR_ERRORS = [""]
+
+
+def lazy_merge(content, path, snippet):
+    PATH_FOR_ERRORS[0] = path
+    items = parse_snippet(snippet)
+    if not items:
+        raise Refusal("%s: the snippet is empty. Nothing written." % path, EXIT_USAGE)
+    if all(kind == "marker" for kind, *_ in items):
+        raise Refusal(
+            "%s: the snippet is markers only, so there is nothing to anchor to. "
+            "Nothing written." % path, EXIT_USAGE)
+    if not any(kind == "marker" for kind, *_ in items):
+        return snippet, 0
+
+    spans = anchor_blocks(content, items)
+    block_positions = [i for i, item in enumerate(items) if item[0] == "block"]
+
+    out = []
+    used = 0
+    for index, item in enumerate(items):
+        if item[0] == "block":
+            out.append(content[spans[used][0]:spans[used][1]])
+            used += 1
+            continue
+        before = [b for b in block_positions if b < index]
+        after = [b for b in block_positions if b > index]
+        start = spans[block_positions.index(before[-1])][1] if before else 0
+        end = spans[block_positions.index(after[0])][0] if after else len(content)
+        out.append(content[start:end])
+    return "".join(out), len(spans)
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+
+USAGE = """usage: fast-apply FILE --old OLD --new NEW [--all] [--dry-run]
+       fast-apply FILE --lazy [--dry-run]        (snippet on stdin)
+       fast-apply --selftest
+
+  --old/--new  exact text to replace and its replacement; either one (never
+               both) may be '-' to read that value from stdin
+  --all        replace every occurrence instead of requiring exactly one
+  --lazy       merge a marker-separated snippet read from stdin
+  --dry-run    print the diff and write nothing
+"""
+
+VALUE_FLAGS = ("--old", "--new")
+BOOL_FLAGS = {"--all": "all", "--lazy": "lazy", "--dry-run": "dry_run"}
+
+
+class Args:
+    __slots__ = ("file", "old", "new", "all", "lazy", "dry_run")
+
+    def __init__(self):
+        self.file = None
+        self.old = None
+        self.new = None
+        self.all = False
+        self.lazy = False
+        self.dry_run = False
+
+
+def parse_args(argv):
+    """Hand-rolled on purpose: on Python 3.14 `import argparse` drags in
+    `_colorize`, which measured ~150ms of interpreter startup -- five times the
+    cost of the edit itself, on a tool whose whole reason to exist is latency.
+    """
+    args = Args()
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token in ("-h", "--help"):
+            sys.stdout.write(USAGE)
+            raise SystemExit(EXIT_OK)
+        if token in BOOL_FLAGS:
+            setattr(args, BOOL_FLAGS[token], True)
+        elif token in VALUE_FLAGS:
+            if i + 1 >= len(argv):
+                raise Refusal("%s needs a value.\n\n%s" % (token, USAGE), EXIT_USAGE)
+            setattr(args, token[2:], argv[i + 1])
+            i += 1
+        elif token.startswith("--") and "=" in token:
+            key, _, value = token.partition("=")
+            if key not in VALUE_FLAGS:
+                raise Refusal("unknown option %s.\n\n%s" % (key, USAGE), EXIT_USAGE)
+            setattr(args, key[2:], value)
+        elif token.startswith("-") and token != "-":
+            raise Refusal("unknown option %s.\n\n%s" % (token, USAGE), EXIT_USAGE)
+        elif args.file is None:
+            args.file = token
+        else:
+            raise Refusal(
+                "unexpected extra argument %r.\n\n%s" % (token, USAGE), EXIT_USAGE)
+        i += 1
+    return args
+
+
+def resolve_stdin_pair(old, new):
+    if old == "-" and new == "-":
+        raise Refusal("only one of --old/--new may be '-'.", EXIT_USAGE)
+    if old == "-":
+        return sys.stdin.read(), new
+    if new == "-":
+        return old, sys.stdin.read()
+    return old, new
+
+
+def run(argv):
+    args = parse_args(argv)
+
+    if not args.file:
+        raise Refusal("a FILE argument is required.", EXIT_USAGE)
+    if args.lazy and (args.old is not None or args.new is not None):
+        raise Refusal("--lazy takes its snippet on stdin; drop --old/--new.",
+                      EXIT_USAGE)
+    if not args.lazy and (args.old is None or args.new is None):
+        raise Refusal("pass --old and --new together, or use --lazy.", EXIT_USAGE)
+
+    path = args.file
+    content, crlf, trailing = load(path)
+    was_empty = content == ""
+
+    if args.lazy:
+        snippet = sys.stdin.read().replace("\r\n", "\n")
+        updated, hits = lazy_merge(content, path, snippet)
+        summary = ("replaced the whole file" if hits == 0
+                   else "merged around %d anchored block(s)" % hits)
+    else:
+        old, new = resolve_stdin_pair(args.old, args.new)
+        old = old.replace("\r\n", "\n")
+        new = new.replace("\r\n", "\n")
+        updated, hits = exact_replace(content, path, old, new, args.all)
+        summary = "replaced %d occurrence(s)" % hits
+
+    diff = diff_text(path, content, updated)
+    if not diff:
+        print("fast-apply: %s already matches the requested state; nothing written."
+              % path)
+        return EXIT_OK
+
+    sys.stdout.write(diff)
+    if args.dry_run:
+        print("fast-apply: --dry-run, nothing written (%s)." % summary)
+        return EXIT_OK
+
+    try:
+        store(path, updated, crlf, trailing, was_empty)
+    except OSError as exc:
+        raise Refusal("%s: cannot write -- %s" % (path, exc), EXIT_USAGE)
+    print("fast-apply: %s -- %s." % (path, summary))
+    return EXIT_OK
+
+
+def main(argv):
+    if "--selftest" in argv:
+        selftest()
+        return EXIT_OK
+    try:
+        return run(argv)
+    except Refusal as exc:
+        sys.stderr.write("fast-apply: %s\n" % exc)
+        return exc.code
+
+
+# --------------------------------------------------------------------------- #
+
+def selftest():
+    import subprocess
+    import time
+
+    script = os.path.abspath(__file__)
+    tmpdir = tempfile.mkdtemp(prefix="fast-apply-selftest-")
+
+    def write(name, text, newline="\n"):
+        p = os.path.join(tmpdir, name)
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(text.replace("\n", newline) if newline != "\n" else text)
+        return p
+
+    def read(path):
+        with open(path, "r", encoding="utf-8", newline="") as fh:
+            return fh.read()
+
+    def cli(args, stdin=""):
+        proc = subprocess.run(
+            [sys.executable, script] + args, input=stdin,
+            capture_output=True, text=True)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    # --- marker recognition ---------------------------------------------------
+    assert is_marker("...")
+    assert is_marker("   ... existing code ...  ")
+    assert is_marker("// ... existing code ...")
+    assert is_marker("# ...")
+    assert is_marker("-- ... existing code ...")
+    assert is_marker("<!-- ... existing code ... -->")
+    assert is_marker("/* ... */")
+    assert is_marker(" * ... existing code ...")
+    assert not is_marker("x = ...  # not a marker")
+    assert not is_marker("...existing code...")
+    assert not is_marker("")
+
+    # --- exact replace: the happy path ---------------------------------------
+    p = write("a.txt", "alpha\nbeta\ngamma\n")
+    code, out, err = cli([p, "--old", "beta", "--new", "BETA"])
+    assert code == EXIT_OK, (code, err)
+    assert read(p) == "alpha\nBETA\ngamma\n", read(p)
+    assert "-beta" in out and "+BETA" in out, out
+
+    # --- exact replace: zero matches leaves the file alone --------------------
+    before = read(p)
+    code, out, err = cli([p, "--old", "nope", "--new", "x"])
+    assert code == EXIT_NO_MATCH, (code, out)
+    assert "matched 0 times" in err, err
+    assert read(p) == before
+
+    # --- exact replace: ambiguity refuses, --all opts in ----------------------
+    p2 = write("b.txt", "x\nx\nx\n")
+    code, out, err = cli([p2, "--old", "x", "--new", "y"])
+    assert code == EXIT_NO_MATCH, code
+    assert "matched 3 times" in err, err
+    assert read(p2) == "x\nx\nx\n"
+    code, out, err = cli([p2, "--old", "x", "--new", "y", "--all"])
+    assert code == EXIT_OK, err
+    assert read(p2) == "y\ny\ny\n"
+    assert "replaced 3 occurrence(s)" in out, out
+
+    # --- stdin plumbing: one side may be '-', never both ----------------------
+    p3 = write("c.txt", "keep\nreplace me\nkeep\n")
+    code, out, err = cli([p3, "--old", "-", "--new", "done"], stdin="replace me")
+    assert code == EXIT_OK, err
+    assert read(p3) == "keep\ndone\nkeep\n"
+    code, out, err = cli([p3, "--old", "-", "--new", "-"], stdin="x")
+    assert code == EXIT_USAGE, code
+    assert "only one of" in err, err
+
+    # --- --dry-run writes nothing --------------------------------------------
+    p4 = write("d.txt", "one\ntwo\n")
+    code, out, err = cli([p4, "--old", "two", "--new", "TWO", "--dry-run"])
+    assert code == EXIT_OK, err
+    assert read(p4) == "one\ntwo\n"
+    assert "+TWO" in out and "nothing written" in out, out
+
+    # --- trailing-newline state survives --------------------------------------
+    p5 = write("e.txt", "no newline at end")
+    code, out, err = cli([p5, "--old", "no", "--new", "NO"])
+    assert code == EXIT_OK, err
+    assert read(p5) == "NO newline at end", repr(read(p5))
+
+    # --- CRLF files stay CRLF -------------------------------------------------
+    p6 = write("f.txt", "one\ntwo\nthree\n", newline="\r\n")
+    code, out, err = cli([p6, "--old", "two", "--new", "TWO"])
+    assert code == EXIT_OK, err
+    assert read(p6) == "one\r\nTWO\r\nthree\r\n", repr(read(p6))
+
+    # --- lazy: a markerless snippet is a whole-file write ---------------------
+    p7 = write("g.txt", "old head\nold body\n")
+    code, out, err = cli([p7, "--lazy"], stdin="brand new\n")
+    assert code == EXIT_OK, err
+    assert read(p7) == "brand new\n", repr(read(p7))
+
+    # --- lazy: a marker reproduces the region it names ------------------------
+    original = "h1\nh2\nANCHOR_A\nmid1\nmid2\nANCHOR_B\nt1\nt2\n"
+    p8 = write("h.txt", original)
+    snippet = "... existing code ...\nANCHOR_A\n... existing code ...\nANCHOR_B\n... existing code ...\n"
+    code, out, err = cli([p8, "--lazy"], stdin=snippet)
+    assert code == EXIT_OK, err
+    assert read(p8) == original, repr(read(p8))
+
+    # --- lazy: omitting the leading marker drops the head ---------------------
+    p9 = write("i.txt", original)
+    snippet = "ANCHOR_A\n... existing code ...\nANCHOR_B\n... existing code ...\n"
+    code, out, err = cli([p9, "--lazy"], stdin=snippet)
+    assert code == EXIT_OK, err
+    assert read(p9) == "ANCHOR_A\nmid1\nmid2\nANCHOR_B\nt1\nt2\n", repr(read(p9))
+
+    # --- lazy: omitting the trailing marker drops the tail --------------------
+    p10 = write("j.txt", original)
+    snippet = "... existing code ...\nANCHOR_A\n... existing code ...\nANCHOR_B\n"
+    code, out, err = cli([p10, "--lazy"], stdin=snippet)
+    assert code == EXIT_OK, err
+    assert read(p10) == "h1\nh2\nANCHOR_A\nmid1\nmid2\nANCHOR_B\n", repr(read(p10))
+
+    # --- lazy: a block that is absent is a refusal, naming its number ---------
+    p11 = write("k.txt", original)
+    snippet = "... existing code ...\nANCHOR_A\n... existing code ...\nNOT_THERE\n"
+    code, out, err = cli([p11, "--lazy"], stdin=snippet)
+    assert code == EXIT_NO_MATCH, code
+    assert "block 2 matched 0 times" in err, err
+    assert "'NOT_THERE'" in err, err
+    assert read(p11) == original
+
+    # --- lazy: out-of-order blocks are named as such --------------------------
+    p12 = write("l.txt", original)
+    snippet = "... existing code ...\nANCHOR_B\n... existing code ...\nANCHOR_A\n... existing code ...\n"
+    code, out, err = cli([p12, "--lazy"], stdin=snippet)
+    assert code == EXIT_NO_MATCH, code
+    assert "out of order" in err, err
+    assert "block 2" in err, err
+    assert read(p12) == original
+
+    # --- lazy: an ambiguous block is a refusal --------------------------------
+    p13 = write("m.txt", "dup\nmid\ndup\n")
+    code, out, err = cli([p13, "--lazy"], stdin="... existing code ...\ndup\n")
+    assert code == EXIT_NO_MATCH, code
+    assert "matched 2 times" in err, err
+    assert read(p13) == "dup\nmid\ndup\n"
+
+    # --- lazy: comment-wrapped markers work the same --------------------------
+    p14 = write("n.txt", original)
+    snippet = "// ... existing code ...\nANCHOR_A\n/* ... */\nANCHOR_B\n<!-- ... -->\n"
+    code, out, err = cli([p14, "--lazy"], stdin=snippet)
+    assert code == EXIT_OK, err
+    assert read(p14) == original, repr(read(p14))
+
+    # --- argument parsing -----------------------------------------------------
+    a = parse_args(["f.txt", "--old", "--new", "--new", "x", "--all", "--dry-run"])
+    assert (a.file, a.old, a.new, a.all, a.dry_run) == ("f.txt", "--new", "x", True, True)
+    a = parse_args(["f.txt", "--old=A", "--new=B"])
+    assert (a.old, a.new) == ("A", "B")
+    code, out, err = cli(["--help"])
+    assert code == EXIT_OK and "usage: fast-apply" in out, (code, out)
+    code, out, err = cli(["f.txt", "--bogus"])
+    assert code == EXIT_USAGE and "unknown option --bogus" in err, err
+    code, out, err = cli(["f.txt", "--old", "a"])
+    assert code == EXIT_USAGE and "--old and --new together" in err, err
+    code, out, err = cli(["f.txt", "--lazy", "--old", "a"])
+    assert code == EXIT_USAGE and "snippet on stdin" in err, err
+
+    # --- a missing file is a usage error, not a crash -------------------------
+    code, out, err = cli([os.path.join(tmpdir, "absent.txt"), "--old", "a", "--new", "b"])
+    assert code == EXIT_USAGE, (code, err)
+    assert "cannot read" in err, err
+
+    # --- no temp files are left behind ----------------------------------------
+    assert not [f for f in os.listdir(tmpdir) if f.startswith(".fast-apply-")]
+
+    # --- performance: a 200KB file merges well under 30ms ---------------------
+    big_path = os.path.join(tmpdir, "big.txt")
+    body = "".join("line %06d filler filler filler filler\n" % i for i in range(5500))
+    with open(big_path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(body)
+    size = os.path.getsize(big_path)
+    assert size > 200_000, size
+    t0 = time.perf_counter()
+    content, crlf_flag, trailing_flag = load(big_path)
+    updated, _hits = exact_replace(content, big_path, "line 002750", "LINE 002750", False)
+    diff_text(big_path, content, updated)
+    store(big_path, updated, crlf_flag, trailing_flag, False)
+    elapsed = (time.perf_counter() - t0) * 1000
+    assert "LINE 002750" in read(big_path)
+    assert elapsed < 30, "200KB edit took %.1fms" % elapsed
+
+    for name in os.listdir(tmpdir):
+        os.remove(os.path.join(tmpdir, name))
+    os.rmdir(tmpdir)
+    print("fast-apply selftest ok (%dKB file edited in %.1fms)"
+          % (size // 1024, elapsed))
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

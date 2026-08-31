@@ -101,6 +101,7 @@ path = [
     "nix/home/configs/.agents/skills/evidence-store/SKILL.md",
     "nix/home/configs/.agents/skills/apology/SKILL.md",
     "nix/home/configs/claude/hooks/apology-leak-guard.py",
+    "nix/home/configs/bin/fast-apply",
     "nix/home/configs/claude/mcp.json",
 ]
 precedence = "aggregate"

@@ -96,9 +96,14 @@
 - DO: make the call yourself when the decision is genuinely yours, state the assumption, and continue
 - NEVER: re-present the same options after a skip, because the skip already said they were not understandable
 
-## Cap at 3 attempts
-- WHEN: a tool call or test fails
-- DO: use a distinct new hypothesis each retry; after 3 failures notify and stop
+## A failure earns a hypothesis and a test plan, never a retry
+- WHEN: a tool call, a command, a build, or a test fails
+- WHY: "실패 시에는 무조건 재시도 불가능" -- a blind rerun spends the same wall time to learn the same nothing, and a measured 7 days held 42 Bash calls that were both slow and failed, burning 3,674 seconds (22.7% of all slow-Bash time) with no result produced
+- DO: write down the HYPOTHESIS for what failed, then the CHECK that would distinguish it from the alternatives, and run that check -- in that order
+- DO: make the check cheaper than the thing that failed, so a wrong guess costs seconds rather than minutes
+- DO: state the hypothesis and its verdict in the response, so a wrong one is visible rather than silently retried
+- DO: use a distinct new hypothesis each attempt; after 3 failures notify and stop
+- NEVER: re-issue a byte-identical command that already failed -- 8 such commands ran 16 times for 1,127 seconds in that same week
 
 ## Climb the YAGNI ladder before writing code
 - WHEN: scoping any task, after you have understood it and traced the real flow end to end

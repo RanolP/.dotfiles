@@ -355,6 +355,16 @@
 - NEVER: emit a sleep or a poll loop as its own tool call -- each iteration buys a full model round-trip
 - SKILL: `metro-wait`, for the Metro dev server -- `/status` for readiness and a `.bundle` request that blocks until the build finishes, replacing the `until grep ... metro.log; do sleep N; done` loops that spent 2,459 seconds in one measured week
 
+## Group the work, run it in the background, think synchronously
+- WHEN: a turn holds more than one unit of work, or any unit that will take longer than a few seconds
+- WHY: "병렬적 실행과 동기적 생각" -- execution fans out, judgement does not; the main thread stays available to the user while the slow parts run elsewhere
+- DO: group the units FIRST -- state the whole set before starting any of it, so the shape is visible and the dependencies are known
+- DO: send every unit with no unmet dependency out together, in ONE message, so they run concurrently
+- DO: put a long or noisy unit in the background -- a background worker or a background command re-invokes you on completion, so the wait costs no round-trip
+- DO: keep the reasoning in one place and in order -- read each result as it lands, judge it, and decide the next unit; parallelism belongs to the execution, never to the judgement
+- DO: verify a background worker's report rather than adopting it, because its green check is a claim about work you did not watch
+- NEVER: hold the main thread blocked on a unit that a background worker could carry
+
 ## A tool call must earn its round-trip
 - WHEN: about to emit a tool call
 - DO: spend the call only when its result is both unknown and needed

@@ -336,6 +336,9 @@
 - DO: run a mutating command standalone, never chained into or piped through anything else
 - DO: batch read-only work freely -- chain reads, or issue independent reads in one message
 - DO: derive a likely path from the platform convention and check that path directly
+- DO: mutate an existing file with the `Edit` or `Write` tool, even while auto permission mode is asking for the shell -- `Edit` measures 0.099s median (n=769) and `Write` 0.106s (n=220), against 2.45s for the same change written as a `python3` script (414 such calls burned 31.7 minutes across 3 days)
+- WHY: the gap is not the binary -- the SAME `sed` measures 0.178s reading (`sed -n`, n=1000) and 3.357s writing (`sed -i`, n=52), because a write-shaped shell command pays a ~1.7-2.3s harness approval step that `Edit` and `Write` never enter; picking a faster CLI buys about 2% of that (`ed` 6.6ms vs `python3` 58.4ms on the same 536-line edit), so leaving the shell is the only lever that moves
+- NOTE: `file-edit-guard.py` denies the shell route for a single existing source file and names `Edit` in its reason; it stays open for new files, globs, `/tmp` and scratchpad paths, and anything it cannot parse
 - NEVER: sweep the filesystem for something that one derived path answers
 
 ## Wait inside one blocking call

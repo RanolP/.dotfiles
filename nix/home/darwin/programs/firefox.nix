@@ -17,44 +17,57 @@
           addons.ublock-origin
           addons.darkreader
           addons.tampermonkey
+          # These five are not in nur.repos.rycee.firefox-addons, so they are
+          # pinned by hand. Each `url` names an immutable AMO file id, NOT the
+          # `/downloads/latest/<slug>/latest.xpi` alias: that alias moves the
+          # moment the author publishes, so the pinned hash stops matching the
+          # bytes and every rebuild on every host dies with a fixed-output hash
+          # mismatch. It happened on 2026-08-31, when simple-translate went
+          # 3.0.1 -> 3.1.0 and the build stopped at
+          # `specified: sha256-+EQulzy6XzQA/Tr4dBuGkqmLSGJArZ63AUuEYgaTyZY=`.
+          #
+          # To bump one: read `.current_version` from
+          # https://addons.mozilla.org/api/v5/addons/addon/<slug>/ and copy its
+          # `version`, `file.url`, and `file.hash` (hex -> SRI via
+          # `nix hash convert --hash-algo sha256 --to sri <hex>`).
           (addons.buildFirefoxXpiAddon {
             pname = "react-devtools";
             version = "6.1.1";
             addonId = "@react-devtools";
-            url = "https://addons.mozilla.org/firefox/downloads/latest/react-devtools/latest.xpi";
-            sha256 = "0iicv47qdnx3f84db8aknjmxrmmi2n4r8cyqqy5npg820hi9xmmj";
+            url = "https://addons.mozilla.org/firefox/downloads/file/4432990/react_devtools-6.1.1.xpi";
+            sha256 = "sha256-staeIgQCvWuLx9gzlIkVsdbcq7RTodUIcqPbhg/ZLEY=";
             meta = { };
           })
           (addons.buildFirefoxXpiAddon {
             pname = "kagi-search";
             version = "0.7.6";
             addonId = "search@kagi.com";
-            url = "https://addons.mozilla.org/firefox/downloads/latest/kagi-search-for-firefox/latest.xpi";
-            sha256 = "03wrf2shznnw16gj9476h2id73ls06k6dpq2smqpcgbyyprc1jji";
+            url = "https://addons.mozilla.org/firefox/downloads/file/4429158/kagi_search_for_firefox-0.7.6.xpi";
+            sha256 = "sha256-UcrA8vV+PXZx1QLfZqYBmo7TooDmkCSfCdzaD7VwmQ8=";
             meta = { };
           })
           (addons.buildFirefoxXpiAddon {
             pname = "maxfocus";
-            version = "1";
+            version = "0.5.8";
             addonId = "{4bda55a4-25fc-4958-aca3-4b3261605398}";
-            url = "https://addons.mozilla.org/firefox/downloads/latest/maxfocus-link-preview/latest.xpi";
-            sha256 = "1lihhnbwz8cky8a0s36vvb46cf5mc4nkgyhaw3wqqx4qs3dqfkbh";
+            url = "https://addons.mozilla.org/firefox/downloads/file/4463963/maxfocus_link_preview-0.5.8.xpi";
+            sha256 = "sha256-cE2H29CYdIz54Ar6Ny1htThmyNrbDA0U8pOhz5eFMNI=";
             meta = { };
           })
           (addons.buildFirefoxXpiAddon {
             pname = "simple-translate";
-            version = "3.0.1";
+            version = "3.1.0";
             addonId = "simple-translate@sienori";
-            url = "https://addons.mozilla.org/firefox/downloads/latest/simple-translate/latest.xpi";
-            sha256 = "15n9jc36512b06vrxba0c948pacjhqdp9y1szl038pxs7jbjwi7q";
+            url = "https://addons.mozilla.org/firefox/downloads/file/4979122/simple_translate-3.1.0.xpi";
+            sha256 = "sha256-wnWR6uc2P7BjXyEnesTgvFcJ5s/ymdM77E3oEGwpiVE=";
             meta = { };
           })
           (addons.buildFirefoxXpiAddon {
             pname = "multi-account-containers";
             version = "8.3.8";
             addonId = "@testpilot-containers";
-            url = "https://addons.mozilla.org/firefox/downloads/latest/multi-account-containers/latest.xpi";
-            sha256 = "0is4q4bgzgr74f7809w711higsli7ys215lf8ykiagrn8m42jsih";
+            url = "https://addons.mozilla.org/firefox/downloads/file/4867303/multi_account_containers-8.3.8.xpi";
+            sha256 = "sha256-MGopSEU2PxWnR46WILQ/keoXYQiHJ4COIye//xbBREc=";
             meta = { };
           })
         ];

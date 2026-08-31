@@ -190,6 +190,13 @@ in
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;
       };
+      # This machine's package set is declared (mise-global.toml, homebrew
+      # lists, the flake). An imperative install lands outside all three, so
+      # the guard denies one and names the file to edit instead.
+      ".claude/hooks/declarative-package-guard.py" = {
+        source = ./configs/claude/hooks/declarative-package-guard.py;
+        executable = true;
+      };
       # A flake reads the git tree, so a new file that was never staged is
       # invisible to the rebuild. Stage the untracked ones before it runs.
       ".claude/hooks/flake-stage-guard.py" = {

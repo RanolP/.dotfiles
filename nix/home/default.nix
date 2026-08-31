@@ -129,6 +129,7 @@ let
     prompt-authoring = localSkill "prompt-authoring";
     ui-automation = localSkill "ui-automation";
     record-replay = localSkill "record-replay";
+    metro-wait = localSkill "metro-wait";
     evidence-store = localSkill "evidence-store";
     apology = localSkill "apology";
     # Same skill under the name the user actually types. Slash-command

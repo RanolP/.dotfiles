@@ -153,6 +153,7 @@ SPDX-License-Identifier = "Apache-2.0"
 path = [
     "scripts/verify-claude-hook.sh",
     "scripts/hook-contract-test.py",
+    "scripts/git-push-guard-test.py",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

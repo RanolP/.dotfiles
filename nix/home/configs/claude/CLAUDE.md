@@ -10,9 +10,10 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO (think): distill the findings into the plan file and present it via ExitPlanMode -- an inline plan paragraph does not count as presenting a plan
 - NOTE: `plan-mode-guard.py` denies every acting tool inside plan mode, and this ExitPlanMode approval is the ONE checkpoint the shared "Checkpoint only for genuine blockers" rule exempts
 - WHEN (handoff): a finished unit of work hands off to the next one inside the same session
+- DO (handoff): invoke the `handoff` skill FIRST and follow it, because the template, the size budget and the `Chainable` flag live there and a handoff drafted from these four lines alone lands as a bare plan the user must still clean up
 - DO (handoff): call EnterPlanMode and write the NEXT unit of work into the plan file, because the approved plan is the compressed context that replaces the old transcript
 - DO (handoff): hand off at the task boundary, never at a token count
-- SKILL: `handoff`, for the state-gathering phases and the handoff template
+- DO (chainable): read the active plan file's `Chainable:` line before handing off -- `true` or absent allows this handoff, and `false` means the current goal runs to completion in this one thread because nobody is at the approval prompt to advance it
 - EXCEPT: act directly when the user handed you a ready-made plan, said to skip planning, or asked for a few-line fix
 - NEVER: enter plan mode before the research is finished
 - NEVER: signal /compact or /clear as the compression mechanism -- EnterPlanMode is the handoff signal

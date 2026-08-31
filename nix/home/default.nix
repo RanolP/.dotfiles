@@ -264,6 +264,12 @@ in
         source = ./configs/claude/hooks/apology-leak-guard.py;
         executable = true;
       };
+      # Route a single-file shell edit back to Edit/Write, which skip the
+      # ~2s approval step a write-shaped shell command pays.
+      ".claude/hooks/file-edit-guard.py" = {
+        source = ./configs/claude/hooks/file-edit-guard.py;
+        executable = true;
+      };
       # Deny direct edits to ~/.claude/ -- the repo is the source of truth.
       ".claude/hooks/claude-dir-edit-guard.py" = {
         source = ./configs/claude/hooks/claude-dir-edit-guard.py;

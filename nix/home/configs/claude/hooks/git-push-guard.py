@@ -54,6 +54,40 @@ def bypass_enabled(start):
         d = parent
 
 
+def push_target_dir(toks, idx, cwd):
+    """Directory the push actually operates on, which is what the bypass is read from.
+
+    `git -C <path> push` pushes the repo at <path>, so the shell's cwd says
+    nothing about which repo is being published. Reading the bypass from cwd let
+    a `.nanno-workers.json` in ~/.dotfiles authorise a `main` push into an
+    unrelated repo, and blocked a dotfiles push issued from anywhere else.
+    Multiple `-C` options compose relatively, as in git itself; `--git-dir` and
+    `--work-tree` count too, and a `.git` directory still resolves because
+    `bypass_enabled` walks upward.
+    """
+    d = os.path.abspath(cwd or ".")
+    i = 0
+    while i < len(toks) and is_env_assign(toks[i]):
+        i += 1
+    i += 1  # the `git` token itself
+    while i < idx:
+        t = toks[i]
+        if t in ("-C", "--git-dir", "--work-tree"):
+            if i + 1 < idx:
+                d = os.path.abspath(os.path.join(d, toks[i + 1]))
+            i += 2
+            continue
+        if t.startswith(("--git-dir=", "--work-tree=")):
+            d = os.path.abspath(os.path.join(d, t.split("=", 1)[1]))
+            i += 1
+            continue
+        if t in GLOBAL_OPT_WITH_ARG:
+            i += 2
+            continue
+        i += 1
+    return d
+
+
 def decide(decision, reason):
     print(json.dumps({
         "hookSpecificOutput": {
@@ -213,15 +247,19 @@ for seg in segments:
 if not push_segments:
     sys.exit(0)
 
+toks, idx = push_segments[0]
+target_dir = push_target_dir(toks, idx, data.get("cwd") or os.getcwd())
+
 # Escape hatch: a .nanno-workers.json opting in bypasses every push restriction.
-if bypass_enabled(data.get("cwd") or os.getcwd()):
-    decide("allow", "Push guard bypassed via .nanno-workers.json (git_push_guard_bypass).")
+# Evaluated at the repo being pushed, never at the shell's cwd.
+if bypass_enabled(target_dir):
+    decide("allow", "Push guard bypassed via .nanno-workers.json "
+                    "(git_push_guard_bypass) at %s." % target_dir)
 
 # A push mixed into a compound command is hard to reason about.
 if is_compound:
     decide("deny", "Run git push as a standalone command (no &&/||/;/| chaining).")
 
-toks, idx = push_segments[0]
 args = toks[idx + 1:]
 positionals = [t for t in args if not t.startswith("-")]
 

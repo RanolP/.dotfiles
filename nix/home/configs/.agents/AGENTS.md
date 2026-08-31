@@ -345,7 +345,10 @@
 - WHEN: a command or job needs time to finish -- a build, a deploy, a test suite, an external job
 - DO: contain the whole wait in ONE tool call -- foreground with a timeout sized to its real duration, or the harness's background mechanism that re-invokes you on completion
 - DO: size a single re-check to the external system's own cadence when only that system can signal readiness
+- DO: spend that one call waiting on the CONDITION rather than on a clock -- `gh run watch <run-id> --exit-status` for CI, `agent-browser wait --load networkidle` or `agent-browser wait --text "..."` for a page, `agent-device wait text "..."` or `agent-device wait stable` for a device, and `until <check>; do sleep 2; done` when the system offers no readiness command of its own
+- WHY: a measured 3 days of transcripts held 167 Bash calls carrying a literal `sleep`, totalling 1,995 seconds (33 minutes) of blind fixed wait -- the guessed duration overshoots whenever the condition became true early and forces a second call whenever it did not
 - NEVER: emit a sleep or a poll loop as its own tool call -- each iteration buys a full model round-trip
+- SKILL: `metro-wait`, for the Metro dev server -- `/status` for readiness and a `.bundle` request that blocks until the build finishes, replacing the `until grep ... metro.log; do sleep N; done` loops that spent 2,459 seconds in one measured week
 
 ## A tool call must earn its round-trip
 - WHEN: about to emit a tool call

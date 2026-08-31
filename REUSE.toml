@@ -61,6 +61,7 @@ path = [
     "nix/home/configs/.agents/skills/github-master/guides/issue.md",
     "nix/home/configs/.agents/skills/worktree-cleanup/SKILL.md",
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
+    "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

@@ -19,10 +19,18 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - NEVER: enter plan mode before the research is finished
 - NEVER: signal /compact or /clear as the compression mechanism -- EnterPlanMode is the handoff signal
 
+## Size the unit first, then commit to one of three strategies
+- WHEN: about to start any unit of work, BEFORE its first tool call
+- WHY: the main session is the only place the user can reach you, so a main thread grinding an execution loop is a session the user has lost; the strategy is a decision made up front, and one discovered mid-grind arrives after the thread is already spent
+- DO: estimate how long this unit holds the main thread, then commit to EXACTLY ONE -- (1) SUBAGENT, a background Agent worker while main keeps answering the user; (2) HANDOFF, the `handoff` skill then EnterPlanMode, reserved for a different SUBJECT; (3) QUICK RETURN, inline because it finishes within a couple of tool calls
+- DO (default): take 1 whenever the return looks slow, and whenever the size is unclear -- an unclear size IS a slow return
+- DO: take 1 rather than 2 for work that is long but stays on the current subject, because length alone earns a subagent and only a topic change earns a handoff
+- DO (chainable): read the active plan file's `Chainable:` line before taking 2 -- `false` means the current goal runs to completion in this one thread
+- DO: carry the chosen strategy to the end and name it in the response, so the user sees which of the three is running -- starting inline and converting to a subagent halfway spends the main thread twice
+
 ## Orchestrate via subagents
 - SETUP: the delegation policy arrives at session start -- `architect-rules.py` injects `## Architect mode` under a Fable or Opus main model and `## Delegation threshold` under every other, so exactly one policy decides when to spawn
-- KEEP MAIN AVAILABLE: the main thread orchestrates and stays responsive to the user, rather than grinding an execution loop itself
-- DO: delegate a loop to a BACKGROUND worker, so the user keeps talking to main while it runs
+- DO: delegate to a BACKGROUND worker whenever the sizing rule above chose strategy 1, so the user keeps talking to main while it runs
 - DO: act on the completion notification when the harness re-invokes you -- continue other ready work, or end the turn
 - DO: send any command that may run long or emit long output to a subagent, so it returns the verdict rather than the transcript
 - DO: spawn one worker per unit of work, with a self-contained brief, so token-heavy traces stay out of main context

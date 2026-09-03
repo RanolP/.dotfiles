@@ -9,10 +9,11 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO (think): finish the research inline FIRST, then call EnterPlanMode
 - DO (think): distill the findings into the plan file and present it via ExitPlanMode -- an inline plan paragraph does not count as presenting a plan
 - NOTE: `plan-mode-guard.py` denies every tool inside plan mode except the plan-file write, AskUserQuestion, ToolSearch and ExitPlanMode -- Read, Grep and Glob included, because a read inside plan mode puts back the context the mode exists to drop; this ExitPlanMode approval is the ONE checkpoint the shared "Checkpoint only for genuine blockers" rule exempts
-- WHEN (handoff): a finished unit of work hands off to the next one inside the same session
+- WHEN (handoff): the NEXT unit of work is a different SUBJECT rather than the next step of the current one -- a finished unit whose successor stays on the same subject continues in this thread
 - DO (handoff): invoke the `handoff` skill FIRST and follow it, because the template, the size budget and the `Chainable` flag live there and a handoff drafted from these four lines alone lands as a bare plan the user must still clean up
 - DO (handoff): call EnterPlanMode and write the NEXT unit of work into the plan file, because the approved plan is the compressed context that replaces the old transcript
-- DO (handoff): hand off at the task boundary, never at a token count
+- DO (handoff): hand off at the TOPIC boundary first -- never at a task boundary that sits inside one topic; and when `handoff-nudge.py` names the thread's resident context, run the handoff at the next topic seam rather than riding the thread to a compaction, because the nudge fires at 110k tokens and auto-compaction fires near 170k, so the room it reports is the room the handoff itself has to run in
+- WHY (handoff timing): measured over the 21 days ending 2026-09-03, handoff was invoked at a median resident context of 139,250 tokens against a ~167k-172k auto-compaction trigger, and a compaction landed inside 5 of the 17 handoffs -- every one of those 17 was a user-typed `/handoff` and none were model-initiated, while 466 compactions fired across 126 sessions doing the job handoff exists to do
 - DO (chainable): read the active plan file's `Chainable:` line before handing off -- `true` or absent allows this handoff, and `false` means the current goal runs to completion in this one thread because nobody is at the approval prompt to advance it
 - EXCEPT: act directly when the user handed you a ready-made plan, said to skip planning, or asked for a few-line fix
 - NEVER: enter plan mode before the research is finished

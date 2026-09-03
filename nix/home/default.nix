@@ -404,6 +404,16 @@ in
     if [ -f "$priv" ]; then
       run sh -c '${pkgs.jq}/bin/jq -s ".[0] * .[1]" "$0" "$1" > "$0.merged" && mv "$0.merged" "$0"' "$out" "$priv"
     fi
+    # Same public-repo rationale for patches that can't be expressed as settings
+    # keys: this repo stays generic and the host-private script names the
+    # internal plugins it touches. Optional -- absent on hosts that need none.
+    # Activation runs with a bare PATH that carries no python3 or jq, so the
+    # interpreters the script may need are handed to it explicitly rather than
+    # left for it to find (`python3: command not found`, 2026-09-01).
+    if [ -x "$HOME/.claude-personal/post-activate.sh" ]; then
+      run env PATH="${pkgs.python3}/bin:${pkgs.jq}/bin:$PATH" \
+        "$HOME/.claude-personal/post-activate.sh"
+    fi
   '';
 
   # Register herdr-browser (fetched above) with herdr. `plugin link` is the only

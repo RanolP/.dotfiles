@@ -32,6 +32,17 @@
     "claude-code-wakatime@wakatime": true
   },
   "skillOverrides": {
+    "claude-api": "name-only",
+    "dataviz": "name-only",
+    "design": "name-only",
+    "update-config": "name-only",
+    "artifact-capabilities": "name-only",
+    "schedule": "name-only",
+    "run": "name-only",
+    "loop": "name-only",
+    "keybindings-help": "name-only",
+    "fewer-permission-prompts": "name-only",
+    "simplify": "name-only",
     "docs-write-tutorial": "name-only",
     "docs-write-concept": "name-only",
     "docs-write-howto": "name-only",

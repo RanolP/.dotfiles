@@ -71,6 +71,27 @@ let
     (builtins.readFile sharedAgentRules) + "\n" + (builtins.readFile claudeSpecificRules)
   );
 
+  # Response-shape rules, held apart from the rules files because the two tools
+  # consume them differently. Claude has an output style layer whose whole body
+  # is inserted into the system prompt and which wins over general formatting
+  # guidance; Codex has no such layer, so the same body is appended to its
+  # AGENTS.md. Editing this one file moves both.
+  outputManner = ./configs/.agents/output-manner.md;
+  claudeOutputStyle = pkgs.writeText "concise-adhd-korean.md" (
+    ''
+      ---
+      name: concise-adhd-korean
+      description: Concise 원문 + ADHD 응답 형태 규칙 + fluent-korean 한국어 규칙을 하나로 합친 출력 스타일입니다. 코딩 지침을 유지합니다.
+      keep-coding-instructions: true
+      ---
+
+    ''
+    + builtins.readFile outputManner
+  );
+  codexAgentRules = pkgs.writeText "AGENTS.md" (
+    (builtins.readFile sharedAgentRules) + "\n" + (builtins.readFile outputManner)
+  );
+
   # Skills, defined once and linked into both tools' skill trees below. Local
   # skills point at the whole directory (each holds SKILL.md plus optional
   # references/); vendored ones point into their fetched store paths.
@@ -154,7 +175,7 @@ in
 
   home.file = lib.mkMerge [
     {
-      ".codex/AGENTS.md".source = sharedAgentRules;
+      ".codex/AGENTS.md".source = codexAgentRules;
       ".profile".text = ''
         export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
       '';
@@ -322,6 +343,10 @@ in
       # dropped in 2026-09: 0 spawns and 0 humanize skill invocations across
       # 437 recorded sessions, at ~360 tokens of every session's first request.
       ".claude/agents".source = ./configs/claude/agents;
+      # One explicit entry per style, never directory recursion: every file here
+      # shows up in the /config picker, and settings.json's "outputStyle" names
+      # the one whose body goes resident.
+      ".claude/output-styles/concise-adhd-korean.md".source = claudeOutputStyle;
       # Pins the herdr-browser store path as a GC root: the plugin registry
       # holds a bare path in herdr's own mutable state, which nix can't see.
       ".local/share/herdr-plugins/herdr-browser".source = herdrBrowser;

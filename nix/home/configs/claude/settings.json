@@ -44,7 +44,7 @@
     "wrangler": "user-invocable-only"
   },
   "model": "sonnet",
-  "outputStyle": "Concise",
+  "outputStyle": "concise-adhd-korean",
   "env": {
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-fable-5",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-5",

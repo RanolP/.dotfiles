@@ -151,7 +151,9 @@ in
           mkdir -p "$dir"
           # Config mirrors ~/.claude so nix updates track; runtime state and
           # the auth token stay per-profile in $dir.
-          for entry in settings.json CLAUDE.md agents skills plugins; do
+          # output-styles must be listed: settings.json mirrors "outputStyle"
+          # by name, so without the definitions the profile fails silently.
+          for entry in settings.json CLAUDE.md agents skills plugins output-styles; do
             [ -e "$base/$entry" ] && ln -sfn "$base/$entry" "$dir/$entry"
           done
           # Sessions live in projects/; symlinking it into ~/.claude/projects

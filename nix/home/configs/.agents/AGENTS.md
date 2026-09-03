@@ -163,7 +163,7 @@
 - WHEN: a saved memory turns out to apply everywhere rather than in one project
 - WHY: a rule in `~/.dotfiles` ships to every agent on every host through Home Manager, while a memory reaches one project folder
 - DO: leave the promotion to the user, who runs it
-- SKILL: `memory-review` ranks the candidates, and `memory-internalize` moves one across
+- SKILL: `memory-review` ranks the candidates, `dotfiles:evolve` moves one across, and `rule-write` lands the rule itself
 
 ## A durable note carries its incident inside it
 - WHEN: writing a memory or a rule whose reason is an incident

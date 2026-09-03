@@ -51,9 +51,10 @@
 - NOTE: on 2026-08-27 an empty `which ffmpeg` led to a hand-written AVFoundation `AVAssetWriter` script that hung; the user's answer was "fucking use ffmpeg"
 
 ## Read a tool's own help before its first call
-- WHEN: about to call an unfamiliar CLI
+- WHEN: about to call an unfamiliar CLI, or the first tool of an unfamiliar MCP bundle
 - DO: read the help that ships with the installed binary, because it is version-matched and beats guessing a flag
 - DO: prefer the tool's own high-level command over a sequence of low-level ones you assemble yourself
+- DO (bundle): list the whole bundle before the first call and find its undo -- which tool updates, which deletes, and which drafts instead of publishing
 
 ## The installed toolchain
 - WHEN: reaching for a capability -- a browser, a device, a second agent, an API client, a data query

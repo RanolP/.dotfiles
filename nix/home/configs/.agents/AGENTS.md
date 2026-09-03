@@ -294,13 +294,6 @@
 - DO: run `git fetch` as its own visible step first, so the update the rebase sees is one the user watched arrive
 - DO: rebase onto the fetched base, and ask the user when the rebase is not obviously safe
 - NEVER: reach for a force-push to make a rejected push go through
-## Commit workflow: read the mode from the repo, never from its name
-- WHEN: any repository work that will produce commits
-- DO: read the nearest `.nanno-workers.json` at or above the working directory -- `"git_push_guard_bypass": true` says this checkout may push its own default branch, so commit straight to that branch there
-- DO: use the `claude/local-dev` stack in every other case -- no file, the key absent, or any value but `true`
-- DO: read that key rather than inferring from the repo name or the file's mere presence, so the commit mode and the push permission cannot drift apart
-- NOTE: `git-push-guard.py`'s `bypass_enabled()` resolves the same key by the same nearest-wins, fail-closed rule
-
 ## `claude/local-dev` is a stash that holds a stack
 - WHEN: work lands that is not ready to publish
 - DO: commit every unit of work onto `claude/local-dev` as it lands, with no permission asked and no polish

@@ -118,6 +118,17 @@
 - DO: judge an intentional simplification by nuance rather than annotating it with a marker
 - NEVER: add features, abstractions, dependencies, or boilerplate nobody asked for
 
+## Caution costs what the thing it protects is worth
+- WHEN: about to preserve, guard, wrap, stage, or defer anything -- old code, a compatibility path, a fallback branch, a deprecation window, a "leave this for now"
+- WHY: preserving a thing buys down exactly one risk -- that something outside your working set still depends on it -- and pays for it in complexity that every later reader carries; so when nothing outside can depend on it, the risk bought is zero and the price is paid in full, which is not a safe choice but a pure loss
+- WHY (the bias): that loss is invisible in the moment while a deletion's cost is immediate and attributable, so caution wins on who gets blamed rather than on what it costs -- and the bill lands on the person who reads the code next
+- DO: price the risk side first from the artifact -- how far the thing has actually spread, who can already observe it, and what breaks if it vanishes right now
+- DO: read reach as a binary with a hard threshold, and locate that threshold for the medium at hand -- code is merged or not, an API is public or internal, a release is published or a draft, a record is committed or in a transaction
+- DO: take the aggressive form below the threshold, where nothing outside your own working set can observe the change and undoing it costs one revert -- delete, rewrite, rename, restructure freely
+- DO: take the careful form above it, where a stranger already depends on the behavior -- and there spend the full cost of a compatibility path, a migration, a deprecation window
+- DO: state the reach as one plain fact when reporting it, and let the user draw the caution from it
+- NEVER: pick the cautious side because it is the side that cannot be blamed -- an unpriced reprieve hands the decision back to the user and leaves the legacy it claims to prevent
+
 ## YAGNI bounds the feature count, never the design
 - WHEN: tempted to ship a smaller design because the task itself is small
 - WHY: a "minimum product" is the wrong target -- the right design comes first, and the feature count is what gets cut to reach it

@@ -337,6 +337,7 @@
 - DO: when the design is still uncertain, settle what is right in conversation first and act after
 - DO (standing go): treat a granted permission as standing for its whole class until the user withdraws it, and stop re-asking inside that class
 - DO (bookkeeping): refresh the commit hashes, branch names, and diff links in an already-published body once the work they name is rewritten
+- DO (irreversible): treat a send as permanent when the bundle carries no update and no delete, and take its draft path instead -- on 2026-08-26 an 11-card long-form post went into a Slack thread through `slack_send_message`, and Slack MCP offers only `send`, `draft`, `schedule`, `reaction` and `canvas`, app-sent messages disable the client's own edit menu, and retention blocked deletion, so the post stood uncorrectable while `slack_send_message_draft` had been the safe path all along
 - NEVER: treat finishing the code as permission to publish it
 
 ## Jira card bodies: edit the ADF with `jira`, never through markdown

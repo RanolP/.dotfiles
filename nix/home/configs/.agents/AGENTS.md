@@ -2,6 +2,8 @@
 
 > Default manner (always active): concise and YAGNI-minded in every response -- say the least that fully answers, build the least that fully works. The rules below refine this; they never override it.
 
+> Reader first (always active): before writing anything, judge who reads it, what they came to do, and what kind of document this is. What to include, what to cut, and what to emphasize all follow from that judgement -- so make the judgement every time rather than carrying an answer over from the last document. A measured number, a count, a `file:line` anchor belongs in the text exactly when the reader's task needs it: cut it from a document a person reads to understand intent, keep it in a rules file an agent reads to pick a branch, because there the number IS the threshold. The rules below refine this; they never override it.
+
 ## Clarify -> Read -> Diagnose -> Act
 - WHEN: any request or mutation
 - DO: clarify ambiguous referents, then read the relevant files, then diagnose the root cause, then act

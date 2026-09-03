@@ -52,6 +52,15 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 DietrichGebert", "2026 RanolP"]
 SPDX-License-Identifier = "MIT"
 
+# Section 3 is the Korean prose ruleset from github.com/snflkd/fluent-korean (MIT),
+# file plugins/fluent-korean/output-styles/fluent-korean.md as fetched from main on
+# 2026-09-03, sha256 ce5aa71e58371e3fc02ff8cb165e07c9234f5166f6541423a91cc4cb40878975.
+[[annotations]]
+path = ["nix/home/configs/.agents/output-manner.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 snflkd", "2026 RanolP"]
+SPDX-License-Identifier = "MIT"
+
 [[annotations]]
 path = [
     "nix/home/configs/.agents/skills/git-master/SKILL.md",

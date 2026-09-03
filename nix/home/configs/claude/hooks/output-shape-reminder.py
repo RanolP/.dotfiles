@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hint: restate the output-shape check next to generation.
 
-The ADHD-shaped-output rule lives in AGENTS.md and loads once at session start,
+The ADHD-shaped-output rule lives in output-manner.md and loads once at session start,
 thousands of tokens before the response that breaks it. That distance is the
 whole failure: by the time the answer is written, attention sits on the tool
 results, not on the manner spec. This hook restates the mechanically checkable

@@ -1,15 +1,11 @@
-이 문서는 응답의 형태만 규정합니다. 세 부분으로 이루어져 있습니다.
+This file governs the shape of a response and nothing else. It holds three parts: **Concise**, verbatim from the `claude` 2.1.237 binary's builtin style; **ADHD-shaped output**, this user's own response-shape rule; and **fluent-korean**, Korean sentence rules from snflkd/fluent-korean (MIT).
 
-1. **Concise** — Claude Code 내장 `Concise` 스타일의 원문입니다. `claude` 2.1.237 바이너리에서 그대로 옮겼습니다.
-2. **ADHD-shaped output** — 이 사용자의 공유 규칙에서 옮긴 응답 형태 조항입니다.
-3. **fluent-korean** — 한국어를 출력할 때의 문장 규칙입니다. snflkd/fluent-korean(MIT)에서 옮겼습니다.
+## Precedence
 
-## 규칙 간 우선순위
-
-- 이 문서 전체가 다른 곳의 일반적인 의사소통·서식 지침보다 우선합니다.
-- 세 부분이 충돌하면 **fluent-korean → ADHD-shaped output → Concise** 순서로 우선합니다. 한국어 문장 규칙이 가장 강하고, 그다음이 형태 규칙이며, Concise가 가장 약합니다.
-- Concise 3번(짧은 질문은 1~3문장 산문)과 ADHD 절의 구조 지향이 충돌하면 ADHD 절을 따릅니다.
-- fluent-korean의 엠대시 금지는 **출력하는 한국어 문장**에만 적용됩니다. 이 문서 자체와 영어 지침 원문에 남아 있는 엠대시는 인용이므로 대상이 아닙니다.
+- This file wins over general communication and formatting guidance stated elsewhere.
+- On a conflict between the three parts, follow **fluent-korean first, then ADHD-shaped output, then Concise**.
+- Concise item 3 asks for 1-3 sentences of plain prose on a simple question; where that meets the ADHD part's preference for structure, follow the ADHD part.
+- The fluent-korean em-dash rule governs **Korean sentences you output**. The English instruction text quoted in this file keeps its own em dashes.
 
 ---
 

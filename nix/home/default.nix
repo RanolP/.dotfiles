@@ -12,13 +12,6 @@ let
     hash = "sha256-1D9otXxDvmKASBu/vtAEWv6kE+U+jG4OxZpRLZbGEF0=";
   };
 
-  humanizeKorean = pkgs.fetchFromGitHub {
-    owner = "epoko77-ai";
-    repo = "im-not-ai";
-    rev = "14aeb52d13e737beb4e999cb7cb92275d0969689";
-    hash = "sha256-iadJGHavCEXPBYjeo5SyCSgn2yWIJ5YUvRG/2qbuVAY=";
-  };
-
   # Official Notion agent skills; only notion-cli exists so far. Declarative
   # equivalent of `npx skills add makenotion/skills --skill notion-cli`.
   notionSkills = pkgs.fetchFromGitHub {
@@ -45,22 +38,6 @@ let
     mkdir -p $out
     sed 's|''${CLAUDE_PLUGIN_ROOT}|${supermemoryPlugin}/plugin|g' \
       ${supermemoryPlugin}/plugin/skills/supermemory-search/SKILL.md > $out/SKILL.md
-  '';
-
-  # Merge the im-not-ai agents with local agent definitions so a sibling file
-  # (prose-editor) can live alongside the 12 vendored agents in ~/.claude/agents.
-  # The vendored agents' long Korean descriptions are collapsed to one short
-  # line: agent descriptions always load into the system prompt (there is no
-  # hidden-but-spawnable mode), and these agents are only ever spawned
-  # explicitly by the humanize skills, so the routing text is dead weight.
-  claudeAgents = pkgs.runCommand "claude-agents" { } ''
-    mkdir -p $out
-    cp ${humanizeKorean}/agents/*.md $out/
-    chmod +w $out/*.md
-    for f in $out/*.md; do
-      sed -i 's/^description: .*/description: humanize-korean pipeline worker. Never auto-delegate — spawned by name from the humanize skills only./' "$f"
-    done
-    cp ${./configs/claude/agents}/*.md $out/
   '';
 
   # herdr-browser renders a Chromium view inside a herdr pane over CDP. herdr
@@ -141,9 +118,6 @@ let
     "시말서" = localSkill "apology";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
     notion-cli = "${notionSkills}/skills/notion-cli";
-    humanize-korean = "${humanizeKorean}/.claude/skills/humanize-korean";
-    humanize = "${humanizeKorean}/.claude/skills/humanize";
-    humanize-redo = "${humanizeKorean}/.claude/skills/humanize-redo";
     supermemory-search = supermemorySearchSkill;
   };
 
@@ -342,13 +316,17 @@ in
         source = ./configs/bin/fast-apply;
         executable = true;
       };
-      ".claude/agents".source = claudeAgents;
+      # Agent descriptions always load into the system prompt -- there is no
+      # hidden-but-spawnable mode -- so only agents that actually get spawned
+      # are deployed here. The 12 vendored im-not-ai humanize workers were
+      # dropped in 2026-09: 0 spawns and 0 humanize skill invocations across
+      # 437 recorded sessions, at ~360 tokens of every session's first request.
+      ".claude/agents".source = ./configs/claude/agents;
       # Pins the herdr-browser store path as a GC root: the plugin registry
       # holds a bare path in herdr's own mutable state, which nix can't see.
       ".local/share/herdr-plugins/herdr-browser".source = herdrBrowser;
       ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
     }
-    # humanize-korean vendored from epoko77-ai/im-not-ai.
     skillFiles
   ];
 

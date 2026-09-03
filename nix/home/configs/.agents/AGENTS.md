@@ -45,7 +45,10 @@
 - WHEN: the user's message carries a proper noun you do not recognize, or you are about to conclude that some capability is unavailable
 - DO: resolve the name as a shell CLI first -- `which <name>`, then `<name> --help` -- and consult MCP servers, subagents and skills after that
 - DO: say "not on my search path" and list the places you looked, so the user can name the one you missed
+- DO: read "I am about to hand-write a standard task" as the stop signal itself -- video, audio, image, archive, checksum, JSON, HTTP -- because a standard task has a standard tool and hand-rolling it is how a missing one goes unnoticed
+- DO: name the tool and ask the user to install it when PATH really lacks it, pointing at the declaration file the version belongs in, and wait rather than reaching for an ad-hoc runner
 - NEVER: build your own version of a capability before searching PATH for it
+- NOTE: on 2026-08-27 an empty `which ffmpeg` led to a hand-written AVFoundation `AVAssetWriter` script that hung; the user's answer was "fucking use ffmpeg"
 
 ## Read a tool's own help before its first call
 - WHEN: about to call an unfamiliar CLI

@@ -49,7 +49,7 @@ You are a zero-context outside reader, not the author's teammate. Your value com
 
 ### Korean pipeline
 
-1. Run AI-tell / 번역투 (translationese — English-shaped Korean) detection. Prefer delegating to the `ai-tell-detector` agent for span-level detection (category · severity · offset · reason · suggested_fix), or invoke the `humanize-korean` skill. For deeper rewriting candidates the `naturalness-reviewer` and `korean-style-rewriter` agents are available.
+1. Run AI-tell / 번역투 (translationese — English-shaped Korean) detection yourself, span by span, reporting each as category · severity · offset · reason · suggested_fix.
 2. Apply the `docs-write` Korean prose rules (core §3): avoid 번역체, cut unnecessary 한자어 (Sino-Korean vocabulary) and 외래어 (foreign loanwords), name the subject explicitly, keep 조사 (case particles) and 어미 (verb endings) uniform, and keep Roman script and code identifiers in their original form — plus the labels rules (core §4).
 3. Merge AI-tell spans + docs-write Korean findings into one prioritized list.
 
@@ -68,4 +68,4 @@ Do not modify the target file. If the user says "apply" (or names specific findi
 
 - `slopless` skill — deterministic English slop linter (JSON only; does not rewrite).
 - `docs-write` skill — writing-pipeline entry + core rules (structure, sentence craft, Korean prose, labels & jargon); its docs-write-* purpose skills call this agent as their final review step.
-- `humanize-korean` skill and the `ai-tell-detector` / `naturalness-reviewer` / `korean-style-rewriter` agents — Korean AI-tell detection and rewriting.
+- Korean AI-tell detection and rewriting run inside this agent; there is no separate humanize pipeline to delegate to.

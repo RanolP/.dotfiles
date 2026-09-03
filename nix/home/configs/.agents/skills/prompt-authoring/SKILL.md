@@ -46,6 +46,24 @@ One that passes:
 
 "Was X, now Y" belongs in human-facing docs and changelogs, where a reader needs the history to understand what changed. It does not belong in a rules file, where the old value is just another elephant. A rules file states the current truth; the changelog carries how it got there.
 
+## Generalize past the incident
+
+One failure is the evidence, not the rule. Name the class of situation the incident belongs to and write the instruction for that class, then keep the incident inside the line as the fact that makes the class recognizable.
+
+- Incident: "I kept a feature flag alive on a branch nobody had pulled."
+- Rule: "unshipped code has no reader to protect, so delete it rather than preserving it."
+
+A line that fires only on the exact file, branch, or ticket that produced it reads as a story, and the next session meets a different file and reads past it.
+
+## A `WHY` states the mechanism, not the conclusion
+
+The `WHY` exists so the reader can apply the rule to a case the author never saw, which takes the causal chain rather than its verdict.
+
+- Conclusion: "caution is not free."
+- Mechanism: "preserving a thing buys down exactly one risk and pays in complexity that every later reader carries."
+
+The second tells the reader what to weigh next time. Write the second.
+
 ## Applying this to a whole file
 
 When editing an existing rules file or skill, work bullet by bullet:

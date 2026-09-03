@@ -129,6 +129,7 @@ let
     "dotfiles:evolve" = localSkill "dotfiles-evolve";
     subagent-orchestration = localSkill "subagent-orchestration";
     prompt-authoring = localSkill "prompt-authoring";
+    rule-write = localSkill "rule-write";
     ui-automation = localSkill "ui-automation";
     record-replay = localSkill "record-replay";
     metro-wait = localSkill "metro-wait";

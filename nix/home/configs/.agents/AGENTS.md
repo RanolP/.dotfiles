@@ -191,7 +191,7 @@
 - DO: build the deterministic guard -- a CI required check, a git hook, or a `PreToolUse` hook
 - DO: file or extend the enforcement issue when the guard belongs to a repo you cannot change right now
 - DO: strip the prose rule once its guard lands, and keep rules files for the context no guard can carry (intent, taste, priorities, domain facts)
-- DO: trace the path a new guard would fire on BEFORE adding it, and drop the guard when an existing one already makes that path unreachable -- vibe-apps PR #58 proposed three oxlint rules (`no-concat-sql`, `bq-date`, `max-bytes-billed`) that `.oxlintrc.json` had already made unreachable from `apps/**` by banning the import, so only `base-url-prefix` survived
+- DO: trace the path a new guard would fire on BEFORE adding it, and drop the guard when an existing one already makes that path unreachable -- a lint-rule PR in a work repo proposed three oxlint rules (`no-concat-sql`, `bq-date`, `max-bytes-billed`) that `.oxlintrc.json` had already made unreachable from `apps/**` by banning the import, so only `base-url-prefix` survived
 - DO: remove a shipped guard the same way once something structural takes over its job, because a guard that cannot fire still costs every reader a look
 - NEVER: offer a prose rule as the enforcement mechanism
 - NEVER: spend a turn re-explaining a footgun the harness already blocks

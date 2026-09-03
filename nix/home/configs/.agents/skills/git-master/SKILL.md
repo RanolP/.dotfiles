@@ -5,7 +5,7 @@ description: Disciplined git workflow — inspect before acting, Conventional-Co
 
 # Git master
 
-Apply these whenever you touch git. The nearest `.nanno-workers.json` at or above the working directory decides the workflow: `"git_push_guard_bypass": true` means this checkout may push its own default branch, so commits go straight there. In every other case work lands on `claude/local-dev` and gets republished as a rebuilt stack. Project CLAUDE.md always wins where it differs (this repo: commits go to `main`; pushes only to `claude/*`). A `git-push-guard` hook independently blocks non-`claude/*` pushes and compound pushes — these rules teach the workflow that satisfies it, they don't replace it.
+Apply these whenever you touch git. The nearest `.nanno-workers.json` at or above the working directory decides the workflow: `"git_push_guard_bypass": true` means this checkout may push its own default branch, so commits go straight there. In every other case -- no file, the key absent, or any value but `true` -- work lands on `claude/local-dev` and gets republished as a rebuilt stack. Read that key rather than inferring from the repo name or the file's mere presence, so the commit mode and the push permission cannot drift apart: `git-push-guard.py`'s `bypass_enabled()` resolves the same key by the same nearest-wins, fail-closed rule. Project CLAUDE.md always wins where it differs (this repo: commits go to `main`; pushes only to `claude/*`). A `git-push-guard` hook independently blocks non-`claude/*` pushes and compound pushes — these rules teach the workflow that satisfies it, they don't replace it.
 
 ## Inspect before acting
 

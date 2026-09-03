@@ -8,7 +8,20 @@
     "deny": [
       "Bash(git commit *--no-verify*)",
       "Bash(git commit *-n *)",
-      "Edit(**/.nanno-workers.json)"
+      "Edit(**/.nanno-workers.json)",
+      "Workflow",
+      "ScheduleWakeup",
+      "ReportFindings",
+      "NotebookEdit",
+      "DesignSync",
+      "LSP",
+      "CronCreate",
+      "CronList",
+      "CronDelete",
+      "RemoteTrigger",
+      "PushNotification",
+      "mcp__claude_ai_Gmail",
+      "mcp__claude_ai_Google_Drive"
     ]
   },
   "enabledPlugins": {

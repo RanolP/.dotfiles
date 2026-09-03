@@ -204,6 +204,14 @@
 - DO: link only to a location the reader genuinely reaches -- the remote repo, the ticket, a shared URL
 - NEVER: put a local-only path into text another person reads
 
+## A command you hand the user runs the same from anywhere
+- WHEN: writing a command into a response for the user to run themselves
+- WHY: their terminal's working directory is not yours to know, and a session that moves between two checkouts will eventually paste the command into the wrong one
+- DO: put the location inside the command -- `git -C /absolute/path push origin <branch>`, or whatever path option the tool offers
+- DO: ask "does this still do the right thing pasted from the home directory" before sending it, and hard-code the path when the answer is no
+- NEVER: prefix a `cd`, whether as advice or as `cd A && B` -- it changes the shell of the person pasting it
+- EXCEPT: a command YOU run in your own Bash tool, where the working directory is known
+
 ## Write the content, never a pointer to a conversation
 - WHEN: writing anything durable -- a rules file, a doc, a memory, a commit message, an issue
 - WHY: the source ages out, so a pointer into it dangles the moment it does

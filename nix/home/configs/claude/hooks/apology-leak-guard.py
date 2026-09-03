@@ -39,9 +39,15 @@ LOCAL_ONLY_CMDS = {
 }
 
 # Tools whose whole job is local file work; the apology skill needs these.
+# `ExitPlanMode` belongs here for the same reason: an approval dialog shown to
+# the local user is not an outbound channel, and the set already exempts `Write`
+# and `Edit`, which put the same text on disk permanently. An audit found this
+# guard blocked ExitPlanMode in 2 of 16 handoffs (transcripts 17e31af0-...:1108
+# and a71f6658-...:262), costing five extra Edit round-trips scrubbing the plan
+# file before a second ExitPlanMode got through.
 LOCAL_ONLY_TOOLS = {
     "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "NotebookRead",
-    "Glob", "Grep", "LS", "TodoWrite", "ToolSearch",
+    "Glob", "Grep", "LS", "TodoWrite", "ToolSearch", "ExitPlanMode",
     "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
 }
 

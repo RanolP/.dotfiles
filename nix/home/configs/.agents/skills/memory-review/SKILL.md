@@ -5,7 +5,7 @@ description: Survey the Claude memories saved across every project, rank them by
 
 # Memory review
 
-Memories are written wherever the work happened, so a correction that applies on every host can sit in one project folder forever. This skill reads the whole store, sorts it by where each memory belongs, and hands the user a ranked shortlist. It recommends; the user picks; `memory-internalize` does the moving.
+Memories are written wherever the work happened, so a correction that applies on every host can sit in one project folder forever. This skill reads the whole store, sorts it by where each memory belongs, and hands the user a ranked shortlist. It recommends; the user picks; `dotfiles:evolve` does the moving.
 
 Nothing is deleted here. This skill only reads.
 
@@ -59,4 +59,4 @@ Close with the single highest-value next step: which memory to internalize first
 
 ---
 
-*Paired with `memory-internalize`, which performs the move this skill recommends.*
+*Paired with `dotfiles:evolve`, which performs the move this skill recommends.*

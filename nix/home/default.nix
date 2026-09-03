@@ -124,7 +124,9 @@ let
     constraint-evasion = localSkill "constraint-evasion";
     claude-hook-management = localSkill "claude-hook-management";
     memory-review = localSkill "memory-review";
-    memory-internalize = localSkill "memory-internalize";
+    # Nix store path names reject `:`, so the source directory is
+    # `dotfiles-evolve` while the link the user types carries the colon.
+    "dotfiles:evolve" = localSkill "dotfiles-evolve";
     subagent-orchestration = localSkill "subagent-orchestration";
     prompt-authoring = localSkill "prompt-authoring";
     ui-automation = localSkill "ui-automation";

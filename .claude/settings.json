@@ -12,5 +12,9 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "work-repo-frontend@work-repo-frontend-skills": false,
+    "work-repo-backend-skills@work-repo-backend-skills": false
   }
 }

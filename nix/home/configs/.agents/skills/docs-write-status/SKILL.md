@@ -11,11 +11,11 @@ Load `docs-write` first if its core rules are not already in context. Draft by t
 
 Order sections the way the decision was thought through, not by reference convenience:
 
-1. **현황** — a short callout: the options that existed, what was chosen, the one-line reason.
-2. **문제 상황** — what hurts, and the constraints that cannot move. State the overall goal plainly; demote heavy examples to one line under it.
-3. **해결책 제안** — each candidate side by side, **each carrying its own diagram**. Mark 채택/보류 in the heading.
-4. **채택 근거** — why the winner won and the loser was dropped, plus the conditions for revisiting.
-5. **진행 상황** — split into 된 것 / 해야 할 것 / 안 할 것, in step order.
+1. **현황** (current state) — a short callout: the options that existed, what was chosen, the one-line reason.
+2. **문제 상황** (the problem) — what hurts, and the constraints that cannot move. State the overall goal plainly; demote heavy examples to one line under it.
+3. **해결책 제안** (proposed solutions) — each candidate side by side, **each carrying its own diagram**. Mark 채택/보류 (adopted/deferred) in the heading.
+4. **채택 근거** (rationale for the choice) — why the winner won and the loser was dropped, plus the conditions for revisiting.
+5. **진행 상황** (progress) — split into 된 것 / 해야 할 것 / 안 할 것 (done / to do / won't do), in step order.
 6. Appendices after a divider: deferred plans, references, glossary.
 
 ## Rules

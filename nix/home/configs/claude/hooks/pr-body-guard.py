@@ -4,9 +4,8 @@
 Two failures from real sessions produced this hook:
 
 - A rewrite of an open PR's body dropped table columns the user had added by
-  hand -- "테이블은 내가 열을 추가한 걸 니가 날렸잖아!!!!". The body had been
-  rebuilt from the branch instead of from the remote body, so every human edit
-  vanished with one `gh pr edit`.
+  hand. The body had been rebuilt from the branch instead of from the remote
+  body, so every human edit vanished with one `gh pr edit`.
 - A ```mermaid fence carrying `<br/>` inside a backtick markdown-string label
   reached GitHub and rendered as "Unable to render rich display -- Lexical
   error on line 2".
@@ -252,7 +251,9 @@ def bookkeeping(word):
     as the branch moves; a Korean or English word does not.
     """
     if CJK.search(word):
-        return bool(re.search(r"\d", word))  # "12개" moves with the diff, "없음이" does not
+        # A CJK word carrying a digit is a count that moves with the diff; a
+        # digit-free CJK word is prose the author wrote.
+        return bool(re.search(r"\d", word))
     return bool(re.search(r"[\d/:@#.]", word))
 
 
@@ -260,10 +261,11 @@ def edited(old, new):
     """True when `new` is `old` with only bookkeeping words rewritten.
 
     Character similarity cannot decide this. Measured 2026-08-18 on 14 real body
-    lines: a hash-and-count refresh scores 0.824 while the meaning flip
-    `되돌릴 수 없습니다` -> `되돌릴 수 있습니다` scores 0.955, so every threshold
-    that passes the refresh also passes the flip. What separates them is WHICH
-    words moved, so this compares word by word:
+    lines: a hash-and-count refresh scores 0.824 while a one-word negation flip
+    (a warning turning from "cannot be rolled back" into "can be rolled back")
+    scores 0.955, so every threshold that passes the refresh also passes the
+    flip. What separates them is WHICH words moved, so this compares word by
+    word:
 
     - a word deleted with nothing in its place: not an edit, the line lost text
     - a word added: fine, the line grew
@@ -306,8 +308,8 @@ def dropped_lines(remote, new, boilerplate):
        its cells, so adding a column or realigning the pipes keeps the row, while
        a cell gone is the incident this guard exists for. Character similarity
        cannot stand in here: measured 2026-08-14, dropping one column from a wide
-       row scores 0.929 while the genuine edit `장애 없음` -> `장애 있음` scores
-       0.800, so the two ranges overlap.
+       row scores 0.929 while a genuine one-word cell edit (a status cell flipping
+       from "no outage" to "outage") scores 0.800, so the two ranges overlap.
     3. the same line with only bookkeeping words rewritten (see edited)
 
     Each new line covers at most one remote line, so five near-identical bullets

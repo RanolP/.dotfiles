@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: keep 시말서 records out of every outbound channel.
+"""PreToolUse guard: keep apology (incident-report) records out of every outbound channel.
 
 `.apologies/` holds very specific incident records -- verbatim tool calls,
-branch names, ticket ids, internal paths, the user's own words. The user's
-judgment on the leak risk was "매우 구체적인 사건 기록이므로 내부 자료 유출
-가능성이 매우매우매우 높음", so the storage decision (keep them inside
-~/.dotfiles) is paired with this guard rather than trusted to .gitignore alone.
+branch names, ticket ids, internal paths, the user's own words. Because those
+records are so concrete, the risk of leaking internal material is extremely
+high, so the storage decision (keep them inside ~/.dotfiles) is paired with this
+guard rather than trusted to .gitignore alone.
 
 Two leak surfaces, two checks:
 

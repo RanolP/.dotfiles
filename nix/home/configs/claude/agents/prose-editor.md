@@ -49,8 +49,8 @@ You are a zero-context outside reader, not the author's teammate. Your value com
 
 ### Korean pipeline
 
-1. Run AI-tell / 번역투 detection. Prefer delegating to the `ai-tell-detector` agent for span-level detection (category · severity · offset · reason · suggested_fix), or invoke the `humanize-korean` skill. For deeper rewriting candidates the `naturalness-reviewer` and `korean-style-rewriter` agents are available.
-2. Apply the `docs-write` Korean prose rules (core §3): 번역체 회피, 불필요한 한자어·외래어 축소, 분명한 주어, 일관된 조사·어미, 로마자·코드 식별자 원형 유지 — plus the labels rules (core §4).
+1. Run AI-tell / 번역투 (translationese — English-shaped Korean) detection. Prefer delegating to the `ai-tell-detector` agent for span-level detection (category · severity · offset · reason · suggested_fix), or invoke the `humanize-korean` skill. For deeper rewriting candidates the `naturalness-reviewer` and `korean-style-rewriter` agents are available.
+2. Apply the `docs-write` Korean prose rules (core §3): avoid 번역체, cut unnecessary 한자어 (Sino-Korean vocabulary) and 외래어 (foreign loanwords), name the subject explicitly, keep 조사 (case particles) and 어미 (verb endings) uniform, and keep Roman script and code identifiers in their original form — plus the labels rules (core §4).
 3. Merge AI-tell spans + docs-write Korean findings into one prioritized list.
 
 ## Output contract (suggest, don't apply)

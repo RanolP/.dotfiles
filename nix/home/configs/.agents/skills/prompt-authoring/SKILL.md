@@ -64,6 +64,20 @@ The `WHY` exists so the reader can apply the rule to a case the author never saw
 
 The second tells the reader what to weigh next time. Write the second.
 
+## Write agent-facing prose in English
+
+Every file a model reads as behavior is written in English, because Hangul fragments into many BPE tokens and that cost is paid in every session that loads the file.
+
+Korean stays for five cases:
+
+1. A runtime string a person reads (a message the tool prints, a document the user opens).
+2. An identifier that is already Korean.
+3. A trigger phrase the user types, such as `시말서`.
+4. A Korean-language specimen the rule is teaching about.
+5. A Korean writing-style term, glossed in English at first use -- `번역체 (translationese)`.
+
+This also replaces quoting the user's own Korean words as a `WHY`. Extract what the quote means and write that mechanism in English; the rule keeps the force and drops the token cost.
+
 ## Applying this to a whole file
 
 When editing an existing rules file or skill, work bullet by bullet:

@@ -302,11 +302,11 @@ SHA_IN_TEXT = re.compile(r"\b[0-9a-f]{7,40}\b")
 def body_sha_drift(cwd, branch):
     """Reminder text when the open PR's body names commits the branch no longer has.
 
-    A PR body whose 작업 내역 items are keyed by commit sha goes stale the moment
+    A PR body whose changelog items are keyed by commit sha goes stale the moment
     the stack is rebased, and a body pointing at a dead hash is worse than one
-    with no hash at all. This never denies: the user granted standing permission
-    to refresh hashes on every push ("해시는 허락 받지 말고 푸시 될 때마다 고치쇼"),
-    so the guard only makes the delta visible. Fails silent on anything odd.
+    with no hash at all. This never denies: refreshing those hashes on every push
+    is standing policy and needs no approval, so the guard only makes the delta
+    visible. Fails silent on anything odd.
     """
     def run(argv):
         return subprocess.run(argv, capture_output=True, text=True, timeout=15, cwd=cwd)

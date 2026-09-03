@@ -14,7 +14,7 @@ Conventional Commits, imperative mood — same rules as commit subjects (see `gi
 
 ## PR body — the shape
 
-The body answers one question: **리뷰어가 진정으로 궁금해할 게 뭘까.** Everything below follows from that.
+The body answers one question: **what does the reviewer genuinely want to know?** Everything below follows from that.
 
 **Sections = the repo template, verbatim.** In the work repos that is exactly four headers, checklist boilerplate included:
 
@@ -27,9 +27,9 @@ The body answers one question: **리뷰어가 진정으로 궁금해할 게 뭘�
 - [ ] Ex) 작품이 iOS에서 재생
 ```
 
-Add no section of your own. A PR body has no meta section, no "이 PR은 …" preamble, no apology, no 사족 — `리뷰에에게 절이 왜 필요해 ㅋㅋ`.
+Add no section of your own. A PR body has no meta section, no "이 PR은 …" preamble, no apology, no padding. A reviewer wants the change, not a bow before it.
 
-**작업 내역 = one numbered item per commit**, in commit order, each opening with the short sha and the commit subject. Under it, one sub-bullet stating the **intent** of the change, and a `리뷰 포인트:` sub-bullet when a decision is non-obvious — name the decision and the evidence behind it:
+**작업 내역 = one numbered item per commit**, in commit order, each opening with the short sha and the commit subject. Under it, one sub-bullet stating the **intent** of the change, and a `리뷰 포인트:` sub-bullet when a decision is non-obvious — say **why it had to be that way**, never what was decided, because the decision already sits in the diff and the reason is the only part the code cannot carry:
 
 ```markdown
 3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현한다
@@ -51,23 +51,23 @@ Never re-paste a commit body under its own item. The reviewer clicks the sha for
 - Where mermaid does not render (Jira ADF), precompile to SVG and place it with the `jira` CLI. A hosted image goes in as a `media` node with `type: "external"` through `jira edit queue`. A local file needs the human to upload it through the Jira web UI first, because the CLI has no upload path; `jira media ls -i KEY` then prints the id to position.
 - A fence that fails to parse shows the reader "Unable to render rich display" and nothing else. The `pr-body-guard` hook lints every fence before `gh pr create|edit` runs — inside a backtick markdown-string label, use a real newline, never `<br/>`.
 
-**Link instead of duplicating.** 피그마에 이미 있는 정보를 중복해서 적지 말자 — link it properly. A bare ticket key auto-links and renders the card title, so never hand-write the title beside it, and never leave a raw Jira URL in a body.
+**Link instead of duplicating.** Never restate information that already lives in Figma — link it properly. A bare ticket key auto-links and renders the card title, so never hand-write the title beside it, and never leave a raw Jira URL in a body.
 
-**Plain and honest over defensive.** Say the limitation outright: "PR 전체는 완전한 코드지만, 개별적인 커밋은 Lint/Typecheck가 실패할 수 있다" — not a hedged clause about 과도기.
+**Plain and honest over defensive.** Say the limitation outright: "PR 전체는 완전한 코드지만, 개별적인 커밋은 Lint/Typecheck가 실패할 수 있다" — not a hedged clause about a transitional state.
 
 **Title**: one short line with the description merged in, not a bare ticket key.
 
-## PR body — Korean, 개조식 위주
+## PR body — Korean, 개조식-first
 
 Write the body in Korean, terse outline style (개조식): noun-phrase or `-함`/`-됨` bullets, not full paragraphs.
 
 Apply inline prose rules (from technical-writing's Korean rules):
 
-- **번역투 제거**: 명사 나열 → 동사로, 피동 → 능동, `~되어지다` 금지, 무생물 주어 → 행위 주체, `~를 통해` → `~로`, 불필요한 `-들` 삭제.
-- **한 항목당 한 가지 생각** — 한 불릿에 두 주장을 `~하고`로 잇지 않는다.
-- **모호한 표현 대신 구체적 수치** — "크게 개선" 대신 "콜드스타트 800ms → 120ms".
-- **개념당 한 용어** — 같은 것을 매개변수/인자/옵션으로 번갈아 부르지 않는다.
-- **약어는 첫 등장에 풀어 쓴다.**
+- **Strip translationese (번역투)**: noun stacks → verbs, passive → active, no `~되어지다`, inanimate subject → the real actor, `~를 통해` → `~로`, drop the unnecessary plural `-들`.
+- **One idea per item** — never join two claims with `~하고` inside one bullet.
+- **Concrete numbers over vague wording** — write `콜드스타트 800ms → 120ms`, not `크게 개선`.
+- **One term per concept** — never alternate 매개변수/인자/옵션 for the same thing.
+- **Expand an abbreviation on its first appearance.**
 
 A PR body is outside-facing prose: run a `prose-editor` agent pass (Korean pipeline) on it before publishing.
 

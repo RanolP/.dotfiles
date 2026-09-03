@@ -98,7 +98,7 @@
 
 ## A failure earns a hypothesis and a test plan, never a retry
 - WHEN: a tool call, a command, a build, or a test fails
-- WHY: "실패 시에는 무조건 재시도 불가능" -- a blind rerun spends the same wall time to learn the same nothing, and a measured 7 days held 42 Bash calls that were both slow and failed, burning 3,674 seconds (22.7% of all slow-Bash time) with no result produced
+- WHY: a retry is never the answer to a failure -- a blind rerun spends the same wall time to learn the same nothing, and a measured 7 days held 42 Bash calls that were both slow and failed, burning 3,674 seconds (22.7% of all slow-Bash time) with no result produced
 - DO: write down the HYPOTHESIS for what failed, then the CHECK that would distinguish it from the alternatives, and run that check -- in that order
 - DO: make the check cheaper than the thing that failed, so a wrong guess costs seconds rather than minutes
 - DO: state the hypothesis and its verdict in the response, so a wrong one is visible rather than silently retried
@@ -114,7 +114,7 @@
 
 ## YAGNI bounds the feature count, never the design
 - WHEN: tempted to ship a smaller design because the task itself is small
-- WHY: "아니 '최소 제품'을 만들지 마. 올바른 설계가 먼저야."
+- WHY: a "minimum product" is the wrong target -- the right design comes first, and the feature count is what gets cut to reach it
 - DO: keep design correctness and refactor depth unbounded -- a new introduction follows what is right over the inertia of shipped code
 - DO: stay rigorous about understanding the problem, validation at trust boundaries, error handling that prevents data loss, security, accessibility, and anything explicitly requested
 - DO: take the sturdier option when two approaches cost the same
@@ -357,7 +357,7 @@
 
 ## Group the work, run it in the background, think synchronously
 - WHEN: a turn holds more than one unit of work, or any unit that will take longer than a few seconds
-- WHY: "병렬적 실행과 동기적 생각" -- execution fans out, judgement does not; the main thread stays available to the user while the slow parts run elsewhere
+- WHY: parallel execution, synchronous thought -- execution fans out, judgement does not; the main thread stays available to the user while the slow parts run elsewhere
 - DO: group the units FIRST -- state the whole set before starting any of it, so the shape is visible and the dependencies are known
 - DO: send every unit with no unmet dependency out together, in ONE message, so they run concurrently
 - DO: put a long or noisy unit in the background -- a background worker or a background command re-invokes you on completion, so the wait costs no round-trip

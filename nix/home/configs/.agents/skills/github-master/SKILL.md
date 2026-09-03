@@ -9,7 +9,7 @@ Apply when working with GitHub PRs/issues through `gh`. Defers to `git-master` f
 
 Per-command guides live in `guides/`; the `gh-guard` PreToolUse hook force-injects the matching guide once per session (3h window) when a mutating `gh pr` / `gh issue` command runs:
 
-- `guides/pr.md` — PR template detection/filling (gh does NOT auto-apply it), title rules, Korean 개조식 body + inline prose rules, issue-closing keywords, hygiene.
+- `guides/pr.md` — PR template detection/filling (gh does NOT auto-apply it), title rules, Korean 개조식 (terse outline style: noun-phrase bullets, `-함`/`-됨` endings) body + inline prose rules, issue-closing keywords, hygiene.
 - `guides/issue.md` — finding/scoping issues, issue templates, writing issues and comments.
 
 If the hook just injected a guide, follow the injected text — no need to re-read the files.

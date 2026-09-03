@@ -43,11 +43,11 @@ Write each sentence to be read once.
 
 ### 3. Korean prose (한국어 문서)
 
-- **번역체를 피한다.** "~되어진다", "~에 의해", "~에 대해" 남용 금지; 능동·간결한 한국어로. ("이 함수가 데이터를 처리한다.")
-- **불필요한 한자어·외래어를 줄인다.** 쉬운 우리말 우선; 정착된 기술 용어(캐시, 토큰, 빌드)는 억지로 바꾸지 않는다.
-- **주어를 분명히 한다.** 행위 주체가 모호하면 오해를 부른다.
-- **조사와 어미를 일관되게.** 한 문서 안에서 "~합니다/~한다"를 섞지 않는다.
-- **로마자·코드 식별자는 원형 그대로.** `useState`를 "유즈스테이트"로 쓰지 않는다.
+- **Avoid 번역체 (translationese — English-shaped Korean).** Do not overuse "~되어진다", "~에 의해", "~에 대해"; write active, compact Korean instead. Good: "이 함수가 데이터를 처리한다."
+- **Cut unnecessary 한자어 (Sino-Korean vocabulary) and 외래어 (foreign loanwords).** Prefer plain native Korean, but leave settled technical terms (캐시, 토큰, 빌드) as they are.
+- **Name the subject explicitly.** An ambiguous actor invites misreading.
+- **Keep 조사 (case particles) and 어미 (verb endings) uniform.** Never mix "~합니다" and "~한다" inside one document.
+- **Keep Roman script and code identifiers in their original form.** Write `useState`, never "유즈스테이트".
 
 ### 4. Labels, jargon, and compression
 

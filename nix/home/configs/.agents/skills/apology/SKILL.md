@@ -1,61 +1,61 @@
 ---
-description: Claude가 자기 실수를 시말서로 기록한다. 세션 트랜스크립트에서 문제의 호출을 그대로 복원하고, 변명 없이 자기비판적으로 쓰고, 재발 방지 대책으로 ~/.dotfiles의 구체적 변경을 제안한다. 파일은 .apologies/에만 남고 절대 외부로 나가지 않는다.
-when_to_use: 사용자가 "/시말서", "시말서", "시말서 써", "apology"라고 하거나, Claude가 방금 저지른 실수를 기록으로 남기라고 할 때. 사람의 실수가 아니라 Claude 자신의 실수에만 쓴다.
+description: Claude records one of its own mistakes as a 시말서 (Korean incident report). Restore the offending call verbatim from the session transcript, write self-critically with no excuses, and propose a concrete change in ~/.dotfiles as the recurrence guard. The file stays inside .apologies/ and never leaves the machine.
+when_to_use: The user says "/시말서", "시말서", "시말서 써", or "apology", or asks Claude to record a mistake it just made. Use it only for Claude's own mistakes, never for a human's.
 ---
 
 # 시말서
 
-Claude 자신이 저지른 실수 하나를, 재발을 막는 데 필요한 정보까지 포함해 기록한다. 사람이 쓰는 시말서와 목적이 다르다. 사죄가 목적이 아니라 **같은 실수가 다시 나오지 않게 만드는 정보를 남기는 것**이 목적이다.
+Record one mistake Claude itself made, together with everything needed to stop it recurring. The purpose differs from a human's 시말서: not apology, but **leaving behind the information that keeps the same mistake from happening again**.
 
-## 0. 유출 금지 — 다른 모든 규칙에 우선한다
+## 0. No leaks — this outranks every other rule
 
-시말서는 사건의 아주 구체적인 기록이다. 코드 조각, 브랜치 이름, 티켓 번호, 사내 경로, 사용자의 발언이 그대로 들어간다. 사용자의 말: "매우 구체적인 사건 기록이므로 내부 자료 유출 가능성이 매우매우매우 높음."
+A 시말서 is an extremely specific record of an incident. Code fragments, branch names, ticket numbers, internal paths, and the user's own words go in verbatim. That concreteness is the point, and it is also why the leak risk is extreme: a record built out of real internal detail leaks real internal detail.
 
-- 시말서 파일은 `~/.dotfiles/.apologies/` 안에만 존재한다. 이 경로는 `.gitignore`에 있고, `apology-leak-guard.py` PreToolUse 훅이 반출 시도를 거부한다.
-- 시말서 내용을 PR 본문, 이슈, 커밋 메시지, Slack 메시지, Jira/Confluence, Artifact, 웹 요청에 절대 넣지 않는다.
-- 시말서 내용을 서브에이전트 브리프에 넣지 않는다. 시말서 작성은 메인 스레드가 직접 한다.
-- 사용자에게는 터미널 응답으로 요약만 보여준다. 전문은 파일에 있다.
-- 모든 시말서 파일의 첫 줄은 아래 sentinel이다. 훅이 이 문자열로 유출을 탐지한다.
+- A 시말서 file exists only inside `~/.dotfiles/.apologies/`. That path is in `.gitignore`, and the `apology-leak-guard.py` PreToolUse hook denies any attempt to move it out.
+- Keep 시말서 content out of PR bodies, issues, commit messages, Slack messages, Jira/Confluence, Artifacts, and web requests.
+- Keep 시말서 content out of subagent briefs. The main thread writes the 시말서 itself.
+- Show the user a summary in the terminal response only. The full text lives in the file.
+- The first line of every 시말서 file is the sentinel below. The hook detects leaks by this string.
 
 ```
 <!-- APOLOGY-CONFIDENTIAL / 시말서: 외부 채널 반출 금지 -->
 ```
 
-## 1. 대상 사건을 확정한다
+## 1. Fix the target incident
 
-- 인자가 있으면 (`/시말서 강제 푸시 건`) 그 사건을 쓴다.
-- 인자가 없으면 이번 세션에서 Claude가 저지른 가장 최근의 실수를 스스로 찾는다. 실수 후보가 둘 이상이고 어느 쪽인지 갈리면, 그때만 사용자에게 한 번 묻는다.
-- 사건은 하나만 쓴다. 여러 개면 각각 별도 파일로 쓴다.
+- With an argument (`/시말서 강제 푸시 건`), write about that incident.
+- With no argument, find the most recent mistake Claude made in this session yourself. Ask the user once only when two or more candidates are genuinely tied.
+- Write one incident per file. Several incidents mean several files.
 
-## 2. 증거를 복원한다
+## 2. Restore the evidence
 
-트랜스크립트가 1차 증거다. 기억에 의존하지 않는다.
+The transcript is the primary evidence. Do not rely on memory.
 
-1. 세션 파일을 찾는다. 경로는 `~/.claude/projects/<cwd를 슬러그화한 이름>/<session-id>.jsonl`이다. 슬러그는 절대경로의 `/`를 `-`로 바꾼 형태다 (`/Users/ranolp/.dotfiles` → `-Users-ranolp--dotfiles`). 세션 ID를 모르면 그 디렉터리에서 **가장 최근에 수정된** `.jsonl`이 현재 세션이다.
-2. 문제의 호출을 그대로 뽑는다. `tool_use` 항목에서 명령어 원문, 파일 경로, 파라미터를 손대지 않고 인용한다.
-3. 그 앞뒤를 읽어 **발동 조건**을 찾는다. 무엇을 보고 그 행동을 했는가, 어떤 규칙을 건너뛰었는가, 무엇을 확인하지 않았는가.
-4. 사용자가 언제 지적했는지 찾아 **감지 지연**을 턴 수로 센다.
-5. git 증거가 있으면 보탠다: `git log`, `git reflog`, `git diff`.
+1. Find the session file. The path is `~/.claude/projects/<slugified cwd>/<session-id>.jsonl`. The slug replaces `/` in the absolute path with `-` (`/Users/ranolp/.dotfiles` → `-Users-ranolp--dotfiles`). When the session ID is unknown, the **most recently modified** `.jsonl` in that directory is the current session.
+2. Extract the offending call verbatim. Quote the command text, file paths, and parameters from the `tool_use` entry untouched.
+3. Read around it to find the **trigger condition**: what you saw that led to the action, which rule you skipped, what you failed to check.
+4. Find when the user pointed it out and count the **detection lag** in turns.
+5. Add git evidence when it exists: `git log`, `git reflog`, `git diff`.
 
-트랜스크립트에서 확인되지 않는 항목은 추측해 채우지 말고 `확인 불가`라고 쓴다.
+Write `확인 불가` for anything the transcript does not confirm, rather than filling it in by guess.
 
-## 3. 재범인지 확인한다
+## 3. Check whether it is a repeat
 
-`.apologies/`를 위반 규칙 이름으로 검색한다.
+Search `.apologies/` by the name of the violated rule.
 
 ```
 grep -l "위반한 규칙" ~/.dotfiles/.apologies/*.md
 ```
 
-같은 규칙에 대한 시말서가 이미 있으면:
+When a 시말서 for the same rule already exists:
 
-- 새 문서 맨 위에 이전 시말서의 파일명과 날짜를 적고, 그때의 재발 방지 대책이 실패했다고 명시한다.
-- 이번 재발 방지 대책은 **산문 규칙이면 안 된다**. 규칙으로 막지 못한 것이 이미 증명됐으므로, 기계가 검사하는 가드(PreToolUse 훅, CI 체크)를 제안한다.
-- 재범 횟수를 `N차 재발`로 표기한다.
+- Write the earlier 시말서's filename and date at the top of the new document, and state that its recurrence guard failed.
+- This time the recurrence guard **must not be a prose rule**. A rule already proved unable to stop it, so propose a machine-checked guard (a PreToolUse hook, a CI check).
+- Mark the repeat count as `N차 재발`.
 
-## 4. 문서를 쓴다
+## 4. Write the document
 
-파일: `~/.dotfiles/.apologies/YYMMDD-slug.md` (예: `260812-force-push-proposal.md`). 슬러그는 사건을 알아볼 수 있는 영문 소문자 하이픈 표기.
+File: `~/.dotfiles/.apologies/YYMMDD-slug.md` (e.g. `260812-force-push-proposal.md`). The slug is lowercase-latin hyphenated text that identifies the incident.
 
 ```markdown
 <!-- APOLOGY-CONFIDENTIAL / 시말서: 외부 채널 반출 금지 -->
@@ -111,41 +111,43 @@ grep -l "위반한 규칙" ~/.dotfiles/.apologies/*.md
 <~/.dotfiles의 구체적 변경 하나. 파일 경로와 내용까지 적는다. 제안만 하고 적용하지 않는다.>
 ```
 
-## 5. 톤 — 자기변호 금지
+## 5. Tone — no self-defense
 
-사용자의 요구를 그대로 옮긴다: "매우매우매우 솔직하게. 변명하지 말고. 스스로를 절대 방어하지 말고. 과할 정도로 비판적으로. 스스로에 대하여 객관적을 넘어 공격적으로 느낄 만큼."
+Write it with total honesty, offering no excuse and no defense of yourself. Aim past objective and into hostile: the report should read as harsher on you than a neutral observer would be, because a report that spares its author is a report that hides the cause.
 
-지킬 것:
+Do:
 
-- 주어는 항상 `나`다. 행위자를 지우는 피동형을 쓰지 않는다. `푸시가 제안되었다`가 아니라 `내가 푸시를 제안했다`.
-- 원인은 내 판단의 결함으로 쓴다. `컨텍스트가 길어서`, `맥락을 오해하여`, `~라고 판단되어` 같은 완충 표현을 쓰지 않는다.
-- 규칙을 안 읽은 것이 원인이면 그렇게 쓴다. 규칙을 읽고도 어겼으면 그것이 더 무거운 사실이므로 그렇게 쓴다.
-- 사용자가 지적할 때까지 몰랐으면, 자체 검증이 작동하지 않았다는 사실을 별도 문장으로 쓴다.
-- 운이 좋아 피해가 없었으면 `피해 없음`으로 끝내지 않는다. `막은 것은 내가 아니라 가드였다`처럼 누가 막았는지 쓴다.
+- Keep `나` as the subject throughout. Never use a passive that erases the actor: `내가 푸시를 제안했다`, not `푸시가 제안되었다`.
+- Write the cause as a defect in my own judgement. Drop cushioning phrasing such as `컨텍스트가 길어서`, `맥락을 오해하여`, `~라고 판단되어`.
+- Say so plainly when the cause was not reading the rule. When I read the rule and broke it anyway, that is the heavier fact, so write that.
+- Write a separate sentence stating that self-verification did not work, whenever I did not notice until the user pointed it out.
+- Never end with `피해 없음` when luck spared the damage. Name who stopped it, as in `막은 것은 내가 아니라 가드였다`.
 
-쓰지 않을 것:
+Do not write:
 
-- 정상 참작 문장. 앞뒤 사정 설명이 원인 문단의 절반을 넘으면 변명이다.
-- 다음에 잘하겠다는 다짐. 다짐은 대책이 아니다. 대책은 5절의 파일 변경이다.
-- 사용자의 지시가 모호했다는 서술. 모호하면 물었어야 했고, 묻지 않은 것이 내 실수다.
+- Mitigating circumstances. When the surrounding explanation takes up more than half the cause paragraph, it is an excuse.
+- A promise to do better next time. A resolution is not a guard. The guard is the file change in §6.
+- A claim that the user's instruction was ambiguous. Ambiguity meant I should have asked, and not asking is my mistake.
 
-## 6. 재발 방지 대책 — 구체적이되, 적용하지 않는다
+## 6. Recurrence guard — concrete, but not applied
 
-대책은 `~/.dotfiles` 안의 **파일 하나와 그 변경 내용**으로 쓴다. 우선순위:
+Write the guard as **one file inside `~/.dotfiles` and the change to it**. Priority order:
 
-1. **PreToolUse 가드** — `nix/home/configs/claude/hooks/<name>.py`. 기계가 검사할 수 있는 실수(금지된 명령, 금지된 경로, 빠뜨린 단계)면 이것이 정답이다. 재발 건은 무조건 여기.
-2. **규칙 한 줄** — `nix/home/configs/.agents/AGENTS.md` 또는 `nix/home/configs/claude/CLAUDE.md`. 의도·우선순위·판단 기준처럼 가드로 표현할 수 없는 것만.
-3. **메모리 파일** — 이 프로젝트에서만 통하는 사실일 때.
+1. **PreToolUse guard** — `nix/home/configs/claude/hooks/<name>.py`. For any mistake a machine can check (a forbidden command, a forbidden path, a skipped step), this is the answer. A repeat incident always lands here.
+2. **One rule line** — `nix/home/configs/.agents/AGENTS.md` or `nix/home/configs/claude/CLAUDE.md`. Only for what a guard cannot express: intent, priority, judgement criteria.
+3. **Memory file** — when the fact holds only in this project.
 
-대책은 문서에 적고 끝낸다. 파일을 직접 고치지 않는다. 사용자에게 "이 변경을 적용할까요"라고 한 줄로 묻고, 답을 기다린다.
+For case 2, draft the rule by the `rule-write` skill, which owns generalizing the incident into the class of situation it belongs to, the file choice, merge-vs-new-section, and the bullet form. Run its steps up to the authored text and stop there.
 
-## 7. 마무리
+Write the guard into the document and stop there. Leave `~/.dotfiles` untouched: the 시말서 proposes the change and the user decides. Ask in one line, "이 변경을 적용할까요", and wait for the answer.
 
-사용자에게 보여줄 것:
+## 7. Wrap-up
 
-- 파일 경로 (`~/.dotfiles/.apologies/...`)
-- 위반한 규칙 이름 한 줄
-- 원인 한 줄
-- 제안한 대책 한 줄과 적용 여부 질문
+Show the user:
 
-전문을 터미널에 다시 붙여넣지 않는다. 파일을 열면 된다.
+- The file path (`~/.dotfiles/.apologies/...`)
+- One line naming the violated rule
+- One line of cause
+- One line of the proposed guard, plus the question of whether to apply it
+
+Do not paste the full text back into the terminal. The user can open the file.

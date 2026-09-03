@@ -12,5 +12,9 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "laftel-frontend@laftel-frontend-skills": false,
+    "laftel-backend-skills@laftel-backend-skills": false
   }
 }

@@ -313,6 +313,13 @@ in
         source = ./configs/claude/hooks/output-shape-reminder.py;
         executable = true;
       };
+      # Name /handoff once the thread's resident context crosses 110k tokens,
+      # then every 30k -- the audit found handoff invoked at a median 139k
+      # against a ~170k compaction trigger, so compaction did the job instead.
+      ".claude/hooks/handoff-nudge.py" = {
+        source = ./configs/claude/hooks/handoff-nudge.py;
+        executable = true;
+      };
       # On "command not found", point at mise/project shims before installs.
       ".claude/hooks/missing-tool-hint.py" = {
         source = ./configs/claude/hooks/missing-tool-hint.py;

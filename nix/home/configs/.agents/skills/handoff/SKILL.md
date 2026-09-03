@@ -84,6 +84,8 @@ depend on.
 Writing rules:
 - Short isolated bullets, no narrative prose -- a coherent narrative is what hides facts from a fresh thread's attention.
 - Before finalizing, re-scan the tail of the session for late user corrections and fold them into User constraints / Decisions -- recent context is what default summarization compresses hardest.
+- Use only the `##` sections the template lists -- fold anything else into the nearest template section rather than opening a new heading.
+- `## Context` carries resolved environment facts (repo root, `owner/repo` from `git remote get-url origin`, verified full CLI invocations), because 11 of 18 successors re-derived them in their first 30 turns -- one retried a wrong GitHub org slug four times.
 - Size budget: the whole handoff fits in ~100 lines / ~1-2k tokens; 3-5 sentences max per entry. Compression pressure drops prose, never the `Chainable:` line or the User constraints section -- both are copied verbatim regardless.
 
 ```
@@ -98,7 +100,7 @@ Chainable: [true | false -- when false, add the reason on this same line]
 [Verbatim quotes of user-stated constraints, preferences, and corrections from this session -- exact words, never paraphrased. "None" if none.]
 
 ## Context
-[repo root, stack, the 2-4 files that matter most -- by path]
+[Resolved facts, never descriptions: the absolute repo root path; the `owner/repo` slug exactly as `git remote get-url origin` returned it, never guessed from the repo name; the stack; the exact CLI invocations this session already verified, in full command form (`gh pr list -R <owner>/<repo>`, `jira search '<jql>'`) and never a bare tool name; the 2-4 files that matter most, by absolute or repo-relative path.]
 
 ## State
 **Anchor:** [branch @ short-SHA, dirty/clean, pushed/unpushed]
@@ -123,10 +125,6 @@ Chainable: [true | false -- when false, add the reason on this same line]
 ## Artifacts
 [Plans/PRDs/ADRs/issues/commits/diffs by path or URL -- not copied here.]
 
-## Suggested skills
-[Skills the next session should invoke for this goal, e.g. /diagnose,
-/tdd, /grill-me -- with one line on why each applies.]
-
 ## Resume
 1. [first action] -- Expected: [outcome]; if it fails: [what to check]
 ```
@@ -140,11 +138,11 @@ Call `ExitPlanMode`. The approval dialog is the user's choice, not yours: the ha
 - ALWAYS treat `$ARGUMENTS` as the purpose and everything else as context capture
   serving it -- a section that does not move the next session toward that goal
   does not belong in the document
+- ALWAYS finish drafting the full document before `EnterPlanMode` -- inside plan
+  mode, write the plan file and exit, nothing else
 - ALWAYS load `EnterPlanMode` and `ExitPlanMode` with one `ToolSearch` in Phase 2,
   so Phase 3 is three adjacent tool calls and no round-trip separates the plan
   write from `ExitPlanMode`
-- ALWAYS finish drafting the full document before `EnterPlanMode` -- inside plan
-  mode, write the plan file and exit, nothing else
 - ALWAYS consume the draft with `EnterPlanMode` in the same turn it is written --
   ending the turn with the handoff sitting in a file or a chat message is a failure
 - ALWAYS hand off through `EnterPlanMode` + `ExitPlanMode` -- the plan file is the
@@ -157,3 +155,5 @@ Call `ExitPlanMode`. The approval dialog is the user's choice, not yours: the ha
   carries the work forward in this session
 - NEVER hand off a summary of the transcript -- extract only the resume-critical state and the next goal; the point is a focused thread, not a lossy digest
 - NEVER paraphrase user-stated constraints -- quote them verbatim in User constraints
+- NEVER add a `##` section the template does not list -- fold the content into the nearest template section instead; ad-hoc sections consumed 247 lines across 18 documents, the joint-largest of any section, and 5 of the 8 documents carrying one blew the size budget
+- NEVER let compression pressure touch the `User constraints` section or the `Chainable:` line -- User constraints looks low-value on a lexical proxy (10 of 18 successors quoted it back) only because constraints get obeyed rather than quoted, so that number is a floor, not a signal to cut

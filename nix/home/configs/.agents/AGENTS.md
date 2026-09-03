@@ -357,6 +357,7 @@
 - WHEN: the user names a cause, a culprit file, or a suspected version
 - DO: test their hypothesis first and report what the test showed, before offering any competing explanation
 - DO: check a dependency's actual version, not merely that it is installed -- presence and version are different facts and the bug usually lives in the version
+- DO: read a short rebuttal ("really?", "그런가?", one skeptical line) as a demand to re-verify the conclusion, and reach it by a DIFFERENT method than the one that produced it -- re-running the same check only reprints the same answer, so it proves nothing the user is asking about
 
 
 ## Reason explicitly

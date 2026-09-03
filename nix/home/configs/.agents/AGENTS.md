@@ -61,13 +61,6 @@
 - NOTE: `~/.dotfiles/nix/home/mise-global.toml` declares the versions, and `mise ls` prints the live set
 - TOOLS: `agent-device` drives iOS, Android, macOS, TV and web app UI; `agent-browser` automates a browser from the CLI; `pi` and `codex` are second coding agents; `herdr` manages terminal workspaces for agents; `ntn` is the Notion CLI; `jira` is this repo's ADF-native Jira CLI; `slopless` strips prose slop; `grit` applies GritQL structural rewrites; `reuse` lints SPDX headers; `duckdb`, `delta`, `gh`, `jq`, `rg`, `fd`, `bat`, `eza`, `fzf` and `uv` fill out the shell
 
-## Drive every UI through the CLI built for it
-- WHEN: a task needs a browser, a device, a simulator, or an app UI
-- DO: use `agent-browser` for a browser, and `agent-device` for a device, a simulator, or an app
-- DO: name the CLI command you checked and why it does not fit, before asking the user to approve a GUI extension instead
-- DO: name the missing subcommand to the user when the CLI genuinely lacks one, rather than falling back on your own
-- SKILL: `ui-automation`, injected by `agent-tooling-guard.py` at the first GUI-tool call
-
 ## Record the scenario to a file, then replay the file
 - WHEN: about to drive a UI, an app, an API, or any multi-step flow you expect to run more than once -- verifying your own change, reproducing a bug, or leaving a regression check behind
 - DO: arm the recording on the FIRST pass, so exploring and recording are one walk rather than two
@@ -81,10 +74,6 @@
 - DO: restate it as the positive action that makes X impossible, and act on that restated form
 - DO: act on the target when the user appends a positive one after the "don't"
 
-## Agent-facing instructions lead with the action
-- WHEN: authoring anything a model reads as behavior -- a skill, a subagent brief, a prompt, a rules file
-- DO: write the positive sentence first, and reach for a prohibition only when the positive form visibly loses something
-- SKILL: `prompt-authoring`, injected by `prompt-authoring-guard.py` at the edit
 ## Plan after research, then act
 - WHEN: any task; "ready" = research done, not context that happened to exist up front
 - DO (non-trivial: 2+ files, multi-step, or ambiguous scope): research the relevant context, then present the plan concisely when the user asked for one or when planning is needed to make scope clear
@@ -284,11 +273,6 @@
 - DO: query the remote state before handing over a push or a deploy
 - DO: treat every subagent report as a claim to verify, because a subagent's green check is not the feature working
 - NEVER: say done when no runtime check was possible -- say exactly which check is missing instead
-## Let every git hook run
-- WHEN: any `git commit` or `git push`
-- DO: run the hooks every time -- they are the mechanized form of these rules, so bypassing them discards the enforcement the repo was given on purpose
-- NOTE: `git-integrity-guard.py` hard-denies `--no-verify` and every force-push flag, with no bypass
-
 ## Resolve a rejected push by fetching and rebasing
 - WHEN: a push is rejected, or a rebase is about to run
 - DO: run `git fetch` as its own visible step first, so the update the rebase sees is one the user watched arrive
@@ -342,16 +326,6 @@
 - DO: label evidence vs premises; state unavoidable assumptions explicitly; mark fixed constraints vs in-scope items
 - DO: build every premise out of what the user actually said -- quote their sentence as the ground for a claim, and drop the claim when no sentence of theirs supports it
 - NEVER: attach a premise the user never gave, because it invites an attack on ground you chose yourself
-
-## Keep shell commands simple
-- WHEN: running shell commands
-- DO: run a mutating command standalone, never chained into or piped through anything else
-- DO: batch read-only work freely -- chain reads, or issue independent reads in one message
-- DO: derive a likely path from the platform convention and check that path directly
-- DO: mutate an existing file with the `Edit` or `Write` tool, even while auto permission mode is asking for the shell -- `Edit` measures 0.099s median (n=769) and `Write` 0.106s (n=220), against 2.45s for the same change written as a `python3` script (414 such calls burned 31.7 minutes across 3 days)
-- WHY: the gap is not the binary -- the SAME `sed` measures 0.178s reading (`sed -n`, n=1000) and 3.357s writing (`sed -i`, n=52), because a write-shaped shell command pays a ~1.7-2.3s harness approval step that `Edit` and `Write` never enter; picking a faster CLI buys about 2% of that (`ed` 6.6ms vs `python3` 58.4ms on the same 536-line edit), so leaving the shell is the only lever that moves
-- NOTE: `file-edit-guard.py` denies the shell route for a single existing source file and names `Edit` in its reason; it stays open for new files, globs, `/tmp` and scratchpad paths, and anything it cannot parse
-- NEVER: sweep the filesystem for something that one derived path answers
 
 ## Wait inside one blocking call
 - WHEN: a command or job needs time to finish -- a build, a deploy, a test suite, an external job

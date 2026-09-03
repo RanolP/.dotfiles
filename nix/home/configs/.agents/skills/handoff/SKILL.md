@@ -46,16 +46,30 @@ failed handoff.
 Plan mode is not a research phase in this skill; it is only the surface that
 carries the finished document forward with a cleared context. Entering it before
 the document is written wastes the very context reset it exists for.
+`plan-mode-guard.py` enforces this: inside plan mode it denies `Read`, `Grep`,
+`Glob`, `Bash` and every other lookup, leaving only the plan-file write,
+`AskUserQuestion`, `ToolSearch` and `ExitPlanMode`. Anything you did not resolve
+here is unresolvable there.
+
+Load the two plan-mode tools here, while still outside plan mode:
+`ToolSearch select:EnterPlanMode,ExitPlanMode`. Both are deferred, so leaving
+this until Phase 3 puts a `ToolSearch` round-trip between the plan-file write and `ExitPlanMode`, which is where a context compaction lands. Measured over the 21 days ending 2026-09-03: 18 of 18 handoffs completed the full `EnterPlanMode` -> plan write -> `ExitPlanMode` -> successor sequence, and zero died.
+
+That gap is recoverable, not fatal: when a compaction lands between the plan-file write and `ExitPlanMode`, re-run `ToolSearch select:ExitPlanMode` to reload the schema the compaction dropped, then call `ExitPlanMode` -- one session did exactly this and survived.
 
 ## Phase 3: Enter plan mode, paste, exit
 The moment the document is complete, in the SAME turn, without pausing for the
-user:
+user, run these three tool calls back to back with nothing in between:
 
-1. Call `EnterPlanMode` (load it with `ToolSearch`
-   `select:EnterPlanMode,ExitPlanMode` first if deferred).
+1. Call `EnterPlanMode`.
 2. Write the already-drafted document into the plan file verbatim -- no new
    research, no new tool calls beyond that write.
 3. Call `ExitPlanMode` immediately.
+
+The plan file lives in the ACTIVE profile's directory: `$CLAUDE_CONFIG_DIR/plans/`
+when `ccc <profile>` set it, `~/.claude/plans/` otherwise. `plan-mode-guard.py`
+auto-allows a write to either, so the write needs no prior `Read` and no
+permission prompt.
 
 At the approval prompt, the intended choice is the context-clearing one: the plan
 file is the compressed context that replaces this session's transcript.
@@ -126,6 +140,9 @@ Call `ExitPlanMode`. The approval dialog is the user's choice, not yours: the ha
 - ALWAYS treat `$ARGUMENTS` as the purpose and everything else as context capture
   serving it -- a section that does not move the next session toward that goal
   does not belong in the document
+- ALWAYS load `EnterPlanMode` and `ExitPlanMode` with one `ToolSearch` in Phase 2,
+  so Phase 3 is three adjacent tool calls and no round-trip separates the plan
+  write from `ExitPlanMode`
 - ALWAYS finish drafting the full document before `EnterPlanMode` -- inside plan
   mode, write the plan file and exit, nothing else
 - ALWAYS consume the draft with `EnterPlanMode` in the same turn it is written --

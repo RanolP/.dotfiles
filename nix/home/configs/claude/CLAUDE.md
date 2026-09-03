@@ -8,7 +8,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - WHEN (think): the shared "Plan after research, then act" rule's non-trivial bar is met, and the task's FIRST mutation has not happened yet
 - DO (think): finish the research inline FIRST, then call EnterPlanMode
 - DO (think): distill the findings into the plan file and present it via ExitPlanMode -- an inline plan paragraph does not count as presenting a plan
-- NOTE: `plan-mode-guard.py` denies every acting tool inside plan mode, and this ExitPlanMode approval is the ONE checkpoint the shared "Checkpoint only for genuine blockers" rule exempts
+- NOTE: `plan-mode-guard.py` denies every tool inside plan mode except the plan-file write, AskUserQuestion, ToolSearch and ExitPlanMode -- Read, Grep and Glob included, because a read inside plan mode puts back the context the mode exists to drop; this ExitPlanMode approval is the ONE checkpoint the shared "Checkpoint only for genuine blockers" rule exempts
 - WHEN (handoff): a finished unit of work hands off to the next one inside the same session
 - DO (handoff): invoke the `handoff` skill FIRST and follow it, because the template, the size budget and the `Chainable` flag live there and a handoff drafted from these four lines alone lands as a bare plan the user must still clean up
 - DO (handoff): call EnterPlanMode and write the NEXT unit of work into the plan file, because the approved plan is the compressed context that replaces the old transcript

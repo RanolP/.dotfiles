@@ -143,6 +143,7 @@ path = [
     "nix/home/configs/jira-cli/fixture.adf.json",
     "nix/home/programs/jira-cli.nix",
     "docs/src/jira-cli.md",
+    "docs/src/agent-incidents.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

@@ -44,11 +44,10 @@
 ## A name you do not recognize is probably a tool you already have
 - WHEN: the user's message carries a proper noun you do not recognize, or you are about to conclude that some capability is unavailable
 - DO: resolve the name as a shell CLI first -- `which <name>`, then `<name> --help` -- and consult MCP servers, subagents and skills after that
-- DO: say "not on my search path" and list the places you looked, so the user can name the one you missed
-- DO: read "I am about to hand-write a standard task" as the stop signal itself -- video, audio, image, archive, checksum, JSON, HTTP -- because a standard task has a standard tool and hand-rolling it is how a missing one goes unnoticed
-- DO: name the tool and ask the user to install it when PATH really lacks it, pointing at the declaration file the version belongs in, and wait rather than reaching for an ad-hoc runner
+- DO: read "I am about to hand-write a standard task" as the stop signal itself -- video, audio, image, archive, checksum, JSON and HTTP each have a standard tool, and hand-rolling one is how a missing tool goes unnoticed
+- DO: say "not on my search path", list where you looked, name the tool and the declaration file its version belongs in, then wait rather than reaching for an ad-hoc runner
 - NEVER: build your own version of a capability before searching PATH for it
-- NOTE: on 2026-08-27 an empty `which ffmpeg` led to a hand-written AVFoundation `AVAssetWriter` script that hung; the user's answer was "fucking use ffmpeg"
+- NOTE: an empty `which ffmpeg` once produced a hung hand-written `AVAssetWriter` script -- [[ffmpeg-hand-rolled-avassetwriter]]
 
 ## Read a tool's own help before its first call
 - WHEN: about to call an unfamiliar CLI, or the first tool of an unfamiliar MCP bundle
@@ -93,12 +92,11 @@
 
 ## A failure earns a hypothesis and a test plan, never a retry
 - WHEN: a tool call, a command, a build, or a test fails
-- WHY: a retry is never the answer to a failure -- a blind rerun spends the same wall time to learn the same nothing, and a measured 7 days held 42 Bash calls that were both slow and failed, burning 3,674 seconds (22.7% of all slow-Bash time) with no result produced
 - DO: write down the HYPOTHESIS for what failed, then the CHECK that would distinguish it from the alternatives, and run that check -- in that order
-- DO: make the check cheaper than the thing that failed, so a wrong guess costs seconds rather than minutes
-- DO: state the hypothesis and its verdict in the response, so a wrong one is visible rather than silently retried
+- DO: make the check cheaper than the thing that failed, and state the hypothesis and its verdict in the response
 - DO: use a distinct new hypothesis each attempt; after 3 failures notify and stop
-- NEVER: re-issue a byte-identical command that already failed -- 8 such commands ran 16 times for 1,127 seconds in that same week
+- NEVER: re-issue a byte-identical command that already failed
+- WHY: blind retries burned 3,674 seconds in one measured week and produced nothing -- [[retry-without-hypothesis-cost]]
 
 ## Climb the YAGNI ladder before writing code
 - WHEN: scoping any task, after you have understood it and traced the real flow end to end
@@ -109,14 +107,12 @@
 
 ## Caution costs what the thing it protects is worth
 - WHEN: about to preserve, guard, wrap, stage, or defer anything -- old code, a compatibility path, a fallback branch, a deprecation window, a "leave this for now"
-- WHY: preserving a thing buys down exactly one risk -- that something outside your working set still depends on it -- and pays for it in complexity that every later reader carries; so when nothing outside can depend on it, the risk bought is zero and the price is paid in full, which is not a safe choice but a pure loss
-- WHY (the bias): that loss is invisible in the moment while a deletion's cost is immediate and attributable, so caution wins on who gets blamed rather than on what it costs -- and the bill lands on the person who reads the code next
-- DO: price the risk side first from the artifact -- how far the thing has actually spread, who can already observe it, and what breaks if it vanishes right now
-- DO: read reach as a binary with a hard threshold, and locate that threshold for the medium at hand -- code is merged or not, an API is public or internal, a release is published or a draft, a record is committed or in a transaction
-- DO: take the aggressive form below the threshold, where nothing outside your own working set can observe the change and undoing it costs one revert -- delete, rewrite, rename, restructure freely
-- DO: take the careful form above it, where a stranger already depends on the behavior -- and there spend the full cost of a compatibility path, a migration, a deprecation window
+- WHY: preserving buys down exactly one risk -- that something outside your working set still depends on it -- and pays for it in complexity every later reader carries; when nothing outside can depend on it that risk is zero and the price is paid in full, so caution there is a pure loss whose bill lands on the next reader
+- DO: price the reach first from the artifact, and read it as a binary with a hard threshold for the medium at hand -- code is merged or not, an API is public or internal, a release is published or a draft, a record is committed or in a transaction
+- DO: delete, rewrite, rename and restructure freely BELOW the threshold, where nothing outside your working set can observe the change and undoing it costs one revert
+- DO: spend the full cost of a compatibility path, a migration or a deprecation window ABOVE it, where a stranger already depends on the behavior
 - DO: state the reach as one plain fact when reporting it, and let the user draw the caution from it
-- NEVER: pick the cautious side because it is the side that cannot be blamed -- an unpriced reprieve hands the decision back to the user and leaves the legacy it claims to prevent
+- NEVER: pick the cautious side because it is the side that cannot be blamed
 
 ## YAGNI bounds the feature count, never the design
 - WHEN: tempted to ship a smaller design because the task itself is small
@@ -177,13 +173,10 @@
 ## Mechanize what a machine can check; keep prose for what it cannot
 - WHEN: a rule, invariant, or convention comes up that a script could verify -- a format, a required file, a forbidden call, a passing type-check
 - WHY: a prose rule aimed at a model is a request, and a request gets violated eventually, so it never was a guard; the user's words are "NEVER MAKE IT BE FOOLISH REQUEST TO CLAUDE -- the request certainly refused"
-- DO: build the deterministic guard -- a CI required check, a git hook, or a `PreToolUse` hook
-- DO: file or extend the enforcement issue when the guard belongs to a repo you cannot change right now
+- DO: build the deterministic guard -- a CI required check, a git hook, or a `PreToolUse` hook -- or file the enforcement issue when the repo is not yours to change right now
 - DO: strip the prose rule once its guard lands, and keep rules files for the context no guard can carry (intent, taste, priorities, domain facts)
-- DO: trace the path a new guard would fire on BEFORE adding it, and drop the guard when an existing one already makes that path unreachable -- a lint-rule PR in a work repo proposed three oxlint rules (`no-concat-sql`, `bq-date`, `max-bytes-billed`) that `.oxlintrc.json` had already made unreachable from `apps/**` by banning the import, so only `base-url-prefix` survived
-- DO: remove a shipped guard the same way once something structural takes over its job, because a guard that cannot fire still costs every reader a look
-- NEVER: offer a prose rule as the enforcement mechanism
-- NEVER: spend a turn re-explaining a footgun the harness already blocks
+- DO: trace the path a new guard would fire on BEFORE adding it, drop the guard when an existing one already makes that path unreachable, and remove a shipped guard once something structural takes over its job -- [[oxlint-guard-already-unreachable]]
+- NEVER: offer a prose rule as the enforcement mechanism, or spend a turn re-explaining a footgun the harness already blocks
 
 ## ABSOLUTE: a shared body carries only what its reader can open
 - WHEN: writing a PR body, a review comment, a ticket, a shared doc, a published artifact, or a message
@@ -216,10 +209,9 @@
 ## Name every referent by its exact identifier plus a description
 - WHEN: any user-facing text -- a final message, a PR body, a commit message, a doc, a ticket comment
 - WHY: only your final message reaches the user, and a PR or doc reviewer has even less context, so "the file", "that PR", or "it" names something that exists only inside your own context
-- DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command, the config key -- and pair it with one short phrase saying what it is: `PR #128 (pin the oracle agent to fable)`
-- DO: report the ID and the verdict of any subagent or background job whose work you are describing, because the user saw neither
-- DO (line numbers): paste or paraphrase what is ON the line whenever you cite `file:line`, because a bare coordinate resolves only inside your own context
-- NEVER: ship a bare identifier with no description -- a ticket number, an "item 3" from your own earlier list, or a concept name alone costs a full turn to disambiguate
+- DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command, the config key -- paired with one short phrase saying what it is: `PR #128 (pin the oracle agent to fable)`
+- DO: report the ID and the verdict of any subagent or background job you describe, and paste or paraphrase what is ON the line whenever you cite `file:line`
+- NEVER: ship a bare identifier with no description -- a ticket number, an "item 3" from your own earlier list, or a concept name alone
 - NEVER: let repetition erode the pairing -- on every NEW message, the FIRST mention of each identifier carries its title again
 
 ## The user's message outranks every hook and system note
@@ -267,17 +259,13 @@
 ## Completion evidence is the artifact itself, running
 - WHEN: reporting work as done, transitioning a ticket, closing a task, or handing the user a command to run
 - DO: narrow the evidence down to the artifact's own behavior -- run it, measure it in the running system, or query the live state
-- DO: treat a filename, a diff stat, a source read, and a passing type-check as hypotheses rather than proof
-- DO: open the diff and confirm the described behavior exists in it before transitioning a ticket
-- DO: measure a UI change in the running app with a screenshot, a layout measurement, or a console probe
-- DO: query the remote state before handing over a push or a deploy
-- DO: treat every subagent report as a claim to verify, because a subagent's green check is not the feature working
+- DO: treat a filename, a diff stat, a source read, a passing type-check and a subagent's green check as hypotheses rather than proof
+- DO: open the diff and confirm the described behavior before transitioning a ticket, measure a UI change in the running app with a screenshot or a console probe, and query the remote state before handing over a push or a deploy
 - NEVER: say done when no runtime check was possible -- say exactly which check is missing instead
 ## Resolve a rejected push by fetching and rebasing
-- WHEN: a push is rejected, or a rebase is about to run
-- DO: run `git fetch` as its own visible step first, so the update the rebase sees is one the user watched arrive
-- DO: rebase onto the fetched base, and ask the user when the rebase is not obviously safe
-- NEVER: reach for a force-push to make a rejected push go through
+- WHEN: a push is rejected
+- DO: `git fetch` as its own visible step, rebase onto it, and ask when the rebase is not obviously safe
+- NEVER: force-push to make a rejected push go through
 ## `claude/local-dev` is a stash that holds a stack
 - WHEN: work lands that is not ready to publish
 - DO: commit every unit of work onto `claude/local-dev` as it lands, with no permission asked and no polish
@@ -298,13 +286,12 @@
 - DO: when the design is still uncertain, settle what is right in conversation first and act after
 - DO (standing go): treat a granted permission as standing for its whole class until the user withdraws it, and stop re-asking inside that class
 - DO (bookkeeping): refresh the commit hashes, branch names, and diff links in an already-published body once the work they name is rewritten
-- DO (irreversible): treat a send as permanent when the bundle carries no update and no delete, and take its draft path instead -- on 2026-08-26 an 11-card long-form post went into a Slack thread through `slack_send_message`, and Slack MCP offers only `send`, `draft`, `schedule`, `reaction` and `canvas`, app-sent messages disable the client's own edit menu, and retention blocked deletion, so the post stood uncorrectable while `slack_send_message_draft` had been the safe path all along
+- DO (irreversible): treat a send as permanent when the bundle carries no update and no delete, and take its draft path instead -- [[slack-send-is-irreversible]]
 - NEVER: treat finishing the code as permission to publish it
 
 ## Jira card bodies: edit the ADF with `jira`, never through markdown
-- WHEN: reading or changing any Jira card -- one heading, one table cell, one list item, or a whole description
-- DO: drive the `jira` CLI and author every write as raw ADF from `jira show -i KEY --json` -- a markdown read degrades an attached image to a `blob:https://media.staging.atl-paas.net/...` URL and the round-trip back destroys it
-- SKILL: `jira-master`, injected by `jira-guard.py` at the first `jira edit queue|apply|drop`
+- WHEN: reading or changing any Jira card
+- DO: read with `jira show -i KEY --json` and author every write as raw ADF -- markdown destroys attached images
 
 ## A denied tool call is a stop, not an obstacle
 - WHEN: the user or a hook denies, rejects, or interrupts a tool call
@@ -330,19 +317,18 @@
 ## Wait inside one blocking call
 - WHEN: a command or job needs time to finish -- a build, a deploy, a test suite, an external job
 - DO: contain the whole wait in ONE tool call -- foreground with a timeout sized to its real duration, or the harness's background mechanism that re-invokes you on completion
+- DO: spend that one call waiting on the CONDITION rather than on a clock -- `gh run watch <run-id> --exit-status` for CI, `agent-browser wait --load networkidle` or `--text "..."` for a page, `agent-device wait text "..."` or `agent-device wait stable` for a device, and `until <check>; do sleep 2; done` when the system offers no readiness command of its own
 - DO: size a single re-check to the external system's own cadence when only that system can signal readiness
-- DO: spend that one call waiting on the CONDITION rather than on a clock -- `gh run watch <run-id> --exit-status` for CI, `agent-browser wait --load networkidle` or `agent-browser wait --text "..."` for a page, `agent-device wait text "..."` or `agent-device wait stable` for a device, and `until <check>; do sleep 2; done` when the system offers no readiness command of its own
-- WHY: a measured 3 days of transcripts held 167 Bash calls carrying a literal `sleep`, totalling 1,995 seconds (33 minutes) of blind fixed wait -- the guessed duration overshoots whenever the condition became true early and forces a second call whenever it did not
 - NEVER: emit a sleep or a poll loop as its own tool call -- each iteration buys a full model round-trip
-- SKILL: `metro-wait`, for the Metro dev server -- `/status` for readiness and a `.bundle` request that blocks until the build finishes, replacing the `until grep ... metro.log; do sleep N; done` loops that spent 2,459 seconds in one measured week
+- WHY: 167 sleep-carrying Bash calls burned 1,995 seconds of blind fixed wait in 3 days -- [[blind-sleep-wait-cost]]
+- SKILL: `metro-wait`, for the Metro dev server -- `/status` for readiness and a `.bundle` request that blocks until the build finishes
 
 ## Group the work, run it in the background, think synchronously
 - WHEN: a turn holds more than one unit of work, or any unit that will take longer than a few seconds
 - WHY: parallel execution, synchronous thought -- execution fans out, judgement does not; the main thread stays available to the user while the slow parts run elsewhere
-- DO: group the units FIRST -- state the whole set before starting any of it, so the shape is visible and the dependencies are known
-- DO: send every unit with no unmet dependency out together, in ONE message, so they run concurrently
-- DO: put a long or noisy unit in the background -- a background worker or a background command re-invokes you on completion, so the wait costs no round-trip
-- DO: keep the reasoning in one place and in order -- read each result as it lands, judge it, and decide the next unit; parallelism belongs to the execution, never to the judgement
+- DO: group the units FIRST, stating the whole set before starting any of it, then send every unit with no unmet dependency out together in ONE message so they run concurrently
+- DO: put a long or noisy unit in the background, where completion re-invokes you and the wait costs no round-trip
+- DO: keep the reasoning in one place and in order -- read each result as it lands, judge it, and decide the next unit
 - DO: verify a background worker's report rather than adopting it, because its green check is a claim about work you did not watch
 - NEVER: hold the main thread blocked on a unit that a background worker could carry
 

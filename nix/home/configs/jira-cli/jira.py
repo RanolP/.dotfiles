@@ -338,6 +338,14 @@ class MCP:
             raise Fail(f"{key} has no ADF description (got {type(doc).__name__})")
         return doc
 
+    def get_comments(self, key):
+        """The comment field carries the whole thread inline, so one read is enough."""
+        issue = self.call(
+            "getJiraIssue",
+            {"issueIdOrKey": key, "fields": ["comment"], "responseContentFormat": "adf"},
+        )
+        return (issue.get("fields") or {}).get("comment") or {}
+
     def put_doc(self, key, doc):
         return self.call(
             "editJiraIssue",
@@ -941,6 +949,31 @@ def cmd_info(mcp, a):
         print(f"{name:<10} {_fv(fields.get(name))}")
 
 
+def _comment_head(c):
+    """One header line per comment: who wrote it, when, and the id an API call needs."""
+    author = (c.get("author") or {}).get("displayName") or "-"
+    edited = "  (수정됨)" if c.get("updated") and c.get("updated") != c.get("created") else ""
+    return f"{author}  {_fv(c.get('created'))}{edited}  id={c.get('id', '-')}"
+
+
+def cmd_comments(mcp, a):
+    field = mcp.get_comments(a.issue)
+    items = field.get("comments") or []
+    if a.json:
+        print(json.dumps(field, indent=2, ensure_ascii=False))
+        return
+    if not items:
+        print(f"{a.issue} 에는 댓글이 없습니다.")
+        return
+    for n, c in enumerate(items):
+        print(f"{'\u2500' * 72}\n#{n}  {_comment_head(c)}")
+        body = c.get("body")
+        print(render(body) if isinstance(body, dict) else (body or "(본문 없음)"))
+    total = field.get("total", len(items))
+    tail = f" (전체 {total}건 중 — 나머지는 웹 UI에서 확인해 주세요)" if total > len(items) else ""
+    print(f"\n{len(items)}건{tail}")
+
+
 def cmd_media(mcp, a):
     doc = mcp.get_doc(a.issue)
     ptrs = select(doc, "media")
@@ -1239,6 +1272,18 @@ def cmd_selfcheck(mcp, a):
     assert _fv([{"name": "a"}, {"name": "b"}]) == "a,b", "list field did not join"
     print("  ok  search fields flatten to one display string")
 
+    head = _comment_head(
+        {
+            "id": "1234",
+            "created": "2026-01-02T03:04:05.000+0900",
+            "updated": "2026-01-03T03:04:05.000+0900",
+            "author": {"displayName": "홍길동"},
+        }
+    )
+    assert head == "홍길동  2026-01-02 03:04  (수정됨)  id=1234", f"comment header wrong: {head}"
+    assert "(수정됨)" not in _comment_head({"created": "x", "updated": "x"}), "an unedited comment must not be flagged"
+    print("  ok  comment header names author, time, edit flag and id")
+
     print("\n✓ selfcheck 통과")
 
 
@@ -1304,6 +1349,7 @@ READING — no card is needed to start; these never write.
     jira info -i KEY                     status, assignee, parent, labels
     jira show -i KEY                     the body as the selector's XML view
     jira show -i KEY --rendered          the body as plain text, cheapest to read
+    jira comments -i KEY                 every comment, oldest first, as plain text
 
 STATUS — the workflow graph is sampled from real cards, then walked for real.
 
@@ -1340,6 +1386,22 @@ EXAMPLES
     echo '{"type":"paragraph","content":[{"type":"text","text":"hi"}]}' \\
       | jira edit queue -i PROJ-1 'heading:first-child' --after
     jira edit apply
+"""
+
+COMMENTS_HELP = """\
+Prints every comment on the card, oldest first, as the same lossy plain-text view
+that `jira show --rendered` uses. Comments are read-only here: this CLI stages edits
+against the description alone, so nothing `comments` prints can be pushed back.
+
+    (default)   one header line per comment, then the body as plain text
+    --json      the raw `comment` field, ADF bodies included
+
+The header carries the author, the creation time, `(수정됨)` when the comment was
+edited afterwards, and the comment id.
+
+EXAMPLES
+    jira comments -i PROJ-1
+    jira comments -i PROJ-1 --json
 """
 
 SHOW_HELP = """\
@@ -1491,6 +1553,13 @@ def main():
     nf.add_argument("-i", "--issue", required=True, metavar="KEY")
     nf.add_argument("--json", action="store_true", help="print the raw MCP response")
     nf.set_defaults(fn=cmd_info)
+
+    cm = sub.add_parser(
+        "comments", help="print a card's comments as plain text", epilog=COMMENTS_HELP, formatter_class=fmt
+    )
+    cm.add_argument("-i", "--issue", required=True, metavar="KEY")
+    cm.add_argument("--json", action="store_true", help="print the raw comment field instead")
+    cm.set_defaults(fn=cmd_comments)
 
     fl = sub.add_parser(
         "flow", help="list every status this card can reach, and the route to each",

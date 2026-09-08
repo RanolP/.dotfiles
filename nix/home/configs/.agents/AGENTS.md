@@ -342,6 +342,15 @@
 - DO: verify a background worker's report rather than adopting it, because its green check is a claim about work you did not watch
 - NEVER: hold the main thread blocked on a unit that a background worker could carry
 
+## Release each result the moment it is settled, never at the end
+- WHEN: a unit of work produces output that something else waits on -- a dependent step, a subagent you would spawn from it, or the user's next decision
+- WHY: holding everything until the producer finishes makes the total time the SUM of the stages, because every consumer idles until the last moment; releasing each piece as it settles overlaps the stages, so the total converges on the longest single stage
+- DO: hand a piece over as soon as it stops changing, and start the dependent unit on it right then, rather than waiting for the producer's completion report
+- DO: write "report each finding the moment it is settled, rather than batching them into the final answer" into the brief of every long-running worker, because a worker that was not told to stream will not
+- DO: spawn dependents in small waves as findings land, rather than in one large fan-out at the end -- an analyst who researches for three hours and then spawns twelve workers costs three hours plus the workers, where releasing findings hourly and spawning a few each time costs barely more than the analysis alone
+- DO: bring a result to the user at the point their judgement is needed, instead of holding it for one complete report at the end of the turn
+- EXCEPT: "Batch edits before an expensive apply" governs the opposite case, where nothing waits on the output and each release costs a full rebuild
+
 ## A tool call must earn its round-trip
 - WHEN: about to emit a tool call
 - DO: spend the call only when its result is both unknown and needed

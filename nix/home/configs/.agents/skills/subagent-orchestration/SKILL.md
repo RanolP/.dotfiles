@@ -11,12 +11,13 @@ The decision of **whether** to spawn lives in `CLAUDE.md` under `## Orchestrate 
 
 A subagent sees none of this thread. Whatever the brief omits, the worker invents.
 
-Every brief carries four things:
+Every brief carries five things:
 
 1. **The goal**, stated as the outcome wanted rather than the steps to take.
 2. **The files**, as repo-relative paths the worker can open directly.
 3. **The return shape** -- see the typed-handoff rules below when the result feeds a next step.
 4. **The constraints** that are not discoverable from the code: the convention to match, the approach already rejected, the thing not to touch.
+5. **The reporting cadence**, whenever the work runs long enough that a dependent step could start on a partial result: tell the worker to report each finding the moment it is settled rather than batching them into a final answer, so the waves of dependent spawns begin while it is still working.
 
 Never point a brief at this conversation. "As we discussed", "the file from before", and "the plan above" all resolve to nothing in a fresh worker's context.
 

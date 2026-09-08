@@ -138,10 +138,15 @@
 - DO (CI): log the intermediate values a failure hinges on, so the log explains itself without a re-run
 - DO (app): log enough context at each error site that the cause reads off the log alone, with no debugger attached
 
-## Lazy code leaves one runnable check
-- WHEN: non-trivial logic was added or changed
+## Lazy code leaves one runnable check, and every test names the regression it catches
+- WHEN: non-trivial logic was added or changed, and again before writing ANY individual test
 - DO: leave ONE runnable check -- the smallest thing that fails if the logic breaks, as an assert-based self-check or one tiny test file, with no frameworks and no fixtures
+- DO (gate): before writing a test, name in one sentence the real regression that would ship undetected if this test did not exist -- write the test when that sentence is concrete, and skip it when you cannot finish the sentence
+- DO: put that sentence into the test's own name or a one-line comment above it, so the next reader can re-apply the gate without you
+- DO: delete a test that fails the gate on sight, rather than keeping it because it is already green
+- DO: read these four shapes as automatic gate failures and drop them -- a test that restates the implementation line by line, one that asserts only that a mock was called, one that exercises the language's type system or the framework's own behavior, and one that breaks on an internal rename while the behavior is unchanged
 - EXCEPT: a trivial one-liner needs no check
+- WHY: a test that no regression can fail is paid for at every future edit and protects nothing, so a suite carrying them reports coverage the code does not actually have
 
 ## A comment carries only what the code cannot
 - WHEN: writing, reviewing, or reading past any comment or docstring
@@ -262,6 +267,7 @@
 - DO: treat a filename, a diff stat, a source read, a passing type-check and a subagent's green check as hypotheses rather than proof
 - DO: open the diff and confirm the described behavior before transitioning a ticket, measure a UI change in the running app with a screenshot or a console probe, and query the remote state before handing over a push or a deploy
 - NEVER: say done when no runtime check was possible -- say exactly which check is missing instead
+
 ## Resolve a rejected push by fetching and rebasing
 - WHEN: a push is rejected
 - DO: `git fetch` as its own visible step, rebase onto it, and ask when the rebase is not obviously safe

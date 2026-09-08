@@ -15,7 +15,7 @@ RIGHT (vertical):    RED->GREEN: t1->i1, t2->i2, t3->i3, ...
 ```
 
 ## Phase 1: Plan
-Confirm with the user what interface changes are needed and which behaviors matter most -- you can't test everything; focus on critical paths and complex logic, not every edge case. Design the interface for testability (small surface, deep implementation). List the behaviors to test (not implementation steps). Get approval before writing code.
+Confirm with the user what interface changes are needed and which behaviors matter most -- you can't test everything; focus on critical paths and complex logic, not every edge case. Design the interface for testability (small surface, deep implementation). List the behaviors to test (not implementation steps), and keep only the entries whose escaping regression you can state in one sentence. Get approval before writing code.
 
 ## Phase 2: Tracer bullet
 Write ONE test that confirms ONE thing end-to-end. RED (it fails) -> GREEN (minimal code to pass). This proves the path works.
@@ -27,6 +27,7 @@ For each remaining behavior: write the next test (RED) -> minimal code to pass (
 Only once all tests are GREEN: extract duplication, deepen modules (complexity behind simple interfaces), apply SOLID where natural, reconsider existing code in light of the new code. Run tests after each refactor step.
 
 ## Per-cycle checklist
+- The RED names in one sentence the real regression it catches; a sentence you cannot finish means this cycle skips the test and moves on
 - Test describes behavior, not implementation
 - Test uses the public interface only
 - Test would survive an internal refactor

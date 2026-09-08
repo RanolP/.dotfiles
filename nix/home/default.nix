@@ -134,6 +134,7 @@ let
     git-master = localSkill "git-master";
     github-master = localSkill "github-master";
     jira-master = localSkill "jira-master";
+    slack-messaging = localSkill "slack-messaging";
     worktree-cleanup = localSkill "worktree-cleanup";
     one-domain = localSkill "one-domain";
     diagnose = localSkill "diagnose";

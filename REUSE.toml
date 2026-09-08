@@ -66,6 +66,7 @@ path = [
     "nix/home/configs/.agents/skills/git-master/SKILL.md",
     "nix/home/configs/.agents/skills/github-master/SKILL.md",
     "nix/home/configs/.agents/skills/jira-master/SKILL.md",
+    "nix/home/configs/.agents/skills/slack-messaging/SKILL.md",
     "nix/home/configs/.agents/skills/github-master/guides/pr.md",
     "nix/home/configs/.agents/skills/github-master/guides/issue.md",
     "nix/home/configs/.agents/skills/worktree-cleanup/SKILL.md",

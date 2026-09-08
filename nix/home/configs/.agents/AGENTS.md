@@ -266,6 +266,10 @@
 - DO: narrow the evidence down to the artifact's own behavior -- run it, measure it in the running system, or query the live state
 - DO: treat a filename, a diff stat, a source read, a passing type-check and a subagent's green check as hypotheses rather than proof
 - DO: open the diff and confirm the described behavior before transitioning a ticket, measure a UI change in the running app with a screenshot or a console probe, and query the remote state before handing over a push or a deploy
+- DO (scope): pick the check by tracing what the diff can actually reach, and run only the suites, screens, or endpoints on that path -- a styling change earns a look at the screen it restyles, and the authentication suite stays unrun because no edited line is on its path
+- DO: widen to the full suite when the change touches shared state, a build config, a dependency version, or a module many paths import, since the reachable set is then genuinely large
+- DO: say which slice you ran and why that slice covers the change, so the user can call for a wider run when they disagree
+- WHY: an unreachable suite returns the same green it would have returned before the change, so its cost buys no information
 - NEVER: say done when no runtime check was possible -- say exactly which check is missing instead
 
 ## Resolve a rejected push by fetching and rebasing

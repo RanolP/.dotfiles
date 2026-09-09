@@ -234,6 +234,19 @@ in
       };
       # A flake reads the git tree, so a new file that was never staged is
       # invisible to the rebuild. Stage the untracked ones before it runs.
+      # Commit b28bf99 shipped declarative-package-guard.py without its
+      # settings.json registration, leaving it deployed-but-inert for weeks. The
+      # guard denies a commit whose edited files never had their check run.
+      ".claude/hooks/commit-check-guard.py" = {
+        source = ./configs/claude/hooks/commit-check-guard.py;
+        executable = true;
+      };
+      # Nothing triggered the memory-review skill, so promotion candidates piled
+      # up unread. This nudges once the pile grows.
+      ".claude/hooks/memory-review-nudge.py" = {
+        source = ./configs/claude/hooks/memory-review-nudge.py;
+        executable = true;
+      };
       ".claude/hooks/flake-stage-guard.py" = {
         source = ./configs/claude/hooks/flake-stage-guard.py;
         executable = true;

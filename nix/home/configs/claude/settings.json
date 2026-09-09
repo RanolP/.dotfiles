@@ -203,6 +203,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/file-edit-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/commit-check-guard.py"
           }
         ]
       },
@@ -263,6 +267,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/architect-rules.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/memory-review-nudge.py"
           }
         ]
       }

@@ -95,6 +95,8 @@ SPDX-License-Identifier = "MIT"
 path = [
     "nix/home/configs/claude/hooks/git-push-guard.py",
     "nix/home/configs/claude/hooks/declarative-package-guard.py",
+    "nix/home/configs/claude/hooks/commit-check-guard.py",
+    "nix/home/configs/claude/hooks/memory-review-nudge.py",
     "nix/home/configs/claude/hooks/file-edit-guard.py",
     "nix/home/configs/claude/hooks/flake-stage-guard.py",
     "nix/home/configs/claude/hooks/git-integrity-guard.py",
@@ -178,6 +180,8 @@ path = [
     "scripts/hook-contract-test.py",
     "scripts/git-push-guard-test.py",
     "scripts/declarative-package-guard-test.py",
+    "scripts/commit-check-guard-test.py",
+    "scripts/memory-review-nudge-test.py",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

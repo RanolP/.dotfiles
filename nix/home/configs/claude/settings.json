@@ -186,6 +186,10 @@
           },
           {
             "type": "command",
+            "command": "python3 ~/.claude/hooks/declarative-package-guard.py"
+          },
+          {
+            "type": "command",
             "command": "python3 ~/.claude/hooks/gh-guard.py"
           },
           {

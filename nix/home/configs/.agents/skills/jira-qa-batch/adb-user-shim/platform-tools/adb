@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# adb wrapper that pins agent-device to one Android user profile.
+#
+# agent-device spawns the literal name "adb" and prepends
+# "$ANDROID_SDK_ROOT/platform-tools" to PATH, so pointing ANDROID_SDK_ROOT at
+# this shim's fake SDK root is enough to intercept every call it makes without
+# patching its minified dist (which has no source map and is replaced on every
+# reinstall).
+#
+# Only the sub-commands that actually understand --user are rewritten. input,
+# screencap, screenrecord, logcat and getprop reject the flag, so they pass
+# through byte-identical.
+set -uo pipefail
+
+USER_ID="${AGENT_DEVICE_ANDROID_USER:-}"
+
+resolve_real_adb() {
+  if [ -n "${AGENT_DEVICE_REAL_ADB:-}" ]; then
+    printf '%s' "$AGENT_DEVICE_REAL_ADB"
+    return
+  fi
+  local self_dir candidate
+  self_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  local IFS=:
+  for dir in $PATH; do
+    [ -n "$dir" ] || continue
+    [ "$(cd -- "$dir" 2>/dev/null && pwd -P)" = "$self_dir" ] && continue
+    candidate="$dir/adb"
+    if [ -x "$candidate" ]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  for candidate in "$HOME/Library/Android/sdk/platform-tools/adb" "$HOME/Android/Sdk/platform-tools/adb"; do
+    if [ -x "$candidate" ]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  echo "adb-user-shim: no real adb found on PATH or in the default SDK roots" >&2
+  exit 127
+}
+
+REAL_ADB="$(resolve_real_adb)" || exit 127
+
+if [ -z "$USER_ID" ]; then
+  exec "$REAL_ADB" "$@"
+fi
+
+args=("$@")
+n=${#args[@]}
+
+# adb's own global options come before the sub-command and must stay in front.
+i=0
+while [ "$i" -lt "$n" ]; do
+  case "${args[$i]}" in
+    -s|-P|-H|-L|-t) i=$((i + 2)) ;;
+    -d|-e|-a) i=$((i + 1)) ;;
+    *) break ;;
+  esac
+done
+globals=("${args[@]:0:$i}")
+rest=("${args[@]:$i}")
+
+has_user_flag() {
+  local tok
+  for tok in "$@"; do
+    [ "$tok" = "--user" ] && return 0
+  done
+  return 1
+}
+
+# Prints the index at which "--user <id>" belongs, or nothing when this command
+# takes no user profile.
+insert_index() {
+  case "${1:-}" in
+    am)
+      case "${2:-}" in
+        start|start-activity|start-service|start-foreground-service|startservice|force-stop|instrument|broadcast) echo 2 ;;
+      esac
+      ;;
+    # "pm list packages --user N" takes the flag after the object, every other
+    # pm sub-command takes it right after the sub-command.
+    pm)
+      if [ "${2:-}" = "list" ]; then
+        [ -n "${3:-}" ] && echo 3
+      elif [ -n "${2:-}" ]; then
+        echo 2
+      fi
+      ;;
+    # "cmd package <sub>" is the same grammar as "pm <sub>", one token later.
+    cmd)
+      if [ "${2:-}" = "package" ]; then
+        if [ "${3:-}" = "list" ]; then
+          [ -n "${4:-}" ] && echo 4
+        elif [ -n "${3:-}" ]; then
+          echo 3
+        fi
+      fi
+      ;;
+  esac
+}
+
+# Fills the global "spliced" array with the tokens plus "--user <id>" after
+# position <at>. Written for bash 3.2 (the macOS system shell), which has no
+# mapfile and errors on an empty array expansion under set -u.
+splice() { # splice <at> <token...>
+  local at=$1
+  shift
+  spliced=()
+  local idx=0 tok
+  for tok in "$@"; do
+    spliced+=("$tok")
+    idx=$((idx + 1))
+    [ "$idx" -eq "$at" ] && spliced+=(--user "$USER_ID")
+  done
+}
+
+run_real() { # run_real <token...>
+  exec "$REAL_ADB" ${globals[@]+"${globals[@]}"} "$@"
+}
+
+case "${rest[0]:-}" in
+  shell)
+    payload=("${rest[@]:1}")
+    [ ${#payload[@]} -eq 0 ] && exec "$REAL_ADB" "$@"
+    joined=0
+    tokens=("${payload[@]}")
+    # agent-device sometimes hands the whole command over as one string.
+    if [ ${#payload[@]} -eq 1 ] && [[ "${payload[0]}" == *[[:space:]]* ]]; then
+      joined=1
+      tokens=()
+      read -r -a tokens <<<"${payload[0]}"
+    fi
+    at="$(insert_index "${tokens[0]:-}" "${tokens[1]:-}" "${tokens[2]:-}" "${tokens[3]:-}")"
+    if [ -z "$at" ] || has_user_flag "${tokens[@]}"; then
+      exec "$REAL_ADB" "$@"
+    fi
+    splice "$at" "${tokens[@]}"
+    if [ "$joined" -eq 1 ]; then
+      run_real shell "${spliced[*]}"
+    fi
+    run_real shell "${spliced[@]}"
+    ;;
+  install)
+    has_user_flag "${rest[@]}" && exec "$REAL_ADB" "$@"
+    splice 1 "${rest[@]}"
+    run_real "${spliced[@]}"
+    ;;
+  *)
+    exec "$REAL_ADB" "$@"
+    ;;
+esac

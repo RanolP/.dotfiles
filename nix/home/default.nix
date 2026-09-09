@@ -134,6 +134,7 @@ let
     git-master = localSkill "git-master";
     github-master = localSkill "github-master";
     jira-master = localSkill "jira-master";
+    jira-qa-batch = localSkill "jira-qa-batch";
     slack-messaging = localSkill "slack-messaging";
     worktree-cleanup = localSkill "worktree-cleanup";
     one-domain = localSkill "one-domain";
@@ -203,6 +204,8 @@ in
     age
     # Runtime for the herdr-browser plugin (see herdrBrowser above).
     bun
+    # Composes the QA review videos built by the jira-qa-batch skill.
+    ffmpeg
     gnupg
     nix-your-shell
   ];

@@ -1,0 +1,17 @@
+diff --git a/android/app/build.gradle b/android/app/build.gradle
+index dc160d7b32..ae1c6f8327 100644
+--- a/android/app/build.gradle
++++ b/android/app/build.gradle
+@@ -64,6 +64,12 @@ react {
+     entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", rootDir.getAbsoluteFile().getParentFile().getAbsolutePath(), "android", "absolute"].execute(null, rootDir).text.trim())
+     cliFile = new File(["node", "--print", "require.resolve('@expo/cli')"].execute(null, rootDir).text.trim())
+     bundleCommand = "export:embed"
++
++    // QA batch (jira-qa-batch skill): the as-is instance runs the bundle baked
++    // into the APK, so the debug variant must be bundled. RN 0.81's Gradle
++    // plugin skips bundling for every variant listed here (default
++    // ["debug", "debugOptimized"]), so "debug" is dropped from the list.
++    debuggableVariants = ["debugOptimized"]
+ }
+ 
+ project.ext.react = [

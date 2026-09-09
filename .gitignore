@@ -1,6 +1,10 @@
 # sensitive — never commit
 local.nix
 
+# Per-machine project settings. The work-repo plugin ids name an employer, so
+# this repo's disables for them live here instead of in .claude/settings.json.
+.claude/settings.local.json
+
 # 시말서: verbatim incident records (internal paths, tickets, quoted work).
 # apology-leak-guard.py blocks the non-git channels this line cannot reach.
 .apologies/

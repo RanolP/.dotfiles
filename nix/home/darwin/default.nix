@@ -181,6 +181,16 @@ in
           SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"
           ;;
       esac
+      # mcp.json lands in the world-readable nix store and in this public git
+      # repo, so a server whose url, name or bearer token is employer-internal
+      # lives in the untracked chmod-600 overlay below instead. --mcp-config is
+      # variadic, so appending the overlay merges its servers in; absent file =
+      # the public set alone, which every other server is fine with.
+      PRIVATE_MCP="$HOME/.claude-personal/mcp.private.json"
+      if [ -r "$PRIVATE_MCP" ]; then
+        SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@" \
+          --mcp-config ${./../configs/claude/mcp.json} "$PRIVATE_MCP"
+      fi
       SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@" \
         --mcp-config ${./../configs/claude/mcp.json}
     '';

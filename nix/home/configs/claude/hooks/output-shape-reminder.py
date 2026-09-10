@@ -20,8 +20,9 @@ Self-check: `python3 output-shape-reminder.py --selftest`.
 import sys
 
 REMINDER = (
-    "Shape check before you send: lead with the outcome, cut every closer and "
-    "trailing recap, end with one next action."
+    "Shape check: lead with the outcome, cut closers. If the user must act, say "
+    "it and stop; if several paths are open, offer the choices; else state your "
+    "next step in one line and continue."
 )
 
 # Injection cost grows with turns^2, so a long reminder is a session-wide tax.
@@ -39,7 +40,7 @@ def main():
 
 def selftest():
     assert len(REMINDER) <= MAX_CHARS, "reminder too long -- cost grows with turns^2"
-    for check in ("outcome", "closer", "next action"):
+    for check in ("outcome", "closer", "stop", "choices", "next step"):
         assert check in REMINDER, f"reminder dropped the {check!r} check"
     print("output-shape-reminder selftest ok")
 

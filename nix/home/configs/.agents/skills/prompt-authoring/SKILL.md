@@ -7,7 +7,7 @@ description: Write text that a model reads as behavior -- a skill, a subagent br
 
 Naming an anti-pattern plants it. Attention latches onto X, and later steps drift toward the forbidden thing -- "no separate `app-manifest.json`" leaves the next reader thinking about `app-manifest.json`. This is the "don't think of an elephant" failure in its authoring form, and it is why a rules file full of `NEVER` lines reads as a list of suggestions.
 
-The reading form of this rule stays in `AGENTS.md` under `## Lead with the action`: a prohibition that arrives in an instruction gets silently restated as the positive action that excludes it. This skill is the authoring form.
+The reading form of this rule stays in `AGENTS.md` under `## A prohibition in model-facing text becomes the positive action`: a prohibition that arrives in an instruction gets silently restated as the positive action that excludes it. This skill is the authoring form.
 
 ## Write the `DO` sentence first, then read it alone
 

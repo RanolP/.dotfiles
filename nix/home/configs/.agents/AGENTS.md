@@ -74,6 +74,15 @@
 - NEVER: re-issue a byte-identical command that already failed
 - WHY: blind retries burned 3,674 seconds in one measured week and produced nothing -- [[retry-without-hypothesis-cost]]
 
+## A hang is read off the stalled process
+- WHEN: a command, a shell, a build or a test produces no output and no exit code -- including a tool call the harness reports as backgrounded
+- DO: take the blocking frame first, with `sample <pid>` on macOS or `eu-stack -p <pid>` on Linux, and name the cause from that stack
+- DO: suspect the layers that front EVERY call before suspecting the command -- a `PreToolUse` hook, the rc files the shell sources, a `$(...)` substitution inside them, an fcntl lock on a file they share, and the shell snapshot that replays their state into each per-call shell
+- DO: reproduce an intermittent hang detached (`nohup ... >/dev/null 2>&1 &`), because an attached probe inherits the same stall and its open completion pipe hangs the tool call around it
+- DO (after a shell-config fix): delete the captured shell snapshot and start a fresh session before calling it fixed, since a rebuild alone leaves the old state replaying
+- DO: read the refuted causes out of [[bash-tool-hang-causes]] rather than re-chasing one
+- WHY: three separate multi-minute hangs each yielded to one stack sample, and each had first cost hours of theorizing about pagers, security agents and memory pressure that the sample excluded in seconds
+
 ## Verify the user's hypothesis before you argue with it
 - WHEN: the user names a cause, a culprit file, or a suspected version
 - DO: test their hypothesis first and report what the test showed, before offering any competing explanation
@@ -139,7 +148,8 @@
 ## A durable note carries its content and its incident inside it
 - WHEN: writing anything durable -- a rules file, a doc, a memory, a commit message, an issue
 - DO: extract what the source says and write that in full, quoting exact words when the wording is the point, so the file reads correctly to someone holding none of your context
-- DO: write the incident into the note itself when the reason for it is an incident
+- DO: write the incident into the note itself when the reason for it is an incident, in full everywhere except the two rules files `nix/home/configs/.agents/AGENTS.md` and `nix/home/configs/claude/CLAUDE.md`
+- DO (those two files): keep the directive and its mechanism there, compress the incident to at most one clause plus a `[[wikilink]]`, and write the narrative into `memory/evidence/` or `docs/src/agent-incidents.md` instead -- `nix/home/default.nix` concatenates both files into `~/.claude/CLAUDE.md`, which is injected at the head of every session, so a narrative paragraph is paid for on every prompt while the story itself is read once
 - DO: write ONE file under `memory/evidence/` for a non-obvious conclusion reached from explicit premises, holding the premises, the question and the conclusion, and grep that store before re-deriving one -- skill `evidence-store`
 - DO: leave the promotion of a memory into a `~/.dotfiles` rule to the user, who runs it -- `memory-review` ranks candidates, `dotfiles:evolve` moves one across, `rule-write` lands the rule
 - NEVER: cite a transcript, a chat thread, a scrollback buffer, a temp file, or a background job's output as the record of a fact

@@ -15,7 +15,7 @@ The candidate almost always arrives as one incident: a file, a branch, a command
 
 - The incident is the evidence, and the class is the rule. "I kept a dead flag in a branch nobody had pulled" generalizes to "unshipped code has no reader to protect, so delete it rather than preserving it".
 - A rule that fires only on the exact file, branch, or ticket that produced it is a retelling. The next session meets a different file and reads past it.
-- Keep the incident inside the rule as its `WHY`, so the reader understands the rule without the session that produced it.
+- Keep the incident inside the rule as its `WHY`, so the reader understands the rule without the session that produced it -- at most one clause plus a `[[wikilink]]`, because both rules files load at the head of every session; the narrative itself goes to `memory/evidence/` or `docs/src/agent-incidents.md`.
 
 ## 2. Confirm it is durable
 

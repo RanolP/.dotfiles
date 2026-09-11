@@ -105,7 +105,7 @@ Chainable: [true | false -- when false, add the reason on this same line]
 ## State
 **Anchor:** [branch @ short-SHA, dirty/clean, pushed/unpushed]
 **Working:** [what functions now -- and HOW verified (test/command run)]
-**Untested:** [changes made but never exercised]
+**Untested:** [changes made but never exercised. An interrupted sweep -- a review, a migration, any walk over an ordered list -- records its position here as the index reached and the items already cleared, so the next thread resumes at that index instead of re-reading from the top.]
 **Broken:** [what doesn't, with error if known]
 **Uncommitted:** [summary, or reference `git diff`]
 
@@ -120,13 +120,13 @@ Chainable: [true | false -- when false, add the reason on this same line]
 [What was tried, why it failed, what replaced it. "None" if nothing failed.]
 
 ## Open questions
-[Pending decisions awaiting user input.]
+[Pending decisions awaiting user input, plus every question the interrupted work raised and left unanswered -- a question dropped here is one the next thread pays to re-derive.]
 
 ## Artifacts
 [Plans/PRDs/ADRs/issues/commits/diffs by path or URL -- not copied here.]
 
 ## Resume
-1. [first action] -- Expected: [outcome]; if it fails: [what to check]
+1. [first action -- for an interrupted sweep, the next unvisited index recorded in State] -- Expected: [outcome]; if it fails: [what to check]
 ```
 
 ## Phase 4: Exit plan mode

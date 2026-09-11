@@ -86,6 +86,22 @@ A transient state is gone by your next turn, so the batch that triggers it also 
 
 For a window too long or too jittery for one assertion, record it instead and read the artifact afterwards: `agent-browser record start <path>` / `record stop`, or `agent-device record start` / `record stop`. `agent-browser trace start|stop` and `vitals` cover timing you need as numbers rather than frames.
 
+Static end-state verification is the one case that needs a single capture: when the thing you are proving is the settled screen — its layout, content and styling — take one screenshot plus one DOM and computed-style dump after the scenario finishes, instead of photographing every step on the way there. A state that persists is still there at the end, so the per-step shots add cost and no coverage. A state that expires is not, which is why everything transient stays captured in the batch that caused it.
+
+## Inspect the settled screen by defect class
+
+Read the end-state dump against these five classes and emit the query result for each one, in this order. A class earns the word "none" only after its query came back empty:
+
+| Class | Query on the settled DOM |
+|---|---|
+| Occlusion | Bounding boxes of the target and its neighbors intersect, with `z-index` putting the wrong one on top |
+| Overlap or overflow | `scrollWidth > clientWidth` (or `scrollHeight > clientHeight`), and sibling boxes intersecting |
+| Missing image | `img.naturalWidth === 0` |
+| Empty value leaking | Visible text matching `null`, `undefined`, `NaN`, `{}`, or an empty template slot |
+| Blurred or broken raster | `img.naturalWidth` under half the element's rendered width |
+
+One `eval` returning an object keyed by class collects all five in a single round trip, which is what keeps this a fixed cost per screen.
+
 ## How far one batch reaches
 
 A batch reaches exactly as far as the scenario you can decide without looking. The moment a target comes out of a snapshot you have not read yet, the batch ends there:

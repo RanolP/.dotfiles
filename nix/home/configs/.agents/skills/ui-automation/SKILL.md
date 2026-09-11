@@ -67,6 +67,19 @@ A wait spent between two Bash calls is wasted — the model turn already took lo
 
 For `agent-device`, prefer `--settle` on the action and continue from its settled diff; reach for `wait stable` after an `open`, a relaunch or a navigation, and for a result that arrives over the network use `wait text "<expected>"` rather than a polling loop.
 
+### A blank or broken screen is a readiness reading first
+
+When a screenshot comes back empty, half-painted or misaligned, the first move is to re-read readiness in the same batch — the cause is a wait condition far more often than the code under test:
+
+| Check | `agent-browser` | Reads false when |
+|---|---|---|
+| Fonts settled | `eval document.fonts.status` → `"loaded"` | Text is unstyled, reflows, or measures wrong |
+| Network quiet | `eval performance.getEntriesByType('resource').filter(r=>!r.responseEnd).length` → `0` | Images and data are still arriving |
+| Animations done | `eval document.getAnimations().length` → `0` | The frame was captured mid-flight |
+| Target laid out | `get box <selector>`, height `> 0` | The element exists but occupies nothing |
+
+`agent-device` reaches the same state through `wait stable` and `--settle`. Any check reading false makes the scenario's wait condition the thing to fix, and the fix is to name that condition — `wait <selector>`, `wait text`, `wait stable` — rather than to lengthen a fixed `wait <ms>`.
+
 ## Capture the evidence in the same batch
 
 A transient state is gone by your next turn, so the batch that triggers it also captures it. Put the `screenshot`, the `get text`, the `get box`, the `diff snapshot` in the same call as the action that caused the thing you are proving.

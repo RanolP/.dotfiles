@@ -10,3 +10,4 @@ Interview the user relentlessly about every aspect of the plan, walking down eac
 - Recommend your own answer with every question
 - If a question can be answered by exploring the codebase, explore the codebase instead of asking
 - NEVER move to the next branch until the current decision is resolved
+- Enumerate the whole option surface before the first question, and put every key to the user in turn -- group only tightly-coupled trivial keys and name each one inside the group, because a key left at its default without being asked is a decision the user never made

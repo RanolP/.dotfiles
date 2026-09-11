@@ -28,7 +28,8 @@ Also true throughout:
 2. Gather the project's own rules: `CLAUDE.md` / `AGENTS.md` at every level from repo root down to the changed directories, plus lint and formatter config. These are inputs, not decoration — a rule the project wrote down and the diff broke is a first-class finding.
 3. Find the plan if one exists — `PLAN.md`, a design doc, the issue/PR body, an `ExitPlanMode` plan file, or a spec the user names. Quote it for every divergence finding. With no plan, say so and skip the plan-divergence passes.
 4. Read the changed files and the call sites of everything the diff touches.
-5. Detect the languages, then run the core passes plus any reading material below.
+5. Read the verdict ledger — `~/.claude-personal/state/review-findings/*.jsonl`, if it exists — and compute, per scenario, the share of the last 30 entries whose `verdict` is `"useless"`. A scenario at or above 10% still runs, and its findings ship marked "reference only" with that rate stated. A scenario above 25% sits out this review entirely; say which one and why in the summary. An absent or thin ledger means every scenario runs at full weight.
+6. Detect the languages, then run the core passes plus any reading material below.
 
 Skip the review and say so when the change is trivial (formatting only, a version bump, generated files, a typo). A review of nothing costs the reader attention.
 
@@ -137,6 +138,8 @@ Lead with a short summary: languages detected, whether a plan and project rules 
 - **Confidence** — the 0–100 score.
 - **Failure scenario** — the concrete input or state that makes it go wrong. For non-correctness findings, the concrete cost instead.
 - **Suggested fix** — before → after, or a diff snippet.
+
+Then append the report to the verdict ledger, so the next review can weigh its own scenarios: one JSON line per reported finding into `~/.claude-personal/state/review-findings/<YYYY-MM>.jsonl` (create the directory if it is missing), with the fields `ts`, `repo`, `scenario`, `file`, `line`, `finding`, `confidence`, and `verdict` set to `"pending"`. Whoever acts on the finding later flips that `verdict` to `"applied"`, `"useless"`, or `"deferred"` — the rate the intake step reads is only as honest as those flips. Findings you dropped at the scoring gate stay out of the ledger.
 
 Close with an explicit list of what was checked and found clean — especially the call-site sweep, which must read as "call sites verified", never as "did not look". If everything cleared, say "no findings above the bar" and name how many candidates you dropped; do not manufacture a finding to justify the review.
 

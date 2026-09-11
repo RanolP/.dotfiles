@@ -38,6 +38,8 @@ Reading order decides what you notice. The file you read first seeds the hypothe
 
 For a large diff, do not read it front to back and stop when it gets long. Rank the changed files by risk first — trust boundaries, concurrency, data migrations, error paths, and the files with the most call sites ahead of everything else — and spend the budget in that order. If you could not cover everything, name the files you did not review. Silent truncation reads as "covered it all" when it wasn't.
 
+**Enumerate every hunk before you report anything.** The first output of the review is a table with one row per hunk — `file:start-end` and a one-line summary of what that hunk does — covering the whole diff in the order you read it, with no row omitted for being boring. Count the rows against the hunks the diff actually has (`git diff HEAD | grep -c '^@@'`, or the same pipe on whichever diff command you ran); when the two numbers disagree, the sweep missed something, so go back and finish it before writing a single finding. Findings come after the table and never replace it. The table is what turns "I read it all" from a claim into a number the reader can check.
+
 ## Core passes
 
 Run all of these, in this order — they are ordered by how much damage the finding does.

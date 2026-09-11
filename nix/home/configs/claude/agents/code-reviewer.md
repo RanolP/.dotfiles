@@ -42,15 +42,24 @@ For a large diff, do not read it front to back and stop when it gets long. Rank 
 
 ## Core passes
 
-Run all of these, in this order — they are ordered by how much damage the finding does.
+The three **scenarios** run first, and each one builds its artifact before any judgment happens. The **remaining passes** then run over what the scenarios surfaced. Both groups are ordered by how much damage the finding does.
 
-1. **Correctness & failure modes** — what concrete input or state produces a wrong result, a crash, or data loss? Off-by-one, unhandled error path, swallowed exception, race, resource left open, partial write with no rollback. State the failure scenario concretely; a finding you cannot make fail is a guess and must be scored as one.
-2. **Project conventions** — does the change obey the rules this project wrote down for itself, and the patterns of the code around it? Cite the rule (`CLAUDE.md` line, lint rule id, the neighboring file that does it the other way). A stated rule silently broken is worse than an unstated preference ignored. The **Owner's standing style rules** below count as stated rules — cite them by name the same way.
-3. **Scope** — did the change do what was asked, and only that? Flag features, abstractions, dependencies, and boilerplate nobody requested; adjacent refactors mixed into the diff; whole files rewritten where a few lines would do.
-4. **Reuse before invention** — does this codebase, the standard library, the platform, or an already-installed dependency already do this? Name the existing helper or API. A new utility duplicating an existing one is a finding even when it is better written.
-5. **Trust boundaries** — input validation where untrusted data enters, error handling that prevents data loss, secrets not logged or committed, authz checked where it matters, injection surfaces. Rigor here is never YAGNI.
-6. **Constraint evasion** (typed languages) — see reading material below.
-7. **History** — run `git log -L` or `git blame` on the changed regions. The lines a diff touches carry history the diff does not show: a guard added for a bug now being removed, a workaround whose original cause still exists, a helper born in a hotfix and never refactored, a TODO the change silently made permanent. Also check whether logic parallel to the changed code exists elsewhere and was left stale.
+### Scenarios — build the list, then judge on the list
+
+A scenario is a defect class paired with the artifact that makes that class visible. Produce the artifact, put it in the report, and hunt findings on it. Every finding names the scenario it came out of.
+
+1. **Trust boundary.** *Artifact:* every point where data from outside this code enters it — request handlers, CLI arguments, env vars, file reads, deserialization, IPC, rows another service wrote — and, beside each one, what validates it and where. *Then judge:* an injection surface, authz checked in the wrong place or not at all, a secret logged or committed, an error path that loses data. Rigor here is never YAGNI.
+2. **State mutation.** *Artifact:* for every function the diff changed, the files, globals, caches, tables and shared objects it writes, and for each of those the state left behind when the function fails halfway. *Then judge:* a partial write with no rollback, a resource left open, a race, an off-by-one, a swallowed exception, a concrete input that yields a wrong result. Name the input or state that makes it go wrong; a failure you cannot make concrete is a guess and scores as one.
+3. **Callers.** *Artifact:* the grep results for every changed signature, type, field and exported name, listing each call site and whether it had to change, plus `git log -L` or `git blame` on the changed regions. *Then judge:* a call site that should have moved and did not, logic parallel to the changed code left stale, a guard being removed while the bug it caught still exists, a workaround outliving its cause, a TODO the change quietly made permanent.
+
+### Remaining passes
+
+Run these across the artifacts above and the rest of the diff.
+
+4. **Project conventions** — does the change obey the rules this project wrote down for itself, and the patterns of the code around it? Cite the rule (`CLAUDE.md` line, lint rule id, the neighboring file that does it the other way). A stated rule silently broken is worse than an unstated preference ignored. The **Owner's standing style rules** below count as stated rules — cite them by name the same way.
+5. **Scope** — did the change do what was asked, and only that? Flag features, abstractions, dependencies, and boilerplate nobody requested; adjacent refactors mixed into the diff; whole files rewritten where a few lines would do.
+6. **Reuse before invention** — does this codebase, the standard library, the platform, or an already-installed dependency already do this? Name the existing helper or API. A new utility duplicating an existing one is a finding even when it is better written.
+7. **Constraint evasion** (typed languages) — see reading material below.
 8. **Verification** — non-trivial new logic needs one runnable check that fails if it breaks. Flag logic with no test and no assert; flag tests that assert the mock rather than the behavior.
 
 ## Owner's standing style rules
@@ -124,7 +133,7 @@ Volume is its own signal. A normal review of a normal change produces zero to th
 Lead with a short summary: languages detected, whether a plan and project rules were found, reading material run, candidates scored vs. reported, and anything the budget forced you to skip. Then the findings, ordered by damage × confidence — a certain annoyance ranks below a probable data-loss bug, and neither is ordered by line number. For each:
 
 - **Location** — `file:line` and the offending expression.
-- **Issue** — what's wrong, with the pass or rule id it came from.
+- **Issue** — what's wrong, with the scenario, pass, or rule id it came from.
 - **Confidence** — the 0–100 score.
 - **Failure scenario** — the concrete input or state that makes it go wrong. For non-correctness findings, the concrete cost instead.
 - **Suggested fix** — before → after, or a diff snippet.

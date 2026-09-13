@@ -136,33 +136,13 @@ in
   # /bin/zsh is immune, reads the same ~/.zshenv//.zprofile, so force it via
   # $SHELL, which short-circuits Claude Code's shell probing. ~/.local/bin
   # precedes mise's claude on PATH, so this wrapper wins.
-  # The wrapper also wires named auth profiles (~/.claude-<profile>): shell
-  # functions like nushell's `ccc` are baked into running shells at startup
-  # and go stale after a rebuild, so the wiring lives here, resolved fresh at
-  # every launch. `ccc` only picks the profile and sets CLAUDE_CONFIG_DIR.
+  # The wrapper also wires named auth profiles (~/.claude-<profile>) by
+  # sourcing configs/claude/profile-wiring.sh, shared with the Linux shim.
   home.file.".local/bin/claude" = {
     executable = true;
     text = ''
       #!/bin/sh
-      case "$CLAUDE_CONFIG_DIR" in
-        "$HOME/.claude-"*)
-          base="$HOME/.claude"
-          dir="$CLAUDE_CONFIG_DIR"
-          mkdir -p "$dir"
-          # Config mirrors ~/.claude so nix updates track; runtime state and
-          # the auth token stay per-profile in $dir.
-          # output-styles must be listed: settings.json mirrors "outputStyle"
-          # by name, so without the definitions the profile fails silently.
-          for entry in settings.json CLAUDE.md agents skills plugins output-styles; do
-            [ -e "$base/$entry" ] && ln -sfn "$base/$entry" "$dir/$entry"
-          done
-          # Sessions live in projects/; symlinking it into ~/.claude/projects
-          # makes /resume see every profile's sessions. If a real dir ever
-          # lands here, ln fails loudly instead of hiding data.
-          mkdir -p "$base/projects"
-          ln -sfn "$base/projects" "$dir/projects"
-          ;;
-      esac
+      . ${./../configs/claude/profile-wiring.sh}
       # MCP servers otherwise live only in the mutable per-profile
       # ~/.claude.json, so declare the shared ones here instead. --mcp-config
       # is variadic: it must come LAST or it swallows the prompt as extra

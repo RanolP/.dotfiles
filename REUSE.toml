@@ -125,6 +125,8 @@ path = [
     "nix/home/configs/claude/hooks/apology-leak-guard.py",
     "nix/home/configs/bin/fast-apply",
     "nix/home/configs/claude/mcp.json",
+    "nix/home/configs/claude/profile-wiring.sh",
+    "scripts/profile-wiring-test.sh",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

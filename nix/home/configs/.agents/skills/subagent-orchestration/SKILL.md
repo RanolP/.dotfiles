@@ -5,7 +5,7 @@ description: Route a subagent spawn to the right model tier, write a self-contai
 
 # Subagent orchestration
 
-The decision of **whether** to spawn lives in `CLAUDE.md` under `## Orchestrate via subagents` -- the lazy default, the context economics, and the bar a spawn must clear. This skill covers everything that happens once that decision is already yes.
+For Codex, the delegation policy lives in its generated `AGENTS.md`. For Claude Code, the decision of **whether** to spawn lives in `CLAUDE.md` under `## Delegation is this user's standing instruction` and `## Size the unit first, then commit to one of three strategies` -- the standing permission, the context economics, and the three strategies a unit resolves to. This skill covers everything that happens once that decision is already SUBAGENT.
 
 ## The brief is the worker's whole world
 
@@ -21,7 +21,11 @@ Every brief carries five things:
 
 Never point a brief at this conversation. "As we discussed", "the file from before", and "the plan above" all resolve to nothing in a fresh worker's context.
 
-## Model tiers
+## Claude role routing
+
+The following model tiers, fork guidance, and oracle guidance apply when Claude Code is the host. Codex uses the native role routing in `## Codex native roles` below.
+
+### Model tiers
 
 `subagent-model-guard.py` denies any `Agent`/`Task` call that omits `model`, because an omitted `model` means `inherit` and silently spends the main thread's tier on the worker. Choose deliberately:
 
@@ -43,6 +47,10 @@ The guard hard-denies an explicit `model: fable` and denies anything above `sonn
 Pass exactly one `question` plus enough `context` to judge it. It answers; it does not edit files, run tools, or take open-ended work.
 
 When `oracle` returns a `suggest_more` other than `none`, tell the user what further context or action it suggested before continuing. That suggestion is the oracle saying its answer is incomplete, and swallowing it wastes the escalation.
+
+## Codex native roles
+
+When Codex is the host, reusable workers live in `~/.codex/agents/*.toml` and use the native `name`, `description`, `model`, `model_reasoning_effort`, `sandbox_mode`, and `developer_instructions` fields. Choose the role matching the unit, and route every child requested by this user to `gpt-5.6-luna` with `xhigh` reasoning; the model slug is the installed form of the user's `luna` request. Keep the brief, typed return shape, parallel launch, and receipt validation rules above in force.
 
 ## Typed handoffs
 

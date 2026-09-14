@@ -1,4 +1,5 @@
 ---
+name: constraint-evasion
 description: Review a TypeScript, Kotlin, Swift, or Rust diff for constraint-evading compromises -- suppressed warnings and escape hatches, values stuffed into existing holes, types weakened away from a recorded plan, sum types extended flat, and call sites that should have changed and did not.
 when_to_use: The typed-language pass of a code review -- loaded by the `code-reviewer` agent when a diff includes TS/Kotlin/Swift/Rust, or invoked directly to check whether an implementation followed its plan. Covers only constraint evasion; the surrounding review (correctness, scope, reuse, trust boundaries, tests) belongs to `code-reviewer`.
 ---

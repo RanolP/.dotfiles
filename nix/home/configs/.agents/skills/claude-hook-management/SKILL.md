@@ -1,4 +1,5 @@
 ---
+name: claude-hook-management
 description: Add, change, or remove a Claude Code hook in the dotfiles repo. Holds the one-concern-per-file rule, the four wiring points, and the deployed-hook inventory.
 when_to_use: When the user asks to create a hook, enforce a rule at the tool layer, or change an existing guard under nix/home/configs/claude/hooks/.
 ---

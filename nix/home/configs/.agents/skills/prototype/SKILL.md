@@ -1,4 +1,5 @@
 ---
+name: prototype
 description: Build throwaway code that answers a design question before committing to it.
 when_to_use: When the user wants to prototype, sanity-check a data model or state machine, mock up a UI, explore design options, or says "prototype this", "let me play with it", "try a few designs". Invoke before writing production code for the design.
 ---

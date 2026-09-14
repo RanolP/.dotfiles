@@ -1,4 +1,5 @@
 ---
+name: diagnose
 description: Disciplined diagnosis loop for hard bugs and performance regressions.
 when_to_use: When the user says "diagnose"/"debug this", reports a bug, says something is broken/throwing/failing, or describes a performance regression. Invoke before guessing at a fix.
 ---

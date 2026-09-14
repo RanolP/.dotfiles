@@ -1,4 +1,5 @@
 ---
+name: grill-me
 description: Interview the user relentlessly about a plan or design until shared understanding.
 when_to_use: When the user wants to stress-test a plan or design, get grilled on their thinking, or says "grill me". Invoke before committing to a design.
 ---

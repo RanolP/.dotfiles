@@ -1,8 +1,9 @@
 # OpenAI Codex CLI config — settings only (managed by this repo).
 # On activation, home-manager writes ~/.codex/config.toml = this file plus the
 # [projects.*] trust blocks from the uncommitted ~/.codex/config.local.toml.
-# Trust entries are machine-specific absolute paths and stay out of git; add
-# them to config.local.toml, not here. Edit this file, then darwin-rebuild.
+# The @codexConfig@ token in hook state keys is replaced with the generated
+# config path during activation, so hook trust stays declarative and portable.
+# Edit this file, then darwin-rebuild.
 
 service_tier = "fast"
 model = "gpt-5.6-terra"
@@ -10,14 +11,12 @@ model_reasoning_effort = "high"
 model_verbosity = "low"
 plan_mode_reasoning_effort = "xhigh"
 approval_policy = "on-request"
-bypass_hook_trust = true
 approvals_reviewer = "auto_review"
 sandbox_mode = "workspace-write"
 web_search = "live"
 file_opener = "vscode"
 personality = "pragmatic"
 check_for_update_on_startup = false
-commit_attribution = "Codex (gpt-5.5) <noreply@openai.com>"
 project_doc_fallback_filenames = []
 
 [sandbox_workspace_write]
@@ -28,12 +27,9 @@ experimental_use_profile = true
 
 [tools]
 web_search = true
-view_image = true
 
 [features]
 memories = true
-codex_git_commit = true
-undo = true
 prevent_idle_sleep = true
 hooks = true
 
@@ -48,6 +44,9 @@ max_bytes = 104857600
 
 [agents]
 max_depth = 2
+max_concurrent_threads_per_session = 8
+default_subagent_model = "gpt-5.6-luna"
+default_subagent_reasoning_effort = "xhigh"
 
 [tui]
 vim_mode_default = false
@@ -63,21 +62,180 @@ status_line = [
   "weekly-limit",
 ]
 
-[[skills.config]]
-path = "~/.claude/skills"
-enabled = true
-
-# Restrict `git push` to claude/* branches (ported from the Claude PreToolUse
-# guard; reuses the same script). Denies via permissionDecision; the deny path
-# uses Codex's documented hook output format.
+# Claude policy scripts run through the Codex payload adapter.
 [[hooks.PreToolUse]]
 matcher = "^Bash$"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = "python3 \"$HOME/.codex/hooks/git-push-guard.py\""
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/git-push-guard.py"'
 timeout = 30
-statusMessage = "Checking git push target"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/git-integrity-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/flake-stage-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/ssh-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/gpg-commit-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/package-manager-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/declarative-package-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/gh-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/jira-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" --timeout 25 "$HOME/.codex/hooks/pr-body-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/file-edit-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/agent-tooling-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/claude-dir-edit-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/prompt-authoring-guard.py"'
+timeout = 30
+
+[[hooks.PreToolUse]]
+matcher = "^(spawn_agent|Agent)$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/orchestration-guard.py"'
+timeout = 30
+
+[[hooks.PostToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/rebuild-enforcer.py"'
+timeout = 30
+
+[[hooks.PostToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/missing-tool-hint.py"'
+timeout = 30
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/output-shape-reminder.py"'
+timeout = 30
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/rebuild-enforcer.py"'
+timeout = 30
+
+[hooks.state."@codexConfig@:pre_tool_use:0:0"]
+trusted_hash = "sha256:1aa5c1d9b1bfbfd9c40e5ea466da5aea18c9efaf6a2a3d7d38584ee98d2c2d5e"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:1"]
+trusted_hash = "sha256:a413f1b23229e552858af864bd6edcdcd42889da5ffcfd04d463d681719da273"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:2"]
+trusted_hash = "sha256:324d0772394c6bcb2ce898f4adb0c51fe6754890eb3d27a00625bdf2ac449d44"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:3"]
+trusted_hash = "sha256:45ba7398a70caab1b0eaf05b3eaeab87020c4b8126d79df1babb29979238beb4"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:4"]
+trusted_hash = "sha256:3eade5629281d2e1d27e64fc212d0291b24cf337a858353c19a049d1fda7cebc"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:5"]
+trusted_hash = "sha256:8a73e021ed03d4376b8656675a0c236017ee2ce1d8dbdb162ddbf9035effe8c9"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:6"]
+trusted_hash = "sha256:51cf946f8991ec72798464903ef1df3a76a8a47ccc205f828e7b51a6a587d407"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:7"]
+trusted_hash = "sha256:35b738910c05f1c0a406325a77bb8ed3166124cb754aa42e758a6ad93e4b0faf"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:8"]
+trusted_hash = "sha256:8afd7ca91e2521992f484dbd7fc798f04449c96bfa64451525b70f2558d81981"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:9"]
+trusted_hash = "sha256:d5dbff449bf359cc8fd6af8f6c2318e297ebf47c1e0b1eb087e7fee4f54dcbb4"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:10"]
+trusted_hash = "sha256:1f9f01c318fb17b797fa0ae132031be37bef46b32b367a14c9f644a76582501a"
+
+[hooks.state."@codexConfig@:pre_tool_use:0:11"]
+trusted_hash = "sha256:e1d4f37cf9a0f4d6ef5ef70b587e4d6954ed1d5f3cb2e622d10df2441c2727b8"
+
+[hooks.state."@codexConfig@:pre_tool_use:1:0"]
+trusted_hash = "sha256:60aec6911e73c3da3ba873e0c81db4f6deeb58a5abaa84804519314e77ad5d67"
+
+[hooks.state."@codexConfig@:pre_tool_use:1:1"]
+trusted_hash = "sha256:f4f1bd0de33e2b1003deacc15a6a615d7c2364c2d5bf36d1ae107e3ec4969fce"
+
+[hooks.state."@codexConfig@:pre_tool_use:2:0"]
+trusted_hash = "sha256:e67bbc0c973e65867f1807599227838de3b761f76568dfdd533bec1578332f77"
+
+[hooks.state."@codexConfig@:post_tool_use:0:0"]
+trusted_hash = "sha256:8bc27cdf0d29cefe2e8b2325233a98beaddbaa7f2d9232001805915a0c7da59a"
+
+[hooks.state."@codexConfig@:post_tool_use:1:0"]
+trusted_hash = "sha256:cdeed70aca395af81f5a6a6c8171457da4812be4204b3f01e34f5766fe4b8381"
+
+[hooks.state."@codexConfig@:user_prompt_submit:0:0"]
+trusted_hash = "sha256:f74b235080280e0d8e09ef743855309b7c34e97c58e4e73e9aafa9edb358577e"
+
+[hooks.state."@codexConfig@:stop:0:0"]
+trusted_hash = "sha256:13ab42fd789464251b1a33b19d680c7747fa983bccc0816b5f7ad82bd8b7ac7b"
+
+[hooks.state."@dotfilesConfig@:post_tool_use:0:0"]
+trusted_hash = "sha256:112dc6851ce7a42e08f21563e6394cfc7fc45a9b2df44d53b642a30d5f5b386b"
 
 [plugins."github@openai-curated"]
 enabled = true

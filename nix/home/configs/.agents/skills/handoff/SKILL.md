@@ -1,4 +1,5 @@
 ---
+name: handoff
 description: Hand off to the next unit of work through plan mode. Invoke it whenever one unit of work finishes and another one follows inside the same session, so the approved plan file replaces the transcript as the carried context -- and invoke it before drafting any handoff document by hand, because the template and the chainable flag live here.
 argument-hint: "[goal for next session]"
 ---

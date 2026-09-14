@@ -1,4 +1,9 @@
-{ pkgs, lib, ... }:
+{
+  pkgs,
+  lib,
+  config,
+  ...
+}:
 let
   # Copy local.nix.example → local.nix and fill in secrets (gpg signing key, etc.)
   # local.nix is gitignored.
@@ -122,7 +127,20 @@ let
     + builtins.readFile outputManner
   );
   codexAgentRules = pkgs.writeText "AGENTS.md" (
-    (builtins.readFile sharedAgentRules) + "\n" + (builtins.readFile outputManner)
+    (builtins.readFile sharedAgentRules)
+    + "\n"
+    + (builtins.readFile ./configs/codex/AGENTS.md)
+    + "\n"
+    + (builtins.readFile outputManner)
+  );
+  codexConfig = pkgs.writeText "codex-config.toml" (
+    builtins.replaceStrings
+      [ "@codexConfig@" "@dotfilesConfig@" ]
+      [
+        "${config.home.homeDirectory}/.codex/config.toml"
+        "${config.home.homeDirectory}/.dotfiles/.codex/config.toml"
+      ]
+      (builtins.readFile ./configs/codex/config.toml)
   );
 
   # Skills, defined once and linked into both tools' skill trees below. Local
@@ -213,6 +231,11 @@ in
   home.file = lib.mkMerge [
     {
       ".codex/AGENTS.md".source = codexAgentRules;
+      ".codex/agents/code-reviewer.toml".source = ./configs/codex/agents/code-reviewer.toml;
+      ".codex/agents/prose-editor.toml".source = ./configs/codex/agents/prose-editor.toml;
+      ".codex/agents/oracle.toml".source = ./configs/codex/agents/oracle.toml;
+      # Claude gets this skill from its frontend-design plugin.
+      ".agents/skills/frontend-design".source = "${anthropicsSkills}/skills/frontend-design";
       ".profile".text = ''
         export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
       '';
@@ -370,10 +393,81 @@ in
         source = ./configs/claude/hooks/missing-tool-hint.py;
         executable = true;
       };
-      # Codex reuses the same push guard (its PreToolUse hook schema matches Claude's:
-      # reads tool_input.command, denies via hookSpecificOutput.permissionDecision).
+      # Reuse the Claude policy scripts; the Codex adapter translates tool payloads.
+      ".codex/hooks/claude-hook-adapter.py" = {
+        source = ./configs/codex/hooks/claude-hook-adapter.py;
+        executable = true;
+      };
       ".codex/hooks/git-push-guard.py" = {
         source = ./configs/claude/hooks/git-push-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/git-integrity-guard.py" = {
+        source = ./configs/claude/hooks/git-integrity-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/flake-stage-guard.py" = {
+        source = ./configs/claude/hooks/flake-stage-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/ssh-guard.py" = {
+        source = ./configs/claude/hooks/ssh-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/gpg-commit-guard.py" = {
+        source = ./configs/claude/hooks/gpg-commit-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/package-manager-guard.py" = {
+        source = ./configs/claude/hooks/package-manager-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/declarative-package-guard.py" = {
+        source = ./configs/claude/hooks/declarative-package-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/gh-guard.py" = {
+        source = ./configs/claude/hooks/gh-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/jira-guard.py" = {
+        source = ./configs/claude/hooks/jira-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/pr-body-guard.py" = {
+        source = ./configs/claude/hooks/pr-body-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/file-edit-guard.py" = {
+        source = ./configs/claude/hooks/file-edit-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/agent-tooling-guard.py" = {
+        source = ./configs/claude/hooks/agent-tooling-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/prompt-authoring-guard.py" = {
+        source = ./configs/claude/hooks/prompt-authoring-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/orchestration-guard.py" = {
+        source = ./configs/claude/hooks/orchestration-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/claude-dir-edit-guard.py" = {
+        source = ./configs/claude/hooks/claude-dir-edit-guard.py;
+        executable = true;
+      };
+      ".codex/hooks/rebuild-enforcer.py" = {
+        source = ./configs/claude/hooks/rebuild-enforcer.py;
+        executable = true;
+      };
+      ".codex/hooks/missing-tool-hint.py" = {
+        source = ./configs/claude/hooks/missing-tool-hint.py;
+        executable = true;
+      };
+      ".codex/hooks/output-shape-reminder.py" = {
+        source = ./configs/claude/hooks/output-shape-reminder.py;
         executable = true;
       };
       # The three-day transcript audit behind file-edit-guard.py counted 414
@@ -529,7 +623,7 @@ in
     run mkdir -p "$codexDir"
     # Drop any leftover read-only symlink from previous management.
     [ -L "$out" ] && run rm -f "$out"
-    run install -m 0644 ${./configs/codex/config.toml} "$out"
+    run install -m 0644 ${codexConfig} "$out"
     if [ -f "$localTrust" ]; then
       {
         echo ""

@@ -1,4 +1,5 @@
 ---
+name: zoom-out
 description: Zoom out and map an unfamiliar area of code at a higher level of abstraction.
 disable-model-invocation: true
 ---

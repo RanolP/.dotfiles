@@ -1,4 +1,5 @@
 ---
+name: website-explainer
 description: Research a subject, then explain it as a Korean slide-per-concept website rendered through the Artifact tool. Invoke when the user wants something explained visually — a PR, a bug, an architecture, a decision, a concept.
 when_to_use: When the user says "website-explainer", "웹사이트로 설명해줘", "랜딩 페이지 만들어줘", or asks for a visual Korean explainer page for any subject.
 ---

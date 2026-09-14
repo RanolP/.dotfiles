@@ -1,4 +1,5 @@
 ---
+name: record-replay
 description: Record a scenario to a file on its first run, then replay that file instead of retyping the steps.
 when_to_use: Before driving a UI, an app, or any multi-step flow you expect to run more than once -- self-verifying your own change, reproducing a bug, or leaving a regression check behind. Also when a replay diverges and you are about to fix it by hand.
 ---

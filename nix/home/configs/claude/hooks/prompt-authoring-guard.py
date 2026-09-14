@@ -61,9 +61,11 @@ def is_behavior_text(path):
     norm = path.replace("\\", "/")
     if os.path.basename(norm) in BEHAVIOR_BASENAMES:
         return True
+    parts = norm.split("/")
+    if norm.endswith(".toml") and "agents" in parts:
+        return True
     if not norm.endswith(".md"):
         return False
-    parts = norm.split("/")
     # A reference page inside a skill, or an agent definition, steers a model
     # exactly as its SKILL.md does.
     return "skills" in parts or "agents" in parts
@@ -151,6 +153,9 @@ def selftest():
         "/r/nix/home/configs/claude/CLAUDE.md",
         "/r/.claude/agents/code-reviewer.md",
         "/r/nix/home/configs/claude/agents/oracle.md",
+        # Codex role instructions live in TOML and need the same authoring guidance.
+        "/r/.codex/agents/code-reviewer.toml",
+        "/r/nix/home/configs/codex/agents/oracle.toml",
         "/r/skills/github-master/guides/pr.md",
         r"C:\r\skills\foo\SKILL.md",
     ):
@@ -163,6 +168,7 @@ def selftest():
         "/r/README.md",
         "/r/nix/home/default.nix",
         "/r/skills/foo/config.json",
+        "/r/.codex/config.toml",
         "",
         None,
     ):

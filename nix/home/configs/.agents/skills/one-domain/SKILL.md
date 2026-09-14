@@ -1,4 +1,5 @@
 ---
+name: one-domain
 description: Present multi-domain information one domain at a time.
 when_to_use: When a task involves 2 or more distinct domains (e.g., frontend + backend, config + code, auth + storage). Invoke before presenting information that spans multiple concerns.
 ---

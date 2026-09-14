@@ -1,4 +1,5 @@
 ---
+name: tdd
 description: Test-driven development via red-green-refactor in vertical slices.
 when_to_use: When building a feature or fixing a bug test-first, when the user mentions "red-green-refactor", TDD, or wants tests that survive refactors. Invoke before writing the implementation.
 ---

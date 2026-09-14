@@ -1,4 +1,5 @@
 ---
+name: metro-wait
 description: Wait for a Metro dev server and its bundle by asking Metro directly, instead of polling its log file with sleep.
 when_to_use: Any React Native task that starts Metro and then needs the server up, the bundle built, or the app reloaded -- a device screenshot, an e2e run, a QA pass, a reload after an edit. Also when you are about to write `until grep ... metro.log; do sleep N; done`.
 ---

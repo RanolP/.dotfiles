@@ -3,3 +3,12 @@
 # do not require per-command sandbox escalation.
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+
+[[hooks.PostToolUse]]
+matcher = "^apply_patch$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = '''if jq -e '(.tool_input.command // "") | test("(?m)^\\*\\*\\* (Add File|Update File|Move to): .*\\.nix\\r?$")' >/dev/null; then (cd "$HOME/.dotfiles/nix" && nix fmt .); fi'''
+timeout = 30
+statusMessage = "Formatting Nix"

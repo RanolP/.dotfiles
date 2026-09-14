@@ -1,4 +1,5 @@
 ---
+name: apology
 description: Claude records one of its own mistakes as a 시말서 (Korean incident report). Restore the offending call verbatim from the session transcript, write self-critically with no excuses, and propose a concrete change in ~/.dotfiles as the recurrence guard. The file stays inside .apologies/ and never leaves the machine.
 when_to_use: The user says "/시말서", "시말서", "시말서 써", or "apology", or asks Claude to record a mistake it just made. Use it only for Claude's own mistakes, never for a human's.
 ---

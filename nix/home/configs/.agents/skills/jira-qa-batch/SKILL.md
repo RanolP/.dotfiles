@@ -1,4 +1,5 @@
 ---
+name: jira-qa-batch
 description: Run a batch of Jira QA cards by driving one scenario twice -- once against the as-is build and once against the to-be build -- on an Android phone with agent-device or on a web page with agent-browser, and hand back a side-by-side review video.
 when_to_use: When a Jira card (or a JQL search full of them) needs manual QA and the verdict depends on seeing the old behaviour and the new behaviour next to each other -- a visual regression, a layout change, a copy change, a timing-sensitive screen. Covers an Android app and any web target.
 ---

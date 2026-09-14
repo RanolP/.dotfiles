@@ -146,6 +146,11 @@ SPDX-License-Identifier = "MIT"
 path = [
     ".codex/config.toml",
     "nix/home/configs/codex/config.toml",
+    "nix/home/configs/codex/hooks/claude-hook-adapter.py",
+    "nix/home/configs/codex/AGENTS.md",
+    "nix/home/configs/codex/agents/code-reviewer.toml",
+    "nix/home/configs/codex/agents/prose-editor.toml",
+    "nix/home/configs/codex/agents/oracle.toml",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
@@ -179,6 +184,8 @@ SPDX-License-Identifier = "Apache-2.0"
 [[annotations]]
 path = [
     "scripts/verify-claude-hook.sh",
+    "scripts/codex-config-check.py",
+    "scripts/codex-hook-adapter-test.py",
     "scripts/hook-contract-test.py",
     "scripts/git-push-guard-test.py",
     "scripts/declarative-package-guard-test.py",

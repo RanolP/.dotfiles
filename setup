@@ -1,0 +1,9 @@
+echo @'
+:' > /dev/null
+:; curl -L dotfiles.ranolp.dev/xpkg/setup-scripts/sh.sh | sh; exit
+@curl -L dotfiles.ranolp.dev/xpkg/setup-scripts/batch.bat > %Temp%\dotfiles-setup.bat
+@%Temp%\dotfiles-setup.bat
+@del %Temp%\dotfiles-setup.bat
+@exit
+'@ | Out-Null
+Invoke-WebRequest dotfiles.ranolp.dev/xpkg/setup-scripts/powershell.ps1 | Invoke-Expression

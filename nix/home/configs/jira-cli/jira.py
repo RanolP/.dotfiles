@@ -352,6 +352,17 @@ class MCP:
             {"issueIdOrKey": key, "fields": {"description": doc}, "contentFormat": "adf"},
         )
 
+    def put_comment(self, key, doc, comment_id=None):
+        args = {
+            "issueIdOrKey": key,
+            "commentBody": json.dumps(doc, ensure_ascii=False),
+            "contentFormat": "adf",
+            "responseContentFormat": "adf",
+        }
+        if comment_id:
+            args["commentId"] = str(comment_id)
+        return self.call("addCommentToJiraIssue", args)
+
 
 def _unwrap(body):
     """MCP answers either plain JSON or an SSE stream; take the first data frame."""
@@ -956,7 +967,31 @@ def _comment_head(c):
     return f"{author}  {_fv(c.get('created'))}{edited}  id={c.get('id', '-')}"
 
 
+def _comment_doc(a):
+    """A comment is a whole `doc`: --text wraps one paragraph, otherwise stdin carries the JSON."""
+    if a.text is not None:
+        para = {"type": "paragraph", "content": [{"type": "text", "text": a.text}]}
+        return {"type": "doc", "version": 1, "content": [para]}
+    raw = sys.stdin.read()
+    if not raw.strip():
+        raise Fail("--add/--edit reads the comment's ADF doc from stdin, and stdin was empty")
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise Fail(f"stdin is not valid JSON: {e}")
+    if not isinstance(doc, dict) or doc.get("type") != "doc":
+        raise Fail("a comment body must be a top-level ADF `doc` node")
+    return doc
+
+
 def cmd_comments(mcp, a):
+    if a.add or a.edit:
+        res = mcp.put_comment(a.issue, _comment_doc(a), a.edit)
+        if isinstance(res, dict) and res.get("id"):
+            print(f"✓ {'수정' if a.edit else '작성'}했습니다  {_comment_head(res)}")
+        else:
+            print(res)
+        return
     field = mcp.get_comments(a.issue)
     items = field.get("comments") or []
     if a.json:
@@ -1350,6 +1385,7 @@ READING — no card is needed to start; these never write.
     jira show -i KEY                     the body as the selector's XML view
     jira show -i KEY --rendered          the body as plain text, cheapest to read
     jira comments -i KEY                 every comment, oldest first, as plain text
+    jira comments -i KEY --add --text …  post one comment right away (or an ADF doc on stdin)
 
 STATUS — the workflow graph is sampled from real cards, then walked for real.
 
@@ -1390,11 +1426,14 @@ EXAMPLES
 
 COMMENTS_HELP = """\
 Prints every comment on the card, oldest first, as the same lossy plain-text view
-that `jira show --rendered` uses. Comments are read-only here: this CLI stages edits
-against the description alone, so nothing `comments` prints can be pushed back.
+that `jira show --rendered` uses. `--add` and `--edit` write one comment right away,
+with no queue, because a comment has no existing body to pre-flight against.
 
     (default)   one header line per comment, then the body as plain text
     --json      the raw `comment` field, ADF bodies included
+    --add       post a new comment; the body is an ADF `doc` on stdin
+    --edit ID   replace comment ID's body; the body is an ADF `doc` on stdin
+    --text STR  with --add/--edit: one plain paragraph instead of stdin
 
 The header carries the author, the creation time, `(수정됨)` when the comment was
 edited afterwards, and the comment id.
@@ -1402,6 +1441,9 @@ edited afterwards, and the comment id.
 EXAMPLES
     jira comments -i PROJ-1
     jira comments -i PROJ-1 --json
+    jira comments -i PROJ-1 --add --text '재현 확인했습니다.'
+    jira show -i PROJ-1 --json | jira comments -i PROJ-1 --add
+    jira comments -i PROJ-1 --edit 10042 --text '(수정) 재현 확인했습니다.'
 """
 
 SHOW_HELP = """\
@@ -1555,10 +1597,14 @@ def main():
     nf.set_defaults(fn=cmd_info)
 
     cm = sub.add_parser(
-        "comments", help="print a card's comments as plain text", epilog=COMMENTS_HELP, formatter_class=fmt
+        "comments", help="print, post or edit a card's comments", epilog=COMMENTS_HELP, formatter_class=fmt
     )
     cm.add_argument("-i", "--issue", required=True, metavar="KEY")
     cm.add_argument("--json", action="store_true", help="print the raw comment field instead")
+    w = cm.add_mutually_exclusive_group()
+    w.add_argument("--add", action="store_true", help="post a new comment from an ADF doc on stdin")
+    w.add_argument("--edit", metavar="ID", help="replace comment ID's body from an ADF doc on stdin")
+    cm.add_argument("--text", metavar="STR", help="with --add/--edit: one plain paragraph instead of stdin")
     cm.set_defaults(fn=cmd_comments)
 
     fl = sub.add_parser(

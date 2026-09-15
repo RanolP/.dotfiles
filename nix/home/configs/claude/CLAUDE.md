@@ -24,6 +24,13 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: keep destructive Bash in the foreground, where its output lands in context
 - DO (review): review the full `git diff HEAD` for correctness and scope creep after non-trivial code is authored, or spawn a fresh sonnet reviewer, and address the findings before finishing
 
+## Escalate one hard question to `oracle`, from inside a worker as readily as from main
+- WHEN: about to commit to an approach whose reversal is expensive, or about to report a non-trivial unit as done
+- DO: spawn `subagent_type: "oracle"` with NO `model` param, passing `question:` plus the `context:` that makes it judgeable -- `subagent-model-guard.py` allows this from inside a worker on exactly the same terms as from the main thread
+- DO: state the verdict in your own words, and surface a `suggest_more` other than `none` before continuing
+- DO (worker): escalate from where the evidence sits rather than deferring the question to whoever reads your report, because the context that makes it answerable is yours and expires with your turn
+- WHY: a server-side tool folds its round trip into one assistant message, so the rolled-up `usage` counts the same context twice and force-compacts the session at half its real size; a subagent records its own messages, so `oracle` buys Fable judgment that cannot inflate the caller -- [[advisor-inflates-autocompact-threshold]]
+
 ## Plan mode -- one gate, two signals: think and hand off
 - PURPOSE: keep working context lean -- the plan file, not the transcript, is what carries work forward
 - SETUP: at session start, ToolSearch `select:TaskCreate,TaskUpdate,TaskList,EnterPlanMode,ExitPlanMode` before any other work, because a deferred EnterPlanMode is invisible at decision time

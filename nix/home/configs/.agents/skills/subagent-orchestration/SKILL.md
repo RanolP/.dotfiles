@@ -27,16 +27,18 @@ The following model tiers, fork guidance, and oracle guidance apply when Claude 
 
 ### Model tiers
 
-`subagent-model-guard.py` denies any `Agent`/`Task` call that omits `model`, because an omitted `model` means `inherit` and silently spends the main thread's tier on the worker. Choose deliberately:
+`subagent-model-guard.py` denies a spawn that omits `model`, because an omitted `model` means `inherit` and silently spends the main thread's tier on the worker. It exempts the three cases where the choice already exists elsewhere: a `fork` (the param is ignored), a named agent that pins `model:` in its own frontmatter, and a namespaced plugin agent whose model lives in the plugin.
 
-| Tier | Use it for |
-|---|---|
-| `haiku` | Mechanical search and read work -- greps, file reads, pattern matching, data collection, Slack and web crawls. No judgment required. |
-| `sonnet` | The default. Anything needing reasoning: research, review, design, debugging. Also the implementer for well-scoped code changes. |
-| `opus` | Only from a Fable main thread, where the main thread is not the reasoning tier. From an Opus main thread, hard reasoning belongs in the main thread itself. |
-| Fable | Only through the pinned `oracle` agent, with no `model` param. |
+Every label resolves one tier ABOVE itself, because `settings.json` remaps them in `env` -- price the worker by the resolved model, never by the label:
 
-The guard hard-denies an explicit `model: fable` and denies anything above `sonnet` from a non-Fable main thread. Its deny reason restates the rubric, so a mis-tiered call costs one round-trip.
+| Label | Resolves to | Use it for |
+|---|---|---|
+| `haiku` | Sonnet 5 | Mechanical search and read work -- greps, file reads, pattern matching, data collection, Slack and web crawls. No judgment required. |
+| `sonnet` | Opus 5 | The default. Anything needing reasoning: research, review, design, debugging. Also the implementer for well-scoped code changes. |
+| `opus` | **Fable 5** | Only from a Fable main thread, where the main thread is not the reasoning tier and this worker is the implementer. From an Opus main thread, hard reasoning belongs in the main thread itself. |
+| `oracle` (no `model`) | **Fable 5** | One bounded question of judgment, from main or from inside a worker. |
+
+The guard hard-denies an explicit `model: fable` and denies anything above `sonnet` from a non-Fable main thread, so reach Fable through `opus` or `oracle` rather than by naming it. Its deny reason restates the rubric, so a mis-tiered call costs one round-trip.
 
 ### `fork` costs more than it looks
 
@@ -44,9 +46,7 @@ The guard hard-denies an explicit `model: fable` and denies anything above `sonn
 
 ### The `oracle` agent
 
-Pass exactly one `question` plus enough `context` to judge it. It answers; it does not edit files, run tools, or take open-ended work.
-
-When `oracle` returns a `suggest_more` other than `none`, tell the user what further context or action it suggested before continuing. That suggestion is the oracle saying its answer is incomplete, and swallowing it wastes the escalation.
+`oracle` answers one bounded question and nothing else: it edits no files, runs no tools, and takes no open-ended work, so a request shaped like a task comes back unusable. The trigger, the call shape and the `suggest_more` obligation are in `CLAUDE.md` under `## Escalate one hard question to oracle`; what belongs here is that `oracle` is now the ONLY route to Fable judgment for a bounded question, since `advisorModel` was removed on 2026-09-14 -- [[advisor-inflates-autocompact-threshold]].
 
 ## Codex native roles
 

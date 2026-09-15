@@ -142,6 +142,13 @@ in
     executable = true;
     text = ''
       #!/bin/sh
+      # The advisor tool folds its round trip into one assistant message, so the
+      # rolled-up usage counts the same context twice and force-compacts the
+      # session at half its real size. `oracle` is the subagent that replaces it.
+      # Exported here as well as in settings.json's env block, because a
+      # `claude -p --setting-sources ""` child loads no settings at all.
+      # Drop this line once the double-count is fixed upstream.
+      export CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1
       . ${./../configs/claude/profile-wiring.sh}
       # MCP servers otherwise live only in the mutable per-profile
       # ~/.claude.json, so declare the shared ones here instead. --mcp-config

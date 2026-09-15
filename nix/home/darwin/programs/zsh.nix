@@ -37,6 +37,15 @@
     # sole tool source for non-interactive zsh.
     envExtra = ''
       export PATH="/Users/ranolp/.local/bin:/Users/ranolp/.local/share/mise/shims:$PATH"
+      # Claude Code's built-in autoupdater runs `npm install --global
+      # @anthropic-ai/claude-code` every 30 minutes whenever ~/.claude.json says
+      # installMethod=global. mise orders node/<ver>/bin AHEAD of mise/shims, so
+      # that npm copy shadows the pinned aqua build declared in mise-global.toml,
+      # and npm 12's allowScripts default blocks its postinstall, leaving a stub
+      # that only prints "claude native binary not installed". The env var is the
+      # only lever that reaches a `claude -p --setting-sources ""` child, which
+      # loads no settings.json at all. Version changes come from mise-global.toml.
+      export DISABLE_AUTOUPDATER=1
       export ANDROID_HOME="$HOME/Library/Android/sdk"
       export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
       # BrowserStack credentials for `agent-device connect browserstack`. They

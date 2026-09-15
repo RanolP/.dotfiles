@@ -142,6 +142,12 @@ in
     executable = true;
     text = ''
       #!/bin/sh
+      # Every claude in this house is the aqua build pinned in mise-global.toml,
+      # so the built-in autoupdater has nothing to do: left on, it npm-installs a
+      # global copy into node/<ver>/bin every 30 minutes, which mise's PATH order
+      # places AHEAD of mise/shims. Exported (not just set) so `claude -p` children
+      # inherit it even when they run with --setting-sources "".
+      export DISABLE_AUTOUPDATER=1
       # The advisor tool folds its round trip into one assistant message, so the
       # rolled-up usage counts the same context twice and force-compacts the
       # session at half its real size. `oracle` is the subagent that replaces it.

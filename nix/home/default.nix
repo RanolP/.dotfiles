@@ -577,6 +577,23 @@ in
     fi
   '';
 
+  # claude comes from mise's aqua backend (mise-global.toml), so an npm-global
+  # copy under node/<ver>/lib/node_modules is always undeclared -- and harmful,
+  # because mise orders node/<ver>/bin ahead of mise/shims and the copy wins the
+  # bare name. DISABLE_AUTOUPDATER (zsh .zshenv, nushell env, ~/.local/bin/claude)
+  # stops anything from writing one; this sweep clears what a stray `npm i -g` or
+  # a pre-fix process already left, on every rebuild.
+  home.activation.pruneNpmGlobalClaude = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    for pkgdir in "$HOME"/.local/share/mise/installs/node/*/lib/node_modules/@anthropic-ai/claude-code; do
+      [ -e "$pkgdir" ] || continue
+      nodedir="''${pkgdir%/lib/node_modules/@anthropic-ai/claude-code}"
+      run rm -rf "$pkgdir"
+      if [ -L "$nodedir/bin/claude" ]; then
+        run rm -f "$nodedir/bin/claude"
+      fi
+    done
+  '';
+
   # Register herdr-browser (fetched above) with herdr. `plugin link` is the only
   # declarative-friendly entry point: it takes a local dir and runs no build.
   # Unlink first so a rev bump re-points the registry at the new store path

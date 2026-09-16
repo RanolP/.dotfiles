@@ -167,12 +167,11 @@
 - NEVER: prefix a `cd`, whether as advice or as `cd A && B`, because it changes the shell of the person pasting it
 - EXCEPT: a command YOU run in your own Bash tool, where the working directory is known
 
-## Name every referent by its exact identifier plus a description
+## Name every referent by its exact identifier
 - WHEN: any user-facing text -- a final message, a PR body, a commit message, a doc, a ticket comment
 - WHY: only your final message reaches the user, so "the file", "that PR", or "it" names something that exists only inside your own context
-- DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command -- paired with one short phrase saying what it is: `PR #128 (pin the oracle agent to fable)`
-- DO: report the ID and the verdict of any subagent or background job you describe, and paraphrase what is ON the line whenever you cite `file:line`
-- NEVER: let repetition erode the pairing -- on every NEW message, the FIRST mention of each identifier carries its title again
+- DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command -- and let it stand alone
+- DO: report the ID and the verdict of any subagent or background job you describe
 
 ## Answer the subset that was asked
 - WHEN: answering a follow-up about items from your own previous message

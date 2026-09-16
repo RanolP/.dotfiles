@@ -49,7 +49,7 @@ Then read the neighbouring sections for contradictions. When the new rule disagr
 
 Bullets are `WHEN` (the trigger condition), `DO` (the action), `WHY` (the causal mechanism), `NEVER` (a failure the `DO` line cannot carry). `WHEN` and at least one `DO` are required; `WHY` and `NEVER` earn their place.
 
-Name every referent by its exact identifier plus a short description -- `git-integrity-guard.py` (denies force-push), never "the guard". Convert relative dates to absolute ones.
+Name every referent by its exact identifier -- `git-integrity-guard.py`, never "the guard". Convert relative dates to absolute ones.
 
 For the sentence-level form -- positive phrasing, which prohibitions earn their place, how a `WHY` states a mechanism rather than a conclusion, and why the prose is English -- follow the `prompt-authoring` skill. It owns that layer.
 

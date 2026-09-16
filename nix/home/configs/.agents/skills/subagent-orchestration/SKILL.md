@@ -29,20 +29,20 @@ The following model tiers, fork guidance, and oracle guidance apply when Claude 
 
 `subagent-model-guard.py` denies a spawn that omits `model`, because an omitted `model` means `inherit` and silently spends the main thread's tier on the worker. It exempts the three cases where the choice already exists elsewhere: a `fork` (the param is ignored), a named agent that pins `model:` in its own frontmatter, and a namespaced plugin agent whose model lives in the plugin.
 
-Every label resolves one tier ABOVE itself, because `settings.json` remaps them in `env` -- price the worker by the resolved model, never by the label:
+Each label resolves to the model it names:
 
 | Label | Resolves to | Use it for |
 |---|---|---|
-| `haiku` | Sonnet 5 | Mechanical search and read work -- greps, file reads, pattern matching, data collection, Slack and web crawls. No judgment required. |
-| `sonnet` | Opus 5 | The default. Anything needing reasoning: research, review, design, debugging. Also the implementer for well-scoped code changes. |
-| `opus` | **Fable 5** | Only from a Fable main thread, where the main thread is not the reasoning tier and this worker is the implementer. From an Opus main thread, hard reasoning belongs in the main thread itself. |
+| `haiku` | Haiku 4.5 | Mechanical search and read work -- greps, file reads, pattern matching, data collection, Slack and web crawls. No judgment required. |
+| `sonnet` | Sonnet 5 | Well-scoped edits, lookups, summaries. |
+| `opus` | Opus 5 | The default for anything needing reasoning: research, review, design, debugging, implementation. |
 | `oracle` (no `model`) | **Fable 5** | One bounded question of judgment, from main or from inside a worker. |
 
-The guard hard-denies an explicit `model: fable` and denies anything above `sonnet` from a non-Fable main thread, so reach Fable through `opus` or `oracle` rather than by naming it. Its deny reason restates the rubric, so a mis-tiered call costs one round-trip.
+The guard hard-denies an explicit `model: fable`, so reach Fable only through `oracle` rather than by naming it. Its deny reason restates the rubric, so a mis-tiered call costs one round-trip.
 
 ### `fork` costs more than it looks
 
-`fork` inherits the parent model at full parent context cost -- the whole conversation is re-sent. Prefer a fresh `sonnet` spawn with a self-contained brief. Reach for `fork` only when the worker genuinely needs this thread's accumulated context and no brief can reconstruct it.
+`fork` inherits the parent model at full parent context cost -- the whole conversation is re-sent. Prefer a fresh `opus` spawn with a self-contained brief. Reach for `fork` only when the worker genuinely needs this thread's accumulated context and no brief can reconstruct it.
 
 ### The `oracle` agent
 

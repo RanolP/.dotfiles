@@ -22,7 +22,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: act on the completion notification when the harness re-invokes you -- continue other ready work, or end the turn
 - DO (multi-step): register every step with TaskCreate before the first one starts, then send everything with no unmet dependency out in ONE message
 - DO: keep destructive Bash in the foreground, where its output lands in context
-- DO (review): review the full `git diff HEAD` for correctness and scope creep after non-trivial code is authored, or spawn a fresh sonnet reviewer, and address the findings before finishing
+- DO (review): review the full `git diff HEAD` for correctness and scope creep after non-trivial code is authored, or spawn a fresh code-reviewer, and address the findings before finishing
 
 ## Escalate one hard question to `oracle`, from inside a worker as readily as from main
 - WHEN: about to commit to an approach whose reversal is expensive, or about to report a non-trivial unit as done

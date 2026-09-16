@@ -67,12 +67,9 @@
     "workers-best-practices": "user-invocable-only",
     "wrangler": "user-invocable-only"
   },
-  "model": "sonnet",
+  "model": "opus",
   "outputStyle": "concise-adhd-korean",
   "env": {
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-fable-5",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-5",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-sonnet-5",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
     "DISABLE_AUTOUPDATER": "1",

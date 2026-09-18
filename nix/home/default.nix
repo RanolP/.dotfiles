@@ -275,6 +275,12 @@ in
         source = ./configs/claude/hooks/commit-check-guard.py;
         executable = true;
       };
+      # Denies a commit to a github.com/RanolP/ repo whose staged diff adds a
+      # secret or a denylisted private identifier.
+      ".claude/hooks/leak-guard.py" = {
+        source = ./configs/claude/hooks/leak-guard.py;
+        executable = true;
+      };
       # Nothing triggered the memory-review skill, so promotion candidates piled
       # up unread. This nudges once the pile grows.
       ".claude/hooks/memory-review-nudge.py" = {

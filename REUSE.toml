@@ -97,6 +97,7 @@ path = [
     "nix/home/configs/claude/hooks/git-push-guard.py",
     "nix/home/configs/claude/hooks/declarative-package-guard.py",
     "nix/home/configs/claude/hooks/commit-check-guard.py",
+    "nix/home/configs/claude/hooks/leak-guard.py",
     "nix/home/configs/claude/hooks/memory-review-nudge.py",
     "nix/home/configs/claude/hooks/file-edit-guard.py",
     "nix/home/configs/claude/hooks/flake-stage-guard.py",
@@ -192,6 +193,7 @@ path = [
     "scripts/git-push-guard-test.py",
     "scripts/declarative-package-guard-test.py",
     "scripts/commit-check-guard-test.py",
+    "scripts/leak-guard-test.py",
     "scripts/memory-review-nudge-test.py",
 ]
 precedence = "aggregate"

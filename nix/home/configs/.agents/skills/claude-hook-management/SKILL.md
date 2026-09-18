@@ -58,6 +58,7 @@ An injected string stays in the transcript, so every later request re-reads all 
 | `gpg-commit-guard.py` | PreToolUse Bash | a signed commit needs an unlocked key |
 | `package-manager-guard.py` | PreToolUse Bash | use the manager the project declares |
 | `gh-guard.py` | PreToolUse Bash | inject the github-master guide before a mutating `gh` |
+| `leak-guard.py` | PreToolUse Bash | a commit to a public `RanolP/` repo adds no secret or denylisted private identifier |
 | `subagent-model-guard.py` | PreToolUse Agent\|Task | every spawn names its model tier |
 | `claude-dir-edit-guard.py` | PreToolUse Edit\|Write | Home-Manager-owned `~/.claude/` paths stay read-only |
 | `rebuild-enforcer.py` | PostToolUse Edit\|Write, PostToolUse Bash, Stop | a config edit is followed by a rebuild |

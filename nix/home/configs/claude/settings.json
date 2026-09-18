@@ -205,6 +205,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/commit-check-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/leak-guard.py"
           }
         ]
       },

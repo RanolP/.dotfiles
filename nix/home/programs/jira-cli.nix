@@ -1,8 +1,10 @@
 { pkgs, ... }:
 let
-  # The script, its vendored ADF schema, and its self-check fixture ship as one
-  # store directory: jira.py resolves both siblings from realpath(__file__), so
-  # linking the three files separately would scatter them across three paths.
+  # The entry script, its `jira_cli/` package, the vendored ADF schema, and the
+  # self-check fixture ship as one store directory: `uv run --script` puts the
+  # script's directory on sys.path, and the package resolves the schema and the
+  # fixture from realpath(__file__), so linking the files separately would
+  # scatter them across several paths.
   src = ../configs/jira-cli;
 
   # uv comes from mise (nix/home/mise-global.toml), not from nixpkgs, so it is

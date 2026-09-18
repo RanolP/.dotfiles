@@ -4,7 +4,7 @@ Fine-grained editing of a Jira card's body. Select a node inside the card's Atla
 
 **Managed by:** `nix/home/programs/jira-cli.nix` — a `writeShellScriptBin` wrapper that runs `nix/home/configs/jira-cli/jira.py` through `uv run --script`. `uv` comes from mise, not from nixpkgs, so the wrapper resolves it off the caller's `PATH` and fails with a named instruction when it is missing.
 
-The script is a single PEP 723 file. Its dependencies (`lxml`, `cssselect`, `jsonschema`) are declared in the script header and resolved by `uv` at run time, so nothing is compiled during a rebuild.
+`jira.py` is a PEP 723 entry point that dispatches into the `jira_cli/` package beside it, one module per domain (the table below names them). Its dependencies (`lxml`, `cssselect`, `jsonschema`) are declared in the script header and resolved by `uv` at run time, so nothing is compiled during a rebuild.
 
 ## Why it exists
 
@@ -14,14 +14,16 @@ Two constraints shaped the design: no OAuth app registration, and no credential 
 
 ## Layers
 
-| Layer | What it does |
-|---|---|
-| Auth | DCR on first login, PKCE authorization code, refresh on 401 or near expiry. `~/.config/jira-cli/credentials.json`, mode 0600. |
-| Transport | MCP JSON-RPC over HTTPS with `urllib`, session id, SSE-or-JSON unwrapping. |
-| Selector | Projects the ADF onto an `lxml` tree — one element per node, tag = the node's `type`, `attrs` as XML attributes, and a `ptr` attribute holding the RFC 6901 pointer. `cssselect` translates the selector to XPath. |
-| Queue | `~/.config/jira-cli/queue.json`. Each entry holds the issue key, the selector, the operation, the new content, the resolved pointers, and a deep snapshot of every matched node. |
-| Apply | Dry-runs every queued card, then writes. `editJiraIssue` with `contentFormat: "adf"`, one call per card. |
-| Workflow | `~/.config/jira-cli/workflow.json`, one entry per `project:issuetype`, holding the sampled status graph. |
+| Layer | Module | What it does |
+|---|---|---|
+| Auth | `jira_cli/auth.py` | DCR on first login, PKCE authorization code, refresh on 401 or near expiry. `~/.config/jira-cli/credentials.json`, mode 0600. |
+| Transport | `jira_cli/mcp.py` | MCP JSON-RPC over HTTPS with `urllib`, session id, SSE-or-JSON unwrapping. |
+| ADF | `jira_cli/adf.py` | Projects the ADF onto an `lxml` tree — one element per node, tag = the node's `type`, `attrs` as XML attributes, and a `ptr` attribute holding the RFC 6901 pointer. `cssselect` translates the selector to XPath. Also holds the JSON-pointer ops, the schema validation, the rendered plain-text view, and `show`, `types`, `media ls`, `schema update`. |
+| Queue | `jira_cli/edit.py` | `~/.config/jira-cli/queue.json`. Each entry holds the issue key, the selector, the operation, the new content, the resolved pointers, and a deep snapshot of every matched node. |
+| Apply | `jira_cli/edit.py` | Dry-runs every queued card, then writes. `editJiraIssue` with `contentFormat: "adf"`, one call per card. |
+| Cards | `jira_cli/cards.py` | `search`, `info`, `comments` — reads that need no ADF tree, plus the one-line field flattening the listings share. |
+| Workflow | `jira_cli/flow.py` | `~/.config/jira-cli/workflow.json`, one entry per `project:issuetype`, holding the sampled status graph. |
+| Self-check | `jira_cli/selfcheck.py` | The offline assertions behind `jira selfcheck`, run against `fixture.adf.json`. |
 
 ## Commands
 

@@ -165,6 +165,7 @@ SPDX-License-Identifier = "MIT"
 [[annotations]]
 path = [
     "nix/home/configs/jira-cli/jira.py",
+    "nix/home/configs/jira-cli/jira_cli/**",
     "nix/home/configs/jira-cli/fixture.adf.json",
     "nix/home/programs/jira-cli.nix",
     "docs/src/jira-cli.md",

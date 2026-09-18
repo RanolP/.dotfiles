@@ -53,6 +53,23 @@ Two more things it warns about: keep sensitive values out of link query params, 
 
 Link previews are off by default; set `unfurl_app_links=true` on `slack_send_message` when the message carries GitHub, Jira, or Figma links worth expanding.
 
+### A bare URL swallows the line after it
+
+Write every link as `[label](url)`, never as a bare `https://…` string, and never end a line with one. The linkifier that runs on `message` reads a bare URL greedily: a `:` and the text after a newline are all legal URL characters to it, so the URL keeps going into the next line.
+
+The incident, 2026-09-18, a release thread in the team channel. Sent:
+
+```
+:ios: https://<workspace>.slack.com/archives/<channel>/<ios-ts>
+:android: https://<workspace>.slack.com/archives/<channel>/<android-ts>
+```
+
+Landed as one iOS link whose text ended in `_:android`, followed by `: <android url>` with no label. Both links were in the message, but the `:android:` label had been eaten into the first URL, so a teammate re-posted the Android link by hand. The same content as `[:ios:](url)` / `[:android:](url)` — or `:ios: [iOS Stage 3.112.0-shorts.4](url)` — parses line by line.
+
+### Read the message back after every send
+
+`slack_send_message` returns `message_ts`; the next call is `slack_read_thread` (or `slack_read_channel`) on it, in `detailed` format, and the reply to the user quotes what Slack actually rendered. A send is permanent, so the only fix for a mangled one is a correction reply, and that is worth posting within the minute rather than after a teammate notices. The incident above went unread for over an hour because the send result alone was reported as success.
+
 ## Short lines, never paragraphs
 
 The recurring correction on this user's drafts is length and shape, not accuracy. "문장이 너무 길고 리스트가 아니야. 슬랙 메시지 다시 정리해" came first; "여전히 기니까 더 구조화하고 문장 다듬어" came after the revision. Treat your first draft's length as a ceiling to beat.

@@ -162,6 +162,7 @@ let
     github-master = localSkill "github-master";
     jira-master = localSkill "jira-master";
     jira-qa-batch = localSkill "jira-qa-batch";
+    component-pixel-review = localSkill "component-pixel-review";
     slack-messaging = localSkill "slack-messaging";
     worktree-cleanup = localSkill "worktree-cleanup";
     one-domain = localSkill "one-domain";

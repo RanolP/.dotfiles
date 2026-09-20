@@ -26,6 +26,15 @@ let
     hash = "sha256-rzT+jXI+hwoXvqS/ln6PT2juxzFsDoKGIOygkJWCM94=";
   };
 
+  # TypeSafe (Jev) agent skill. Declarative equivalent of
+  # `npx skills add typesafe-ai/skills --skill typesafe-ai`.
+  typesafeSkills = pkgs.fetchFromGitHub {
+    owner = "typesafe-ai";
+    repo = "skills";
+    rev = "65a39f393687675ce170e6094757de20370365b9";
+    hash = "sha256-Lh2Y90TFv+njKqo/g5WXEHw0Rk1jQSH5POqKtrvy5kM=";
+  };
+
   # Supermemory, manual-search-only. The plugin is disabled in settings.json:
   # its SessionStart/UserPromptSubmit hooks inject recall context into every
   # request, Claude Code has no per-hook disable, and the plugin's own
@@ -192,6 +201,7 @@ let
     "시말서" = localSkill "apology";
     skill-creator = "${anthropicsSkills}/skills/skill-creator";
     notion-cli = "${notionSkills}/skills/notion-cli";
+    typesafe-ai = "${typesafeSkills}/skills/typesafe-ai";
     supermemory-search = supermemorySearchSkill;
   };
 

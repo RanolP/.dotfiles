@@ -23,12 +23,18 @@ in
     enable = true;
     onActivation = {
       autoUpdate = false;
+      # Casks move with the rebuild, not by hand: Karabiner 16.0.0's CGEventTap
+      # leak stayed installed for months because the default is --no-upgrade.
+      upgrade = true;
       cleanup = "zap";
       # Silently zap anything not declared above -- no interactive prompt.
       # Everything Homebrew-installed is declared here, so a leftover is always
       # undeclared drift (manual `brew install`, orphan dep, renamed cask).
       extraFlags = [ "--force" ];
     };
+    # Self-updating casks (karabiner-elements, raycast, ...) are skipped by a
+    # plain upgrade; greedy makes the rebuild the one place they move.
+    greedyCasks = true;
     brews = [
       "git-absorb"
       "git-filter-repo"

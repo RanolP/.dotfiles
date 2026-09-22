@@ -82,6 +82,8 @@
   "theme": "dark",
   "skipAutoPermissionPrompt": true,
   "autoUpdates": false,
+  "syncClaudeAiSkills": false,
+  "syncClaudeAiPlugins": false,
   "disableDeepLinkRegistration": "disable",
   "feedbackSurveyRate": 0,
   "showClearContextOnPlanAccept": true,

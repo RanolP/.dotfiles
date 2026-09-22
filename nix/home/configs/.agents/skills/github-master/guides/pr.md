@@ -59,11 +59,11 @@ Never re-paste a commit body under its own item. The reviewer clicks the sha for
 
 ## PR body — Korean, 개조식-first
 
-A reviewer opens a body to decide where to look, not to read a narrative — so both rules below exist to make an item readable without parsing it, and the examples are what the reasoning happens to produce, not the rule itself.
+A reviewer opens a body to decide where to look, so both rules below make an item readable by position. The block that follows them is what they produce.
 
-**One predicate per unit (개조식).** Chaining clauses inside one item hides which single fact the item is making, and makes the reader parse a sentence before they can pull the cause and the action out of it. An arrow chain (`->`) of noun phrases puts 원인, 결과 and 조치 in fixed positions instead, so each is found by position rather than by reading; a parenthesis carries what is true but not load-bearing. So cut the item at every connective and let each predicate stand as its own segment — the structure is what carries the rule, and the ending follows from it.
+**One predicate per unit (개조식).** An arrow chain (`->`) of noun phrases puts 원인, 결과 and 조치 in fixed positions, so each is found by position. Cut the item at every connective, let one predicate stand per segment, and put what is true but not load-bearing in parentheses.
 
-**Forward reasoning 대국적으로.** N siblings at one level assert N independent facts. They are not independent: one of them caused the rest, so a flat list discards the reasoning the author already did and hands the reviewer the job of rebuilding it. Nesting states that tree outright — the reviewer reads one root cause, takes the children as its consequences, and accepts or skips a whole subtree at once. Ordering by commit encodes the order the work happened in, which is the one ordering the reviewer never needs. The 개요 compresses the same chain into one or two lines:
+**Forward reasoning 대국적으로.** Fold the items by cause: name the root cause, put it alone at the top level, and indent every action it forced. The reviewer then reads the cause once and takes its whole subtree with it. The 개요 compresses the same chain into one or two lines:
 
 ```
 - 테스트 러너 없음 -> vitest 구성
@@ -74,12 +74,9 @@ A reviewer opens a body to decide where to look, not to read a narrative — so 
   - 기존 *-self-check.mjs 마이그레이션
 ```
 
-```
-전: 저장소에 vitest가 없어 pnpm test가 동작하지 않던 상태
-후: 저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)
-```
+The 개요 of that same body reads: `저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)`.
 
-The `pr-body-guard` hook denies a `gh pr create|edit` whose Hangul item holds more than one predicate inside one arrow-segment, or ends in 니다/요/다 (commit-sha lines, fences, headings and template lines exempt), and denies a section that lists 5 or more top-level Hangul items with nothing nested under any of them — a flat list is a body folded by commit count instead of by cause. Both share one escape hatch: when the prose or the flat list is deliberate, re-run with `PR_BODY_GUARD_ALLOW_PROSE=1` in front of the command.
+The `pr-body-guard` hook enforces both: it passes a Hangul item that keeps one predicate per arrow-segment and ends on a noun or `-함`/`-됨`/`-임`/`-음`, and passes a section once its items nest under their cause (a section stays under the guard's eye from 5 top-level items up; commit-sha lines, fences, headings and template lines are exempt). Both share one escape hatch: when the prose or the flat list is deliberate, re-run with `PR_BODY_GUARD_ALLOW_PROSE=1` in front of the command.
 
 Apply inline prose rules (from technical-writing's Korean rules):
 

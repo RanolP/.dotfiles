@@ -540,11 +540,10 @@ def main():
             shown = "\n".join("  - %s   (%s)" % (l[:120], why) for l, why in prose[:15])
             decide("deny", (
                 "PR body is 서술식, not 개조식 (%d item(s)):\n%s\n"
-                "WHY: an arrow chain is read by position; a sentence has to be "
-                "parsed first. So cut the item at every connective and let each "
-                "predicate stand as its own segment.\n"
-                "  전: 저장소에 vitest가 없어 pnpm test가 동작하지 않던 상태\n"
-                "  후: 저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)\n"
+                "WHY: an arrow chain is read by position. Cut the item at every "
+                "connective, let one predicate stand per segment, and put what is "
+                "true but not load-bearing in parentheses:\n"
+                "  저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)\n"
                 "If the prose is deliberate, re-run with PR_BODY_GUARD_ALLOW_PROSE=1 "
                 "in front of the command." % (len(prose), shown)
             ))
@@ -554,9 +553,10 @@ def main():
             where = ", ".join("(%s: 최상위 %d개, 중첩 0개)" % (h, n) for h, n in flat)
             decide("deny", (
                 "PR body is a flat list, not forward reasoning %s:\n"
-                "WHY: siblings claim to be independent, but one caused the rest. "
-                "So put that root cause alone at the top level and indent what it "
-                "forced -- fold by cause, not by commit.\n"
+                "WHY: one of these items caused the rest. Name that root cause, "
+                "put it alone at the top level, and indent every action it forced, "
+                "so the reviewer reads the cause once and takes its subtree with "
+                "it:\n"
                 "  - 테스트 러너 없음 -> vitest 구성\n"
                 "    - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체\n"
                 "    - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리\n"

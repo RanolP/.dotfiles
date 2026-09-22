@@ -54,3 +54,44 @@ It grades each result:
 - `SLOW` -- the hook is slow enough to notice.
 
 A hook that scores any `STOP` never gets registered.
+
+## 2026-09-22 -- the user rewrote an agent's PR body and cut it to a seventh
+
+Reported from another session working on a CI build-cache fix in a work repository. The user edited the agent's body by hand, showed both versions side by side, and told the agent to send the case here: "내가 고치는 걸 보고 잘 배워서 dotfiles한테 사례집 보내라". The agent's body ran about 2,900 bytes; the user's covered the same scope in about 400, roughly a seventh.
+
+That repo's `.github/PULL_REQUEST_TEMPLATE.md` defines exactly four top-level headers: `## 개요`, `## 작업 내역`, `## 관련 카드`, `## 변경 체크리스트`.
+
+The agent's version opened `## 개요` with five bullets (a measurement, two refuted hypotheses, the scope of application), added a top-level `## 실측 결과` section holding a four-row table plus three paragraphs explaining which number came from what, and wrote `## 작업 내역` as a numbered list of `<short sha> <commit subject>` items, each carrying two or three `리뷰 포인트:` sub-bullets.
+
+The user's version kept the same scope in this shape, with the measurements standing in for the real ones:
+
+```markdown
+- CI에서 빌드 캐시가 적용되지 않아 활성화한다.
+
+## 작업 내역
+
+- 캐시 경로만이 문제였으므로 경로를 수정하고 캐시 히트를 확인
+- 원격 빌드 캐시를 추가로 사용한다
+- 캐시 오염을 막기 위해 버킷을 저장소별로 분리한다
+
+### 실측 결과
+
+- 빌드 시간 : <전> -> <후> (-N%p)
+- 캐시 적중 태스크 : <전> -> <후> (-N%p)
+
+증거: 1회차 (링크), 2회차 (링크)
+```
+
+Five rules come out of that edit.
+
+**`## 개요` is one line.** It says what was wrong and what was done, nothing else. Four of the agent's five 개요 bullets did not belong there. A refuted hypothesis stays out of the body entirely until a reviewer asks for it.
+
+**No `##` section beyond the ones the repo template names.** The agent created a top-level `## 실측 결과`; the user demoted it to `### 실측 결과` under `## 작업 내역`, saying "실측 결과 <- 이런 섹션은 표준이 아님". Anything extra goes in as a sub-header of an existing section.
+
+**작업 내역 is a list of what was done, not a list of commits.** The user deleted every short sha and every commit subject and cut each item to one line. The reviewer already sees the commit list on the PR screen, so copying it into the body buys nothing. `nix/home/configs/.agents/skills/github-master/guides/pr.md` had asked for one numbered item per commit opening with the short sha and the commit subject; on the same day the user replaced that with one short line per group of commits that does one thing, and set the bar for a `리뷰 포인트:` sub-bullet at "without it a Haiku-level reader could not understand the change".
+
+**A number is one `A -> B (-N%p)` line, not a table.** The agent built a four-row table and the user kept the two load-bearing rows as plain lines. A table earns its place only at three or more columns with a different kind of thing per row.
+
+**Evidence is a `증거: <링크>` line, not commentary.** The agent spent three paragraphs attributing each number to a cause; the user replaced them with the two run links. Whatever the reviewer can confirm by opening the link does not get explained in the body.
+
+One notation to carry verbatim: the user writes a reduction as `-N%p`, using the percentage-point symbol for a ratio change. Write it their way.

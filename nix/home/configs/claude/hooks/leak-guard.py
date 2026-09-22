@@ -8,8 +8,13 @@ repository's `origin` points at `github.com/RanolP/` -- the user's personal
 public repos. A work repo's commits are that employer's business and pass
 untouched.
 
-Two pattern sources scan the ADDED lines of the staged diff (`-U0`, `+` lines;
-also the unstaged tracked diff when `-a`/`--all` is given):
+The hook fires BEFORE the command runs, so `git add X && git commit` would show
+it an empty index. The scan therefore covers what the chain WILL commit: the
+staged diff always, plus -- when the same chain stages earlier or the commit
+carries `-a`/`--all` -- the unstaged tracked diff and the content of every
+untracked file the `git add` arguments name.
+
+Two pattern sources scan the ADDED lines of those diffs (`-U0`, `+` lines):
 
   1. built-in secret / identifier shapes -- Slack tokens, GitHub PATs, OpenAI
      keys, AWS access keys, PEM private keys, JWTs, Slack archive URLs, Slack
@@ -47,6 +52,10 @@ DENYLIST_ENV = "LEAK_GUARD_DENYLIST"
 DENYLIST_DEFAULT = os.path.join("~", ".config", "leak-guard", "denylist")
 GIT_TIMEOUT_S = 10
 MAX_HITS = 10
+# A staging step in the same chain makes the guard read the working tree, so
+# both are capped: a huge untracked tree must not stall the hook.
+MAX_UNTRACKED_FILES = 50
+MAX_FILE_BYTES = 256 * 1024
 
 ORIGIN_RE = re.compile(r"github\.com[:/]RanolP/", re.IGNORECASE)
 
@@ -245,14 +254,84 @@ def commit_spec(toks):
     return {"c_path": c_path, "all": all_flag, "allow": allow}
 
 
+def git_subcommand(toks):
+    """(subcommand, args) for a `git` invocation, or None."""
+    _, toks = strip_prefix(toks)
+    if not toks or base(toks[0]) != "git":
+        return None
+    i = 1
+    while i < len(toks):
+        t = toks[i]
+        if t in GIT_OPTS_WITH_ARG:
+            i += 2
+            continue
+        if t.startswith("-"):
+            i += 1
+            continue
+        return toks[i], toks[i + 1:]
+    return None
+
+
+def staging_spec(toks):
+    """None when the segment stages nothing; else {"add_all": bool, "paths": [str]}.
+
+    `git add` / `git stage` / `git rm --cached`. `git reset` unstages, so it
+    contributes nothing by itself -- the `git add` that follows it is what the
+    chain stages with.
+    """
+    sub = git_subcommand(toks)
+    if sub is None:
+        return None
+    name, args = sub
+    if name not in ("add", "stage", "rm"):
+        return None
+    if name == "rm" and "--cached" not in args:
+        return None
+    paths = []
+    add_all = False
+    after_dashdash = False
+    for a in args:
+        if not after_dashdash:
+            if a == "--":
+                after_dashdash = True
+                continue
+            if a.startswith("--"):
+                if a in ("--all", "--update", "--no-ignore-removal"):
+                    add_all = True
+                continue
+            if a.startswith("-") and len(a) > 1:
+                if any(ch in "Au" for ch in a[1:]):
+                    add_all = True
+                continue
+        if a.rstrip("/") in (".", ""):
+            add_all = True
+            continue
+        paths.append(a)
+    return {"add_all": add_all, "paths": paths}
+
+
 def find_commits(command):
+    """Commit specs in chain order; each carries the staging its own chain does
+    before it, so the scan can cover what the command WILL commit."""
     specs = []
+    staged_here = False
+    stage_all = False
+    staged_paths = []
     for seg in parse_segments(command):
         if seg["parse_error"]:
             continue
         spec = commit_spec(seg["tokens"])
         if spec is not None:
+            spec["staged_here"] = staged_here
+            spec["stage_all"] = stage_all
+            spec["paths"] = list(staged_paths)
             specs.append(spec)
+            continue
+        staging = staging_spec(seg["tokens"])
+        if staging is not None:
+            staged_here = True
+            stage_all = stage_all or staging["add_all"]
+            staged_paths += staging["paths"]
     return specs
 
 
@@ -323,6 +402,53 @@ def scan(diff, patterns):
     return hits
 
 
+def path_selected(rel, paths):
+    """True when `git add <paths>` would stage the repo-relative file `rel`."""
+    for p in paths:
+        # Only a literal `./` prefix is dropped, never a leading dot: a
+        # character-class strip would turn `.env` into `env` and never match.
+        while p.startswith("./"):
+            p = p[2:]
+        p = p.rstrip("/")
+        if p in ("", "."):
+            return True
+        if rel == p or rel.startswith(p + "/"):
+            return True
+    return False
+
+
+def untracked_diff(repo, paths, add_all):
+    """A pseudo `-U0` diff of the untracked files `git add` would stage, so the
+    same scanner sees them. Capped at MAX_UNTRACKED_FILES files and
+    MAX_FILE_BYTES per file: over the cap, what fits is scanned and the rest
+    allowed."""
+    if not add_all and not paths:
+        return ""
+    out = git(repo, "status", "--porcelain", "-z", "-uall", "--no-renames")
+    if not out:
+        return ""
+    chunks = []
+    for entry in out.split("\0"):
+        if len(entry) < 4 or entry[:2] != "??":
+            continue
+        rel = entry[3:]
+        if not add_all and not path_selected(rel, paths):
+            continue
+        try:
+            with open(os.path.join(repo, rel), "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read(MAX_FILE_BYTES)
+        except OSError:
+            continue
+        lines = text.splitlines()
+        if not lines:
+            continue
+        chunks.append("--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n%s"
+                      % (rel, len(lines), "\n".join("+" + l for l in lines)))
+        if len(chunks) >= MAX_UNTRACKED_FILES:
+            break
+    return "\n".join(chunks)
+
+
 def git(repo, *args):
     env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     p = subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True,
@@ -359,7 +485,7 @@ def evaluate(data):
     for spec in specs:
         repo = os.path.join(cwd, os.path.expanduser(spec["c_path"])) if spec["c_path"] else cwd
         repo = os.path.normpath(repo)
-        key = (repo, spec["all"])
+        key = (repo, spec["all"], spec["staged_here"], spec["stage_all"], tuple(spec["paths"]))
         if key in seen:
             continue
         seen.add(key)
@@ -371,10 +497,15 @@ def evaluate(data):
         diff = git(repo, "diff", "--cached", "-U0", "--no-color", "--no-ext-diff")
         if diff is None:
             continue
-        if spec["all"]:
+        if spec["all"] or spec["staged_here"]:
             unstaged = git(repo, "diff", "-U0", "--no-color", "--no-ext-diff")
             if unstaged:
                 diff += "\n" + unstaged
+        if spec["staged_here"]:
+            # `-a` never stages an untracked file; an explicit `git add` does.
+            untracked = untracked_diff(repo, spec["paths"], spec["stage_all"])
+            if untracked:
+                diff += "\n" + untracked
         hits += scan(diff, patterns)
         if len(hits) >= MAX_HITS:
             hits = hits[:MAX_HITS]
@@ -443,9 +574,43 @@ def _selftest():
     check("missing denylist is empty", load_denylist("/nonexistent/leak-guard/denylist") == [])
 
     # command parsing
-    check("plain commit", find_commits("git commit -m x") == [{"c_path": None, "all": False, "allow": False}])
+    plain = find_commits("git commit -m x")
+    check("plain commit", len(plain) == 1 and plain[0]["c_path"] is None
+          and plain[0]["all"] is False and plain[0]["allow"] is False
+          and plain[0]["staged_here"] is False)
     check("-C path", find_commits("git -C /r commit -m x")[0]["c_path"] == "/r")
     check("chain + wrapper", find_commits("git add -A && sudo git commit -am x")[0]["all"] is True)
+
+    # staging earlier in the same chain (the compound-command bypass)
+    chained = find_commits("git add docs/a.md && git commit -m x")[0]
+    check("chain add marks staged_here", chained["staged_here"] is True)
+    check("chain add records the path", chained["paths"] == ["docs/a.md"])
+    check("chain add -A marks stage_all",
+          find_commits("git add -A && git commit -m x")[0]["stage_all"] is True)
+    check("chain add . marks stage_all",
+          find_commits("git add . ; git commit -m x")[0]["stage_all"] is True)
+    check("bare . is add_all, not a literal path",
+          staging_spec(["git", "add", "."]) == {"add_all": True, "paths": []})
+    check("./ is add_all, not a literal path",
+          staging_spec(["git", "add", "./"]) == {"add_all": True, "paths": []})
+    check("a dot-prefixed path stays a path",
+          staging_spec(["git", "add", ".env"]) == {"add_all": False, "paths": [".env"]})
+
+    # path selection keeps the leading dot
+    check("dotfile selected by its own name", path_selected(".env", [".env"]) is True)
+    check("dotfile selected via ./ prefix", path_selected(".env", ["./.env"]) is True)
+    check("dot directory selects its children",
+          path_selected(".aws/credentials", [".aws"]) is True)
+    check("dotfile not selected by a sibling", path_selected(".env", ["env"]) is False)
+    check("plain path still selected", path_selected("docs/a.md", ["docs"]) is True)
+    check("chain reset then add",
+          find_commits("git reset -q && git add d && git commit -q -F -")[0]["paths"] == ["d"])
+    check("rm --cached counts as staging",
+          find_commits("git rm --cached f && git commit -m x")[0]["staged_here"] is True)
+    check("rm without --cached is not staging",
+          find_commits("git rm f && git commit -m x")[0]["staged_here"] is False)
+    check("staging after the commit does not count",
+          find_commits("git commit -m x && git add y")[0]["staged_here"] is False)
     check("--all", find_commits("git commit --all -m x")[0]["all"] is True)
     check("allow prefix", find_commits("LEAK_GUARD_ALLOW=1 git commit -m x")[0]["allow"] is True)
     check("not a commit", find_commits("git status; git add x") == [])
@@ -527,6 +692,49 @@ def _selftest_git(check, tempfile):
                   evaluate(payload(repo, "git commit -m x")) is None)
             check("unstaged secret, commit -a denied",
                   evaluate(payload(repo, "git commit -am x")) is not None)
+
+            # the compound-command bypass: stage and commit in ONE call
+            sh(repo, "reset", "-q", "--hard")
+            with open(os.path.join(repo, "doc.md"), "a") as fh:
+                fh.write("thread: " + SLACK_URL + "\n")
+            reason = evaluate(payload(repo, "git add doc.md && git commit -q -m x"))
+            check("chained add + commit denied", reason is not None and "doc.md:" in reason)
+            check("chained add + commit -am denied",
+                  evaluate(payload(repo, "git reset -q && git add doc.md && git commit -qam x"))
+                  is not None)
+            sh(repo, "reset", "-q", "--hard")
+
+            os.makedirs(os.path.join(repo, "notes"))
+            with open(os.path.join(repo, "notes", "new.md"), "w") as fh:
+                fh.write("thread: " + SLACK_URL + "\n")
+            reason = evaluate(payload(repo, "git add notes && git commit -q -m x"))
+            check("untracked file under an added directory denied",
+                  reason is not None and "notes/new.md:1:" in reason)
+            check("untracked file swept by git add -A denied",
+                  evaluate(payload(repo, "git add -A && git commit -q -m x")) is not None)
+            check("untracked file outside the added path allowed",
+                  evaluate(payload(repo, "git add doc.md && git commit -q -m x")) is None)
+            check("untracked file, plain commit allowed",
+                  evaluate(payload(repo, "git commit -q -m x")) is None)
+            with open(os.path.join(repo, "notes", "new.md"), "w") as fh:
+                fh.write("nothing secret here\n")
+            check("clean untracked file, chained add allowed",
+                  evaluate(payload(repo, "git add notes && git commit -q -m x")) is None)
+
+            # a leaked credential lives in a dot-prefixed file more often than not
+            with open(os.path.join(repo, ".env"), "w") as fh:
+                fh.write("OPENAI_API_KEY=" + "sk-" + "a" * 32 + "\n")
+            reason = evaluate(payload(repo, "git add .env && git commit -q -m x"))
+            check("untracked .env named explicitly denied",
+                  reason is not None and ".env:1:" in reason)
+            check("untracked .env via ./ prefix denied",
+                  evaluate(payload(repo, "git add ./.env && git commit -q -m x")) is not None)
+            os.makedirs(os.path.join(repo, ".secrets"))
+            with open(os.path.join(repo, ".secrets", "token"), "w") as fh:
+                fh.write("ghp_" + "b" * 36 + "\n")
+            reason = evaluate(payload(repo, "git add .secrets && git commit -q -m x"))
+            check("untracked file under a dot directory denied",
+                  reason is not None and ".secrets/token:1:" in reason)
 
         with tempfile.TemporaryDirectory() as root:
             repo = make_repo(root, "git@github.com:other-org/x.git")

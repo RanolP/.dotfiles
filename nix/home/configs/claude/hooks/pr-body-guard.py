@@ -541,8 +541,8 @@ def main():
             decide("deny", (
                 "PR body is 서술식, not 개조식 (%d item(s)):\n%s\n"
                 "WHY: an arrow chain is read by position; a sentence has to be "
-                "parsed first. So drop the connectives, not the endings -- "
-                "한다 -> 함 clears nothing.\n"
+                "parsed first. So cut the item at every connective and let each "
+                "predicate stand as its own segment.\n"
                 "  전: 저장소에 vitest가 없어 pnpm test가 동작하지 않던 상태\n"
                 "  후: 저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)\n"
                 "If the prose is deliberate, re-run with PR_BODY_GUARD_ALLOW_PROSE=1 "

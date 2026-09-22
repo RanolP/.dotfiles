@@ -14,37 +14,23 @@ Conventional Commits, imperative mood — same rules as commit subjects (see `gi
 
 ## PR body — the shape
 
-The body answers one question: **what does the reviewer genuinely want to know?** Everything below follows from that.
+The body answers one question: **what does the reviewer genuinely want to know?** Everything below follows from that. Worked specimens live in `guides/pr-body-examples.md` — read one when a principle here is clear but its shape is not.
 
-**Sections = the repo template, verbatim.** In the work repos that is exactly four headers, checklist boilerplate included:
+**Dense, with the boundaries marked.** A body earns its space by packing information, and density tires the reader exactly where nothing shows one unit ending and the next beginning. So every unit opens with a marker the eye lands on before the content: a `###` sub-header for a group of items, a label prefix such as `리뷰 포인트:` or `증거:` for a line of a known kind, an arrow segment for 원인 / 결과 / 조치 inside one item, and indentation for what a cause forced. Push the density as far as the markers hold it, and reach for one more marker before reaching for one more sentence of explanation.
 
-```
-## 개요
-## 작업 내역
-## 관련 카드
-## 변경 체크리스트
-- [ ] 변경 후 확인이 필요한 기능을 명시해주세요
-- [ ] Ex) 작품이 iOS에서 재생
-```
+**Sections = the repo template, verbatim.** Keep its headers as they are and add no `##` of your own; anything extra goes in as a `###` under one of them.
 
-Add no section of your own. A PR body has no meta section, no "이 PR은 …" preamble, no apology, no padding. A reviewer wants the change, not a bow before it.
+**개요 is one line.** It says what was wrong and what was done. A measurement, a refuted hypothesis, and the scope of application all belong elsewhere, and a refuted hypothesis stays out of the body until a reviewer asks for it.
 
-**작업 내역 = one numbered item per commit**, in commit order, each opening with the short sha and the commit subject. Under it, one sub-bullet stating the **intent** of the change, and a `리뷰 포인트:` sub-bullet when a decision is non-obvious — say **why it had to be that way**, never what was decided, because the decision already sits in the diff and the reason is the only part the code cannot carry:
+**작업 내역 = one short line per group of commits that does one thing.** Group the commits by what they accomplish, then write each group as a single line saying what was done. Carry no short sha and no commit subject into the body: the reviewer already has the commit list on the PR screen, so copying it there buys nothing.
 
-```markdown
-3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현한다
-   - 표현 전용 배지 — 쌓인 개수는 주입받고, 탭 시 꼬리 복귀만 위임
-4. e1b01069a feat: 채팅 리스트 컴포넌트를 구현한다
-   - 비반전 Animated.FlatList + 꼬리 500행 상주 창 — 스크롤 핸들러는 UI 스레드
-   - 리뷰 포인트: 창 고정 앵커를 길이가 아닌 머리 행 id로 잡은 이유(포화 시 길이 파생
-     창은 읽던 행이 밀림, getWindowStart 순수 함수 + 테스트)
-```
+Add a `리뷰 포인트:` sub-bullet only where you judge that without it a Haiku-level reader could not understand the change. That bar is deliberately high — most groups get the one line and nothing else. When one does earn the sub-bullet, say **why it had to be that way**, never what was decided, because the decision already sits in the diff and the reason is the only part the code cannot carry.
 
-Never re-paste a commit body under its own item. The reviewer clicks the sha for that; the item exists to say *why*, not *what again*.
+**A number is one `A -> B (-N%p)` line**, and its backing is a `증거: <링크>` line. Whatever the reviewer confirms by opening the link stays unexplained in the body. A table earns its place only from three columns up, with a different kind of thing per row.
 
 **~25 lines.** A body that restates every commit message is the failure this replaces.
 
-**Show, don't narrate.** A diagram or a rendered screenshot goes *inside* the numbered item it belongs to:
+**Show, don't narrate.** A diagram or a rendered screenshot goes *inside* the item it belongs to:
 
 - **Mermaid** for flow, state, and sequence — GitHub renders ` ```mermaid ` fences natively. Diagram only what this PR does.
 - **Screenshot / rendered output** instead of describing UI in prose.
@@ -59,22 +45,11 @@ Never re-paste a commit body under its own item. The reviewer clicks the sha for
 
 ## PR body — Korean, 개조식-first
 
-A reviewer opens a body to decide where to look, so both rules below make an item readable by position. The block that follows them is what they produce.
+A reviewer opens a body to decide where to look, so both rules below make an item readable by position. `guides/pr-body-examples.md` holds a folded specimen.
 
 **One predicate per unit (개조식).** An arrow chain (`->`) of noun phrases puts 원인, 결과 and 조치 in fixed positions, so each is found by position. Cut the item at every connective, let one predicate stand per segment, and put what is true but not load-bearing in parentheses.
 
-**Forward reasoning 대국적으로.** Fold the items by cause: name the root cause, put it alone at the top level, and indent every action it forced. The reviewer then reads the cause once and takes its whole subtree with it. The 개요 compresses the same chain into one or two lines:
-
-```
-- 테스트 러너 없음 -> vitest 구성
-  - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체
-  - jest 계열 의존성 제거 -> happy-dom 사용 및 코드 정리
-  - 테스트 코드 타입 검사 추가
-  - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리 (unit + storybook 2 프로젝트 구성)
-  - 기존 *-self-check.mjs 마이그레이션
-```
-
-The 개요 of that same body reads: `저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)`.
+**Forward reasoning 대국적으로.** Fold the items by cause: name the root cause, put it alone at the top level, and indent every action it forced. The reviewer then reads the cause once and takes its whole subtree with it, and the 개요 compresses the same chain into one line.
 
 The `pr-body-guard` hook enforces both: it passes a Hangul item that keeps one predicate per arrow-segment and ends on a noun or `-함`/`-됨`/`-임`/`-음`, and passes a section once its items nest under their cause (a section stays under the guard's eye from 5 top-level items up; commit-sha lines, fences, headings and template lines are exempt). Both share one escape hatch: when the prose or the flat list is deliberate, re-run with `PR_BODY_GUARD_ALLOW_PROSE=1` in front of the command.
 

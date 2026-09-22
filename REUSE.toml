@@ -75,6 +75,7 @@ path = [
     "nix/home/configs/.agents/skills/jira-qa-batch/adb-user-shim/shim-selfcheck.sh",
     "nix/home/configs/.agents/skills/component-pixel-review/**",
     "nix/home/configs/.agents/skills/github-master/guides/pr.md",
+    "nix/home/configs/.agents/skills/github-master/guides/pr-body-examples.md",
     "nix/home/configs/.agents/skills/github-master/guides/issue.md",
     "nix/home/configs/.agents/skills/worktree-cleanup/SKILL.md",
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",

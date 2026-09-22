@@ -53,13 +53,31 @@ Never re-paste a commit body under its own item. The reviewer clicks the sha for
 
 **Link instead of duplicating.** Never restate information that already lives in Figma — link it properly. A bare ticket key auto-links and renders the card title, so never hand-write the title beside it, and never leave a raw Jira URL in a body.
 
-**Plain and honest over defensive.** Say the limitation outright: "PR 전체는 완전한 코드지만, 개별적인 커밋은 Lint/Typecheck가 실패할 수 있다" — not a hedged clause about a transitional state.
+**Plain and honest over defensive.** Say the limitation outright: "PR 전체는 완전한 코드, 개별 커밋은 Lint/Typecheck 실패 가능" — not a hedged clause about a transitional state.
 
 **Title**: one short line with the description merged in, not a bare ticket key.
 
 ## PR body — Korean, 개조식-first
 
-Write the body in Korean, terse outline style (개조식): noun-phrase or `-함`/`-됨` bullets, not full paragraphs.
+Write the body in Korean, terse outline style (개조식): **one predicate per unit**. A story (cause, effect, action) is compressed into an arrow chain (`->`) of noun phrases, and an aside goes in parentheses. Swapping 한다→함 while the clauses stay chained (없어 … 동작하지 않던 …) is still 서술식:
+
+**Forward reasoning 대국적으로.** Items fold by causal structure, never by commit count: the root cause sits alone at the top level and every action it forced is nested under it, so the reviewer reads 원인 -> 결과, 문제 -> 해결책 top-down. The 개요 compresses the same chain into one or two lines:
+
+```
+- 테스트 러너 없음 -> vitest 구성
+  - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체
+  - jest 계열 의존성 제거 -> happy-dom 사용 및 코드 정리
+  - 테스트 코드 타입 검사 추가
+  - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리 (unit + storybook 2 프로젝트 구성)
+  - 기존 *-self-check.mjs 마이그레이션
+```
+
+```
+전: 저장소에 vitest가 없어 pnpm test가 동작하지 않던 상태
+후: 저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)
+```
+
+The `pr-body-guard` hook denies a `gh pr create|edit` whose Hangul item holds more than one predicate inside one arrow-segment, or ends in 니다/요/다 (commit-sha lines, fences, headings and template lines exempt), and denies a section that lists 5 or more top-level Hangul items with nothing nested under any of them — a flat list is a body folded by commit count instead of by cause. Both share one escape hatch: when the prose or the flat list is deliberate, re-run with `PR_BODY_GUARD_ALLOW_PROSE=1` in front of the command.
 
 Apply inline prose rules (from technical-writing's Korean rules):
 

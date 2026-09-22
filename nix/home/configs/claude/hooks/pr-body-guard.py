@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: keep a PR body from silently losing lines or shipping broken mermaid.
+"""PreToolUse guard: keep a PR body from losing lines, shipping broken mermaid, or reading as 서술식.
 
-Two failures from real sessions produced this hook:
+Three failures from real sessions produced this hook:
 
 - A rewrite of an open PR's body dropped table columns the user had added by
   hand. The body had been rebuilt from the branch instead of from the remote
@@ -9,8 +9,12 @@ Two failures from real sessions produced this hook:
 - A ```mermaid fence carrying `<br/>` inside a backtick markdown-string label
   reached GitHub and rendered as "Unable to render rich display -- Lexical
   error on line 2".
+- Bodies kept arriving in 서술식 (full sentences ending in ~한다/~합니다) even
+  though guides/pr.md says 개조식 (noun phrases, -함/-됨/-임/-음). The rule was
+  prose aimed at a model, and prose gets skipped; a guard is the only form that
+  holds.
 
-So this guard does exactly two things:
+So this guard does exactly three things:
 
 1. `gh pr edit` with a body: every non-boilerplate line of the REMOTE body must
    survive into the new body. Dropped lines are printed in the deny reason, so
@@ -23,10 +27,20 @@ So this guard does exactly two things:
    lint (known diagram type, no `<br>` inside a markdown-string label, balanced
    quotes and brackets). When `mmdc` happens to be on PATH the real parser runs
    too; it is optional and never installed on demand.
+3. `gh pr create|edit` with a body: no Hangul line may end in a sentence-final
+   ending (니다/요/다). Fences, headings, table rows, template lines and lines
+   quoting a commit SHA are exempt, and a wrapped list item is judged as one.
+   The ending check alone was gamed (한다→함 with the clauses intact: "없어 …
+   동작하지 않던 상태"), so the guard also counts predicates per arrow-segment
+   and denies an item that chains more than one. A 작업 내역 listing one flat
+   bullet per commit -- seven siblings at one level -- was rejected three times
+   even after 개조식 and the `문제 -> 해결` arrows landed, so the guard also
+   requires the nesting: a section of 5+ flat Hangul items with nothing nested
+   under any of them is denied.
 
 Escape hatch: prefix the command with `PR_BODY_GUARD_ALLOW_DROP=1` when the drop
-is deliberate. The deny exists to make the dropped lines visible first, not to
-freeze a body forever.
+is deliberate, or `PR_BODY_GUARD_ALLOW_PROSE=1` when the prose is. The deny
+exists to make the problem visible first, not to freeze a body forever.
 
 Fail open on anything unexpected -- this guard must never make `gh` unusable.
 """
@@ -78,6 +92,35 @@ EDGE_PUNCT = re.compile(r"^[^\w<]+|[^\w>]+$")
 # line. Measured 2026-08-18 over 16 real body lines: every bookkeeping refresh
 # changes 1 word of 2 or more, every genuine rewrite changes more.
 MAX_EDITED_SHARE = 0.5
+
+ANY_FENCE = re.compile(r"^[ \t]*```")
+HANGUL = re.compile(r"[가-힣]")
+LIST_MARKER = re.compile(r"^[ \t]*(?:[-*+]|\d+\.)(?:[ \t]+\[[ xX]\])?(?:[ \t]|$)")
+# A Korean sentence-final ending: 합니다/하세요/해요/한다. -함/-됨/-임/-음, a bare
+# noun and a closing backtick all miss, which is what 개조식 looks like.
+SENTENCE_END = re.compile(r"(?:니다|세요|[어아여해예]요|[가-힣]다)$")
+TRAILING_CLOSERS = re.compile(r"""[.。!?)\]"'\s]+$""")
+# A sentence closed and another begun inside one item: "…한다. 그리고 …".
+SENTENCE_BREAK = re.compile(r"[가-힣]다\.\s")
+# 개조식 compresses a story into an arrow chain of noun phrases, one predicate
+# per segment. A story told in 서술식 chains clauses instead (없어 … 동작하지 않던),
+# so more than one conjugated 어절 in a segment is the tell.
+ARROW = re.compile(r"\s*(?:->|→|=>|⇒)\s*")
+# Explicit connective/conjugated endings only. A generic 고$/어$ would count
+# nouns like 재고 and 언어; 받고/밀림/누락/해결 all miss on purpose.
+PREDICATE_END = re.compile(
+    r"(?:하고|되고|않고|없고|있고|하며|되며|해서|돼서|하여|되어|않아|없어|있어|하지|되지"
+    r"|하게|되게|않던|않는|않게|는데|지만|므로|니까|라서|면서|려고|도록|던|해|돼)$"
+)
+WORD_EDGE = re.compile(r"^\W+|\W+$")
+# A 작업 내역 item opens with the short sha: `3. 795077968 feat: ...`. SHA_TOKEN
+# wants an a-f digit and a 9-digit sha like that one has none, so the position
+# of the token is what identifies it here.
+COMMIT_ITEM = re.compile(r"^(?:[-*+]|\d+\.)[ \t]+[0-9a-f]{7,40}\b")
+HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]*(.*)$")
+# A section that lists one sibling per commit carries no causal structure. Under
+# 5 items a flat list still reads as a list; at 5 the fold is what was missing.
+MIN_FLAT_ITEMS = 5
 
 
 def decide(decision, reason):
@@ -350,6 +393,100 @@ def dropped_lines(remote, new, boilerplate):
     return out
 
 
+def predicates(segment):
+    """Number of 어절 in one arrow-segment that end in a conjugated verb form."""
+    return sum(
+        1 for tok in segment.split()
+        if PREDICATE_END.search(WORD_EDGE.sub("", tok))
+    )
+
+
+def prose_verdict(text):
+    """'문장 종결', '절 K개' when the item reads as 서술식, else None."""
+    if SENTENCE_END.search(TRAILING_CLOSERS.sub("", text)) or SENTENCE_BREAK.search(text):
+        return "문장 종결"
+    worst = max(predicates(seg) for seg in ARROW.split(text))
+    return "절 %d개" % worst if worst > 1 else None
+
+
+def prose_lines(body, boilerplate):
+    """(item, verdict) pairs for Hangul items written as 서술식 rather than 개조식.
+
+    A wrapped list item -- an indented line with no list marker under a list
+    line -- is joined to its item first, so only the item's real ending is
+    judged. A line carrying a commit SHA quotes a commit subject verbatim, and
+    the work repos' subjects end in ~한다 by convention, so it is exempt.
+
+    Two criteria: a sentence-final ending (or a sentence break mid-item), and
+    more than one predicate inside one arrow-segment -- see prose_verdict.
+    """
+    items, inside = [], False
+    for line in body.splitlines():
+        if ANY_FENCE.match(line):
+            inside = not inside
+            continue
+        stripped = line.strip()
+        if inside or not stripped or stripped in boilerplate \
+                or stripped.startswith("#") or table_cells(stripped) is not None:
+            continue
+        is_item = bool(LIST_MARKER.match(line))
+        continuation = line[:1] in " \t" and not is_item
+        if continuation and items and items[-1][0]:
+            items[-1][1].append(stripped)
+        else:
+            items.append((is_item, [stripped]))
+
+    out = []
+    for _, parts in items:
+        text = " ".join(parts)
+        if not HANGUL.search(text) or SHA_TOKEN.search(text) or COMMIT_ITEM.match(text):
+            continue
+        verdict = prose_verdict(text)
+        if verdict:
+            out.append((text, verdict))
+    return out
+
+
+def flat_sections(body, boilerplate):
+    """(heading, top-level count) for sections whose items are a flat list.
+
+    The rejected body folded its 작업 내역 by commit count -- one full bullet per
+    commit, siblings all the way down -- so the reviewer got seven unrelated
+    facts instead of a cause with its consequences nested under it. Forward
+    reasoning shows up structurally: a root cause at indent 0, the actions it
+    forced indented beneath it. A section with MIN_FLAT_ITEMS or more top-level
+    Hangul items and nothing nested anywhere has no such structure.
+
+    Continuation lines (indented, no list marker) are not items, so a wrapped
+    bullet never passes as nesting.
+    """
+    sections = [("(본문)", [])]
+    inside = False
+    for line in body.splitlines():
+        if ANY_FENCE.match(line):
+            inside = not inside
+            continue
+        stripped = line.strip()
+        if inside or not stripped or stripped in boilerplate:
+            continue
+        head = HEADING.match(line)
+        if head:
+            sections.append((head.group(1).strip() or "(본문)", []))
+            continue
+        if not LIST_MARKER.match(line):
+            continue
+        tabbed = line.expandtabs(4)
+        sections[-1][1].append((len(tabbed) - len(tabbed.lstrip()), stripped))
+
+    out = []
+    for heading, items in sections:
+        top = [t for depth, t in items if depth == 0 and HANGUL.search(t)]
+        nested = [t for depth, t in items if depth > 0]
+        if len(top) >= MIN_FLAT_ITEMS and not nested:
+            out.append((heading, len(top)))
+    return out
+
+
 def nearest(line, new_lines):
     """Closest surviving line, so a deny says whether this looks edited or lost.
 
@@ -392,6 +529,38 @@ def main():
                 "Mermaid block %d in the PR body will not render on GitHub: %s\n"
                 "Fix the fence in %s and re-run. A broken fence shows the reader "
                 '"Unable to render rich display", not the diagram.' % (i, detail, source)
+            ))
+
+    allow_prose = os.environ.get("PR_BODY_GUARD_ALLOW_PROSE") == "1" \
+        or "PR_BODY_GUARD_ALLOW_PROSE=1" in cmd
+    if not allow_prose:
+        boilerplate = template_lines(cwd)
+        prose = prose_lines(body, boilerplate)
+        if prose:
+            shown = "\n".join("  - %s   (%s)" % (l[:120], why) for l, why in prose[:15])
+            decide("deny", (
+                "PR body is 서술식, not 개조식 (%d item(s)):\n%s\n"
+                "개조식 = 단위당 술어 하나. 이야기를 원인 -> 결과 -> 조치 사슬로 압축하고, "
+                "부가 정보는 괄호에 넣을 것.\n"
+                "  전: 저장소에 vitest가 없어 pnpm test가 동작하지 않던 상태\n"
+                "  후: 저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)\n"
+                "If the prose is deliberate, re-run with PR_BODY_GUARD_ALLOW_PROSE=1 "
+                "in front of the command." % (len(prose), shown)
+            ))
+
+        flat = flat_sections(body, boilerplate)
+        if flat:
+            where = ", ".join("(%s: 최상위 %d개, 중첩 0개)" % (h, n) for h, n in flat)
+            decide("deny", (
+                "PR body is a flat list, not forward reasoning %s:\n"
+                "원인 -> 결과, 문제 -> 해결책을 대국적으로 세울 것. 근본 원인 한 줄을 "
+                "최상위에 세우고, 파생된 조치를 들여쓰기로 중첩할 것. 커밋 개수가 아니라 "
+                "인과 구조에 맞춰 접는다.\n"
+                "  - 테스트 러너 없음 -> vitest 구성\n"
+                "    - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체\n"
+                "    - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리\n"
+                "If the flat list is deliberate, re-run with PR_BODY_GUARD_ALLOW_PROSE=1 "
+                "in front of the command." % where
             ))
 
     if verb != "edit" or os.environ.get("PR_BODY_GUARD_ALLOW_DROP") == "1" \
@@ -493,6 +662,102 @@ def self_check():
     assert table_cells("plain prose | with a pipe") is None
     assert nearest("| 열A | 열B | 내가추가한열 |", ["| 열A | 열B |"]) == "| 열A | 열B |"
     assert nearest("완전히 다른 문장", ["| 열A | 열B |"]) is None
+
+    # A 서술식 bullet (~한다) is the incident: it must be flagged.
+    assert prose_lines("- pill 컴포넌트를 구현한다", set()) == [("- pill 컴포넌트를 구현한다", "문장 종결")]
+    # The 개조식 rewrite of the same bullet passes.
+    assert prose_lines("- pill 컴포넌트를 구현함", set()) == []
+    # A commit-subject line quotes the work repo's ~한다 subject and is exempt,
+    # whether the sha carries a hex letter or is all digits.
+    assert prose_lines("3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현한다", set()) == []
+    assert prose_lines("- e1b01069a feat: 채팅 리스트 컴포넌트를 구현한다", set()) == []
+    # A wrapped 리뷰 포인트 item is judged by its joined ending, not the wrap point.
+    wrapped = ("   - 리뷰 포인트: 창 고정 앵커를 길이가 아닌 머리 행 id로 잡은 이유(포화 시 길이 파생\n"
+               "     창은 읽던 행이 밀림, getWindowStart 순수 함수 + 테스트)")
+    assert prose_lines(wrapped, set()) == [], prose_lines(wrapped, set())
+    # A paragraph sentence (~합니다.) is flagged even without a list marker.
+    assert prose_lines("이 PR은 pill 컴포넌트를 추가합니다.", set()) == [("이 PR은 pill 컴포넌트를 추가합니다.", "문장 종결")]
+    # Text inside a mermaid fence and a template checklist line are skipped.
+    fenced = "```mermaid\nflowchart LR\n A[시작한다] --> B\n```\n- [ ] 변경 후 확인이 필요한 기능을 명시해주세요\n"
+    assert prose_lines(fenced, {"- [ ] 변경 후 확인이 필요한 기능을 명시해주세요"}) == []
+    # An English-only bullet has no Hangul and is never judged.
+    assert prose_lines("- add the pill component", set()) == []
+    # A bullet ending in `code` passes even when the code word ends in 다.
+    assert prose_lines("- 진입점은 `renderPill다`", set()) == []
+    # ~어요 is a sentence ending too.
+    assert prose_lines("- 컴포넌트를 추가했어요", set()) == [("- 컴포넌트를 추가했어요", "문장 종결")]
+
+    # The ending check was gamed: 한다→함 with the clauses intact. Each of these
+    # chains 2-3 predicates in one segment and must be denied, alone and together.
+    gamed = [
+        ("- 저장소에 vitest가 없어 pnpm test가 동작하지 않던 상태", 3),
+        ("- vitest·storybook 테스트 환경을 도입하고 CI에서 실행되게 함", 2),
+        ("- 그동안 아무데서도 실행되지 않던 scripts/*-self-check.mjs 4개를 이 환경으로 이관", 2),
+    ]
+    for line, n in gamed:
+        assert prose_lines(line, set()) == [(line, "절 %d개" % n)], prose_lines(line, set())
+    block = "\n".join(l for l, _ in gamed)
+    assert [why for _, why in prose_lines(block, set())] == ["절 3개", "절 2개", "절 2개"]
+    # The user's rewrite: an arrow chain of noun phrases, one predicate per segment.
+    chain = "저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)"
+    assert [predicates(s) for s in ARROW.split(chain)] == [0, 0, 1]
+    assert prose_lines(chain, set()) == [], prose_lines(chain, set())
+    # The two 작업 내역 examples in guides/pr.md stay green (the wrapped one is
+    # asserted above): 주입받고 ends in 받고, which is not a listed ending.
+    example = ("3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현한다\n"
+               "   - 표현 전용 배지 — 쌓인 개수는 주입받고, 탭 시 꼬리 복귀만 위임\n"
+               "4. e1b01069a feat: 채팅 리스트 컴포넌트를 구현한다\n"
+               "   - 비반전 Animated.FlatList + 꼬리 500행 상주 창 — 스크롤 핸들러는 UI 스레드\n"
+               + wrapped)
+    assert prose_lines(example, set()) == [], prose_lines(example, set())
+    # Nouns ending in 고/어 are not predicates: the list is explicit, not 고$/어$.
+    assert prose_lines("- 재고 언어 제어 정리", set()) == []
+    assert predicates("재고 언어 제어 정리") == 0
+    # A sentence break mid-item is 서술식 even when the item's own ending is a noun.
+    assert prose_lines("- 가드를 추가한다. 이후 정리", set()) == [("- 가드를 추가한다. 이후 정리", "문장 종결")]
+
+    # The incident: 작업 내역 as one flat bullet per commit, 7 siblings, every one
+    # valid 개조식 -- rejected three times, so the prose check alone misses it.
+    flat7 = "\n".join([
+        "## 작업 내역",
+        "- 테스트 러너 없음 -> vitest 구성",
+        "- addon-vitest는 Vite 전용 -> nextjs-vite로 교체",
+        "- jest 계열 의존성 제거",
+        "- happy-dom 사용 및 코드 정리",
+        "- 테스트 코드 타입 검사 추가",
+        "- playwright 로컬 전용으로 격리",
+        "- 기존 self-check 스크립트 마이그레이션",
+    ])
+    assert prose_lines(flat7, set()) == [], prose_lines(flat7, set())
+    assert flat_sections(flat7, set()) == [("작업 내역", 7)], flat_sections(flat7, set())
+    # The user's corrected form -- one root cause with its actions nested -- passes.
+    nested = "\n".join([
+        "## 작업 내역",
+        "- 테스트 러너 없음 -> vitest 구성",
+        "  - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체",
+        "  - jest 계열 의존성 제거 -> happy-dom 사용 및 코드 정리",
+        "  - 테스트 코드 타입 검사 추가",
+        "  - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리 (unit + storybook 2 프로젝트 구성)",
+        "  - 기존 *-self-check.mjs 마이그레이션",
+    ])
+    assert flat_sections(nested, set()) == [], flat_sections(nested, set())
+    # Under the threshold a flat list still reads as a list, so 4 siblings pass.
+    four = "## 작업 내역\n- 가드 추가\n- 훅 등록\n- 문서 갱신\n- 자기검사 보강"
+    assert flat_sections(four, set()) == [], flat_sections(four, set())
+    # Diagram lines inside a fence are not list items and must not be counted.
+    fenced_flat = ("## 개요\n```mermaid\nflowchart LR\n A --> B\n```\n"
+                   "- 가드 추가\n- 훅 등록\n- 문서 갱신")
+    assert flat_sections(fenced_flat, set()) == [], flat_sections(fenced_flat, set())
+    fenced_dash = "## 개요\n```mermaid\n- 하나\n- 둘\n- 셋\n- 넷\n- 다섯\n- 여섯\n```"
+    assert flat_sections(fenced_dash, set()) == [], flat_sections(fenced_dash, set())
+    # The 작업 내역 example in guides/pr.md is numbered + sub-bulleted: still green.
+    assert flat_sections(example, set()) == [], flat_sections(example, set())
+    # A heading-less body is one section, reported as (본문).
+    headless = "\n".join("- 항목 %d" % i for i in range(6))
+    assert flat_sections(headless, set()) == [("(본문)", 6)], flat_sections(headless, set())
+    # Template checklist lines are boilerplate, not the author's flat list.
+    boiler_body = "## 변경 체크리스트\n" + "\n".join(["- [ ] 변경 후 확인이 필요한 기능을 명시해주세요"] * 6)
+    assert flat_sections(boiler_body, {"- [ ] 변경 후 확인이 필요한 기능을 명시해주세요"}) == []
 
     assert gh_invocation(shlex.split("gh pr edit 12 --body-file b.md"))[0] == "edit"
     assert gh_invocation(shlex.split("git push origin main"))[0] is None

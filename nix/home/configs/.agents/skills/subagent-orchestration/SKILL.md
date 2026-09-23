@@ -29,14 +29,14 @@ The following model tiers, fork guidance, and oracle guidance apply when Claude 
 
 `subagent-model-guard.py` denies a spawn that omits `model`, because an omitted `model` means `inherit` and silently spends the main thread's tier on the worker. It exempts the three cases where the choice already exists elsewhere: a `fork` (the param is ignored), a named agent that pins `model:` in its own frontmatter, and a namespaced plugin agent whose model lives in the plugin.
 
-Each label resolves to the model it names:
+Each label names a tier, and the harness resolves it to whatever model that tier currently ships. Write the label and let it move with the generation:
 
-| Label | Resolves to | Use it for |
+| Label | Tier | Use it for |
 |---|---|---|
-| `haiku` | Haiku 4.5 | Mechanical search and read work -- greps, file reads, pattern matching, data collection, Slack and web crawls. No judgment required. |
-| `sonnet` | Sonnet 5 | Well-scoped edits, lookups, summaries. |
-| `opus` | Opus 5 | The default for anything needing reasoning: research, review, design, debugging, implementation. |
-| `oracle` (no `model`) | **Fable 5** | One bounded question of judgment, from main or from inside a worker. |
+| `haiku` | cheapest | Mechanical search and read work -- greps, file reads, pattern matching, data collection, Slack and web crawls. No judgment required. |
+| `sonnet` | middle | Well-scoped edits, lookups, summaries. |
+| `opus` | reasoning | The default for anything needing reasoning: research, review, design, debugging, implementation. |
+| `oracle` (no `model`) | **Fable** | One bounded question of judgment, from main or from inside a worker. |
 
 The guard hard-denies an explicit `model: fable`, so reach Fable only through `oracle` rather than by naming it. Its deny reason restates the rubric, so a mis-tiered call costs one round-trip.
 

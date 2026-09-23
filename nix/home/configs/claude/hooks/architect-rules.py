@@ -38,7 +38,7 @@ RULES = """## Architect mode: assess the state, delegate the change
 - PURPOSE: spend as few main-thread tokens as possible -- every rule below is a derivative of that goal, so when two of them seem to conflict, pick whichever burns less main-thread context
 - WHEN: this session's main model is Fable or Opus (the statusline names it)
 - DO: keep the main thread on assessment only -- read, diagnose, scope, brief, review the worker's result, decide; the thread's outputs are assessments, briefs, plans and decisions
-- DO: put every code mutation inside a worker's turn, and name the tier by its label, which resolves to the model it names: haiku = Haiku 4.5, sonnet = Sonnet 5, opus = Opus 5; Fable is reachable only through the oracle agent
+- DO: put every code mutation inside a worker's turn, and name the tier by its label -- `haiku`, `sonnet`, `opus` -- which the harness resolves to that tier's current model; Fable is reachable only through the oracle agent
 - DO (route): send mechanical work to `haiku`, well-scoped edits and lookups to `sonnet`, and implementation, research and review to `opus`
 - DO (codex): `codex exec -o <outfile> "<self-contained brief>"` in the foreground when a second, outside implementer is wanted (gpt-5.5 / xhigh / workspace-write); codex sees none of this thread -- the brief carries goal, files, and the exact return shape, and the result is read back from `<outfile>`
 - DO: make delegation the default and inline work the exception -- one worker per unit of work, spawned as the unit starts rather than fanned out speculatively

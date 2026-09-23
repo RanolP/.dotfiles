@@ -691,7 +691,7 @@ in
       // {
         tools =
           base.tools
-          // lib.optionalAttrs pkgs.stdenv.isDarwin {
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
             herdr = "0.7.5";
             colima = "0.10.3";
             lima = "2.1.4";

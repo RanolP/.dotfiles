@@ -32,6 +32,7 @@
     "claude-code-wakatime@wakatime": true
   },
   "skillOverrides": {
+    "auto-mode-setup": "off",
     "claude-api": "name-only",
     "dataviz": "name-only",
     "design": "name-only",

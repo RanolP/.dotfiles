@@ -3,6 +3,7 @@ version = 1
 [[annotations]]
 path = [
     "nix/home/configs/.agents/skills/diagnose/SKILL.md",
+    "nix/home/configs/.agents/skills/update/SKILL.md",
     "nix/home/configs/.agents/skills/record-replay/SKILL.md",
     "nix/home/configs/.agents/skills/tdd/SKILL.md",
     "nix/home/configs/.agents/skills/grill-me/SKILL.md",

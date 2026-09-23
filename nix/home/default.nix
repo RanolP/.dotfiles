@@ -160,6 +160,7 @@ let
     handoff = localSkill "handoff";
     git-master = localSkill "git-master";
     ship = localSkill "ship";
+    update = localSkill "update";
     github-master = localSkill "github-master";
     jira-master = localSkill "jira-master";
     jira-qa-batch = localSkill "jira-qa-batch";

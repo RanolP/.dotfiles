@@ -33,12 +33,32 @@ files found across 1491 transcripts, ~8k tokens of finished plan discarded.
 CLAUDE_CONFIG_DIR is read when present, and any ~/.claude*/plans/ is accepted
 too so the guard still works if the hook is spawned without that variable.
 
+The plan-file write is also budgeted. The handoff skill asked for ~100 lines of
+short English as prose, and prose was not obeyed, so the write is denied when
+the resulting document exceeds MAX_LINES or MAX_BYTES, or when Hangul makes up
+MAX_HANGUL_RATIO or more of the letters outside the `## User constraints`
+section (which quotes the user verbatim) and outside ``` fences. For Edit the
+size is measured on the file with the replacement applied and the language on
+`new_string` alone. The deny reason names the measured numbers and the fix.
+Any exception in this check falls through to the existing allow.
+
 Self-check: `python3 plan-mode-guard.py --selftest`.
 """
 
 import json
 import os
+import re
 import sys
+
+# Budget for the handoff plan file. Measured 2026-09-21 over the 8 most recent
+# files in ~/.claude-personal/plans: 55-123 lines, 5.8-13.5 KB, and 60-80% of
+# their lines carried Hangul, against a prose budget of ~100 lines of English.
+MAX_LINES = 100
+MAX_BYTES = 8000
+MAX_HANGUL_RATIO = 0.03
+
+VERBATIM_SECTION = "## User constraints"
+HANGUL = re.compile(r"[가-힣ㄱ-ㆎ]")
 
 # ToolSearch is here for one reason only: ExitPlanMode is a deferred tool, so a
 # session that entered plan mode without its schema loaded needs the search to
@@ -98,6 +118,90 @@ def decide(decision, reason):
     }))
 
 
+def checkable_text(text):
+    """The document minus the verbatim section and every ``` fence."""
+    kept = []
+    in_fence = False
+    in_verbatim = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if line.startswith("## "):
+            in_verbatim = line.rstrip() == VERBATIM_SECTION
+            continue
+        if not in_verbatim:
+            kept.append(line)
+    return "\n".join(kept)
+
+
+def hangul_ratio(text):
+    """Hangul share of all letters in text, or 0.0 when there are none."""
+    hangul = len(HANGUL.findall(text))
+    letters = hangul + sum(
+        1 for c in text if c.isalpha() and not HANGUL.match(c)
+    )
+    return hangul / letters if letters else 0.0
+
+
+def budget_violation(size_text, lang_text=None):
+    """The deny reason when the plan breaks the budget, else None.
+
+    size_text is the whole document as it will exist after the write;
+    lang_text is the newly written text (the whole doc for Write, new_string
+    for Edit), defaulting to size_text. None for size_text skips the size
+    check, which is how an unreadable Edit target fails open.
+    """
+    if lang_text is None:
+        lang_text = size_text
+    problems = []
+    if size_text is not None:
+        lines = len(size_text.splitlines())
+        nbytes = len(size_text.encode("utf-8"))
+        if lines > MAX_LINES or nbytes > MAX_BYTES:
+            problems.append(
+                f"{lines} lines / {nbytes:,} bytes "
+                f"(budget: {MAX_LINES} lines, {MAX_BYTES:,} bytes)"
+            )
+    ratio = hangul_ratio(checkable_text(lang_text))
+    if ratio >= MAX_HANGUL_RATIO:
+        problems.append(
+            f"{ratio:.0%} Hangul outside {VERBATIM_SECTION} "
+            f"(budget: <{MAX_HANGUL_RATIO:.0%})"
+        )
+    if not problems:
+        return None
+    return (
+        "Handoff plan is " + " and ".join(problems) + ". Rewrite in short "
+        "English -- isolated bullets, 3-5 sentences per entry -- then Write "
+        "again. Korean stays only in verbatim quotes under "
+        f"{VERBATIM_SECTION} and inside code fences."
+    )
+
+
+def plan_write_violation(tool, tool_input, cwd):
+    """budget_violation() applied to a Write or Edit payload."""
+    if tool == "Write":
+        return budget_violation(tool_input.get("content", ""))
+    new = tool_input.get("new_string", "")
+    old = tool_input.get("old_string", "")
+    path = os.path.expanduser(tool_input.get("file_path", ""))
+    if not os.path.isabs(path):
+        path = os.path.join(cwd or os.getcwd(), path)
+    try:
+        with open(path, encoding="utf-8") as f:
+            current = f.read()
+    except OSError:
+        return budget_violation(None, new)
+    if tool_input.get("replace_all"):
+        result = current.replace(old, new)
+    else:
+        result = current.replace(old, new, 1)
+    return budget_violation(result, new)
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -111,9 +215,17 @@ def main():
     if data.get("permission_mode") != "plan":
         return
     tool = data.get("tool_name", "")
+    tool_input = data.get("tool_input", {}) or {}
     if tool in ("Write", "Edit") and is_plan_file(
-        (data.get("tool_input", {}) or {}).get("file_path", ""), data.get("cwd")
+        tool_input.get("file_path", ""), data.get("cwd")
     ):
+        try:
+            reason = plan_write_violation(tool, tool_input, data.get("cwd"))
+        except Exception:
+            reason = None
+        if reason:
+            decide("deny", reason)
+            return
         decide("allow", "Writing the plan file is what plan mode is for.")
         return
     # Write/Edit refuse to touch an existing file this context has not Read, so
@@ -175,6 +287,34 @@ def selftest():
     for denied in ("Read", "Grep", "Glob", "WebFetch", "WebSearch",
                    "NotebookRead", "TaskGet", "Bash", "Agent"):
         assert denied not in ALLOWED, denied
+
+    # The plan budget: short English passes, size and language breaks deny.
+    english = "\n".join(f"- bullet {i} about the resume step" for i in range(50))
+    assert budget_violation("# Handoff\n\n" + english) is None
+    too_long = "\n".join(f"- line {i}" for i in range(101))
+    reason = budget_violation(too_long)
+    assert reason and "101 lines" in reason and "100 lines" in reason, reason
+    too_big = "- " + "x" * (MAX_BYTES + 1)
+    assert "bytes" in budget_violation(too_big)
+    quoted = (
+        "## Goal\nShip the guard.\n\n## User constraints\n"
+        "- \"절대 브랜치 만들지 마\"\n- \"메인에서만 작업해\"\n\n"
+        "## Decisions\n- guard over prose -- rejected: prose; why: unread\n"
+    )
+    assert budget_violation(quoted) is None
+    korean_decision = (
+        "## Goal\nShip the guard.\n\n## Decisions\n"
+        "- 프로즈 대신 가드 -- rejected: prose; why: 안 읽힘\n"
+    )
+    reason = budget_violation(korean_decision)
+    assert reason and "Hangul" in reason and "Decisions" not in reason, reason
+    fenced = "## Context\nSee below.\n\n```\n한글 주석이 있는 코드\n```\n"
+    assert budget_violation(fenced) is None
+    # An Edit is judged on new_string alone, with the size check skipped
+    # when the target cannot be read.
+    assert budget_violation(None, "- 한글로 쓴 결정") is not None
+    assert budget_violation(None, "- decided in English") is None
+    assert budget_violation(too_long, "- short and English") is not None
     print("plan-mode-guard selftest ok")
 
 

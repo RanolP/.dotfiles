@@ -87,7 +87,7 @@ Writing rules:
 - Before finalizing, re-scan the tail of the session for late user corrections and fold them into User constraints / Decisions -- recent context is what default summarization compresses hardest.
 - Use only the `##` sections the template lists -- fold anything else into the nearest template section rather than opening a new heading.
 - `## Context` carries resolved environment facts (repo root, `owner/repo` from `git remote get-url origin`, verified full CLI invocations), because 11 of 18 successors re-derived them in their first 30 turns -- one retried a wrong GitHub org slug four times.
-- Size budget: the whole handoff fits in ~100 lines / ~1-2k tokens; 3-5 sentences max per entry. Compression pressure drops prose, never the `Chainable:` line or the User constraints section -- both are copied verbatim regardless.
+- Language and size: the plan is written in short English, 100 lines / 8,000 bytes max, 3-5 sentences per entry. Korean appears only as verbatim quotes under `## User constraints` or inside code fences. `plan-mode-guard.py` denies a plan-file write that breaks this and names the measured numbers, so the fix is to rewrite shorter and in English, not to argue with the hook. Compression pressure drops prose, never the `Chainable:` line or the User constraints section -- both are copied verbatim regardless.
 
 ```
 # Handoff: [brief title]

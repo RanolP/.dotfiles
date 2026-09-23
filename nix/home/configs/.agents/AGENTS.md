@@ -170,8 +170,9 @@
 ## Name every referent by its exact identifier
 - WHEN: any user-facing text -- a final message, a PR body, a commit message, a doc, a ticket comment
 - WHY: only your final message reaches the user, so "the file", "that PR", or "it" names something that exists only inside your own context
-- DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command -- and let it stand alone
-- DO: report the ID and the verdict of any subagent or background job you describe
+- DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command
+- DO: pair every opaque identifier with what it names -- `PR #128 (Fix token refresh race)`, `ABC-512 (Payment failure alert missing)`, `a1b2c3d (mise: bump claude 2.1.280)` -- since a number, a key or a SHA tells the reader nothing on its own; a path or a command already says what it is
+- DO: report the ID, the task, and the verdict of any subagent or background job you describe
 
 ## Answer the subset that was asked
 - WHEN: answering a follow-up about items from your own previous message

@@ -1,11 +1,11 @@
 ---
 name: ship
-description: Run the whole publish sequence for finished work in one pass -- stage explicit paths, prove the diff carries no secret and no private identifier, commit, then push on one confirmation. Use when work is ready to commit, when the user says commit, push, ship, or asks whether pushing is safe, and before any git commit or git push in a public repository.
+description: Run the whole publish sequence for finished work in one pass -- stage explicit paths, prove the diff carries no secret and no private identifier, commit, then push when every check came back clean. Use when work is ready to commit, when the user says commit, push, ship, or asks whether pushing is safe, and before any git commit or git push in a public repository.
 ---
 
 # ship
 
-One pass takes finished work from the working tree to the remote. The user confirms the push once, at the end, and reads a single report instead of a step-by-step conversation.
+One pass takes finished work from the working tree to the remote. A clean safety check and a fast-forward position together authorise the push, so the user reads one report of finished work instead of answering a step-by-step conversation. A check that fails, or a remote that moved, is what turns the last step into a question.
 
 ## Stage and commit in separate Bash calls
 
@@ -24,8 +24,9 @@ NEVER: chain `git add` and `git commit` with `&&`, `;`, or a newline inside a si
 2. **Stage explicit paths**, never `-A` and never `.`, in a Bash call that does nothing else.
 3. **Check safety** against the staged diff, before writing the message. The checks are below.
 4. **Commit** in its own call, with the message in the repo's dominant form (`git log --oneline -30` decides subject style, prefix and language).
-5. **Report and ask once.** Give the user the commit subjects, the file list, the push state, and one `git -C <absolute-path> push <remote> <branch>` command. Stop there.
-6. **Push** only after the user answers, then confirm the remote moved.
+5. **Read the push position** with the fetch and the `rev-list` count below, before deciding anything about the last step.
+6. **Push on a clean pass.** Four passing checks plus a left count of `0` are the authorisation: run the push, then report the commit subjects, the file list and the remote's new position together, in one message.
+7. **Hand the push over on anything else.** A failing check, a non-zero left count, or a staged path this unit does not own keeps the work at the local commit: report which one fired and give the user one `git -C <absolute-path> push <remote> <branch>` command to run themselves.
 
 ## The safety check
 
@@ -50,7 +51,9 @@ git -C <absolute-path> fetch --prune origin
 git -C <absolute-path> rev-list --left-right --count origin/<branch>...<branch>
 ```
 
-`0 N` means the push is a fast-forward and nothing on the remote is at risk. Any non-zero left count means the remote moved: rebase onto it, and ask the user when the rebase is not obviously safe.
+`0 N` means the push is a fast-forward and nothing on the remote is at risk, which is the authorisation step 6 runs on. Any non-zero left count means the remote moved: rebase onto it, and ask the user when the rebase is not obviously safe.
+
+Say which commits the push carries. A branch that already held commits from earlier sessions sends those too, so name them in the report alongside the ones this pass made.
 
 ## When a leak is already committed
 

@@ -9,13 +9,18 @@
     # nushell's `ccc`) need their config mirrored from ~/.claude and their
     # projects/ pointed at the shared ~/.claude/projects, or /resume lists only
     # the running profile's sessions. macOS carries that in its
-    # ~/.local/bin/claude wrapper; here the native installer owns that path and
-    # rewrites it on every self-update, so the shim goes in ~/.nix-profile/bin,
-    # which env.linux.nu prepends ahead of ~/.local/bin.
+    # ~/.local/bin/claude wrapper; here the shim goes in ~/.nix-profile/bin,
+    # which env.linux.nu prepends ahead of everything else.
+    #
+    # It execs mise's pinned build, never ~/.local/bin/claude: that path belongs
+    # to the native installer, which rewrites it on every self-update and so
+    # sets the version outside any declaration. mise-global.toml is the single
+    # place a claude version changes here (2.1.278 ran while the pin said
+    # 2.1.280, 2026-09-26).
     (writeShellScriptBin "claude" ''
-      real="$HOME/.local/bin/claude"
+      real="$HOME/.local/share/mise/shims/claude"
       if [ ! -x "$real" ]; then
-        echo "claude: no native install at $real -- run the Claude Code installer" >&2
+        echo "claude: no mise shim at $real -- run 'mise install' (pin: nix/home/mise-global.toml)" >&2
         exit 127
       fi
       . ${../configs/claude/profile-wiring.sh}

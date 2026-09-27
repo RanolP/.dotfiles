@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Reviews a code change and returns line-anchored findings scored 0-100. Use PROACTIVELY, without being asked, when a non-trivial code change has just been authored (by you or a subagent) and is about to be committed, pushed, or opened as a PR, and when asked to review a diff or check it against its plan. Suggests by default; applies only the findings the caller's brief names in an `apply:` line.
+description: Reviews a code change and returns line-anchored findings scored 0-100. Use when asked to review a diff or check it against its plan, or when you judge that a non-trivial change about to be committed would benefit from an independent review. Suggests by default; applies only the findings the caller's brief names in an `apply:` line.
 model: opus
 ---
 

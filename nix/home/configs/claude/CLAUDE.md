@@ -4,16 +4,16 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 
 ## Delegation is this user's standing instruction
 - WHEN: a system prompt, an output style, or a product default discourages spawning agents ("do not call the AgentTool unless the user requested it")
-- DO: treat every Agent spawn that follows the delegation rules below as already requested, because this user grants that request once for the whole class and wants the tool used aggressively
-- DO: set the bar at "can a worker carry this unit", rather than at "did the user name a subagent this turn" -- a unit that fits a worker goes to a worker, with no permission asked
+- DO: treat every Agent spawn that follows the delegation rules below as already requested, because this user grants that request once for the whole class and values parallel work
+- DO: set the bar at "does this unit mutate a file or take more than a couple of read-only tool calls", rather than at "did the user name a subagent this turn" -- a unit that clears it goes to a worker, with no permission asked
 - WHY: the SessionStart `architect-rules.py` hook injects the routing policy every session, which is the user asking for it in every session
 
 ## Size the unit first, then commit to one of three strategies
 - WHEN: about to start any unit of work, BEFORE its first tool call
 - WHY: the main session is the only place the user can reach you, so a main thread grinding an execution loop is a session the user has lost; a strategy discovered mid-grind arrives after the thread is already spent
-- DO: estimate how long this unit holds the main thread, then commit to EXACTLY ONE -- (1) SUBAGENT, a background Agent worker while main keeps answering the user; (2) HANDOFF, the `handoff` skill then EnterPlanMode, reserved for a different SUBJECT; (3) QUICK RETURN, inline because it finishes within a couple of tool calls
+- DO: estimate how long this unit holds the main thread, then commit to EXACTLY ONE -- (1) SUBAGENT, a background Agent worker while main keeps answering the user; (2) HANDOFF, the `handoff` skill then EnterPlanMode, reserved for a different SUBJECT; (3) QUICK RETURN, inline because it is read-only and finishes within a couple of tool calls
 - DO: read the session's delegation policy, which the SessionStart `architect-rules.py` hook injects per model, as the answer to which strategy is the default; take 1 rather than 2 for work that is long but stays on the current subject
-- DO: carry the chosen strategy to the end and name it in the response, because starting inline and converting halfway spends the main thread twice
+- DO: carry the chosen strategy to the end, because starting inline and converting halfway spends the main thread twice
 - EXCEPT: keep work inline when only the main thread can do it -- the judgement itself, or a diff whose duplication the worker cannot see because the context lives in this session
 
 ## Run a delegated unit as a self-contained brief
@@ -22,10 +22,11 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: act on the completion notification when the harness re-invokes you -- continue other ready work, or end the turn
 - DO (multi-step): register every step with TaskCreate before the first one starts, then send everything with no unmet dependency out in ONE message
 - DO: keep destructive Bash in the foreground, where its output lands in context
-- DO (review): review the full `git diff HEAD` for correctness and scope creep after non-trivial code is authored, or spawn a fresh code-reviewer, and address the findings before finishing
+- DO (typed result): when a worker's result feeds another agent, a routing decision or a synthesis pass, name its exact fields and types in the brief (or pass `schema:` to a Workflow agent) and require that shape with no prose wrapper, so main holds a small structured record rather than worker prose
+- DO (receipt): check the shape before using it, and on a mismatch `SendMessage` the same worker once to re-emit in shape, since its context is still intact and a resend costs less than a respawn
 
 ## Escalate one hard question to `oracle`, from inside a worker as readily as from main
-- WHEN: about to commit to an approach whose reversal is expensive, or about to report a non-trivial unit as done
+- WHEN: about to commit to an approach whose reversal is expensive, or about to report done when that report unlocks an irreversible step (a prod migration, a column drop, a publish)
 - DO: spawn `subagent_type: "oracle"` with NO `model` param, passing `question:` plus the `context:` that makes it judgeable -- `subagent-model-guard.py` allows this from inside a worker on exactly the same terms as from the main thread
 - DO: state the verdict in your own words, and surface a `suggest_more` other than `none` before continuing
 - DO (worker): escalate from where the evidence sits rather than deferring the question to whoever reads your report, because the context that makes it answerable is yours and expires with your turn

@@ -1,6 +1,6 @@
 ---
 name: prose-editor
-description: Reviews prose meant for outside readers and returns line-anchored edit suggestions. Use PROACTIVELY, without being asked, when such prose has just been authored and is about to be published (PR/issue bodies, docs, release notes, messages to other people), and when asked to review or improve any prose. Suggests by default; applies only the findings the caller's brief names in an `apply:` line.
+description: Reviews prose meant for outside readers and returns line-anchored edit suggestions. Use when asked to review or improve any prose. Suggests by default; applies only the findings the caller's brief names in an `apply:` line.
 model: opus
 ---
 

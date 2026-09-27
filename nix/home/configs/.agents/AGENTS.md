@@ -187,9 +187,8 @@
 ## Completion evidence is the artifact itself, running
 - WHEN: reporting work as done, transitioning a ticket, closing a task, or handing the user a command to run
 - DO: narrow the evidence down to the artifact's own behavior -- run it, measure it in the running system, or query the live state, and say explicitly which claims stayed unverified
-- DO: treat a filename, a diff stat, a source read, a passing type-check and a subagent's green check as hypotheses rather than proof
+- DO: treat a filename, a diff stat, a source read, and a passing type-check as hypotheses rather than proof
 - DO (scope): pick the check by tracing what the diff can actually reach, run only the suites or screens on that path, and say which slice you ran and why it covers the change
-- DO: widen to the full suite when the change touches shared state, a build config, a dependency version, or a module many paths import
 - DO (facts): rank evidence for any CLI flag, API parameter or config option -- the installed binary, the source in node_modules, the lockfile or a real response beats official docs, which beat a blog or your own memory -- and say which rung you were on
 - NEVER: say done when no runtime check was possible; say exactly which check is missing instead
 
@@ -228,7 +227,7 @@
 ## Parallel execution, synchronous thought
 - WHEN: a turn holds more than one unit of work, or any unit that will take longer than a few seconds
 - DO: group the units FIRST, state the whole set before starting any of it, then send every unit with no unmet dependency out together so they run concurrently
-- DO: verify a background worker's report rather than adopting it, because its green check is a claim about work you did not watch
+- DO: re-verify a worker's report only when it lacks the commands and output behind its claims, or when the change reaches beyond what the worker checked (its callers, another environment); adopt a report that carries its own evidence for the scope it touched
 - DO (wait): spend one blocking call on the CONDITION rather than a clock -- `gh run watch <run-id> --exit-status`, `agent-browser wait --load networkidle`, `agent-device wait stable`, or `until <check>; do sleep 2; done` when the system offers no readiness command; skill `metro-wait` covers the Metro dev server
 - DO (stream): hand a piece over as soon as it stops changing and start the dependent unit on it right then, write "report each finding the moment it is settled" into every long-running worker's brief, and spawn dependents in small waves as findings land
 - EXCEPT: batch every related edit before a costly apply step -- a rebuild, a container restart, a full test suite -- and run that step once for the whole batch

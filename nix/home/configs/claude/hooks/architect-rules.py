@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """SessionStart hook: pick the session's delegation policy from its main model.
 
-Two policies contradict each other by design. `## Architect mode` makes
-delegation the default and inline work the exception, which is right when the
-main model's own tokens are the expensive ones. `## Delegation threshold` makes
+Two policies contradict each other by design. `## Architect mode` puts every
+code mutation in a parallel worker and keeps the main thread on assessment,
+which is right when the main model's own tokens are the expensive ones. `## Delegation threshold` makes
 inline work the default until the task outgrows the thread, which is right
 otherwise. Holding both in CLAUDE.md left a live conflict on the page and cost
 every session -- and every subagent spawn -- the bytes of the one it ignores,
@@ -34,15 +34,16 @@ TRANSCRIPT_TAIL = 262144
 # work. Matched as substrings of the model id, so `claude-opus-5[1m]` counts.
 ARCHITECT_MODELS = ("fable", "opus")
 
-RULES = """## Architect mode: assess the state, delegate the change
-- PURPOSE: spend as few main-thread tokens as possible -- every rule below is a derivative of that goal, so when two of them seem to conflict, pick whichever burns less main-thread context
+RULES = """## Architect mode: the main thread talks, workers mutate
+- PURPOSE: keep the main thread free to talk with the user at every moment -- its context stays clear of read-before-write traces and no execution loop blocks it
 - WHEN: this session's main model is Fable or Opus (the statusline names it)
-- DO: keep the main thread on assessment only -- read, diagnose, scope, brief, review the worker's result, decide; the thread's outputs are assessments, briefs, plans and decisions
-- DO: put every code mutation inside a worker's turn, and name the tier by its label -- `haiku`, `sonnet`, `opus` -- which the harness resolves to that tier's current model; Fable is reachable only through the oracle agent
-- DO (route): send mechanical work to `haiku`, well-scoped edits and lookups to `sonnet`, and implementation, research and review to `opus`
+- DO: keep the main thread on assessment -- read, diagnose, scope, brief, decide -- and put every code mutation inside a background worker's turn, because each Edit or Write needs a Read of its file first and those reads fill main context
+- DO: spawn one worker per unit as the unit starts, and send every unit with no unmet dependency out in one message so the workers run in parallel
+- DO: spend workers on producing work, and adopt a worker's checked result rather than spawning another worker to re-check it
+- DO (route): name the tier by its label -- `haiku`, `sonnet`, `opus` -- which the harness resolves to that tier's current model; send mechanical work to `haiku`, well-scoped edits and lookups to `sonnet`, and implementation and research to `opus`; Fable is reachable only through the oracle agent
 - DO (codex): `codex exec -o <outfile> "<self-contained brief>"` in the foreground when a second, outside implementer is wanted (gpt-5.5 / xhigh / workspace-write); codex sees none of this thread -- the brief carries goal, files, and the exact return shape, and the result is read back from `<outfile>`
-- DO: make delegation the default and inline work the exception -- one worker per unit of work, spawned as the unit starts rather than fanned out speculatively
-- EXCEPT: the plan file, memory/evidence files, and read-only inspection stay the main thread's own work"""
+- EXCEPT: the plan file, memory/evidence files, and read-only inspection stay the main thread's own work
+- WHY: Opus 5.5 already verifies its own work, so a spawn whose only job is re-checking adds wall time without adding quality (Anthropic's Opus 5 prompting guide, 2026-09-27)"""
 
 LAZY_RULES = """## Delegation threshold: work inline until the task outgrows the thread
 - WHEN: this session's main model is neither Fable nor Opus (the statusline names it)

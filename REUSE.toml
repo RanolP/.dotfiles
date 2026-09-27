@@ -80,6 +80,7 @@ path = [
     "nix/home/configs/.agents/skills/github-master/guides/pr-body-examples.md",
     "nix/home/configs/.agents/skills/github-master/guides/issue.md",
     "nix/home/configs/.agents/skills/worktree-cleanup/SKILL.md",
+    "nix/home/configs/.agents/skills/parallel-worktree-workflow/SKILL.md",
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
     "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
 ]
@@ -116,8 +117,6 @@ path = [
     "nix/home/configs/claude/hooks/handoff-nudge.py",
     "nix/home/configs/claude/hooks/mcp-auth-log.py",
     "nix/home/configs/claude/hooks/architect-rules.py",
-    "nix/home/configs/claude/hooks/orchestration-guard.py",
-    "nix/home/configs/.agents/skills/subagent-orchestration/SKILL.md",
     "nix/home/configs/claude/hooks/prompt-authoring-guard.py",
     "nix/home/configs/.agents/skills/prompt-authoring/SKILL.md",
     "nix/home/configs/.agents/skills/rule-write/SKILL.md",

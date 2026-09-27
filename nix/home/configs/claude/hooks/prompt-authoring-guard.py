@@ -15,7 +15,7 @@ trigger, and this is it.
 Description-based skill triggering is not a replacement: gh-guard.py measured
 that only 11% of `gh pr create` runs had loaded github-master on their own.
 
-Like orchestration-guard.py and unlike jira-guard.py, this hook does NOT deny.
+Unlike jira-guard.py, this hook does NOT deny.
 The hooks reference allows `additionalContext` on PreToolUse, so the guidance
 rides along with an edit that still happens and no round-trip is spent on a
 denial. No `permissionDecision` is emitted, so claude-dir-edit-guard.py's deny

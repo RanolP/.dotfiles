@@ -221,10 +221,6 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/subagent-model-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/orchestration-guard.py"
           }
         ]
       },

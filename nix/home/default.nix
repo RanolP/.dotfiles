@@ -167,6 +167,7 @@ let
     component-pixel-review = localSkill "component-pixel-review";
     slack-messaging = localSkill "slack-messaging";
     worktree-cleanup = localSkill "worktree-cleanup";
+    parallel-worktree-workflow = localSkill "parallel-worktree-workflow";
     one-domain = localSkill "one-domain";
     diagnose = localSkill "diagnose";
     tdd = localSkill "tdd";
@@ -190,7 +191,6 @@ let
     # Nix store path names reject `:`, so the source directory is
     # `dotfiles-evolve` while the link the user types carries the colon.
     "dotfiles:evolve" = localSkill "dotfiles-evolve";
-    subagent-orchestration = localSkill "subagent-orchestration";
     prompt-authoring = localSkill "prompt-authoring";
     rule-write = localSkill "rule-write";
     ui-automation = localSkill "ui-automation";
@@ -312,12 +312,6 @@ in
       # not in every session's CLAUDE.md.
       ".claude/hooks/prompt-authoring-guard.py" = {
         source = ./configs/claude/hooks/prompt-authoring-guard.py;
-        executable = true;
-      };
-      # The spawn mechanics live in the subagent-orchestration skill and arrive
-      # at the first Agent/Task call, not in every session's CLAUDE.md.
-      ".claude/hooks/orchestration-guard.py" = {
-        source = ./configs/claude/hooks/orchestration-guard.py;
         executable = true;
       };
       # The Fable-only rules load at SessionStart when the model is Fable, so a
@@ -467,10 +461,6 @@ in
       };
       ".codex/hooks/prompt-authoring-guard.py" = {
         source = ./configs/claude/hooks/prompt-authoring-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/orchestration-guard.py" = {
-        source = ./configs/claude/hooks/orchestration-guard.py;
         executable = true;
       };
       ".codex/hooks/claude-dir-edit-guard.py" = {

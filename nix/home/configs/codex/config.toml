@@ -139,14 +139,6 @@ type = "command"
 command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/prompt-authoring-guard.py"'
 timeout = 30
 
-[[hooks.PreToolUse]]
-matcher = "^(spawn_agent|Agent)$"
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/orchestration-guard.py"'
-timeout = 30
-
 [[hooks.PostToolUse]]
 matcher = "^apply_patch$"
 

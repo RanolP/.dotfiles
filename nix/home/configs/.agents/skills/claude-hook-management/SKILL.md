@@ -54,7 +54,7 @@ An injected string stays in the transcript, so every later request re-reads all 
 | `output-shape-reminder.py` | UserPromptSubmit | restate the output-shape check next to generation |
 | `plan-mode-guard.py` | PreToolUse `*` | plan mode distills only |
 | `git-push-guard.py` | PreToolUse Bash | push reaches `claude/*` only |
-| `ssh-guard.py` | PreToolUse Bash | `ssh` goes to the user's own TTY |
+| `ssh-guard.py` | PreToolUse Bash | no remote-device access (ssh, scp, sftp, remote rsync, ...) at any command position |
 | `gpg-commit-guard.py` | PreToolUse Bash | a signed commit needs an unlocked key |
 | `package-manager-guard.py` | PreToolUse Bash | use the manager the project declares |
 | `gh-guard.py` | PreToolUse Bash | inject the github-master guide before a mutating `gh` |

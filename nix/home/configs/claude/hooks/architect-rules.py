@@ -42,7 +42,7 @@ RULES = """## Architect mode: the main thread talks, workers mutate
 - DO: spend workers on producing work, and adopt a worker's checked result rather than spawning another worker to re-check it
 - DO (route): name the tier by its label -- `haiku`, `sonnet`, `opus` -- which the harness resolves to that tier's current model; send mechanical work to `haiku`, well-scoped edits and lookups to `sonnet`, and implementation and research to `opus`; Fable is reachable only through the oracle agent
 - DO (codex): `codex exec -o <outfile> "<self-contained brief>"` in the foreground when a second, outside implementer is wanted (gpt-5.5 / xhigh / workspace-write); codex sees none of this thread -- the brief carries goal, files, and the exact return shape, and the result is read back from `<outfile>`
-- EXCEPT: the plan file, memory/evidence files, and read-only inspection stay the main thread's own work
+- EXCEPT: the plan file, memory/evidence files, and a short read-only inspection (a couple of tool calls) stay the main thread's own work
 - WHY: Opus 5.5 already verifies its own work, so a spawn whose only job is re-checking adds wall time without adding quality (Anthropic's Opus 5 prompting guide, 2026-09-27)"""
 
 LAZY_RULES = """## Delegation threshold: work inline until the task outgrows the thread

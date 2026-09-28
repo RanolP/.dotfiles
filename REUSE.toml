@@ -131,6 +131,7 @@ path = [
     "nix/home/configs/claude/mcp.json",
     "nix/home/configs/claude/profile-wiring.sh",
     "scripts/profile-wiring-test.sh",
+    "CLAUDE.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

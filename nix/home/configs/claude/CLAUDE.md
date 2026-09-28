@@ -30,7 +30,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: spawn `subagent_type: "oracle"` with NO `model` param, passing `question:` plus the `context:` that makes it judgeable -- `subagent-model-guard.py` allows this from inside a worker on exactly the same terms as from the main thread
 - DO: state the verdict in your own words, and surface a `suggest_more` other than `none` before continuing
 - DO (worker): escalate from where the evidence sits rather than deferring the question to whoever reads your report, because the context that makes it answerable is yours and expires with your turn
-- WHY: a server-side tool folds its round trip into one assistant message, so the rolled-up `usage` counts the same context twice and force-compacts the session at half its real size; a subagent records its own messages, so `oracle` buys Fable judgment that cannot inflate the caller -- [[advisor-inflates-autocompact-threshold]]
+- WHY: the advisor tool double-counts context and force-compacts the session early; a subagent does not -- [[advisor-inflates-autocompact-threshold]]
 
 ## Plan mode -- one gate, two signals: think and hand off
 - PURPOSE: keep working context lean -- the plan file, not the transcript, is what carries work forward
@@ -54,5 +54,4 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 
 ## Push only to claude/* branches
 - WHEN: running `git push`
-- DO (`~/.dotfiles`): work on `main` here, and push `origin main` when the user asks -- "you must not make any branch here. just work with main."
 - NEVER: create or modify `.nanno-workers.json` anywhere -- its `git_push_guard_bypass` exists only where the user granted it

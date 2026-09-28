@@ -92,7 +92,7 @@ git rebase --exec '<lint and typecheck>' origin/main   # every commit green on i
 
 Default to the non-destructive option. For each below, confirm with the user and create a backup (branch/stash/tag) before running:
 
-- **Force-push**: never, in any form -- `git-integrity-guard.py` denies `--force`, `-f`, `--force-with-lease` and `--force-if-includes` with no bypass. Resolve a rejected push by fetching and rebasing.
+- **Force-push**: only as `--force-with-lease`, and never onto a branch whose open PR carries review comments -- `git-integrity-guard.py` always denies `--force`, `-f`, `+refspec` and a lone `--force-if-includes`, and denies a lease onto a reviewed PR; push fixup commits on top there instead.
 - **`reset --hard`**: `git stash` (or branch) first — it discards uncommitted work irrecoverably.
 - **`clean -fd`**: run `git clean -nd` (dry-run) first and read the list before deleting.
 - **Amend / rebase of *pushed* commits**: prefer `git revert` over amend, and `git merge` over rebasing a shared branch. Rewriting published history breaks everyone downstream.

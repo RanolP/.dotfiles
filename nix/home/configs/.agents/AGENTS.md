@@ -217,7 +217,7 @@
 - DO: run `git fetch --prune` as its own visible step before the session's first commit, read the default branch from `git symbolic-ref --short refs/remotes/origin/HEAD`, and keep the branch rebased onto it
 - DO (publish): rebuild the stack for the reviewer onto a fresh base rather than moving it, one commit per concern, in the order that explains the change
 - DO (rejected push): `git fetch` as its own visible step, rebase onto it, and ask when the rebase is not obviously safe
-- NEVER: push `claude/local-dev`, and never force-push to make a rejected push go through
+- NEVER: push `claude/local-dev`, and force-push only as `--force-with-lease`, never onto a branch whose PR carries review comments (`git-integrity-guard.py` enforces it)
 - SKILL: `git-master`, for the commit-message form, the non-interactive replay, and the destructive-op guardrails
 
 ## Jira card bodies: edit the ADF with `jira`, never through markdown

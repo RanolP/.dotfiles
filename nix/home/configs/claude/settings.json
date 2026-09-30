@@ -133,6 +133,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/handoff-nudge.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/time-budget.py"
           }
         ]
       }
@@ -257,6 +261,15 @@
             "command": "python3 ~/.claude/hooks/missing-tool-hint.py"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/time-budget.py"
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -283,6 +296,30 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/time-budget.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/time-budget.py"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/time-budget.py"
           }
         ]
       }

@@ -118,6 +118,7 @@ path = [
     "nix/home/configs/claude/hooks/mcp-auth-log.py",
     "nix/home/configs/claude/hooks/architect-rules.py",
     "nix/home/configs/claude/hooks/prompt-authoring-guard.py",
+    "nix/home/configs/claude/hooks/time-budget.py",
     "nix/home/configs/.agents/skills/prompt-authoring/SKILL.md",
     "nix/home/configs/.agents/skills/rule-write/SKILL.md",
     "nix/home/configs/.agents/skills/ui-automation/SKILL.md",

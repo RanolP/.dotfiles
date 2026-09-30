@@ -406,6 +406,16 @@ in
         source = ./configs/claude/hooks/missing-tool-hint.py;
         executable = true;
       };
+      # Time-budget checkpoints at 1/3, 1/2, 2/3, 5/6, 6/6. The same script is
+      # the agent's `time-budget` CLI, since Bash carries no agent id to key on.
+      ".claude/hooks/time-budget.py" = {
+        source = ./configs/claude/hooks/time-budget.py;
+        executable = true;
+      };
+      ".local/bin/time-budget" = {
+        source = ./configs/claude/hooks/time-budget.py;
+        executable = true;
+      };
       # Reuse the Claude policy scripts; the Codex adapter translates tool payloads.
       ".codex/hooks/claude-hook-adapter.py" = {
         source = ./configs/codex/hooks/claude-hook-adapter.py;

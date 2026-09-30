@@ -231,3 +231,18 @@ else
     L3="${WK_STR}"
 fi
 printf '%s\n' "$L3"
+
+# ── LINE 4: time budget (hooks/time-budget.py) ───────────────────────────────
+# Shown only while this session has a timed main-thread unit.
+TB_FILE="$HOME/.local/share/claude-time-budget/units/${SESSION_ID}/main.json"
+if [ -r "$TB_FILE" ]; then
+    IFS=$'\t' read -r TB_START TB_BUDGET TB_FIRED TB_SUMMARY < <(jq -r \
+        '[(.start|floor), (.budget_min|floor), (.fired // 0), ((.report // "") | split("\n")[0])] | @tsv' \
+        "$TB_FILE" 2>/dev/null)
+    if [ -n "$TB_START" ]; then
+        TB_LABELS=("start" "1/3" "1/2" "2/3" "5/6" "6/6")
+        TB_LINE="${GR}budget ${RS}${W}$(( ($(date +%s) - TB_START) / 60 ))/${TB_BUDGET}m${RS}${GR} past ${TB_LABELS[${TB_FIRED:-0}]}${RS}"
+        [ -n "$TB_SUMMARY" ] && TB_LINE+="${GR} · ${RS}${TB_SUMMARY:0:$((COLS - 26))}"
+        printf '%s\n' "$TB_LINE"
+    fi
+fi

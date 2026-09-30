@@ -7,8 +7,8 @@
 
     # Claude Code's named auth profiles (~/.claude-<profile>, picked by
     # nushell's `ccc`) need their config mirrored from ~/.claude and their
-    # projects/ pointed at the shared ~/.claude/projects, or /resume lists only
-    # the running profile's sessions. macOS carries that in its
+    # projects/ pointed at the shared store outside ~/.claude, or /resume
+    # lists only the running profile's sessions. macOS carries that in its
     # ~/.local/bin/claude wrapper; here the shim goes in ~/.nix-profile/bin,
     # which env.linux.nu prepends ahead of everything else.
     #

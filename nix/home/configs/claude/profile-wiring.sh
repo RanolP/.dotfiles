@@ -1,7 +1,13 @@
 # Wire a named Claude Code auth profile dir (~/.claude-<profile>, chosen by
 # nushell's `ccc`): mirror ~/.claude's config into it, keep its auth token
-# per-profile, and point its projects/ at the shared ~/.claude/projects so
-# /resume lists every profile's sessions instead of only the running one's.
+# per-profile, and point every profile's (and the default's) projects/ at the
+# shared store outside ~/.claude, so /resume lists every profile's sessions
+# instead of only the running one's. The store lives at
+# ~/.local/share/claude-projects rather than inside ~/.claude: Claude Code
+# 2.1.280 treats any path with a ".claude" segment as protected, which allow
+# rules cannot override, so memory writes through the old
+# ~/.claude-personal/projects -> ~/.claude/projects symlink prompted every
+# time.
 #
 # Sourced by both platform wrappers -- ~/.local/bin/claude on macOS
 # (nix/home/darwin/default.nix) and the ~/.nix-profile/bin/claude shim on Linux
@@ -23,6 +29,54 @@ _claude_link() {
   fi
 }
 
+# Merge a real directory ($1) that should be the symlink back into the store
+# ($2), then replace it with the symlink. A concurrent claude session can
+# recreate $1 as a real dir between this session's launches, so this runs on
+# every launch rather than once: move each top-level entry into the store
+# when the store lacks that name, otherwise copy its contents in with
+# no-clobber and drop the source copy only once that copy succeeds. Never
+# touches anything already inside the store. On any per-entry failure, $1 is
+# left in place (not linked) and the failing path plus exit code is reported.
+_claude_heal() {
+  real="$1" store="$2" ok=1
+  for entry in "$real"/* "$real"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    name="$(basename "$entry")"
+    if [ ! -e "$store/$name" ]; then
+      mv "$entry" "$store/$name"; rc=$?
+    elif [ -d "$entry" ]; then
+      cp -Rn "$entry/." "$store/$name/"; rc=$?
+      [ "$rc" -eq 0 ] && rm -rf "$entry"
+    else
+      cp -n "$entry" "$store/$name"; rc=$?
+      [ "$rc" -eq 0 ] && rm -f "$entry"
+    fi
+    if [ "$rc" -ne 0 ]; then
+      echo "claude: heal of $entry into $store failed (exit $rc)" >&2
+      ok=0
+    fi
+  done
+  [ "$ok" = 1 ] || return 1
+  rmdir "$real" && ln -sfn "$store" "$real"
+}
+
+# Heal $2 into $1 first when a concurrent session left it a real dir, then
+# link it -- so a launch that races another session's migration still ends
+# with $2 pointed at the store instead of failing on a real dir that just
+# reappeared.
+_claude_link_or_heal() {
+  if [ -e "$2" ] && [ ! -L "$2" ]; then
+    _claude_heal "$2" "$1"
+  fi
+  _claude_link "$1" "$2"
+}
+
+# Outside the case so the default profile (CLAUDE_CONFIG_DIR unset) also gets
+# ~/.claude/projects pointed at the unprotected store.
+store="$HOME/.local/share/claude-projects"
+mkdir -p "$store"
+_claude_link_or_heal "$store" "$HOME/.claude/projects"
+
 case "$CLAUDE_CONFIG_DIR" in
   "$HOME/.claude-"*)
     base="$HOME/.claude"
@@ -37,11 +91,6 @@ case "$CLAUDE_CONFIG_DIR" in
     done
     # Sessions live in projects/; sharing one store across profiles is what
     # lets /resume reach a session another account started.
-    mkdir -p "$base/projects"
-    _claude_link "$base/projects" "$dir/projects" || cat >&2 <<MERGE
-claude: this profile's sessions stay out of /resume until its store is merged.
-claude: with no claude running, merge once:
-claude:   cp -rn "$dir/projects/." "$base/projects/" && rm -rf "$dir/projects"
-MERGE
+    _claude_link_or_heal "$store" "$dir/projects"
     ;;
 esac

@@ -20,7 +20,7 @@ Self-check: `python3 output-shape-reminder.py --selftest`.
 import sys
 
 REMINDER = (
-    "Shape check: lead with the outcome, cut closers. If the user must act, say "
+    "Shape check: end with the outcome, cut closers. If the user must act, say "
     "it and stop; if several paths are open, offer the choices; else state your "
     "next step in one line and continue."
 )

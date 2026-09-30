@@ -128,7 +128,7 @@ let
     ''
       ---
       name: concise-adhd-korean
-      description: Concise 원문 + ADHD 응답 형태 규칙 + fluent-korean 한국어 규칙을 하나로 합친 출력 스타일입니다. 코딩 지침을 유지합니다.
+      description: ADHD 독자에 맞춘 한국어 문체와 간결한 보고 규칙을 합친 출력 스타일이다. 코딩 지침을 유지한다.
       keep-coding-instructions: true
       ---
 

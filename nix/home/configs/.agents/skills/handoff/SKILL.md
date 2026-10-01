@@ -87,12 +87,13 @@ Writing rules:
 - Before finalizing, re-scan the tail of the session for late user corrections and fold them into User constraints / Decisions -- recent context is what default summarization compresses hardest.
 - Use only the `##` sections the template lists -- fold anything else into the nearest template section rather than opening a new heading.
 - `## Context` carries resolved environment facts (repo root, `owner/repo` from `git remote get-url origin`, verified full CLI invocations), because 11 of 18 successors re-derived them in their first 30 turns -- one retried a wrong GitHub org slug four times.
-- Language and size: the plan is written in short English, 100 lines / 8,000 bytes max, 3-5 sentences per entry. Korean appears only as verbatim quotes under `## User constraints` or inside code fences. `plan-mode-guard.py` denies a plan-file write that breaks this and names the measured numbers, so the fix is to rewrite shorter and in English, not to argue with the hook. Compression pressure drops prose, never the `Chainable:` line or the User constraints section -- both are copied verbatim regardless.
+- Language and size: the plan is written in short English, 100 lines / 8,000 bytes max, 3-5 sentences per entry. Korean appears only as verbatim quotes under `## User constraints` or inside code fences. `plan-mode-guard.py` denies a plan-file write that breaks this and names the measured numbers, so the fix is to rewrite shorter and in English, not to argue with the hook. Compression pressure drops prose, never the `Chainable:` line or the User constraints section -- both are copied verbatim regardless. The `Response language: Korean` line under `Chainable:` is copied verbatim into every handoff, because the receiving thread sees only this English plan and would otherwise answer in English.
 
 ```
 # Handoff: [brief title]
 
 Chainable: [true | false -- when false, add the reason on this same line]
+Response language: Korean
 
 ## Goal
 [goal from $ARGUMENTS, with acceptance criteria]
@@ -136,6 +137,7 @@ Call `ExitPlanMode`. The approval dialog is the user's choice, not yours: the ha
 ## Constraints
 - ALWAYS read the active plan file's `Chainable:` field before Phase 1, and finish the goal in one thread when it says `false`
 - ALWAYS emit a `Chainable:` line in every handoff, directly under the title, with the reason attached whenever it is `false`
+- ALWAYS emit the `Response language: Korean` line directly under `Chainable:`
 - ALWAYS treat `$ARGUMENTS` as the purpose and everything else as context capture
   serving it -- a section that does not move the next session toward that goal
   does not belong in the document

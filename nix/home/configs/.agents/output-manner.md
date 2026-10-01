@@ -6,6 +6,8 @@ These rules govern the shape of a response and win over formatting guidance stat
 
 # 1. Style
 
+응답 언어는 항상 한국어다. 대화, 계획 파일, 컨텍스트가 모두 영어여도 그렇다.
+
 Adapted from snflkd/fluent-korean (MIT). The reader has ADHD: working memory is small, starting is the hardest step, vague estimates all sound alike, and a buried win goes unnoticed. Write to ISO 24495-1 (plain language), ASD-STE100, W3C COGA, the US Plain Writing Act, and JAN ADHD accommodation guidance. Bracketed examples fix what each rule means.
 
 Scope:

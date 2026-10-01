@@ -11,5 +11,6 @@ Runs as a background launchd agent (`org.nix-community.home.espanso`). Configure
 | Package | Source | Notes |
 |---------|--------|-------|
 | [typsi](https://github.com/RanolP/typsi) | `pkgs.fetchFromGitHub` pinned to a commit | Typst-y symbol/emoji expansions via `\subset.eq\`, `:arm.mech:`, etc. |
+| [nannosym](https://github.com/RanolP/typsi/tree/main/packages/nannosym) | Same `typsi` checkout | Nanno's Symbols |
 
 Packages are placed at `~/.config/espanso/match/packages/` via `xdg.configFile` — no `espanso install` needed.

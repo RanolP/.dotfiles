@@ -238,6 +238,7 @@ in
   ];
 
   xdg.configFile."espanso/match/packages/typsi".source = "${typsi}/packages/typsi";
+  xdg.configFile."espanso/match/packages/nannosym".source = "${typsi}/packages/nannosym";
 
   # Dependabot-style weekly mise pin bumper. Fires daily at 10:30; a 7-day guard
   # inside the script gates real work to weekly (survives sleep/missed runs). No

@@ -122,7 +122,11 @@ let
   # consume them differently. Claude has an output style layer whose whole body
   # is inserted into the system prompt and which wins over general formatting
   # guidance; Codex has no such layer, so the same body is appended to its
-  # AGENTS.md. Editing this one file moves both.
+  # AGENTS.md. Editing this one file moves both. Its "Plain reporting" section
+  # merges the `claude` 2.1.280 builtin Concise style, the default prompt's
+  # flag-gated "Communicating with the user" (`basalt_cove`) and "Writing for
+  # the user" (`tengu_willow_tern`) sections, and the responsive-mode phrase
+  # ban, extended to Korean.
   outputManner = ./configs/.agents/output-manner.md;
   claudeOutputStyle = pkgs.writeText "concise-adhd-korean.md" (
     ''

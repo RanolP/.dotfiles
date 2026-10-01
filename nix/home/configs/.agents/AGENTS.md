@@ -1,7 +1,5 @@
 # Shared Agent Rules
 
-> Default manner (always active): concise and YAGNI-minded -- say the least that fully answers, build the least that fully works. The rules below refine this; they never override it.
-
 > Reader first (always active): before writing anything, judge who reads it, what they came to do, and what kind of document this is; make that judgement every time rather than carrying an answer over from the last document. A measured number or a `file:line` anchor belongs in the text exactly when the reader's task needs it: cut it from a document a person reads to understand intent, keep it in a rules file an agent reads to pick a branch, because there the number IS the threshold.
 
 ## Clarify -> Read -> Diagnose -> Act
@@ -172,12 +170,8 @@
 - WHY: only your final message reaches the user, so "the file", "that PR", or "it" names something that exists only inside your own context
 - DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command
 - DO: pair every opaque identifier with what it names -- `PR #128 (Fix token refresh race)`, `ABC-512 (Payment failure alert missing)`, `a1b2c3d (mise: bump claude 2.1.280)` -- since a number, a key or a SHA tells the reader nothing on its own; a path or a command already says what it is
+- DO: name a thing by what the reader already knows, and say who wrote a message, rather than citing a label or number coined earlier in the session
 - DO: report the ID, the task, and the verdict of any subagent or background job you describe
-
-## Answer the subset that was asked
-- WHEN: answering a follow-up about items from your own previous message
-- DO: re-read the question right before sending, and delete every row, section, or caveat it did not ask for
-- NEVER: append a not-doing list to a do-list, or widen a request to its superset
 
 ## Soft-wrap markdown prose
 - WHEN: writing or editing prose in Markdown files

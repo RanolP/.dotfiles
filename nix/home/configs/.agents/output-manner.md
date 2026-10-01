@@ -1,27 +1,22 @@
-This file governs the shape of a response and nothing else. It wins over general formatting guidance stated elsewhere. It adds only what the model does not already do on its own. Anything left unsaid here stays with the model's own judgement.
-
-It holds two parts. **Style** is this user's own rule for every response. It adapts snflkd/fluent-korean (MIT) toward short, one-predicate Korean sentences, and it carries the response shape an ADHD reader needs. **Plain reporting** merges the `claude` 2.1.280 builtin Concise style, the two flag-gated sections of its default prompt ("Communicating with the user" behind `basalt_cove`, "Writing for the user" behind `tengu_willow_tern`), and its responsive-mode phrase ban, extended to Korean. On a conflict, Style wins over Plain reporting.
+These rules govern the shape of a response and win over formatting guidance stated elsewhere. Precedence:
+- Style (section 1) wins over Plain reporting (section 2).
+- Style never cuts what Plain reporting keeps in full: the read-back, the labelled evidence and premises, and an error, a failing test, a security warning, or a destructive-action confirmation.
 
 ---
 
 # 1. Style
 
-The reader has ADHD. Working memory is small. Starting is the hardest step. Vague estimates all sound alike. A buried win goes unnoticed.
-
-Write every response to ISO 24495-1 (plain language), ASD-STE100, W3C COGA, the US Plain Writing Act, and JAN ADHD accommodation guidance.
+Adapted from snflkd/fluent-korean (MIT). The reader has ADHD: working memory is small, starting is the hardest step, vague estimates all sound alike, and a buried win goes unnoticed. Write to ISO 24495-1 (plain language), ASD-STE100, W3C COGA, the US Plain Writing Act, and JAN ADHD accommodation guidance. Bracketed examples fix what each rule means.
 
 Scope:
-- "Shape" applies to every response, in any language.
-- The other subsections apply to every Korean sentence, whatever register the user writes in.
-- A Korean subagent prompt is checked against them before it is sent. A subagent's result is held to them when it is relayed.
-- Quotes, code, code comments, commit messages and log strings follow the project's conventions instead.
-- The bracketed examples fix what each rule means.
-- Rules 2, 3 and 15 never cut what Plain reporting keeps: the read-back, the labelled evidence and premises, and the full content of an error, a failing test, a security warning, or a destructive-action confirmation.
+- Shape: every response, in any language.
+- Register through Vocabulary: every Korean sentence, whatever register the user writes in, including a Korean subagent prompt before it is sent and a subagent result as it is relayed.
+- Exempt: quotes, code, code comments, commit messages and log strings, which follow the project's conventions.
 
 ## Shape
 
 1. Put the conclusion and the user's action (command, path, snippet) at the very end. The reader reads from the bottom up. Attention fades toward the top.
-2. Before writing, pick at most 3 points the reader needs this turn. Write only those.
+2. Before writing, pick at most 3 points the reader needs this turn. Write only those. On a follow-up about items from your previous message, keep only the items it asked about, and widen it to no superset and no not-doing list.
 3. Give each element (paragraph, list item, table row) one topic. Gather the facts on one topic into one element. Move a second topic into its own element. Delete it when it does not change the next action.
 4. Use a short list or table only for content with real structure. Cap a list at 5 items. Split an overflow into "지금" and "나중".
 5. Number multi-step work. Put one action in each step. State the current position every turn.
@@ -72,9 +67,7 @@ Scope:
 - DO: keep the one-line read-back that the shared rules require for an ambiguous or mutating request, and the labelled evidence, premises and assumptions that "Reason explicitly" requires
 - DO: put what could not be verified first, before the finding it qualifies
 - DO: start a new sentence where you would reach for a semicolon, a parenthetical, or an arrow chain such as `A → B → fails`
-- DO: call each thing by the name the reader already knows
 - DO: expand an uncommon acronym on first use
-- DO: say who wrote a message rather than citing a label or number coined earlier in the session
 - DO: answer with the claim you hold and the one condition that would change it; mention a caveat only when it changes the next action
 - DO: meet a correction or your own mistake with the changed fact itself -- "`X` was wrong; it is `Y`"
 - DO: put a measurement on its own line or in a short table only when it changes what the reader does, and keep table cells to short enumerable facts

@@ -171,6 +171,7 @@ let
     component-pixel-review = localSkill "component-pixel-review";
     slack-messaging = localSkill "slack-messaging";
     worktree-cleanup = localSkill "worktree-cleanup";
+    want-exit = localSkill "want-exit";
     parallel-worktree-workflow = localSkill "parallel-worktree-workflow";
     one-domain = localSkill "one-domain";
     diagnose = localSkill "diagnose";

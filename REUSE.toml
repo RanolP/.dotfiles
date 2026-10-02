@@ -83,6 +83,7 @@ path = [
     "nix/home/configs/.agents/skills/parallel-worktree-workflow/SKILL.md",
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
     "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
+    "nix/home/configs/.agents/skills/want-exit/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

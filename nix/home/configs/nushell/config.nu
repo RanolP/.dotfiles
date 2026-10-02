@@ -44,14 +44,30 @@ $env.config.hooks.pre_prompt = (
   | append {|| _windows-terminal-cwd }
 )
 
+# Starship's language modules (nodejs/python/...) scan the cwd for project
+# files; on a Windows-drive path under WSL (/mnt/..., served over 9p) that
+# scan is slow enough to hit starship's own timeout, so swap to the
+# language-module-free config (nix/home/programs/starship.nix) while there.
+def --env _starship-config-for-pwd [pwd: string]: nothing -> nothing {
+  if ($pwd | str starts-with "/mnt/") {
+    $env.STARSHIP_CONFIG = ($env.HOME | path join ".config" "starship-winfs.toml")
+  } else {
+    hide-env -i STARSHIP_CONFIG
+  }
+}
+
 $env.config.hooks.env_change.PWD = (
   ($env.config.hooks?.env_change?.PWD? | default [])
   | append {|before, after|
       if (($env.TERM_PROGRAM? == "ghostty") or ($env.WSL_DISTRO_NAME? | is-not-empty)) and ($env.ZELLIJ? | is-empty) {
         print -n $"(char -u '1b')]11;#(_folder-bg-color)(char -u '07')"
       }
+      _starship-config-for-pwd $after
     }
 )
+
+# env_change.PWD only fires on a later cd, so apply once at startup too.
+_starship-config-for-pwd $env.PWD
 
 # Launch Claude Code under a named auth profile.
 # With no profile, prompt with a picker: (default) ~/.claude, any existing

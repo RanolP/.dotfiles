@@ -38,7 +38,7 @@ _claude_link() {
 # touches anything already inside the store. On any per-entry failure, $1 is
 # left in place (not linked) and the failing path plus exit code is reported.
 _claude_heal() {
-  real="$1" store="$2" ok=1
+  local real="$1" store="$2" ok=1 entry name rc
   for entry in "$real"/* "$real"/.[!.]*; do
     [ -e "$entry" ] || continue
     name="$(basename "$entry")"

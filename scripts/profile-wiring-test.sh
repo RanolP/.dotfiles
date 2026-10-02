@@ -96,6 +96,17 @@ check "healed profile projects/ ends up a symlink to the store" $?
 [ -f "$store/-some-repo/session.jsonl" ]
 check "heal moves the profile's session into the store" $?
 
+# The wrapper's `exec "$real"` broke when heal clobbered the caller's "real".
+HOME="$(mktemp -d)"; export HOME
+store="$HOME/.local/share/claude-projects"
+mkdir -p "$HOME/.claude/projects/-repo-d"
+echo d > "$HOME/.claude/projects/-repo-d/session.jsonl"
+CLAUDE_CONFIG_DIR=""
+real=/sentinel
+. "$SNIPPET" >/dev/null 2>&1
+[ "$real" = /sentinel ]
+check "heal does not clobber the wrapper's own real variable" $?
+
 # The default profile (~/.claude itself) still gets the store link, since the
 # wiring for it runs unconditionally.
 HOME="$(mktemp -d)"; export HOME

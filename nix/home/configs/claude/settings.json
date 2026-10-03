@@ -30,7 +30,8 @@
     "clangd-lsp@claude-plugins-official": true,
     "supermemory@supermemory-plugins": false,
     "humanize-korean@im-not-ai": false,
-    "claude-code-wakatime@wakatime": true
+    "claude-code-wakatime@wakatime": true,
+    "cc-plugin-you-should-know@builtin": true
   },
   "skillOverrides": {
     "auto-mode-setup": "off",

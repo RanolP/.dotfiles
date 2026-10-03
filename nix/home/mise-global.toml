@@ -35,4 +35,5 @@ codex = "0.155.1"
 "npm:ntn" = "0.21.8"
 "npm:slopless" = "0.2.23"
 "pipx:reuse" = "6.2.0"
+"pipx:google-colab-cli" = "0.7.4"
 "ubi:namespacelabs/foundation" = { version = "0.0.573", exe = "nsc", matching = "nsc" }

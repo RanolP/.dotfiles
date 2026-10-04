@@ -161,7 +161,6 @@ let
   # references/); vendored ones point into their fetched store paths.
   localSkill = name: ./configs/.agents/skills + "/${name}";
   skills = {
-    handoff = localSkill "handoff";
     git-master = localSkill "git-master";
     ship = localSkill "ship";
     update = localSkill "update";
@@ -399,13 +398,14 @@ in
         source = ./configs/claude/hooks/output-shape-reminder.py;
         executable = true;
       };
-      # Name /handoff once the thread's resident context crosses 110k tokens,
-      # then every 30k -- the audit found handoff invoked at a median 139k
-      # against a ~170k compaction trigger, so compaction did the job instead.
-      ".claude/hooks/handoff-nudge.py" = {
-        source = ./configs/claude/hooks/handoff-nudge.py;
-        executable = true;
-      };
+      # clm replaces compaction: at turn end it folds older turns into a
+      # ledger. CLAUDE_CODE_PLUGIN_DIRS in settings.json loads it. The whole
+      # directory is linked as one store path because Claude Code rejects a
+      # hook module whose realpath escapes the plugin directory.
+      ".claude/mods/clm".source = ./configs/claude/mods/clm;
+      # codex-subagent runs subagent types on GPT through `codex app-server`;
+      # its hook starts the bridge as `node <root>/daemon/codex-bridge.mjs`.
+      ".claude/mods/codex-subagent".source = ./configs/claude/mods/codex-subagent;
       # On "command not found", point at mise/project shims before installs.
       ".claude/hooks/missing-tool-hint.py" = {
         source = ./configs/claude/hooks/missing-tool-hint.py;

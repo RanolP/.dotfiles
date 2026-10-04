@@ -9,8 +9,7 @@ plan mode could never exit.
 Read-only lookups are denied too, Read and Grep included. They were once open
 on the theory that distilling a plan surfaces gaps and reading one file is
 cheaper than leaving and re-entering. That theory is wrong for the purpose:
-removing context is what a handoff is for, and every file read inside plan mode
-puts back some of what the reset was supposed to drop. A gap found here means
+plan mode carries finished research out, so a file read inside it means
 the research was unfinished, so the answer is to exit, research in auto mode,
 and re-enter with the plan complete.
 
@@ -33,7 +32,7 @@ files found across 1491 transcripts, ~8k tokens of finished plan discarded.
 CLAUDE_CONFIG_DIR is read when present, and any ~/.claude*/plans/ is accepted
 too so the guard still works if the hook is spawned without that variable.
 
-The plan-file write is also budgeted. The handoff skill asked for ~100 lines of
+The plan-file write is also budgeted. A plan was asked for in ~100 lines of
 short English as prose, and prose was not obeyed, so the write is denied when
 the resulting document exceeds MAX_LINES or MAX_BYTES, or when Hangul makes up
 MAX_HANGUL_RATIO or more of the letters outside the `## User constraints`
@@ -50,7 +49,7 @@ import os
 import re
 import sys
 
-# Budget for the handoff plan file. Measured 2026-09-21 over the 8 most recent
+# Budget for the plan file. Measured 2026-09-21 over the 8 most recent
 # files in ~/.claude-personal/plans: 55-123 lines, 5.8-13.5 KB, and 60-80% of
 # their lines carried Hangul, against a prose budget of ~100 lines of English.
 MAX_LINES = 100
@@ -174,7 +173,7 @@ def budget_violation(size_text, lang_text=None):
     if not problems:
         return None
     return (
-        "Handoff plan is " + " and ".join(problems) + ". Rewrite in short "
+        "Plan file is " + " and ".join(problems) + ". Rewrite in short "
         "English -- isolated bullets, 3-5 sentences per entry -- then Write "
         "again. Korean stays only in verbatim quotes under "
         f"{VERBATIM_SECTION} and inside code fences."
@@ -279,8 +278,8 @@ def selftest():
     assert not is_plan_file(home + "/.claude/plans/../settings.json", None, none)
     assert config_plans_dir({}) is None
     assert config_plans_dir(None) is None
-    # Only the plan write and the exit survive; every lookup is denied so the
-    # context the handoff just dropped cannot be pulled back in.
+    # Only the plan write and the exit survive; every lookup is denied, since
+    # a lookup here means the research was unfinished.
     assert ALLOWED == {
         "ExitPlanMode", "Write", "Edit", "AskUserQuestion", "ToolSearch"
     }
@@ -290,7 +289,7 @@ def selftest():
 
     # The plan budget: short English passes, size and language breaks deny.
     english = "\n".join(f"- bullet {i} about the resume step" for i in range(50))
-    assert budget_violation("# Handoff\n\n" + english) is None
+    assert budget_violation("# Plan\n\n" + english) is None
     too_long = "\n".join(f"- line {i}" for i in range(101))
     reason = budget_violation(too_long)
     assert reason and "101 lines" in reason and "100 lines" in reason, reason

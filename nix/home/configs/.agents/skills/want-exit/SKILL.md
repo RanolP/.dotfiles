@@ -59,7 +59,7 @@ A wait on Metro (it must finish writing a bundle before it is stopped) goes thro
 
 Batch every `ask` row into ONE `AskUserQuestion` call, multi-select, one option per row labelled with the resource and its evidence. Proposed learnings go in the same call, each as a one-line conclusion. Act on the answer: clean the selected resources with the step-3 commands, and write each selected learning through the `evidence-store` skill. Leave unselected rows as they are.
 
-When the user names a next subject to continue with instead of exiting, hand it to the `handoff` skill and stop here.
+When the user names a next subject to continue with instead of exiting, stop here and start that subject in this session.
 
 ## 5. Report and release
 

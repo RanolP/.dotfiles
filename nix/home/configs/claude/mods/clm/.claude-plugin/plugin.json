@@ -1,0 +1,11 @@
+{
+  "name": "clm",
+  "version": "0.3.0",
+  "description": "Replaces compaction for the main conversation: older turns are folded into a ledger (goal, user instructions, done, to do, open questions, key facts) and the transcript is rewritten to the first request, the ledger and the newest turns that fit.",
+  "author": { "name": "RanolP" },
+  "userConfig": {
+    "budget": { "type": "number", "title": "Token budget", "description": "Message tokens allowed before older turns are folded into the ledger. An integer of at least 2000.", "default": 32000 },
+    "tailTarget": { "type": "number", "title": "Tail target", "description": "Tokens the first request, the ledger and the kept newest turns may fill after a fold. 0 means half the budget.", "default": 0 },
+    "reserve": { "type": "number", "title": "Reserve", "description": "A fold starts this many tokens before the budget is reached. Must be under the budget. 0 means 2048, or a quarter of a budget under 8192.", "default": 0 }
+  }
+}

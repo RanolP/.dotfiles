@@ -8,11 +8,11 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: set the bar at "does this unit mutate a file or take more than a couple of read-only tool calls", rather than at "did the user name a subagent this turn" -- a unit that clears it goes to a worker, with no permission asked
 - WHY: the SessionStart `architect-rules.py` hook injects the routing policy every session, which is the user asking for it in every session
 
-## Size the unit first, then commit to one of three strategies
+## Size the unit first, then commit to one of two strategies
 - WHEN: about to start any unit of work, BEFORE its first tool call
 - WHY: the main session is the only place the user can reach you, so a main thread grinding an execution loop is a session the user has lost; a strategy discovered mid-grind arrives after the thread is already spent
-- DO: estimate how long this unit holds the main thread, then commit to EXACTLY ONE -- (1) SUBAGENT, a background Agent worker while main keeps answering the user; (2) HANDOFF, the `handoff` skill then EnterPlanMode, reserved for a different SUBJECT; (3) QUICK RETURN, inline because it is read-only and finishes within a couple of tool calls
-- DO: read the session's delegation policy, which the SessionStart `architect-rules.py` hook injects per model, as the answer to which strategy is the default; take 1 rather than 2 for work that is long but stays on the current subject
+- DO: estimate how long this unit holds the main thread, then commit to EXACTLY ONE -- (1) SUBAGENT, a background Agent worker while main keeps answering the user; (2) QUICK RETURN, inline because it is read-only and finishes within a couple of tool calls
+- DO: read the session's delegation policy, which the SessionStart `architect-rules.py` hook injects per model, as the answer to which strategy is the default
 - DO: carry the chosen strategy to the end, because starting inline and converting halfway spends the main thread twice
 - EXCEPT: keep work inline when only the main thread can do it -- the judgement itself, or a diff whose duplication the worker cannot see because the context lives in this session
 
@@ -32,15 +32,12 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO (worker): escalate from where the evidence sits rather than deferring the question to whoever reads your report, because the context that makes it answerable is yours and expires with your turn
 - WHY: the advisor tool double-counts context and force-compacts the session early; a subagent does not -- [[advisor-inflates-autocompact-threshold]]
 
-## Plan mode -- one gate, two signals: think and hand off
-- PURPOSE: keep working context lean -- the plan file, not the transcript, is what carries work forward
+## Plan mode -- present the plan before the first mutation
+- NOTE: the `clm` plugin folds older turns into a ledger (done, to do, key facts, open questions) at every turn end, so context stays bounded with no manual step from you
 - SETUP: at session start, ToolSearch `select:TaskCreate,TaskUpdate,TaskList,EnterPlanMode,ExitPlanMode` before any other work, because a deferred EnterPlanMode is invisible at decision time
 - WHEN (think): the shared "Plan after research, then act" rule's non-trivial bar is met, and the task's FIRST mutation has not happened yet
 - DO (think): finish the research inline FIRST, then call EnterPlanMode, then distill the findings into the plan file and present it via ExitPlanMode -- an inline plan paragraph does not count as presenting a plan
-- WHEN (handoff): the NEXT unit of work is a different SUBJECT rather than the next step of the current one
-- DO (handoff): invoke the `handoff` skill FIRST and follow it, because the template, the size budget and the `Chainable` flag live there; read the active plan file's `Chainable:` line first, where `false` means the current goal runs to completion in this one thread
 - EXCEPT: act directly when the user handed you a ready-made plan, said to skip planning, or asked for a few-line fix
-- NEVER: signal /compact or /clear as the compression mechanism -- EnterPlanMode is the handoff signal
 
 ## Questions = explain only
 - WHEN: the message asks about work already done, or starts with "ask:"

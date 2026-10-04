@@ -222,7 +222,7 @@ def checkpoint_message(kind, idx, token, elapsed_s, budget):
                     f"grants by replying and the same clock continues. An open "
                     f"item with its next action is a complete report; list "
                     f"unverified items as open.")
-        return (f"{head} The budget is spent, which calls for a handoff. "
+        return (f"{head} The budget is spent, which calls for a stop and a report. "
                 f"{TASK_LIST_MIRROR} Then end the turn with "
                 f"{REPORT_SHAPE[0].lower()}{REPORT_SHAPE[1:]} Add the extra "
                 f"minutes you would need; the user continues by replying.")
@@ -532,7 +532,7 @@ def selftest():
     assert "Checkpoint 2/3" in out[1] and "Checkpoint 1/3" not in out[1]
     assert handle(ev(hook_event_name="PostToolUse"), t0 + 22 * 60) is None
 
-    # Regression: late checkpoints read as "finish now" instead of handoff/extension.
+    # Regression: late checkpoints read as "finish now" instead of report/extension.
     late = checkpoint_message("sub", IDX_FIVE_SIXTHS, "a/b", 1500, 30)
     assert "--more" in late and "hurry" not in late.lower()
 

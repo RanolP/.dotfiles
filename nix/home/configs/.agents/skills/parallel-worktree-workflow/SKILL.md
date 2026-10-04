@@ -76,5 +76,5 @@ WHY: every merge serialized through a slow gate made integration, not coding, th
 ## 6. Main stays on assessment
 
 - Relay reports, ask design questions (one question per decision, with a recommendation on each option), and record each decision to memory as it is made.
-- Leave plan mode alone while workers run: entering it once blocked the running workers. Use the `handoff` skill only after the last worker has merged.
+- Leave plan mode alone while workers run: entering it once blocked the running workers.
 - Tear down finished worktrees with skill `worktree-cleanup`.

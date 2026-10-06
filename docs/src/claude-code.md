@@ -32,6 +32,22 @@ Skills extend Claude Code with domain-specific workflows.
 
 The `anthropics/skills` repo is fetched via `pkgs.fetchFromGitHub` at a pinned revision and linked into `~/.claude/skills/`. The two vendored multi-file skills are linked as whole directories rather than a single `SKILL.md`, and their MIT provenance is declared in `REUSE.toml`.
 
+## Mods
+
+Here, a mod is a Claude Code plugin directory with a manifest and hook module. The mods are loaded through `CLAUDE_CODE_PLUGIN_DIRS`, set to `~/.claude/mods/clm:~/.claude/mods/codex-subagent` in `settings.json`. Each source is linked as a whole directory because Claude Code rejects a hook module whose realpath escapes the plugin directory.
+
+### clm
+
+`clm` replaces the engine's compaction for the main conversation. At turn end, it folds older turns into a ledger of the goal, user instructions, work done, work left, open questions and key facts, then rewrites the transcript to the first request, ledger and newest turns. It takes over the job previously handled by the handoff skill and handoff-nudge hook.
+
+### codex-subagent
+
+`codex-subagent` registers two Agent tool types: `luna` uses `gpt-5.6-luna` at `xhigh` effort in `workspace-write`, and `sol` uses `gpt-5.6-sol` at `medium` effort in `workspace-write`.
+
+The mod starts one Node bridge per Claude session; the bridge runs `codex app-server`, speaks HTTP over a Unix socket to the hook, and speaks JSON-RPC over stdio to Codex. `SendMessage` continues the same Codex thread.
+
+Sources: `nix/home/configs/claude/mods/clm/` and `nix/home/configs/claude/mods/codex-subagent/`.
+
 ## Statusline
 
 `~/.claude/statusline.sh` renders a custom 3-line statusline from the session JSON Claude Code pipes to it:

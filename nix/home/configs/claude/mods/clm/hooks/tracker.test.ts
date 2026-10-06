@@ -1,6 +1,6 @@
-import { test, expect } from 'claude-code/testing'
+import { test, expect, mock } from 'claude-code/testing'
 
-import { describe, injected, parseLog, snapshot, type Issue, type TrackerEvent } from './tracker'
+import { describe, injected, parseLog, sectionLines, snapshot, staleOpenCount, type Issue, type TrackerEvent } from './tracker'
 
 const at = (session: string, repo: string) => ({ session, repo, cwd: '/w' })
 const line = (e: TrackerEvent) => JSON.stringify(e)
@@ -52,16 +52,20 @@ test('merging two session logs, the later status of one issue wins', async () =>
   expect(issue!.status).toBe('done')
 })
 
-// Regression caught: an issue from another repository leaks into every session's ledger, or a linked one is left out.
+// Regression caught: an issue from another repository leaks into every session's ledger (or into its stale count), or a linked one is left out.
 test('an unlinked issue from another repo is not injected', async () => {
   const other = at('cccccc33', 'github.com/o/other')
   const events: TrackerEvent[] = [
     { ts: '2026-10-06T01:00:00Z', seq: 1, issue: 'cccccc-1', origin: other, op: 'create', title: 'unlinked', status: 'todo' },
     { ts: '2026-10-06T01:00:01Z', seq: 2, issue: 'cccccc-2', origin: other, op: 'create', title: 'linked', status: 'todo' },
     { ts: '2026-10-06T01:00:02Z', seq: 1, issue: 'cccccc-2', origin: at('s1', 'github.com/o/repo'), op: 'link' },
+    // Same repo, another session, untouched for over a week: counted, not listed.
+    { ts: '2026-09-01T01:00:00Z', seq: 1, issue: 'dddddddd-1', origin: at('dddddddd', 'github.com/o/repo'), op: 'create', title: 'old same-repo', status: 'todo' },
   ]
-  const shown = injected(snapshot(events), { session: 's1', repo: 'github.com/o/repo' })
+  const shown = injected(snapshot(events), { session: 's1', repo: 'github.com/o/repo' }, Date.parse('2026-10-06T00:00:00Z'))
   expect(shown.map(i => i.title)).toEqual(['linked'])
+  const stale = staleOpenCount(snapshot(events), { session: 's1', repo: 'github.com/o/repo' }, Date.parse('2026-10-06T00:00:00Z'))
+  expect(sectionLines(snapshot(events), '할 일', stale)).toContain('- 1 older open issue(s) are summarized; see /clm board')
 })
 
 // --- a fold through the plugin ------------------------------------------------
@@ -72,7 +76,7 @@ const ROWS = [
   M('user', 'start'), M('assistant', BIG), M('user', 'next'), M('assistant', BIG),
   M('user', 'more'), M('assistant', 'ok'), M('user', 'last'), M('assistant', 'done'),
 ]
-const NOTES = '## 목표\n- g\n\n## 사용자 지시\n- "start"\n\n## 핵심 사실·경로\n- f'
+const NOTES = '## 목표\n- g\n\n## 핵심 사실·경로\n- f'
 const LOG = '/home/t/.claude-work/tracker/events/old-session.jsonl'
 
 // Regression caught: the merge model omits an issue it was shown and the ledger silently loses it (the old whole-ledger rewrite did exactly this).
@@ -82,6 +86,7 @@ test('a fold with no op for an existing issue keeps it in the ledger', { options
   }
   const store: Record<string, unknown> = {}
   const prompts: string[] = []
+  mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
   on('store.get', (_$: any, e: any) => ({ value: store[e.key] }))
   on('store.set', (_$: any, e: any) => { store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete store[e.key]; return { value: undefined } })

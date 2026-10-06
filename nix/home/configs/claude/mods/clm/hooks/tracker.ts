@@ -1,9 +1,10 @@
 // The tracker behind the ledger's 한 일 / 할 일 / 미결 질문 sections. State is
 // global (every session, every repository) but written as one append-only log
-// per session, so each file has a single writer and the read-then-rewrite
-// "append" `$.fs` allows never races. Nothing is cached: the issues are
-// recomputed from every log on each read, which stays cheap because issues
-// live for a session or two.
+// per session, so each file has a single writer session; that session's own
+// concurrent writes (parallel tool calls) are serialized per session in
+// register.ts `serialized`, since `$.fs` offers only a read-then-rewrite
+// "append". Log contents are cached by the metadata returned from `$.fs.list`,
+// so an unchanged session file is parsed once.
 
 export const STATUSES = ['todo', 'doing', 'done', 'question', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
@@ -41,9 +42,11 @@ export type Issue = {
   linked: string[]
   taskId?: string
   updated: string
+  /** Position of the event that last made this issue done, in snapshot order; later is larger. */
+  doneOrder?: number
 }
 
-export const issueId = (session: string, seq: number) => `${session.slice(0, 6)}-${seq}`
+export const issueId = (session: string, seq: number) => `${session.slice(0, 8)}-${seq}`
 
 // --- pure ------------------------------------------------------------------
 
@@ -66,15 +69,23 @@ const order = (a: TrackerEvent, b: TrackerEvent) =>
 /** Folds every session's events, in (ts, session, seq) order, into the issues. */
 export function snapshot(events: readonly TrackerEvent[]): Issue[] {
   const issues = new Map<string, Issue>()
+  let n = 0
   for (const e of [...events].sort(order)) {
+    n += 1
     if (e.op === 'create') {
       if (!issues.has(e.issue))
-        issues.set(e.issue, { id: e.issue, title: e.title, status: e.status, origin: e.origin, notes: e.note ? [e.note] : [], linked: [], ...(e.taskId ? { taskId: e.taskId } : {}), updated: e.ts })
+        issues.set(e.issue, {
+          id: e.issue, title: e.title, status: e.status, origin: e.origin, notes: e.note ? [e.note] : [], linked: [],
+          ...(e.taskId ? { taskId: e.taskId } : {}), updated: e.ts, ...(e.status === 'done' ? { doneOrder: n } : {}),
+        })
       continue
     }
     const i = issues.get(e.issue)
     if (!i) continue
-    if (e.op === 'status') i.status = e.status
+    if (e.op === 'status') {
+      i.status = e.status
+      if (e.status === 'done') i.doneOrder = n
+    }
     else if (e.op === 'retitle') i.title = e.title
     else if (e.op === 'progress') i.progress = { done: e.done, total: e.total }
     else if (e.op === 'task') i.taskId = e.taskId
@@ -105,15 +116,36 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
 
 export const isOpen = (i: Issue) => i.status === 'todo' || i.status === 'doing' || i.status === 'question'
 
+// The ledger's 한 일 and the task panel show only a session's newest
+// completions; the tracker log keeps every issue as the searchable history.
+// An older one moved back to todo or doing is no longer done, so it shows again.
+export const DONE_SHOWN = 5
+/** Ids of this session's done issues older than its newest DONE_SHOWN completions. */
+export function archivedDone(issues: readonly Issue[], session: string): Set<string> {
+  const done = issues.filter(i => i.status === 'done' && i.origin.session === session)
+    .sort((a, b) => (b.doneOrder ?? 0) - (a.doneOrder ?? 0))
+  return new Set(done.slice(DONE_SHOWN).map(i => i.id))
+}
+
+const RECENT_MS = 7 * 24 * 60 * 60 * 1000
+const isRecent = (i: Issue, now: number) => now - Date.parse(i.updated) <= RECENT_MS
+
 /**
- * What one session's ledger carries: open issues from its repository, every
- * issue linked to it, and the issues it finished itself (its 한 일).
+ * What one session's ledger carries: open issues from its repository (another
+ * session's only while touched in the last week), every issue linked to it,
+ * and the newest DONE_SHOWN issues it finished itself (its 한 일).
  */
-export function injected(issues: readonly Issue[], here: { session: string; repo: string }): Issue[] {
-  return issues.filter(i =>
+export function injected(issues: readonly Issue[], here: { session: string; repo: string }, now = Date.now()): Issue[] {
+  const archived = archivedDone(issues, here.session)
+  return issues.filter(i => !archived.has(i.id) && (
     i.linked.includes(here.session) ||
-    (isOpen(i) && i.origin.repo === here.repo) ||
-    (i.status === 'done' && i.origin.session === here.session))
+    (isOpen(i) && i.origin.repo === here.repo && (i.origin.session === here.session || isRecent(i, now))) ||
+    (i.status === 'done' && i.origin.session === here.session)))
+}
+
+/** Open issues of this repository that `injected` leaves out for age; the ledger shows only their count. */
+export function staleOpenCount(issues: readonly Issue[], here: { session: string; repo: string }, now = Date.now()): number {
+  return issues.filter(i => isOpen(i) && i.origin.repo === here.repo && i.origin.session !== here.session && !i.linked.includes(here.session) && !isRecent(i, now)).length
 }
 
 /** Same repository whatever the transport: `git@host:o/r.git` and `https://host/o/r` match. */
@@ -138,11 +170,12 @@ const flat = (s: string) => s.replace(/\s*\n\s*/g, ' ').trim()
 export const issueLine = (i: Issue) =>
   `- ${i.status === 'doing' ? '(doing) ' : ''}${i.title}${i.progress ? ` (${i.progress.done}/${i.progress.total})` : ''}${i.notes.length ? ` — ${i.notes[i.notes.length - 1]}` : ''} [${i.id}]`
 
-export function sectionLines(issues: readonly Issue[], section: string): string[] {
+export function sectionLines(issues: readonly Issue[], section: string, stale = 0): string[] {
   const want = TRACKER_SECTIONS[section] ?? []
   const lines = issues.filter(i => want.includes(i.status))
     .sort((a, b) => want.indexOf(a.status) - want.indexOf(b.status) || (a.updated < b.updated ? -1 : a.updated > b.updated ? 1 : 0))
     .map(issueLine)
+  if (section === '할 일' && stale > 0) lines.push('- ' + stale + ' older open issue(s) are summarized; see /clm board')
   return lines.length ? lines : ['- (none yet)']
 }
 

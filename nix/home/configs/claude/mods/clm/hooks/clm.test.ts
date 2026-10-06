@@ -1,4 +1,7 @@
-import { test, expect } from 'claude-code/testing'
+import { test, expect, mock } from 'claude-code/testing'
+
+import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions } from './ledger'
+import { parseLog, snapshot } from './tracker'
 
 const M = (role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) =>
   ({ role, text, toolUses: [], ...extra }) as any
@@ -15,10 +18,10 @@ const ROWS = [
   M('user', 'run tests'), use('tu_c', 'Bash'), res('tu_c', 'pass ' + BIG), M('assistant', 'tests pass'),
   M('user', 'commit it'), M('assistant', 'done'),
 ]
-// The merge model writes the three note sections, optional changes, and an <ops> array; the
-// tracker renders the other three.
-const NOTES = ['목표', '사용자 지시', '핵심 사실·경로']
-const ledger = (fact: string, ops = '[]', changes = '') => `${NOTES.map(s => `## ${s}\n- ${s === '핵심 사실·경로' ? fact : '-'}`).join('\n\n')}${changes ? `\n\n<changes>${changes}</changes>` : ''}\n\n<ops>${ops}</ops>`
+// The merge model writes the two note sections and an <ops> array; clm keeps
+// 사용자 지시 itself and the tracker renders the other three.
+const NOTES = ['목표', '핵심 사실·경로']
+const ledger = (fact: string, ops = '[]') => `${NOTES.map(s => `## ${s}\n- ${s === '핵심 사실·경로' ? fact : '-'}`).join('\n\n')}\n\n<ops>${ops}</ops>`
 const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as any
 const OPTS = { options: { budget: 2000, tailTarget: 1200, reserve: 100 } }
 const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
@@ -28,9 +31,10 @@ const est = (m: any) => Math.ceil((m.text.length + m.toolUses.reduce((k: number,
 const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 
-type State = { rows: any[]; replies: (string | null)[]; usage?: any }
+type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; usage?: any }
 function bottoms(on: any, s: State) {
-  const seen = { store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], logs: [] as string[], results: [] as any[], taskCalls: [] as any[], engineCompactions: 0 }
+  mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
+  const seen = { store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], logs: [] as string[], results: [] as any[], taskCalls: [] as any[], engineCompactions: 0, engineInputs: [] as any[][] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -44,13 +48,22 @@ function bottoms(on: any, s: State) {
       .map(f => ({ name: f.slice(e.path.length + 1), kind: 'file', size: seen.files[f]!.length, mtimeMs: 0, isLink: false })),
   }))
   on('session.cwd', () => ({ value: '/work/repo' }))
-  on('process.run', (_$: any, e: any) => ({ value: { exitCode: 0, stdout: e.argv.includes('get-url') ? 'git@github.com:o/repo.git\n' : 'main\n', stderr: '' } }))
+  on('process.run', (_$: any, e: any) => {
+    if (e.argv[0] === 'rm') for (const path of e.argv.slice(e.argv.indexOf('--') + 1)) delete seen.files[path]
+    return { value: { exitCode: 0, stdout: e.argv.includes('get-url') ? 'git@github.com:o/repo.git\n' : 'main\n', stderr: '' } }
+  })
   on('ui.panes', () => ({ value: [] }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
+  // The merge call answers from s.replies, the turn-time change call from s.turnReplies.
   on('model.complete', (_$: any, e: any) => {
+    if (e.system !== MERGE_SYSTEM) {
+      seen.turnPrompts.push(e.prompt)
+      return { value: { isAnswered: true, text: s.turnReplies?.shift() ?? '<changes></changes>', usage: {} } }
+    }
     seen.prompts.push(e.prompt)
     const text = s.replies.shift()
+    if (text instanceof Error) throw text
     return { value: text === null ? { isAnswered: false, reason: 'aborted' } : { isAnswered: true, text: text ?? '', usage: {} } }
   })
   on('ui.status', () => ({ value: undefined }))
@@ -59,27 +72,33 @@ function bottoms(on: any, s: State) {
   on('session.start', () => ({ cwd: '/tmp' }))
   on('turn.complete', () => ({ text: '' }))
   // Stands for the engine summarizer: any call reaching it is a compaction clm failed to replace.
-  on('session.compact', () => { seen.engineCompactions++; return { messages: [M('user', 'ENGINE SUMMARY')] } })
+  on('session.compact', (_$: any, e: any) => { seen.engineCompactions++; seen.engineInputs.push(e.messages); return { messages: [M('user', 'ENGINE SUMMARY')] } })
   return seen
 }
 // The plugin raises its compaction from turn.complete; the engine answers by
 // running the chain again with the live transcript, which a test raises itself.
-async function turnEnds($: any, s: State, seen: { results: any[] }) {
-  await $.turn.complete(TURN)
+async function turnEnds($: any, s: State, seen: { results: any[] }, answer = '') {
+  await $.turn.complete({ ...TURN, answer })
   seen.results.push(await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) }))
 }
 const logEvents = (seen: { files: Record<string, string> }) => (seen.files[LOG_FILE] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
 
-// Regression caught: a fold-created issue reaches the built-in panel and a later completion updates its projected task.
+// Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.
 test('fold issues project to the task panel', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('fact 2', '[{"op":"status","issue":"s1-1","status":"done"}]')] }
   const seen = bottoms(on, s)
+  let created = 0
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
     seen.taskCalls.push(e)
-    return { result: { task: { id: 'panel-1', subject: e.subject } } }
+    return { result: { task: { id: `panel-${++created}`, subject: e.subject } } }
   })
+  let stale = true
   on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
     seen.taskCalls.push(e)
+    if (stale && e.taskId === 'panel-1') {
+      stale = false
+      return { result: { success: false, message: 'stale task id' }, isError: true }
+    }
     return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
   })
   await turnEnds($, s, seen)
@@ -89,10 +108,48 @@ test('fold issues project to the task panel', OPTS, async ($, on) => {
   const updates = seen.taskCalls.filter(c => c.tool === 'TaskUpdate')
   expect(create.subject).toBe('clm 조사하기')
   expect(create.description).toBe('조사 메모')
-  expect(updates.some(u => u.taskId === 'panel-1' && u.status === 'completed')).toBe(true)
+  expect(updates.some(u => u.taskId === 'panel-2' && u.status === 'completed')).toBe(true)
+  expect(logEvents(seen).some(e => e.event === 'panel-relink')).toBe(true)
 })
 
-// Regression caught: the model cannot write the panel directly, while clm's own projection call is allowed through.
+// Regression caught: every done issue of the session stayed in the ledger's 한 일 and on the task panel forever, so a long session's context filled with old completions.
+test('a session with 8 done issues shows only the latest 5 in the ledger and panel', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact')] }
+  const seen = bottoms(on, s)
+  let n = 0
+  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
+    seen.taskCalls.push(e)
+    return { result: { task: { id: `panel-${++n}`, subject: e.subject } } }
+  })
+  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
+    seen.taskCalls.push(e)
+    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
+  })
+  for (let i = 1; i <= 8; i++) await $.tool.call({ tool: 'TaskCreate', subject: `done ${i}`, description: `d${i}` })
+  for (let i = 1; i <= 8; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: `panel-${i}`, status: 'completed' })
+  const last = new Map<string, string>()
+  for (const c of seen.taskCalls) if (c.tool === 'TaskUpdate' && c.status) last.set(c.taskId, c.status)
+  expect([1, 2, 3].map(i => last.get(`panel-${i}`))).toEqual(['deleted', 'deleted', 'deleted'])
+  expect([4, 5, 6, 7, 8].map(i => last.get(`panel-${i}`))).toEqual(Array(5).fill('completed'))
+  await turnEnds($, s, seen)
+  const done = /## 한 일\n([\s\S]*?)\n\n/.exec(seen.files[LEDGER_FILE] ?? '')?.[1] ?? ''
+  expect(done.split('\n').map(l => /^- (done \d)/.exec(l)?.[1])).toEqual(['done 4', 'done 5', 'done 6', 'done 7', 'done 8'])
+})
+
+// Regression caught: a completed TaskUpdate notice was delayed until session.compact and then could be repeated by the pending fold.
+test('a TaskUpdate to completed logs its notice before any fold and is not repeated', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [] }
+  const seen = bottoms(on, s)
+  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => ({ result: { task: { id: 'panel-1', subject: e.subject } } }))
+  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => ({ result: { success: true, taskId: e.taskId, updatedFields: [] } }))
+  await $.tool.call({ tool: 'TaskCreate', subject: 'event task', description: 'created in the turn' })
+  await $.tool.call({ tool: 'TaskUpdate', taskId: 'panel-1', status: 'completed' })
+  expect(seen.logs.filter(l => l === "작업 'event task' 완수").length).toBe(1)
+  await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) })
+  expect(seen.logs.filter(l => l === "작업 'event task' 완수").length).toBe(1)
+})
+
+// Regression caught: the model stays denied while clm centralizes its task change into tracker and panel writes.
 test('model task calls are denied outside clm projection', OPTS, async ($, on) => {
   const s: State = { rows: [], replies: [] }
   const seen = bottoms(on, s)
@@ -102,7 +159,8 @@ test('model task calls are denied outside clm projection', OPTS, async ($, on) =
   })
   const r = await $.tool.call({ tool: 'TaskCreate', subject: 'model task', description: 'should be denied' })
   expect('deny' in r).toBe(true)
-  expect(seen.taskCalls).toEqual([])
+  expect(seen.taskCalls.some(c => c.tool === 'TaskCreate' && c.subject === 'model task')).toBe(true)
+  expect(seen.logs).toContain("작업 'model task' 추가")
 })
 
 // Regression caught: a fold creating several issues re-entered the projection and created duplicate panel tasks.
@@ -133,23 +191,26 @@ test('a refused TaskCreate still lets the fold complete', OPTS, async ($, on) =>
   expect(seen.logs).toContain("작업 'clm 조사하기' 추가")
 })
 
-// Regression caught: a changes block written before the notes emptied them and dropped the fold.
-test('a changes block before the notes still applies the fold', OPTS, async ($, on) => {
+// Regression caught: a `<changes>` block in the merge reply leaked into the ledger notes or was announced as a 맥락 갱신 line at fold time.
+test('a merge reply carrying a changes block folds without announcing it', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [`<changes>핵심 사실: 순서가 바뀐 응답</changes>\n\n${ledger('fact')}`] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   expect(seen.results[0].messages[1].text).toContain('fact')
-  expect(seen.logs).toContain('맥락 갱신: 핵심 사실: 순서가 바뀐 응답')
+  expect(seen.results[0].messages[1].text).not.toContain('<changes>')
+  expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
 })
 
-// Regression caught: non-task ledger changes were lost from the fold or leaked into the session transcript.
-test('non-task merge changes show display-only notices', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact', '[]', '핵심 사실: 브리지 재시작 시 키 유실 확인\n미결 질문 추가: ui.log가 --resume 후 남는지')] }
+// Regression caught: the turn-time 맥락 갱신 lines were lost, capped above three, or leaked into the session transcript.
+test('turn-time context changes show at most three display-only notices', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact')], turnReplies: ['<changes>핵심 사실: 브리지 재시작 시 키 유실 확인\n미결 질문 추가: ui.log가 --resume 후 남는지\n셋째\n넷째</changes>'] }
   const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
+  await turnEnds($, s, seen, 'finished')
+  expect(seen.turnPrompts.length).toBe(1)
   expect(seen.logs).toContain('맥락 갱신: 핵심 사실: 브리지 재시작 시 키 유실 확인')
   expect(seen.logs).toContain('맥락 갱신: 미결 질문 추가: ui.log가 --resume 후 남는지')
-  expect(seen.results[0].messages.some(m => m.text?.includes('맥락 갱신:'))).toBe(false)
+  expect(seen.logs.filter(l => l.startsWith('맥락 갱신: ')).length).toBe(3)
+  expect(seen.results[0].messages.some((m: { text?: string }) => m.text?.includes('맥락 갱신:'))).toBe(false)
 })
 
 // Regression caught: a merge reply without the optional changes block must still apply its ledger fold.
@@ -196,13 +257,13 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
 })
 
 // Regression caught: a merged ledger missing a section replaces the memory anyway and silently drops that section.
-test('a merged ledger without all three note headers skips the fold', OPTS, async ($, on) => {
+test('a merged ledger without both note headers skips the fold', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: ['## 목표\n- only one section\n\n<ops>[]</ops>'] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   expect(seen.store['pending:s1']).toBeUndefined()
   expect(seen.files[LEDGER_FILE]).toBeUndefined()
-  expect((seen.store['ledger:s1'] as any).lastSkip).toContain('expected the 3 note sections')
+  expect((seen.store['ledger:s1'] as any).lastSkip).toContain('expected the 2 note sections')
   expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid'])
 })
 
@@ -295,24 +356,27 @@ test('after three failed merges in a row the fold uses a mechanical ledger', OPT
   expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-timeout', 'merge-invalid', 'fallback', 'clear'])
 })
 
-// Regression caught (guard 5): chars/4 undercounts Korean and code, so the real context overflows while the estimate still reads under budget; and a plain real/estimate quotient counts the system prompt and tools as conversation.
-test('a token ratio measured on growth between turns scales the estimate so the fold fires on real size', OPTS, async ($, on) => {
-  const rows = ROWS.slice(4) // ~1250 estimated tokens: under the 1900 trigger on chars/4 alone
-  const msgs = rows.reduce((n: number, m: any) => n + est(m), 0)
+// Regression caught: the first fold took observed / (0 overhead + estimate) as the ratio and saturated it at 4.
+test('the first usage reading folds but sets no ratio', OPTS, async ($, on) => {
+  const rows = ROWS.slice(4)
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
-  const s: State = { rows, replies: [ledger('x')], usage: usage(15000 + msgs) }
+  const s: State = { rows, replies: [ledger('x')], usage: usage(6000) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
-  expect((seen.store['ledger:s1'] as any).ratio).toBeUndefined() // one reading is only a baseline
-  expect(seen.store['pending:s1']).toBeUndefined()
-  const more = [M('user', 'and the docs'), use('tu_g', 'Read'), res('tu_g', MID), M('assistant', 'read')]
-  const grew = more.reduce((n: number, m: any) => n + est(m), 0)
-  s.rows = [...rows, ...more] // ~1470 estimated: still under 1900 at ratio 1
-  s.usage = usage(15000 + msgs + 2 * grew)
-  await $.turn.complete(TURN)
-  expect((seen.store['ledger:s1'] as any).ratio).toBe(2)
+  expect((seen.store['ledger:s1'] as { ratio?: number }).ratio).toBeUndefined()
   expect(seen.store['pending:s1']).toBeDefined()
-  expect(logEvents(seen).map(e => e.event)).toContain('calibration')
+})
+
+// Regression caught: the usage reading from before a fold was read as current after it, so every later turn folded again.
+test('a turn after a fold with an unchanged usage reading does not fold again', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('x'), ledger('y')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  expect(seen.prompts.length).toBe(1)
+  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'ok'), M('assistant', 'fine')]
+  await $.turn.complete(TURN)
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.store['pending:s1']).toBeUndefined()
 })
 
 // Regression caught (guard 7): empty and "(no content)" rows carried into the rewritten transcript waste context and can be refused by the API.
@@ -358,6 +422,117 @@ test('auto compaction with no pending plan produces an engine summary instead of
   expect(manual.messages[1].text).toMatch(/^\[clm ledger #2 · /)
   expect(manual.messages.some((m: any) => m.text === 'ENGINE SUMMARY')).toBe(false)
   expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: an auto compaction that cannot shrink must reach the engine summarizer instead of returning the unchanged transcript.
+test('a non-shrinking auto fold calls next after the escape attempt', { options: { budget: 2000, tailTarget: 1990, reserve: 100 } }, async ($, on) => {
+  const rows = [M('user', 'start'), M('user', 'a'), M('assistant', 'A'), M('user', 'b'), M('assistant', 'B'), M('user', 'go'), M('assistant', 'w'.repeat(7600))]
+  const s: State = { rows, replies: [ledger('p'.repeat(1700))] }
+  const seen = bottoms(on, s)
+  const r = await $.session.compact({ trigger: 'auto', messages: handled(rows) })
+  if (!('messages' in r)) throw new Error('compaction returned no messages')
+  expect(r.messages?.[0]?.text).toBe('ENGINE SUMMARY')
+  expect(seen.engineCompactions).toBe(1)
+  expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
+})
+
+const NOTE_REPLY = '## 목표\n- g\n\n## 핵심 사실·경로\n- f\n\n'
+
+// Regression caught: a merge withdrawing an instruction the user never gave was counted as valid, or a reply without 사용자 지시 was refused.
+test('a withdraw naming no current instruction is rejected and a reply without instructions is accepted', async () => {
+  const ok = parseMerge(NOTE_REPLY + '<ops>[]</ops>', new Set(), 1000, ['old'])
+  expect(typeof ok === 'string' ? ok : ok.withdrawn).toEqual([])
+  const r = parseMerge(NOTE_REPLY + '<ops>[{"op":"withdraw","instruction":"never said"},{"op":"withdraw","instruction":"old"}]</ops>', new Set(), 1000, ['old'])
+  if (typeof r === 'string') throw new Error(r)
+  expect(r.withdrawn).toEqual(['old'])
+  expect(r.rejected).toBe(1)
+})
+
+// Regression caught: the fallback stored an oversized prompt twice (clipped and whole), or without a pointer to the full text in the ledger file.
+test('an oversized prompt is kept once, whole in the file and clipped with its pointer on the visible line', async () => {
+  const prompt = 'line one\n' + 'x'.repeat(2100)
+  const prev = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
+  const dropped = [M('user', prompt)]
+  const first = preserveInstructions(fallbackLedger(prev, dropped).notes, [], dropped, '/ledger.md')
+  expect(first.notes).toContain(`…[${prompt.length - 2000} chars cut, see /ledger.md]`)
+  expect(first.fullNotes.split(JSON.stringify(prompt)).length).toBe(2)
+  // The next fold reads the file's values back as prior; the same prompt dropped again stays one line.
+  const again = preserveInstructions(first.fullNotes, [prompt], dropped, '/ledger.md')
+  expect(again.fullNotes.split(JSON.stringify(prompt)).length).toBe(2)
+  expect(again.notes.match(/chars cut/g)?.length).toBe(1)
+})
+
+// Regression caught: a model TaskUpdate's subject and description were dropped silently, or an unknown task id got a deny that never said where the change belongs.
+test('a model TaskUpdate records retitle and note, and an unknown id is sent to the reply text', OPTS, async ($, on) => {
+  const s: State = { rows: [], replies: [] }
+  const seen = bottoms(on, s)
+  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => ({ result: { task: { id: 'panel-1', subject: e.subject } } }))
+  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => ({ result: { success: true, taskId: e.taskId, updatedFields: [] } }))
+  await $.tool.call({ tool: 'TaskCreate', subject: 'event task', description: 'created' })
+  const r = await $.tool.call({ tool: 'TaskUpdate', taskId: 'panel-1', subject: 'renamed task', description: 'more detail' })
+  if (!('deny' in r)) throw new Error('model TaskUpdate was not denied')
+  expect(r.deny).toContain('clm이 트래커에 기록했다')
+  expect(r.deny).toContain('renamed task')
+  expect(seen.logs).toContain("작업 'event task' 재조정 -> 'renamed task'")
+  expect(seen.logs).toContain("작업 'renamed task' 메모: more detail")
+  const unknown = await $.tool.call({ tool: 'TaskUpdate', taskId: 'nope', status: 'completed' })
+  if (!('deny' in unknown)) throw new Error('unknown TaskUpdate was not denied')
+  expect(unknown.deny).toContain('답변 본문에 적어라')
+})
+
+// Regression caught: two task calls in flight at once each read the log before the other wrote, and one issue was lost or both got the same id.
+test('two concurrent model TaskCreate calls keep both issues with distinct ids', OPTS, async ($, on) => {
+  const s: State = { rows: [], replies: [] }
+  const seen = bottoms(on, s)
+  let n = 0
+  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => ({ result: { task: { id: `panel-${++n}`, subject: e.subject } } }))
+  await Promise.all([
+    $.tool.call({ tool: 'TaskCreate', subject: 'first', description: '' }),
+    $.tool.call({ tool: 'TaskCreate', subject: 'second', description: '' }),
+  ])
+  const issues = snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
+  expect(issues.map(i => i.title).sort()).toEqual(['first', 'second'])
+  expect(new Set(issues.map(i => i.id)).size).toBe(2)
+})
+
+// Regression caught: instruction lines from a ledger written before JSON-quoted instructions failed to parse and were deleted for good on the first fold after the upgrade.
+test('legacy free-form instruction lines survive preserveInstructions verbatim', async () => {
+  const legacy = ['"headless only, no visible windows, no input events" (UI 검증)', 'PR 병합에 대해: "ㅇ 일단 다 머지하고 생각해보자"']
+  const notes = `## 목표\n- g\n\n## 사용자 지시\n${legacy.map(l => `- ${l}`).join('\n')}\n- "quoted one"\n- [additional user instructions in /ledger.md]\n\n## 핵심 사실·경로\n- f`
+  const out = preserveInstructions(notes, instructionValues(notes), [], '/ledger.md')
+  expect(instructionValues(out.fullNotes)).toEqual([...legacy, 'quoted one'])
+})
+
+// Escape-path rows: the oldest turn's tool result is the only thing that can be withheld.
+const ESCAPE_ROWS = [
+  M('user', 'start'), M('user', 'a'), use('tu_a', 'Bash'), res('tu_a', 'r'.repeat(4000)), M('assistant', 'A'),
+  M('user', 'b'), M('assistant', 'B'.repeat(2200)), M('user', 'go'), M('assistant', 'w'.repeat(2200)),
+]
+const WITHHELD_FILE = '/home/t/.claude-work/plans/clm-s1.withheld-0-tu_a.txt'
+
+// Regression caught: on the escape path the retry fold dropped the row holding the withheld pointer, the merge saw only the pointer, and the prune deleted the file, losing the tool output with no record.
+test('a tool result folded away on the escape path keeps its withheld file and a ledger pointer to it', OPTS, async ($, on) => {
+  const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
+  const seen = bottoms(on, s)
+  const r = await $.session.compact({ trigger: 'auto', messages: handled(ESCAPE_ROWS) })
+  if (!('messages' in r)) throw new Error('compaction returned no messages')
+  expect(seen.engineCompactions).toBe(0)
+  expect(seen.files[WITHHELD_FILE]).toBe('r'.repeat(4000))
+  expect(r.messages?.[1]?.text).toContain(`- 보존된 출력: ${WITHHELD_FILE}`)
+  expect(seen.files[LEDGER_FILE]).toContain(`- 보존된 출력: ${WITHHELD_FILE}`)
+  expect(r.messages?.some(m => m.toolResults?.some(x => x.tool_use_id === 'tu_a'))).toBe(false)
+})
+
+// Regression caught: when the escape retry also failed, the engine summarized the original transcript, so withholding results never shrank what it read.
+test('a failed escape retry hands the engine the withheld rows without their handles', OPTS, async ($, on) => {
+  const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), new Error('still down')] }
+  const seen = bottoms(on, s)
+  await $.session.compact({ trigger: 'auto', messages: handled(ESCAPE_ROWS) })
+  expect(seen.engineCompactions).toBe(1)
+  const withheld = (seen.engineInputs[0] ?? []).find((m: any) => m.toolResults?.[0]?.tool_use_id === 'tu_a')
+  expect(withheld.toolResults[0].text).toBe(`[clm escape: full tool result at ${WITHHELD_FILE}]`)
+  expect(withheld.handle).toBeUndefined()
+  expect(seen.files[WITHHELD_FILE]).toBe('r'.repeat(4000))
 })
 
 // Regression caught: the engine spends a summarizer call ahead of time and can install that summary at the next compaction.

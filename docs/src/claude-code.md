@@ -38,7 +38,7 @@ Here, a mod is a Claude Code plugin directory with a manifest and hook module. T
 
 ### clm
 
-`clm` replaces the engine's compaction for the main conversation. At turn end, it folds older turns into a ledger of the goal, user instructions, work done, work left, open questions and key facts, then rewrites the transcript to the first request, ledger and newest turns. It takes over the job previously handled by the handoff skill and handoff-nudge hook.
+`clm` replaces the engine's compaction for the main conversation. It budgets from the live context usage when available, folds older turns into a ledger while preserving the first request and user instructions, and keeps a recent tail. When a fold fails during auto or manual compaction, it moves the oldest tool results to files, one at a time, until the context fits, and only then hands compaction to the engine. A tracker notice appears when the model's task call is made, up to three `맥락 갱신:` notices appear at turn completion, and stale cross-session issues are summarized with `/clm board`; it takes over the job previously handled by the handoff skill and handoff-nudge hook.
 
 ### codex-subagent
 

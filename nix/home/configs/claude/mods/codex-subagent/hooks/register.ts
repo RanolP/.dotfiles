@@ -83,6 +83,12 @@ export function typeOf(subagentType: string): TypeName | undefined {
   return t in TYPES ? (t as TypeName) : undefined
 }
 
+// A step naming one of these models is a codex agent's, whatever this module
+// knows of its id: Anthropic answers every one of them 404 model_not_found.
+export function typeForModel(model: string): TypeName | undefined {
+  return (Object.keys(TYPES) as TypeName[]).find(t => TYPES[t].model === model)
+}
+
 // The thread cwd is codex's workspace-write root. $.session.cwd() follows a
 // shell `cd` in the main session, so a worker spawned from a subdirectory
 // could write only there; the repo root keeps the whole project writable.
@@ -255,6 +261,8 @@ export async function settlePending(
 
 type BridgeChunk = { stream: string; text: string; exitCode?: unknown; signal?: unknown }
 const BRIDGE_STARTUP_TIMEOUT_MS = 15_000
+// How long an unregistered codex step waits for in-flight spawns to register it.
+const SPAWN_WAIT_MS = 5_000
 
 function processStatus(err: unknown): string {
   if (!err || typeof err !== 'object') return 'exit code=unknown'
@@ -359,6 +367,8 @@ export const register: Register = (on) => {
   const agents = new Map<string, Agent>()
   // Messages delivered to a codex agent and not yet handed to codex, by agent id.
   const inbox = new Map<string, string[]>()
+  // Codex spawns whose next(e) has not resolved yet.
+  const spawning = new Set<Promise<void>>()
 
   on('session.receive', async ($, e, next) => {
     const r = await next(e)
@@ -391,10 +401,24 @@ export const register: Register = (on) => {
 
   on('agent.spawn', async ($, e, next) => {
     const type = typeOf(e.subagentType)
-    const r = await next(e)
-    if (type && r.agentId) {
-      const cwd = await workspaceRoot((argv, init) => $.process.run(argv, init), e.cwd ?? (await $.session.cwd()))
-      agents.set(r.agentId, { type, cwd })
+    if (!type) return next(e)
+    // A background agent's loop starts before next(e) resolves, so its first
+    // step may already be running: the cwd is resolved first and the agent
+    // registered the moment its id exists. turn.step waits on `spawning`.
+    let done!: () => void
+    const spawned = new Promise<void>(resolve => { done = resolve })
+    spawning.add(spawned)
+    let r: Awaited<ReturnType<typeof next>>
+    let cwd: string
+    try {
+      cwd = await workspaceRoot((argv, init) => $.process.run(argv, init), e.cwd ?? (await $.session.cwd()))
+      r = await next(e)
+      if (r.agentId) agents.set(r.agentId, { type, cwd })
+    } finally {
+      spawning.delete(spawned)
+      done()
+    }
+    if (r.agentId) {
       try {
         sock ||= await socketPath($)
         bridgeReady ??= startBridge($, sock)
@@ -416,7 +440,17 @@ export const register: Register = (on) => {
     const agentId = e.agentId!
     const post = (route: string, payload: unknown) =>
       $.http.fetch(`http://codex-bridge${route}`, { method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+    const ours = typeForModel(e.model)
     let agent = agentId ? agents.get(agentId) : undefined
+    if (!agent && agentId && ours && spawning.size) {
+      // This may be the first step of a spawn still inside next(e); a spawn
+      // that never resolves must not hold the step, so the wait is bounded.
+      await new Promise<void>(resolve => {
+        const timer = $.clock.after(SPAWN_WAIT_MS, resolve)
+        void Promise.all(spawning).then(() => { timer.cancel(); resolve() })
+      })
+      agent = agents.get(agentId)
+    }
     if (!agent && agentId) {
       try {
         sock ||= await socketPath($)
@@ -430,11 +464,21 @@ export const register: Register = (on) => {
           agent = { type: recovered.type, cwd: recovered.cwd, threadId: recovered.threadId }
       } catch (err) {
         $.ui.log(`[codex-subagent] recovery lookup failed for ${agentId}: ${String(err)}`, { to: 'debug' })
-        const hinted = typeOf(String((e as { subagentType?: unknown }).subagentType ?? ''))
-        if (hinted) return yield* endTurn(e, `[codex-subagent error] cannot recover ${agentId}: ${err instanceof Error ? err.message : String(err)}`)
+        if (ours) return yield* endTurn(e, `[codex-subagent error] cannot recover ${agentId}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      // Neither this module nor the bridge has seen the spawn: the model names
+      // the type, and the session's repo root is the cwd the spawn would pick.
+      if (!agent && ours) {
+        try {
+          agent = { type: ours, cwd: await workspaceRoot((argv, init) => $.process.run(argv, init), await $.session.cwd()) }
+          $.ui.log(`[codex-subagent] ${agentId} unknown to spawn and bridge; serving it as ${ours} in ${agent.cwd}`, { to: 'debug' })
+        } catch (err) {
+          return yield* endTurn(e, `[codex-subagent error] cannot resolve ${agentId}: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
       if (agent) agents.set(agentId, agent)
     }
+    if (!agent && ours) return yield* endTurn(e, `[codex-subagent error] ${e.model} step carries no agent id`)
     if (!agent) return yield* next(e)
     if (next.signal.aborted) return yield* endTurn(e, '[codex-subagent error] interrupted')
     const onAbort = () => { void post('/interrupt', { key: agentId }).catch(err => $.ui.log(`[codex-subagent] interrupt failed: ${String(err)}`, { to: 'debug' })) }

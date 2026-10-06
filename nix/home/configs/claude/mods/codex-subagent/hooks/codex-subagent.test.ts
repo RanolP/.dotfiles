@@ -1,6 +1,6 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { ApiMessage, SessionMessage, TimerCall } from 'claude-code'
-import { abortable, bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import { abortable, bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -38,6 +38,16 @@ test('TYPES pins each Codex agent model, effort, sandbox, and display', async ()
     luna: { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'implementer for well-planned code changes' },
     sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast implementer for mechanical or small changes' },
   })
+})
+
+// Regression: sol and luna resolve to each other's model id, or a step for a
+// codex model is not recognized as one and goes to Claude.
+test('typeForModel maps each Codex model back to its own type', async () => {
+  expect(TYPES.luna.model).toBe('gpt-5.6-luna')
+  expect(TYPES.sol.model).toBe('gpt-5.6-sol')
+  expect(typeForModel('gpt-5.6-luna')).toBe('luna')
+  expect(typeForModel('gpt-5.6-sol')).toBe('sol')
+  expect(typeForModel('claude-opus-5-5')).toBeUndefined()
 })
 
 // Regression: a relayed Skill call hands codex only "Launching skill: x" and
@@ -464,4 +474,50 @@ test('a transient /wait failure recovers when the bridge is healthy instead of f
   expect(waits).toBe(2)
   expect(r.value.answer).toBe('')
   expect((r.value.toolUses[0]?.input as { message?: string } | undefined)?.message).toStartWith('recovered answer')
+})
+
+// Incident: a background codex worker's first step raced agent.spawn's async
+// tail, /recover answered found:false, and the step fell through to a Claude
+// request for gpt-5.6-luna, which died with 404 model_not_found.
+test('a step for a codex model is never sent to Claude, even for an agent spawn has not registered', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-unregistered'
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const steps: Record<string, unknown>[] = []
+  let claudeSteps = 0
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('session.cwd', async () => ({ value: '/repo/sub' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const body = JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: false })
+    if (route === '/step') { steps.push(body); return json({ threadId: 'thread-5', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } }) }
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+  // Beneath the plugin stands the engine: reaching this is the Claude request that 404s.
+  on('turn.step', async function* (_$, e) {
+    claudeSteps++
+    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: null }
+    return { turnId: e.turnId, index: e.index, answer: 'claude', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-5.6-sol', messageCount: api.length, agentId })
+  let r = await stream.next()
+  while (!r.done) r = await stream.next()
+
+  expect(claudeSteps).toBe(0)
+  expect(steps).toHaveLength(1)
+  expect(steps[0]).toMatchObject({ key: agentId, agentType: 'sol', model: 'gpt-5.6-sol', cwd: '/repo' })
 })

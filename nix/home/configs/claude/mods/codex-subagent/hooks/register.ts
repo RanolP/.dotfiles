@@ -2,7 +2,7 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, TurnStepChu
 
 // codex-subagent: pinned GPT agent types, served by codex app-server.
 //
-// The Agent tool spawns `codex-subagent:luna` (or `:sol`, `:luna-ro`) like any agent, so
+// The Agent tool spawns `codex-subagent:luna` (or `:sol`) like any agent, so
 // the engine owns the agentId, the background task, the completion
 // notification and SendMessage resumes. This plugin answers every `turn.step`
 // of those agents without `next`, so no Claude request is ever sent.
@@ -23,7 +23,6 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, TurnStepChu
 export const TYPES = {
   luna: { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'implementer for well-planned code changes' },
   sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast implementer for mechanical or small changes' },
-  'luna-ro': { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'read-only', blurb: 'reviewer / inspector, never edits' },
 } as const
 type TypeName = keyof typeof TYPES
 const PREFIX = 'codex-subagent:'
@@ -84,19 +83,23 @@ export function typeOf(subagentType: string): TypeName | undefined {
   return t in TYPES ? (t as TypeName) : undefined
 }
 
+const stripReminders = (s: string) => s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+
 // The text this step must hand codex: the newest user row that is a real
-// message (the spawn prompt on the first step, a SendMessage on a resume),
-// never a tool-result row.
+// message (the spawn prompt on the first step, a SendMessage on a resume).
+// A tool-result row can also carry a new user message, so its text is real
+// prompt input and must not be discarded.
 export function pendingPrompt(rows: readonly SessionMessage[]): string | undefined {
   for (let i = rows.length - 1; i >= 0; i--) {
-    const r = rows[i]!
+    const r = rows[i]
+    if (!r) continue
     if (r.role === 'assistant') return undefined
-    if (!r.toolResults?.length && r.text.trim()) return r.text
+    const text = stripReminders(r.text)
+    if (text) return text
   }
   return undefined
 }
 
-const stripReminders = (s: string) => s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
 type ContentItem = { type: 'inputText'; text: string } | { type: 'inputImage'; imageUrl: string }
 
 function toItems(content: unknown): ContentItem[] {
@@ -119,11 +122,14 @@ function toItems(content: unknown): ContentItem[] {
 export function toolResultFor(api: readonly ApiMessage[], toolUseId: string): { contentItems: ContentItem[]; success: boolean } | undefined {
   const last = api[api.length - 1]
   if (!last || last.role !== 'user') return undefined
-  const blocks = last.content as { type: string; tool_use_id?: string; content?: unknown; is_error?: boolean }[]
+  const blocks = last.content as ApiBlock[]
   const i = blocks.findIndex(b => b.type === 'tool_result' && b.tool_use_id === toolUseId)
   if (i < 0) return undefined
-  const r = blocks[i]!
-  const contentItems = [...toItems(r.content), ...toItems(blocks.slice(i + 1).filter(b => b.type === 'text' || b.type === 'image'))]
+  const r = blocks[i]
+  if (!r) return undefined
+  const contentItems = r.toolDenialKind === 'user-rejected'
+    ? [{ type: 'inputText' as const, text: 'user rejected this tool call' }]
+    : [...toItems(r.content), ...toItems(blocks.slice(i + 1).filter(b => b.type === 'text' || b.type === 'image'))]
   return { contentItems: contentItems.length ? contentItems : [{ type: 'inputText', text: '(empty result)' }], success: !r.is_error }
 }
 
@@ -151,22 +157,56 @@ The Claude session's context for this agent follows.`
 // report until the call's result shows whether it was delivered.
 const HANDBACK = 'SubagentHandback'
 type Agent = { type: TypeName; cwd: string; threadId?: string; waiting?: { toolUseId: string; callId: string }; relay?: Relay; handback?: { toolUseId: string; text: string } }
-type StepReply = {
-  threadId: string; model?: string; resumed: boolean; bridgePid: number; codexPid: number
-  toolCall?: { callId: string; tool: string; arguments: unknown }
-  final?: { text: string; status?: string; errors: string[] }
+export type StepMeta = { threadId: string; model?: string; resumed: boolean; bridgePid: number; codexPid: number }
+type StepResult = StepMeta & ({ toolCall: { callId: string; tool: string; arguments: unknown } } | { final: { text: string; status?: string; errors: string[] } })
+type StepEvent = StepResult | (StepMeta & { error: string })
+export type StepReply = { pending: true } | StepEvent | { error: string }
+
+type ApiBlock = { type: string; tool_use_id?: string; content?: unknown; is_error?: boolean; toolDenialKind?: string }
+
+// $.http.fetch's text for a socket nothing listens on (missing, or left by a
+// dead bridge). Its 30 s "aborted: no complete answer" is not one: that bridge
+// is alive, and a second one would run the same prompt again.
+export const unreachable = (err: unknown) => /\bfailed: .*(FailedToOpenSocket|ConnectionRefused|ECONNREFUSED|ENOENT)/.test(String(err))
+
+export function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  let interrupt = () => {}
+  const aborted = new Promise<never>((_, reject) => {
+    interrupt = () => reject(new Error('interrupted'))
+    if (signal.aborted) interrupt()
+    else signal.addEventListener('abort', interrupt, { once: true })
+  })
+  return Promise.race([work, aborted]).finally(() => signal.removeEventListener('abort', interrupt))
+}
+
+export const interrupted = (err: unknown) => err instanceof Error && err.message === 'interrupted'
+
+export function settlePending(reply: StepReply, wait: () => Promise<StepReply>, onRetry: (err: unknown) => void): Promise<StepResult> {
+  const settle = async (current: StepReply): Promise<StepResult> => {
+    if (!('pending' in current)) {
+      if ('error' in current) throw new Error(`bridge: ${current.error}`)
+      return current
+    }
+    try {
+      return settle(await wait())
+    } catch (err) {
+      if (!/aborted: no complete answer/.test(String(err))) throw err
+      onRetry(err)
+      return settle(current)
+    }
+  }
+  return settle(reply)
 }
 
 // A bridge for the session's life; resolves once it listens. A step calls this
-// again when the socket stops answering (the bridge or codex died); the new
+// again when nothing listens on the socket (the bridge or codex died); the new
 // bridge resumes threads from the threadId the step sends.
 function startBridge($: EngineInterface, sock: string): Promise<void> {
-  let markReady!: () => void
-  const ready = new Promise<void>(r => { markReady = r })
+  const { promise: ready, resolve: markReady } = Promise.withResolvers<void>()
   void (async () => {
     const bridge = $.process.spawn({ argv: ['node', `${$.plugin.root}/daemon/codex-bridge.mjs`, sock] })
     for await (const { stream, text } of bridge) {
-      if (stream === 'stdout' && text.includes('"ready":true')) markReady()
+      if (stream === 'stdout' && text.includes('"ready":true')) markReady?.()
       // $.ui.log drops any text over 4096 characters, so long bridge lines go in pieces.
       for (const line of text.trimEnd().split('\n'))
         for (let i = 0; i < line.length; i += 3900) $.ui.log(`[codex-bridge ${stream}] ${line.slice(i, i + 3900)}`, { to: 'debug' })
@@ -181,13 +221,17 @@ export const register: Register = (on) => {
   let sock = ''
   let bridgeReady: Promise<void> | undefined
 
+  const socketPath = async ($: EngineInterface) => {
+    const home = (await $.env.get('HOME')) ?? '/tmp'
+    return `${home}/.claude-work/run/codex-subagent-${await $.session.id()}.sock`
+  }
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // The bridge's schema-harvest child is a `claude -p` that never reaches the
     // API; were this plugin installed there, it would start a bridge of its own.
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
-    const home = (await $.env.get('HOME')) ?? '/tmp'
-    sock = `${home}/.claude-work/run/codex-subagent-${await $.session.id()}.sock`
+    sock = await socketPath($)
     for (const [name, t] of Object.entries(TYPES)) {
       await $.agent.register({
         name,
@@ -211,14 +255,42 @@ export const register: Register = (on) => {
     const agent = e.agentId ? agents.get(e.agentId) : undefined
     if (!agent) return yield* next(e)
     const agentId = e.agentId!
+    if (next.signal.aborted) return yield* endTurn(e, '[codex-subagent error] interrupted')
     const post = (route: string, payload: unknown) =>
       $.http.fetch(`http://codex-bridge${route}`, { method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
     const onAbort = () => { void post('/interrupt', { key: agentId }).catch(() => {}) }
     next.signal.addEventListener('abort', onAbort)
+    const ask = async (route: string, payload: unknown) => {
+      const res = await abortable(post(route, payload), next.signal)
+      if (!res.ok) throw new Error(`bridge POST ${route} ${res.status}: ${res.text.slice(0, 2000)}`)
+      const r = JSON.parse(res.text) as StepReply
+      if ('error' in r) throw new Error(`bridge: ${r.error}`)
+      return r
+    }
+
+    const settle = (reply: StepReply): Promise<StepResult> => settlePending(
+      reply,
+      () => ask('/wait', { key: agentId }),
+      err => $.ui.log(`[codex-subagent] /wait failed (${String(err)}); retrying`, { to: 'debug' }),
+    )
+    const step = async (body: Record<string, unknown>): Promise<StepResult> => {
+      const roundTrip = async () => {
+        await bridgeReady
+        return ask('/step', body).then(settle)
+      }
+      try {
+        return await roundTrip()
+      } catch (err) {
+        if (!unreachable(err)) throw err
+        $.ui.log(`[codex-subagent] bridge unreachable (${String(err)}); restarting it`, { to: 'debug' })
+        bridgeReady = startBridge($, sock)
+        await bridgeReady
+        return roundTrip()
+      }
+    }
 
     // A thrown turn.step falls through to the hook below, which would send
     // this agent's turn to a Claude model; a failure ends the turn as text instead.
-    let reply: StepReply
     try {
       const api = await $.session.messages({ agentId, as: 'api' })
       if (!Array.isArray(api)) throw new Error(`cannot read agent ${agentId}'s messages: ${api.deny}`)
@@ -246,55 +318,42 @@ export const register: Register = (on) => {
         body.prompt = prompt
       }
       agent.waiting = undefined
-      await bridgeReady
-      let res
-      try {
-        res = await post('/step', body)
-      } catch (err) {
-        $.ui.log(`[codex-subagent] bridge unreachable (${String(err)}); restarting it`, { to: 'debug' })
-        bridgeReady = startBridge($, sock)
-        await bridgeReady
-        res = await post('/step', body)
+      sock ||= await socketPath($)
+      bridgeReady ??= startBridge($, sock)
+      const reply = await step(body)
+      agent.threadId = reply.threadId
+
+      if ('toolCall' in reply) {
+        const { callId, tool, arguments: input } = reply.toolCall
+        const name = agent.relay?.claudeName.get(tool) ?? tool
+        const toolUseId = `toolu_codex_${callId.replace(/[^A-Za-z0-9_-]/g, '_')}`
+        agent.waiting = { toolUseId, callId }
+        const chunks: TurnStepChunk[] = [
+          { kind: 'tool', index: 0, id: toolUseId, name },
+          { kind: 'input', index: 0, json: JSON.stringify(input ?? {}) },
+          { kind: 'stop', stopReason: 'tool_use', usage: null },
+        ]
+        for (const c of chunks) yield c
+        return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
       }
-      if (!res.ok) throw new Error(`bridge POST /step ${res.status}: ${res.text.slice(0, 2000)}`)
-      reply = JSON.parse(res.text) as StepReply
+
+      const f = 'final' in reply ? reply.final : { text: '', status: undefined, errors: ['bridge reply had neither toolCall nor final'] }
+      const errors = f.errors.length ? `\n\n[codex errors] ${f.errors.join('\n')}` : ''
+      const text = `${f.text}${errors}\n\n[codex-subagent: model=${reply.model ?? '?'} thread=${reply.threadId}${reply.resumed ? ' (resumed)' : ''} codexPid=${reply.codexPid} bridgePid=${reply.bridgePid} status=${f.status}]`
+      const toolUseId = `toolu_codex_handback_${reply.threadId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
+      agent.handback = { toolUseId, text }
+      const input = { message: text }
+      yield { kind: 'tool', index: 0, id: toolUseId, name: HANDBACK }
+      yield { kind: 'input', index: 0, json: JSON.stringify(input) }
+      yield { kind: 'stop', stopReason: 'tool_use', usage: null }
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: HANDBACK, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
     } catch (err) {
       const text = `[codex-subagent error] ${err instanceof Error ? err.message : String(err)}`
       $.ui.log(text, { to: 'debug' })
-      yield { kind: 'text', index: 0, text }
-      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
-      return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null } satisfies TurnStepResult
+      return yield* endTurn(e, text)
     } finally {
       next.signal.removeEventListener('abort', onAbort)
     }
-    agent.threadId = reply.threadId
-
-    if (reply.toolCall) {
-      const { callId, tool, arguments: input } = reply.toolCall
-      const name = agent.relay?.claudeName.get(tool) ?? tool
-      const toolUseId = `toolu_codex_${callId.replace(/[^A-Za-z0-9_-]/g, '_')}`
-      agent.waiting = { toolUseId, callId }
-      const chunks: TurnStepChunk[] = [
-        { kind: 'tool', index: 0, id: toolUseId, name },
-        { kind: 'input', index: 0, json: JSON.stringify(input ?? {}) },
-        { kind: 'stop', stopReason: 'tool_use', usage: null },
-      ]
-      for (const c of chunks) yield c
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
-    }
-
-    const f = reply.final ?? { text: '', errors: ['bridge reply had neither toolCall nor final'] }
-    const errors = f.errors.length ? `\n\n[codex errors] ${f.errors.join('\n')}` : ''
-    const text = `${f.text}${errors}\n\n[codex-subagent: model=${reply.model ?? '?'} thread=${reply.threadId}${reply.resumed ? ' (resumed)' : ''} codexPid=${reply.codexPid} bridgePid=${reply.bridgePid} status=${f.status}]`
-    // Sent unconditionally: whether $.tool.list() is scoped to this agent is
-    // unverified, and outside auto mode the call fails into the plain-text path.
-    const toolUseId = `toolu_codex_handback_${reply.threadId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
-    agent.handback = { toolUseId, text }
-    const input = { message: text }
-    yield { kind: 'tool', index: 0, id: toolUseId, name: HANDBACK }
-    yield { kind: 'input', index: 0, json: JSON.stringify(input) }
-    yield { kind: 'stop', stopReason: 'tool_use', usage: null }
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: HANDBACK, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
   })
 }
 

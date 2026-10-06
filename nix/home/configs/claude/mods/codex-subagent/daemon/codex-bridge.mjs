@@ -12,8 +12,11 @@
 // relays, so codex sees the Claude session's environment rather than ~/.codex.
 //
 // One POST /step per Claude turn step. It either starts a codex turn (prompt)
-// or answers the dynamic tool call codex is blocked on (toolResult), then
-// long-polls until codex either calls the next dynamic tool or ends the turn.
+// or answers the dynamic tool call codex is blocked on (toolResult) and
+// returns at once; POST /wait then long-polls until codex either calls the
+// next dynamic tool or ends the turn. The mod's fetch gives up at 30 s, so no
+// request may outlast that: /wait answers {pending:true} after WAIT_MS and the
+// event stays queued for the next /wait.
 import { spawn, spawnSync } from 'node:child_process'
 import http from 'node:http'
 import fs from 'node:fs'
@@ -57,6 +60,10 @@ let nextId = 1
 const pending = new Map() // rpc id -> {resolve, reject, method}
 const sessions = new Map() // caller key -> session
 const byThread = new Map() // codex threadId -> session
+const boxes = new Map() // caller key -> {queue, waiter}: events outlive the session's open and any absent waiter
+const inFlight = new Set() // caller keys whose /step run() has not settled
+const box = key => { let b = boxes.get(key); if (!b) boxes.set(key, b = { queue: [], waiter: null }); return b }
+const WAIT_MS = 25000
 
 const send = m => codex.stdin.write(JSON.stringify(m) + '\n')
 const rpc = (method, params) => new Promise((resolve, reject) => {
@@ -78,8 +85,9 @@ codex.stdout.on('data', d => {
   }
 })
 
-function emit(s, ev) {
-  if (s.waiter) { const w = s.waiter; s.waiter = null; w(ev) } else s.queue.push(ev)
+function emit(key, ev) {
+  const b = box(key)
+  if (b.waiter) { const w = b.waiter; b.waiter = null; w(ev) } else b.queue.push(ev)
 }
 
 // Sub-agent guard. codex 0.155.1 serves spawn_agent even with multi_agent and
@@ -145,7 +153,7 @@ function onMessage(m) {
     if (m.method === 'item/tool/call' && s) {
       console.error('[bridge] dynamic tool call', JSON.stringify({ thread: p.threadId, callId: p.callId, tool: p.tool }))
       s.held.set(p.callId, m.id)
-      emit(s, { toolCall: { callId: p.callId, tool: p.tool, arguments: p.arguments ?? {} } })
+      emit(s.key, { toolCall: { callId: p.callId, tool: p.tool, arguments: p.arguments ?? {} } })
       return
     }
     // approvalPolicy "never" means codex should ask nothing else; log what it did ask.
@@ -165,7 +173,7 @@ function onMessage(m) {
     const text = s.messages.length ? s.messages[s.messages.length - 1] : ''
     const ev = { final: { text, status: p.turn?.status, errors: s.errors } }
     s.active = false; s.turnId = null; s.messages = []; s.errors = []
-    emit(s, ev)
+    emit(s.key, ev)
   }
 }
 
@@ -367,13 +375,15 @@ async function open(b) {
       r = await rpc('thread/start', { ...common, ephemeral: false, dynamicTools: b.dynamicTools ?? [] })
     }
   }
-  s = { key: b.key, threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, queue: [], waiter: null, held: new Map(), messages: [], errors: [] }
+  s = { key: b.key, threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, held: new Map(), messages: [], errors: [] }
   sessions.set(b.key, s); byThread.set(s.threadId, s)
   console.error('[bridge] thread', b.threadId ? 'resumed' : 'started', s.threadId, 'tools', (b.dynamicTools ?? []).map(t => t.name).join(','))
   return s
 }
 
-async function step(b) {
+// Opening a thread can take a schema harvest (up to a minute), so all of it runs
+// past the reply; a failure reaches the mod through /wait as {error}.
+async function run(b) {
   await ready
   const s = await open(b)
   if (b.toolResult) {
@@ -383,11 +393,38 @@ async function step(b) {
     send({ id: rpcId, result: { contentItems: b.toolResult.contentItems, success: b.toolResult.success } })
   } else if (b.prompt !== undefined) {
     if (s.active) throw new Error(`thread ${s.threadId} already has a running turn`)
+    box(b.key).queue.length = 0 // the end of an interrupted turn nobody waited for
     s.active = true
     await rpc('turn/start', { threadId: s.threadId, effort: b.effort ?? null, input: [{ type: 'text', text: b.prompt, text_elements: [] }] })
   } else throw new Error('step needs prompt or toolResult')
-  const ev = s.queue.length ? s.queue.shift() : await new Promise(r => { s.waiter = r })
-  return { ...ev, threadId: s.threadId, model: s.model, resumed: s.resumed, bridgePid: process.pid, codexPid: codex.pid }
+}
+
+function step(b) {
+  if (!b.key) throw new Error('step needs key')
+  inFlight.add(b.key)
+  run(b).catch(err => { console.error('[bridge] step failed', b.key, err); emit(b.key, { error: String(err?.message ?? err) }) }).finally(() => inFlight.delete(b.key))
+  return { pending: true }
+}
+
+function decorate(key, ev) {
+  const s = sessions.get(key)
+  return { ...ev, threadId: s?.threadId, model: s?.model, resumed: s?.resumed, bridgePid: process.pid, codexPid: codex.pid }
+}
+
+async function wait({ key }, res) {
+  const b = box(key)
+  if (b.queue.length) return decorate(key, b.queue.shift())
+  if (!sessions.has(key) && !inFlight.has(key)) return { error: 'unknown key' }
+  let w
+  const ev = await new Promise(r => {
+    w = r; b.waiter = w
+    const drop = () => { if (b.waiter === w) { b.waiter = null; r(null) } }
+    setTimeout(drop, WAIT_MS)
+    res.on('close', drop)
+  })
+  if (!ev) return { pending: true }
+  if (res.destroyed) { b.queue.unshift(ev); return { pending: true } }
+  return decorate(key, ev)
 }
 
 async function interrupt({ key }) {
@@ -409,7 +446,8 @@ const server = http.createServer(async (req, res) => {
     }
     let body = ''
     for await (const d of req) body += d
-    if (req.method === 'POST' && req.url === '/step') return reply(200, await step(JSON.parse(body)))
+    if (req.method === 'POST' && req.url === '/step') return reply(200, step(JSON.parse(body)))
+    if (req.method === 'POST' && req.url === '/wait') return reply(200, await wait(JSON.parse(body), res))
     if (req.method === 'POST' && req.url === '/interrupt') return reply(200, await interrupt(JSON.parse(body)))
     reply(404, { error: `no route ${req.method} ${req.url}` })
   } catch (err) {
@@ -417,11 +455,12 @@ const server = http.createServer(async (req, res) => {
     reply(500, { error: String(err?.message ?? err) })
   }
 })
-// The mod long-polls one request per step; a codex turn can outlast node's defaults.
+// /wait holds a request open for up to WAIT_MS.
 server.requestTimeout = 0
 server.headersTimeout = 0
-// A module reload starts the new bridge before the old one exits, on the same
-// path; each bridge removes only the socket inode it created.
+// A module reload or a restart starts the new bridge before the old one exits,
+// on the same path; each bridge removes only the socket inode it created, and
+// one whose socket was replaced exits rather than run a second codex.
 let sockIno
 server.listen(sock, () => {
   sockIno = fs.statSync(sock).ino
@@ -437,4 +476,9 @@ function shutdown(why) {
 }
 for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(s, () => shutdown(s))
 codex.on('exit', (code, sig) => shutdown(`codex app-server exited code=${code} signal=${sig}`))
-setInterval(() => { if (process.ppid !== parent) shutdown(`parent ${parent} gone`) }, 2000).unref()
+setInterval(() => {
+  if (process.ppid !== parent) shutdown(`parent ${parent} gone`)
+  let ino
+  try { ino = fs.statSync(sock).ino } catch {}
+  if (sockIno !== undefined && ino !== sockIno) shutdown('socket replaced by another bridge')
+}, 2000).unref()

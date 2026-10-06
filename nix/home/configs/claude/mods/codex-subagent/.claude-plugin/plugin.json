@@ -1,6 +1,6 @@
 {
   "name": "codex-subagent",
   "version": "0.1.0",
-  "description": "Agent types backed by OpenAI GPT through a per-session codex app-server daemon: the Agent tool spawns codex-subagent:gpt like any subagent, and every model step of that agent is answered by a codex thread instead of a Claude request.",
+  "description": "Agent types backed by OpenAI GPT through a per-session codex app-server daemon: the Agent tool spawns codex-subagent:luna or codex-subagent:sol like any subagent, and every model step of that agent is answered by a codex thread instead of a Claude request.",
   "author": { "name": "RanolP" }
 }

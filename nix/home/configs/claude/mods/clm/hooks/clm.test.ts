@@ -1,4 +1,7 @@
 import { test, expect, mock } from 'claude-code/testing'
+import type { Engine, TestBody } from 'claude-code/testing'
+
+import type { Meta } from './register'
 
 import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions } from './ledger'
 import { parseLog, snapshot } from './tracker'
@@ -134,6 +137,54 @@ test('a session with 8 done issues shows only the latest 5 in the ledger and pan
   await turnEnds($, s, seen)
   const done = /## 한 일\n([\s\S]*?)\n\n/.exec(seen.files[LEDGER_FILE] ?? '')?.[1] ?? ''
   expect(done.split('\n').map(l => /^- (done \d)/.exec(l)?.[1])).toEqual(['done 4', 'done 5', 'done 6', 'done 7', 'done 8'])
+})
+
+type On = Parameters<TestBody>[1]
+type Seen = ReturnType<typeof bottoms>
+type PanelReply = { success: boolean; error?: string }
+// Panel tasks numbered panel-1, panel-2, ...; each TaskUpdate is answered by `reply`.
+function panelHandlers(on: On, seen: Seen, reply: (taskId: string) => PanelReply = () => ({ success: true })) {
+  let n = 0
+  on('tool.call', { tool: 'TaskCreate' }, (_$, e) => {
+    seen.taskCalls.push(e)
+    return { result: { task: { id: `panel-${++n}`, subject: e.subject } } }
+  })
+  on('tool.call', { tool: 'TaskUpdate' }, (_$, e) => {
+    seen.taskCalls.push(e)
+    return { result: { taskId: e.taskId, updatedFields: [], ...reply(e.taskId) } }
+  })
+}
+// Six model tasks, all completed, so 'done 1' is archived.
+async function sixDone($: Engine, on: On, seen: Seen) {
+  panelHandlers(on, seen)
+  for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskCreate', subject: `done ${i}`, description: `d${i}` })
+  for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: `panel-${i}`, status: 'completed' })
+}
+const storedOverhead = (v: unknown): Meta['overhead'] =>
+  typeof v === 'object' && v !== null && 'overhead' in v && typeof v.overhead === 'number' ? v.overhead : undefined
+
+// Regression caught: the merge model never saw archived done issues, re-created them from the folded turns, and each duplicate pushed a real recent completion off the ledger and panel.
+test('a fold over turns that finished an archived issue creates no duplicate done issue', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"done 1","status":"done","note":"again"}]')] }
+  const seen = bottoms(on, s)
+  await sixDone($, on, seen)
+  await turnEnds($, s, seen)
+  expect(seen.prompts[0]).toContain('<finished_earlier>\n- done 1\n</finished_earlier>')
+  const done = /## 한 일\n([\s\S]*?)\n\n/.exec(seen.files[LEDGER_FILE] ?? '')?.[1] ?? ''
+  expect(done.split('\n').map(l => /^- (done \d)/.exec(l)?.[1])).toEqual(['done 2', 'done 3', 'done 4', 'done 5', 'done 6'])
+  expect(seen.files[LEDGER_FILE]).not.toContain('<finished_earlier>')
+})
+
+// Regression caught: a TaskUpdate answered with success: false and no isError counted as success, so a missing panel task was never relinked.
+test('a TaskUpdate answered success false relinks the issue to a new panel task', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [] }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen, id => (id === 'panel-1' ? { success: false, error: 'Task not found' } : { success: true }))
+  await $.tool.call({ tool: 'TaskCreate', subject: 'lost task', description: 'd' })
+  await $.tool.call({ tool: 'TaskUpdate', taskId: 'panel-1', status: 'in_progress' })
+  expect(seen.taskCalls.filter(c => c.tool === 'TaskCreate').map(c => c.subject)).toEqual(['lost task', 'lost task'])
+  expect(seen.taskCalls.some(c => c.tool === 'TaskUpdate' && c.taskId === 'panel-2' && c.status === 'in_progress')).toBe(true)
+  expect(logEvents(seen).some(e => e.event === 'panel-relink' && e.reason.includes('Task not found'))).toBe(true)
 })
 
 // Regression caught: a completed TaskUpdate notice was delayed until session.compact and then could be repeated by the pending fold.
@@ -521,6 +572,17 @@ test('a tool result folded away on the escape path keeps its withheld file and a
   expect(r.messages?.[1]?.text).toContain(`- 보존된 출력: ${WITHHELD_FILE}`)
   expect(seen.files[LEDGER_FILE]).toContain(`- 보존된 출력: ${WITHHELD_FILE}`)
   expect(r.messages?.some(m => m.toolResults?.some(x => x.tool_use_id === 'tu_a'))).toBe(false)
+})
+
+// Regression caught: the escape retry calibrated against the usage reading from before the results were withheld, inflating overhead so the next fold shrank the tail to one turn.
+test('an escape retry leaves meta.overhead as it was', OPTS, async ($, on) => {
+  const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
+  const seen = bottoms(on, s)
+  seen.store['ledger:s1'] = { seq: 0, fails: 0, overhead: 100, ratio: 1 }
+  const r = await $.session.compact({ trigger: 'auto', messages: handled(ESCAPE_ROWS) })
+  if (!('messages' in r)) throw new Error('compaction returned no messages')
+  expect(seen.engineCompactions).toBe(0)
+  expect(storedOverhead(seen.store['ledger:s1'])).toBe(100)
 })
 
 // Regression caught: when the escape retry also failed, the engine summarized the original transcript, so withholding results never shrank what it read.

@@ -179,6 +179,8 @@ export const MERGE_SYSTEM = [
   'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you, so the notes carry only the sections above.',
   'Create an issue for each step finished (status done, with its evidence as note), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'Move an existing issue with a status op once the turns show it changed; never re-create it. Issues you do not mention stay as they are. Items listed under <legacy> have no issue yet: create one for each that still holds.',
+  // clm-prompt
+  'Steps listed under <finished_earlier> are already recorded; leave them as they are.',
   'Write `<ops>[]</ops>` when no task changed.',
   'Drop small talk and anything later turns replaced. Keep the notes under 600 words.',
 ].join('\n')

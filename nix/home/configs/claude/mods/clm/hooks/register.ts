@@ -75,7 +75,7 @@ type Pending = { notes: string; fullNotes: string; ops: Payload[]; seq: number; 
 // `foldTokens` is the usage reading taken when the last fold landed: the
 // engine keeps reporting it until the next API response, so an equal reading
 // describes the transcript before that fold and is ignored.
-type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number }
+export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number }
 const sid = ($: EngineInterface) => $.session.id()
 const metaKey = async ($: EngineInterface) => `ledger:${await sid($)}`
 const pendingKey = async ($: EngineInterface) => `pending:${await sid($)}`
@@ -309,6 +309,8 @@ async function updateTask($: EngineInterface, taskId: string, issue: Issue, stat
     tool: 'TaskUpdate', taskId, subject: panelSubject(issue), description: panelDescription(issue), status,
   })
   if ('deny' in r || r.isError) throw new Error('TaskUpdate was refused')
+  // A missing task can come back as success: false with no isError.
+  if (!r.result.success) throw new Error(`TaskUpdate failed: ${r.result.error ?? 'success: false'}`)
 }
 
 // One pass over one snapshot: an issue without a task gets one (a dropped or
@@ -383,7 +385,9 @@ async function refreshBoardIfOpen($: EngineInterface) {
 
 // --- folding -------------------------------------------------------------
 
-type TrackerView = { issues: Issue[]; stale: number }
+// `finished` is this session's archived done issues, shown to the merge model
+// only, so it does not re-create them from the turns being folded.
+type TrackerView = { issues: Issue[]; stale: number; finished: Issue[]; doneTitles: Set<string> }
 type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean }
 
 // The issues one session's ledger shows, with `ops` previewed on top when the
@@ -392,7 +396,12 @@ async function trackerView($: EngineInterface, here: Origin, ops: readonly Paylo
   const events = await readAll($)
   const lastSeq = events.reduce((n, e) => (e.origin.session === here.session ? Math.max(n, e.seq) : n), 0)
   const all = snapshot([...events, ...toEvents(ops, here, lastSeq, new Date().toISOString())])
-  return { issues: injected(all, here), stale: staleOpenCount(all, here) }
+  const archived = archivedDone(all, here.session)
+  const done = all.filter(i => i.status === 'done' && i.origin.session === here.session)
+  return {
+    issues: injected(all, here), stale: staleOpenCount(all, here),
+    finished: done.filter(i => archived.has(i.id)), doneTitles: new Set(done.map(i => i.title.trim())),
+  }
 }
 
 /**
@@ -401,16 +410,19 @@ async function trackerView($: EngineInterface, here: Origin, ops: readonly Paylo
  * `mustFold` is off, or the result would not be smaller. Updates `meta.fails`;
  * the caller writes `meta`.
  */
-async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number): Promise<Fold | string> {
+// `calibrate` is false on the escape retry, whose usage reading predates the
+// withheld rows and so would inflate the ratio and overhead.
+async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number, calibrate = true): Promise<Fold | string> {
   const observed = freshReal(reading ?? await usageReading($), meta)
+  const calib = calibrate ? observed : undefined
   const estimated = sum(rows)
   const overhead = meta.overhead ?? 0
   // The ratio needs an overhead baseline (system prompt, tools) to subtract;
   // the first reading only sets that baseline, below.
-  const ratio = observed === undefined || meta.overhead === undefined ? (meta.ratio ?? 1) : clampRatio(observed / Math.max(1, overhead + estimated))
-  if (observed !== undefined) {
+  const ratio = calib === undefined || meta.overhead === undefined ? (meta.ratio ?? 1) : clampRatio(calib / Math.max(1, overhead + estimated))
+  if (calib !== undefined) {
     if (meta.overhead !== undefined) meta.ratio = ratio
-    meta.lastObserved = observed
+    meta.lastObserved = calib
   }
   const prev = (await readText($, await ledgerPath($))) ?? EMPTY_LEDGER
   const plan = planClear(rows, Math.max(0, (opts.tailTarget - overhead) / ratio), Math.ceil(prev.length / 4) + 60)
@@ -434,6 +446,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
         `<notes>\n${mergeableNotes(notes)}\n</notes>`,
         `<instructions>\n${instructions.map(i => JSON.stringify(i)).join('\n') || '(none)'}\n</instructions>`,
         `<issues>\n${issueList(view.issues)}\n</issues>`,
+        ...(view.finished.length ? [`<finished_earlier>\n${view.finished.map(i => `- ${i.title}`).join('\n')}\n</finished_earlier>`] : []),
         ...(legacy.length ? [`<legacy>\n${legacy.join('\n')}\n</legacy>`] : []),
         `<removed_turns>\n${renderTurns(plan.dropped)}\n</removed_turns>`,
       ].join('\n\n'),
@@ -461,6 +474,8 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
       await logEvent($, 'fallback', { ratio, reason: bad })
     }
   }
+  // Backstop for the merge model: a step already recorded as done is never created twice.
+  ops = ops.filter(o => !(o.op === 'create' && o.status === 'done' && view.doneTitles.has(o.title.trim())))
   const preserved = preserveInstructions(notes, instructions, plan.dropped, await ledgerPath($), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
   const fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
@@ -478,7 +493,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   }
   if (Object.keys(plan.cuts).length)
     await logEvent($, 'truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
-  if (observed !== undefined) meta.overhead = Math.max(0, observed - estimated)
+  if (calib !== undefined) meta.overhead = Math.max(0, calib - estimated)
   return { plan, notes, fullNotes, ops, seq, fallback }
 }
 
@@ -713,7 +728,7 @@ export const register: Register = (on, options) => {
           workingRows = escapedRows
           first = protectedIndex(workingRows)
           try {
-            f = await fold($, opts, workingRows, meta, true)
+            f = await fold($, opts, workingRows, meta, true, undefined, false)
           } catch (err) {
             f = 'escape retry failed: ' + String(err).slice(0, 160)
           }

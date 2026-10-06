@@ -15,8 +15,10 @@ const ROWS = [
   M('user', 'run tests'), use('tu_c', 'Bash'), res('tu_c', 'pass ' + BIG), M('assistant', 'tests pass'),
   M('user', 'commit it'), M('assistant', 'done'),
 ]
-const SECTIONS = ['목표', '사용자 지시', '한 일', '할 일', '미결 질문', '핵심 사실·경로']
-const ledger = (fact: string) => SECTIONS.map(s => `## ${s}\n- ${s === '핵심 사실·경로' ? fact : '-'}`).join('\n\n')
+// The merge model writes the three note sections and an <ops> array; the
+// tracker renders the other three.
+const NOTES = ['목표', '사용자 지시', '핵심 사실·경로']
+const ledger = (fact: string, ops = '[]') => `${NOTES.map(s => `## ${s}\n- ${s === '핵심 사실·경로' ? fact : '-'}`).join('\n\n')}\n\n<ops>${ops}</ops>`
 const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as any
 const OPTS = { options: { budget: 2000, tailTarget: 1200, reserve: 100 } }
 const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
@@ -36,7 +38,14 @@ function bottoms(on: any, s: State) {
   on('session.messages', () => ({ value: s.rows }))
   on('session.usage', () => ({ value: s.usage ?? { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
   on('env.get', () => ({ value: '/home/t' }))
-  on('fs.exists', (_$: any, e: any) => ({ value: e.path in seen.files }))
+  on('fs.exists', (_$: any, e: any) => ({ value: e.path in seen.files || Object.keys(seen.files).some(f => f.startsWith(`${e.path}/`)) }))
+  on('fs.list', (_$: any, e: any) => ({
+    value: Object.keys(seen.files).filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/'))
+      .map(f => ({ name: f.slice(e.path.length + 1), kind: 'file', size: seen.files[f]!.length, mtimeMs: 0, isLink: false })),
+  }))
+  on('session.cwd', () => ({ value: '/work/repo' }))
+  on('process.run', (_$: any, e: any) => ({ value: { exitCode: 0, stdout: e.argv.includes('get-url') ? 'git@github.com:o/repo.git\n' : 'main\n', stderr: '' } }))
+  on('ui.panes', () => ({ value: [] }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
   on('model.complete', (_$: any, e: any) => {
@@ -96,13 +105,13 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
 })
 
 // Regression caught: a merged ledger missing a section replaces the memory anyway and silently drops that section.
-test('a merged ledger without all six headers skips the fold', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: ['## 목표\n- only one section'] }
+test('a merged ledger without all three note headers skips the fold', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: ['## 목표\n- only one section\n\n<ops>[]</ops>'] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   expect(seen.store['pending:s1']).toBeUndefined()
   expect(seen.files[LEDGER_FILE]).toBeUndefined()
-  expect((seen.store['ledger:s1'] as any).lastSkip).toContain('expected the six sections')
+  expect((seen.store['ledger:s1'] as any).lastSkip).toContain('expected the 3 note sections')
   expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid'])
 })
 

@@ -3,6 +3,7 @@
   "version": "0.3.0",
   "description": "Replaces compaction for the main conversation: older turns are folded into a ledger (goal, user instructions, done, to do, open questions, key facts) and the transcript is rewritten to the first request, the ledger and the newest turns that fit.",
   "author": { "name": "RanolP" },
+  "types": "./types/index.d.ts",
   "userConfig": {
     "budget": { "type": "number", "title": "Token budget", "description": "Message tokens allowed before older turns are folded into the ledger. An integer of at least 2000.", "default": 32000 },
     "tailTarget": { "type": "number", "title": "Tail target", "description": "Tokens the first request, the ledger and the kept newest turns may fill after a fold. 0 means half the budget.", "default": 0 },

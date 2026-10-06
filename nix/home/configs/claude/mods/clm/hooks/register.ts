@@ -1,4 +1,20 @@
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionMessage } from 'claude-code'
+
+import type { ClmBoard } from '../types'
+import { BoardView } from './board'
+import {
+  buildCleared, fingerprint, isSystemRow, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
+  type Boundary, type ClearPlan,
+} from './fold'
+import {
+  composeLedger, EMPTY_LEDGER, fallbackLedger, issueList, legacyItems, MERGE_SYSTEM, notesOf, oversizeLines, parseMerge, rememberOversize,
+  renderTurns,
+} from './ledger'
+import {
+  injected, normalizeRemote, parseLog, snapshot, TASK_STATUS, toEvents,
+  type Issue, type Origin, type Payload, type TrackerEvent,
+} from './tracker'
 
 // clm replaces the engine's compaction for the main conversation. When the
 // rows outgrow a token budget, a cheap model folds the turns about to go into a
@@ -8,211 +24,15 @@ import type { EngineInterface, Register, SessionMessage } from 'claude-code'
 // every main-session compaction, /compact and the engine's own threshold
 // included, is answered here, and the ahead-of-time `precompute` is refused.
 //
+// 한 일, 할 일 and 미결 질문 are not merged text: they are rendered from the
+// tracker (tracker.ts), and the merge model only emits ops against it, so an
+// item it forgets to repeat stays where it was.
+//
 // Interactive sessions fold right after the turn that crossed the budget. A
 // headless (-p / SDK) session refuses a plugin-raised compaction, so there the
 // plan waits in the store for the next /compact or engine compaction.
 
-export const SECTIONS = ['목표', '사용자 지시', '한 일', '할 일', '미결 질문', '핵심 사실·경로'] as const
-export const EMPTY_LEDGER = SECTIONS.map(s => `## ${s}\n- (none yet)`).join('\n\n')
-const LEDGER_TAG = '[clm ledger'
-const RESULT_FLOOR = 128 // tokens each kept tool result may shrink to, at least
-const OVERSIZE_MARK = '출력 과다:'
-const OVERSIZE_KEEP = 5
 const FAILS_BEFORE_FALLBACK = 3
-
-// --- rows ----------------------------------------------------------------
-
-export const estTokens = (m: SessionMessage): number => {
-  let chars = m.text.length
-  for (const u of m.toolUses) chars += JSON.stringify(u.input ?? {}).length + u.tool.length
-  for (const r of m.toolResults ?? []) chars += r.text.length
-  return Math.ceil(chars / 4)
-}
-const sum = (rows: readonly SessionMessage[]) => rows.reduce((n, m) => n + estTokens(m), 0)
-
-export const fingerprint = (m: SessionMessage): string =>
-  [m.role, m.toolUses.map(u => u.tool_use_id).join(','), (m.toolResults ?? []).map(r => r.tool_use_id).join(','), m.text.slice(0, 160)].join('|')
-
-// Rows the engine injects rather than the conversation. SessionMessage has no
-// origin flag, so match text. "(no content)" is how the engine rebuilds an
-// empty assistant row after a compaction.
-const SYSTEM_ROW = {
-  taskNotification: /^\s*<task-notification>/,
-  remindersOnly: /^\s*(?:<system-reminder>[\s\S]*?<\/system-reminder>\s*)+$/,
-}
-const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
-const isEmptyRow = (m: SessionMessage) => isBare(m) && (m.text.trim() === '' || (m.role === 'assistant' && m.text.trim() === '(no content)'))
-export const isSystemRow = (m: SessionMessage): boolean => {
-  if (!isBare(m)) return false
-  if (m.role === 'assistant') return isEmptyRow(m)
-  return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text)
-}
-export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && m.text.startsWith(LEDGER_TAG)
-const isPrompt = (m: SessionMessage) =>
-  m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m)
-
-export const protectedIndex = (msgs: readonly SessionMessage[]): number => {
-  const i = msgs.findIndex(isPrompt)
-  return i < 0 ? 0 : i
-}
-export const visibleTokens = (msgs: readonly SessionMessage[]) => msgs.reduce((n, m) => n + (isSystemRow(m) ? 0 : estTokens(m)), 0)
-
-// `$.session.messages()` returns the stored transcript, older chains before a
-// compact boundary included, and no API option scopes it. So each fold records
-// the ledger row it wrote (unique: it carries a sequence number and a time) and
-// its offset; the live rows start that far before its last occurrence.
-export type Boundary = { fp: string; offset: number }
-export function liveRows(msgs: readonly SessionMessage[], b: Boundary | undefined): readonly SessionMessage[] {
-  if (!b) return msgs
-  for (let j = msgs.length - 1; j >= 0; j--) if (fingerprint(msgs[j]!) === b.fp) return msgs.slice(Math.max(0, j - b.offset))
-  return msgs
-}
-
-// Rebuilt WITHOUT the handle: a handled row keeps its old parent and message id,
-// and on --resume the loader pulls the pre-fold chain back in.
-const strip = (m: SessionMessage): SessionMessage =>
-  ({ role: m.role, text: m.text, toolUses: m.toolUses, ...(m.toolResults ? { toolResults: m.toolResults } : {}) })
-
-// --- planning a fold -----------------------------------------------------
-
-export type ClearPlan = {
-  head: readonly SessionMessage[]
-  dropped: readonly SessionMessage[]
-  tail: readonly SessionMessage[]
-  keptTurns: number
-  /** tool_use_id -> token share its result is cut to */
-  cuts: Record<string, number>
-}
-
-// Turns open on a real user prompt, so whole turns never split a tool_use
-// from its tool_result. The tail is the newest turns that fit `target`
-// alongside the head and the ledger, and always holds the newest one.
-export function planClear(msgs: readonly SessionMessage[], target: number, ledgerTokens: number): ClearPlan | undefined {
-  const first = protectedIndex(msgs)
-  const starts = msgs.flatMap((m, i) => (i > first && isPrompt(m) ? [i] : []))
-  const head = msgs.slice(0, first + 1)
-  const fixed = sum(head) + ledgerTokens
-  let keepFrom = starts.length ? starts[starts.length - 1]! : first + 1
-  let keptTurns = starts.length ? 1 : 0
-  for (let t = starts.length - 2; t >= 0; t--) {
-    if (fixed + sum(msgs.slice(starts[t]!)) > target) break
-    keepFrom = starts[t]!
-    keptTurns++
-  }
-  const tail = msgs.slice(keepFrom)
-  const dropped = msgs.slice(first + 1, keepFrom).filter(m => !isLedgerRow(m) && !isSystemRow(m))
-  const cuts = fixed + sum(tail) > target ? shareResults(tail, target - fixed) : {}
-  if (dropped.length === 0 && Object.keys(cuts).length === 0) return undefined
-  return { head, dropped, tail, keptTurns, cuts }
-}
-
-// Each tool result in the tail gets an equal slice of the room left after the
-// tail's other text; only results bigger than their slice are cut.
-function shareResults(tail: readonly SessionMessage[], room: number): Record<string, number> {
-  const results = tail.flatMap(m => m.toolResults ?? [])
-  if (results.length === 0) return {}
-  const other = sum(tail) - results.reduce((n, r) => n + Math.ceil(r.text.length / 4), 0)
-  const share = Math.max(RESULT_FLOOR, Math.floor((room - other) / results.length))
-  const cuts: Record<string, number> = {}
-  for (const r of results) if (Math.ceil(r.text.length / 4) > share) cuts[r.tool_use_id] = share
-  return cuts
-}
-
-export function cutText(text: string, share: number): string {
-  const keep = share * 4
-  const headChars = Math.floor(keep * 0.6)
-  return `${text.slice(0, headChars)}\n…[clm: ${text.length - keep} of ${text.length} chars cut at fold time]…\n${text.slice(text.length - (keep - headChars))}`
-}
-const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMessage =>
-  !m.toolResults?.some(r => cuts[r.tool_use_id] !== undefined)
-    ? m
-    : { ...m, toolResults: m.toolResults.map(r => (cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) })) }
-
-export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage): SessionMessage[] {
-  return [...plan.head, ledgerRow, ...plan.tail].filter(m => !isEmptyRow(m)).map(m => strip(applyCuts(m, plan.cuts)))
-}
-
-export const ledgerRowText = (seq: number, at: string, path: string, ledger: string) =>
-  `${LEDGER_TAG} #${seq} · ${at}] Earlier turns of this session were folded into these notes by the harness (file: ${path}). They are your memory of that work.\n\n${ledger}`
-
-// --- ledger text ---------------------------------------------------------
-
-const sectionsOf = (ledger: string) => ledger.split(/^(?=## )/m)
-const isSection = (part: string, name: string) => part.trimEnd() === `## ${name}` || part.startsWith(`## ${name}\n`)
-
-/** Adds lines at the end of one section, replacing its "(none yet)" placeholder. */
-export function appendToSection(ledger: string, section: string, lines: readonly string[]): string {
-  if (lines.length === 0) return ledger
-  return sectionsOf(ledger)
-    .map(p => (isSection(p, section) ? `${[...p.trimEnd().split('\n').filter(l => l.trim() !== '- (none yet)'), ...lines].join('\n')}\n\n` : p))
-    .join('')
-    .trimEnd()
-}
-
-/** Records commands whose output had to be cut, newest five only. */
-export function rememberOversize(ledger: string, lines: readonly string[]): string {
-  if (lines.length === 0) return ledger
-  return sectionsOf(ledger)
-    .map(p => {
-      if (!isSection(p, '핵심 사실·경로')) return p
-      const body = p.trimEnd().split('\n')
-      const keep = [...body.filter(l => l.includes(OVERSIZE_MARK)), ...lines].slice(-OVERSIZE_KEEP)
-      return `${[...body.filter(l => !l.includes(OVERSIZE_MARK) && l.trim() !== '- (none yet)'), ...keep].join('\n')}\n\n`
-    })
-    .join('')
-    .trimEnd()
-}
-
-const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
-const oneLine = (s: string) => s.replace(/\s*\n\s*/g, ' ')
-const oversizeLines = (tail: readonly SessionMessage[], cuts: Record<string, number>) =>
-  tail.flatMap(m => m.toolUses).filter(u => cuts[u.tool_use_id] !== undefined)
-    .map(u => `- ${OVERSIZE_MARK} ${clip(oneLine(`${u.tool} ${JSON.stringify(u.input ?? {})}`), 70)}`)
-
-// Deterministic stand-in when the merge model keeps failing: the dropped
-// prompts verbatim, and one line per dropped turn naming the tools it used.
-export function fallbackLedger(prev: string, dropped: readonly SessionMessage[]): string {
-  const turns: { prompt?: string; tools: string[] }[] = []
-  for (const m of dropped) {
-    if (isPrompt(m) || turns.length === 0) turns.push({ prompt: isPrompt(m) ? m.text : undefined, tools: [] })
-    turns[turns.length - 1]!.tools.push(...m.toolUses.map(u => u.tool))
-  }
-  const asks = turns.flatMap(t => (t.prompt ? [`- "${oneLine(t.prompt)}"`] : []))
-  const done = turns.map(t => `- turn ${t.prompt ? `"${clip(oneLine(t.prompt), 60)}"` : '(first request, continued)'}: tools ${t.tools.length ? [...new Set(t.tools)].join(', ') : 'none'}`)
-  return appendToSection(appendToSection(prev, '사용자 지시', asks), '한 일', done)
-}
-
-const MERGE_SYSTEM = [
-  'You keep the working ledger of a coding session whose oldest turns are about to be deleted.',
-  'You receive the current ledger and the turns being removed. Reply with the updated ledger only: no preamble, no code fence.',
-  `Use exactly these six level-2 headings, each once, in this order: ${SECTIONS.map(s => `"## ${s}"`).join(', ')}.`,
-  '- 목표: what the session is trying to achieve, updated if the turns changed it.',
-  '- 사용자 지시: every instruction the user gave, copied word for word inside quotes. Never paraphrase. Keep earlier ones unless the user withdrew them.',
-  '- 한 일: one bullet per finished step, with the command or check that showed it worked and what it printed.',
-  '- 할 일: steps still ahead; move an item to 한 일 once the turns show it finished.',
-  '- 미결 질문: questions still waiting for an answer, and who must answer them.',
-  `- 핵심 사실·경로: file paths with line numbers, ids, versions, numbers and decisions a later step will need. Keep lines starting with "${OVERSIZE_MARK}" as they are.`,
-  'Drop small talk and anything later turns replaced. Write bullets. Keep the whole ledger under 900 words.',
-].join('\n')
-
-export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): string {
-  const out = rows.map(m => {
-    const parts = [m.text ? `[${m.role}] ${clip(m.text, 4000)}` : `[${m.role}]`]
-    for (const u of m.toolUses) parts.push(`  -> ${u.tool} ${clip(JSON.stringify(u.input ?? {}), 600)}`)
-    for (const r of m.toolResults ?? []) parts.push(`  <- ${r.isError ? 'error ' : ''}${clip(r.text, 1500)}`)
-    return parts.join('\n')
-  }).join('\n')
-  return out.length > cap ? `…[older part cut]\n${out.slice(out.length - cap)}` : out
-}
-
-export const normalizeLedger = (text: string) => text.trim().replace(/^```[a-z]*\n([\s\S]*?)\n```$/, '$1').trim()
-/** Why a merged ledger is unusable, or undefined when it is fine. */
-export function ledgerProblem(ledger: string, maxTokens: number): string | undefined {
-  const heads = [...ledger.matchAll(/^##\s+(.+?)\s*$/gm)].map(m => m[1]!)
-  if (heads.join('|') !== SECTIONS.join('|')) return `headers were [${heads.join(', ')}], expected the six sections in order`
-  if (Math.ceil(ledger.length / 4) > maxTokens) return `ledger is ~${Math.ceil(ledger.length / 4)}t, over the ${maxTokens}t cap`
-  return undefined
-}
 
 // --- options -------------------------------------------------------------
 
@@ -246,7 +66,9 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 
 // --- session state -------------------------------------------------------
 
-type Pending = { text: string; ledger: string; seq: number; keepFp?: string; cuts: Record<string, number>; keptTurns: number; fallback: boolean }
+// `ops` reach the tracker only when the fold is applied, so a planned fold
+// that never lands cannot leave issues behind for the next one to duplicate.
+type Pending = { notes: string; ops: Payload[]; seq: number; keepFp?: string; cuts: Record<string, number>; keptTurns: number; fallback: boolean }
 type Meta = { seq: number; lastClear?: string; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; probe?: { est: number; real: number } }
 const sid = ($: EngineInterface) => $.session.id()
 const metaKey = async ($: EngineInterface) => `ledger:${await sid($)}`
@@ -264,7 +86,7 @@ async function readText($: EngineInterface, p: string): Promise<string | undefin
   return (await $.fs.exists(p)) ? ((await $.fs.read(p)) as string) : undefined
 }
 
-export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'fallback' | 'truncation' | 'calibration'
+export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'calibration'
 type LogFields = { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; reason?: string }
 const LOG_KEEP = 200
 async function logEvent($: EngineInterface, event: LogEvent, f: LogFields) {
@@ -313,9 +135,87 @@ async function skip($: EngineInterface, why: string) {
   await writeMeta($, { ...(await readMeta($)), lastSkip: why })
 }
 
+// --- tracker I/O -----------------------------------------------------------
+
+async function trackerDir($: EngineInterface): Promise<string> {
+  return `${(await $.env.get('HOME')) ?? '.'}/.claude-work/tracker/events`
+}
+const logFile = async ($: EngineInterface, session: string) => `${await trackerDir($)}/${session}.jsonl`
+
+async function git($: EngineInterface, cwd: string, args: string[]): Promise<string | undefined> {
+  try {
+    const r = await $.process.run(['git', ...args], { cwd, timeoutMs: 5000 })
+    return r.exitCode === 0 && r.stdout.trim() ? r.stdout.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** repo is the origin remote, else the worktree's top level, else the cwd. */
+async function captureOrigin($: EngineInterface): Promise<Origin> {
+  const session = await $.session.id()
+  const cwd = await $.session.cwd()
+  const remote = await git($, cwd, ['remote', 'get-url', 'origin'])
+  const repo = remote ? normalizeRemote(remote) : ((await git($, cwd, ['rev-parse', '--show-toplevel'])) ?? cwd)
+  const branch = await git($, cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  return { session, repo, ...(branch ? { branch } : {}), cwd }
+}
+
+async function readAll($: EngineInterface): Promise<TrackerEvent[]> {
+  const dir = await trackerDir($)
+  if (!(await $.fs.exists(dir))) return []
+  const out: TrackerEvent[] = []
+  for (const f of await $.fs.list(dir)) {
+    if (f.kind !== 'file' || !f.name.endsWith('.jsonl')) continue
+    try {
+      out.push(...parseLog((await $.fs.read(`${dir}/${f.name}`)) as string))
+    } catch (err) {
+      $.ui.log(`clm tracker: could not read ${f.name} (${String(err).slice(0, 120)})`, { to: 'debug' })
+    }
+  }
+  return out
+}
+
+/** Appends to this session's log; only this session ever writes that file. */
+async function append($: EngineInterface, payloads: readonly Payload[], origin?: Origin): Promise<TrackerEvent[]> {
+  if (payloads.length === 0) return []
+  const o = origin ?? (await captureOrigin($))
+  const p = await logFile($, o.session)
+  const prev = (await $.fs.exists(p)) ? ((await $.fs.read(p)) as string) : ''
+  const lastSeq = parseLog(prev).reduce((n, e) => Math.max(n, e.seq), 0)
+  const events = toEvents(payloads, o, lastSeq, new Date().toISOString())
+  const body = prev && !prev.endsWith('\n') ? `${prev}\n` : prev
+  await $.fs.write(p, `${body}${events.map(e => JSON.stringify(e)).join('\n')}\n`)
+  return events
+}
+
+// The board's drawing reads only `$.state`; the logs are read when it opens,
+// on its refresh button, and after this session appends while it is open.
+const BOARD = 'clm-board'
+const board = atom({ plugin: 'clm', key: 'board' } as const, { issues: [], repo: '', filter: 'repo' } as ClmBoard)
+
+async function refreshBoard($: EngineInterface) {
+  const [events, here] = await Promise.all([readAll($), captureOrigin($)])
+  const issues = snapshot(events).map(i => ({
+    id: i.id, title: i.title, status: i.status, repo: i.origin.repo, ...(i.origin.branch ? { branch: i.origin.branch } : {}), updated: i.updated,
+  }))
+  await update($, board, b => ({ ...b, issues, repo: here.repo }))
+}
+async function refreshBoardIfOpen($: EngineInterface) {
+  if ((await $.ui.panes()).some(p => p.id === BOARD)) await refreshBoard($)
+}
+
 // --- folding -------------------------------------------------------------
 
-type Fold = { plan: ClearPlan; ledger: string; text: string; seq: number; fallback: boolean }
+type Fold = { plan: ClearPlan; notes: string; ops: Payload[]; seq: number; fallback: boolean }
+
+// The issues one session's ledger shows, with `ops` previewed on top when the
+// fold has not appended them yet; ids then match what append assigns.
+async function trackerView($: EngineInterface, here: Origin, ops: readonly Payload[] = []): Promise<Issue[]> {
+  const events = await readAll($)
+  const lastSeq = events.reduce((n, e) => (e.origin.session === here.session ? Math.max(n, e.seq) : n), 0)
+  return injected(snapshot([...events, ...toEvents(ops, here, lastSeq, new Date().toISOString())]), here)
+}
 
 /**
  * Plans a fold of `rows` and merges the dropped turns into the ledger. Returns
@@ -330,37 +230,48 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   const plan = planClear(rows, opts.tailTarget / ratio, Math.ceil(prev.length / 4) + 60)
   if (!plan) return 'nothing left to fold'
 
-  let ledger = prev
+  const here = await captureOrigin($)
+  const issues = await trackerView($, here)
+  let notes = notesOf(prev)
+  let ops: Payload[] = []
   let fallback = false
   if (plan.dropped.length > 0) {
+    const legacy = legacyItems(prev)
     const r = await $.model.complete({
       model: 'haiku',
       system: MERGE_SYSTEM,
-      prompt: `<ledger>\n${prev}\n</ledger>\n\n<removed_turns>\n${renderTurns(plan.dropped)}\n</removed_turns>`,
+      prompt: [
+        `<notes>\n${notes}\n</notes>`,
+        `<issues>\n${issueList(issues)}\n</issues>`,
+        ...(legacy.length ? [`<legacy>\n${legacy.join('\n')}\n</legacy>`] : []),
+        `<removed_turns>\n${renderTurns(plan.dropped)}\n</removed_turns>`,
+      ].join('\n\n'),
       maxTokens: 4096,
       timeoutMs: 120_000,
     })
-    const merged = r.isAnswered ? normalizeLedger(r.text) : ''
-    const bad = r.isAnswered ? ledgerProblem(merged, Math.max(500, Math.floor(opts.budget / 4))) : `merge model gave no text (${r.reason})`
-    if (bad === undefined) {
-      ledger = merged
+    const merged = r.isAnswered ? parseMerge(r.text, new Set(issues.map(i => i.id)), Math.max(500, Math.floor(opts.budget / 4))) : `merge model gave no text (${r.reason})`
+    const bad = typeof merged === 'string' ? merged : undefined
+    if (typeof merged !== 'string') {
+      notes = merged.notes
+      ops = merged.ops
       meta.fails = 0
+      if (merged.rejected) await logEvent($, 'ops-rejected', { ratio, reason: `${merged.rejected} op(s) failed validation; ${ops.length} kept` })
     } else {
       meta.fails += 1
       await logEvent($, !r.isAnswered && r.reason === 'aborted' ? 'merge-timeout' : 'merge-invalid', { ratio, reason: `${bad} (failure ${meta.fails} in a row)` })
       if (!mustFold && meta.fails < FAILS_BEFORE_FALLBACK) return `merged ledger rejected: ${bad}`
       // A merge that never succeeds must not block folding forever.
-      ledger = fallbackLedger(prev, plan.dropped)
+      ;({ notes, ops } = fallbackLedger(notes, plan.dropped))
       fallback = true
       meta.fails = 0
       $.ui.log(`clm: merge failed (${bad}); folded with a mechanical ledger instead`, { to: 'debug' })
       await logEvent($, 'fallback', { ratio, reason: bad })
     }
   }
-  ledger = rememberOversize(ledger, oversizeLines(plan.tail, plan.cuts))
+  notes = rememberOversize(notes, oversizeLines(plan.tail, plan.cuts))
 
   const seq = meta.seq + 1
-  const text = ledgerRowText(seq, new Date().toISOString(), await ledgerPath($), ledger)
+  const text = ledgerRowText(seq, new Date().toISOString(), await ledgerPath($), composeLedger(notes, await trackerView($, here, ops)))
   const tokensBefore = sum(rows)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
   if (tokensAfter >= tokensBefore) {
@@ -371,7 +282,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   }
   if (Object.keys(plan.cuts).length)
     await logEvent($, 'truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
-  return { plan, ledger, text, seq, fallback }
+  return { plan, notes, ops, seq, fallback }
 }
 
 async function maybeClear($: EngineInterface, opts: Opts) {
@@ -383,7 +294,7 @@ async function maybeClear($: EngineInterface, opts: Opts) {
   await writeMeta($, meta)
   if (typeof f === 'string') return skip($, f)
   const pending: Pending = {
-    text: f.text, ledger: f.ledger, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
+    notes: f.notes, ops: f.ops, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
     cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback,
   }
   await $.store.set(await pendingKey($), pending)
@@ -413,7 +324,7 @@ export function report(ledger: string | undefined, rows: readonly SessionMessage
 const GUIDE = [
   'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
   'That row records the goal, the user\'s instructions verbatim, what was done with its evidence, what is left, open questions and key facts; the turns it replaced are gone.',
-  'Rely on it as your own memory of that work. When something matters later, say it plainly in a reply so the next fold keeps it.',
+  'Rely on it as your own memory of that work.',
 ].join('\n')
 
 export const register: Register = (on, options) => {
@@ -421,13 +332,40 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     for (const p of problems) $.ui.log(`clm: option ${p}`)
-    await $.command.register({ name: 'clm', description: 'Show the clm ledger, budget use and recent decisions (shown to you only).', immediate: true })
+    await $.command.register({
+      name: 'clm',
+      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board, `link <id>` brings another repo\'s issue into this session (shown to you only).',
+      immediate: true,
+    })
     return next(e)
   })
 
   // Printed through ui.log, which the engine draws as a notice and never sends
   // to the model; a command's `text` is a transcript row and may be.
-  on('command.run', { command: 'clm' }, async $ => {
+  on('command.run', { command: 'clm' }, async ($, e) => {
+    // `$.command.run` documents a left-out args as "", yet the test kit hands it over undefined.
+    const [sub, arg] = (e.args ?? '').trim().split(/\s+/)
+    if (sub === 'board') {
+      await refreshBoard($)
+      const opened = await $.ui.open({ id: BOARD, title: 'clm board' })
+      if (!opened.isPlaced) $.ui.log(`clm: the board is not shown (${opened.reason})`)
+      return {}
+    }
+    if (sub === 'link') {
+      const issue = arg ? snapshot(await readAll($)).find(i => i.id === arg) : undefined
+      if (!issue) {
+        $.ui.log(arg ? `clm: no issue ${arg}; /clm board lists them` : 'clm: usage /clm link <issue id>')
+        return {}
+      }
+      await append($, [{ op: 'link', issue: issue.id }])
+      await refreshBoardIfOpen($)
+      $.ui.log(`clm: ${issue.id} "${issue.title}" (${issue.origin.repo}) is linked to this session and shows in its ledger from the next fold`)
+      return {}
+    }
+    if (sub) {
+      $.ui.log('clm: usage /clm, /clm board, /clm link <issue id>')
+      return {}
+    }
     const meta = await readMeta($)
     const rows = liveRows(await $.session.messages(), meta.boundary)
     const log = ((await readText($, await logPath($))) ?? '').split('\n').filter(Boolean).slice(-5)
@@ -475,19 +413,62 @@ export const register: Register = (on, options) => {
         $.ui.log(`clm: ${e.trigger} compaction left the conversation as it is: ${f}`)
         return { messages: all }
       }
-      use = { text: f.text, ledger: f.ledger, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: rows.length - f.plan.tail.length }
+      use = { notes: f.notes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: rows.length - f.plan.tail.length }
     }
 
-    const ledgerRow: SessionMessage = { role: 'user', text: use.text, toolUses: [] }
+    const here = await captureOrigin($)
+    await append($, use.ops, here)
+    const ledger = composeLedger(use.notes, await trackerView($, here))
+    const text = ledgerRowText(use.seq, new Date().toISOString(), await ledgerPath($), ledger)
+    const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
     const messages = buildCleared({ head: rows.slice(0, first + 1), tail: rows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow)
     const tokensBefore = sum(rows)
     const tokensAfter = sum(messages)
-    await $.fs.write(await ledgerPath($), `${use.ledger}\n`)
-    const offset = messages.findIndex(m => m.text === use.text)
+    await $.fs.write(await ledgerPath($), `${ledger}\n`)
+    if (use.ops.length) await refreshBoardIfOpen($)
+    const offset = messages.findIndex(m => m.text === text)
     await writeMeta($, { ...meta, seq: use.seq, lastClear: new Date().toISOString(), lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset } })
     await logEvent($, 'clear', { tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1, reason: `${e.trigger}${use.fallback ? ', fallback ledger' : ''}` })
     return { messages, tokensBefore, tokensAfter }
   })
+
+  // The main loop's task list mirrored into the tracker. Task ids are numbered
+  // per session, so an update finds its issue among this session's own.
+  on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined || r.deny !== undefined || r.isError) return r
+    try {
+      const taskId = (r.result as { task?: { id?: unknown } } | undefined)?.task?.id
+      await append($, [{ op: 'create', title: e.subject, status: 'todo', ...(typeof taskId === 'string' ? { taskId } : {}) }])
+      await refreshBoardIfOpen($)
+    } catch (err) {
+      $.ui.log(`clm tracker: TaskCreate not mirrored (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return r
+  })
+
+  on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => {
+    const r = await next(e)
+    const status = e.status && TASK_STATUS[e.status]
+    if (e.agentId !== undefined || r.deny !== undefined || r.isError || !status) return r
+    try {
+      const session = await $.session.id()
+      const issue = snapshot(await readAll($)).find(i => i.origin.session === session && i.taskId === e.taskId)
+      if (issue && issue.status !== status) {
+        await append($, [{ op: 'status', issue: issue.id, status }])
+        await refreshBoardIfOpen($)
+      }
+    } catch (err) {
+      $.ui.log(`clm tracker: TaskUpdate not mirrored (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return r
+  })
+
+  on('ui.render', { component: 'Pane', requestId: BOARD }, async ($, e) =>
+    BoardView($.ui.resolve(e), await read($, board), e.props.bodyColumns, {
+      filter: f => update($, board, b => ({ ...b, filter: f })),
+      refresh: () => refreshBoard($),
+    }))
 
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)

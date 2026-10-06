@@ -81,18 +81,22 @@ export function fallbackLedger(prevNotes: string, dropped: readonly SessionMessa
 export const MERGE_SYSTEM = [
   'You keep the working ledger of a coding session whose oldest turns are about to be deleted.',
   'You receive the current notes, the open issues of the session\'s tracker, and the turns being removed.',
-  'Reply with two parts and nothing else: no preamble, no code fence.',
+  'Reply with the updated notes, `<changes>`, and `<ops>` only: no preamble, no code fence.',
   `First the updated notes, using exactly these level-2 headings, each once, in this order: ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')}.`,
   '- 목표: what the session is trying to achieve, updated if the turns changed it.',
   '- 사용자 지시: every instruction the user gave, copied word for word inside quotes. Never paraphrase. Keep earlier ones unless the user withdrew them.',
   `- 핵심 사실·경로: file paths with line numbers, ids, versions, numbers and decisions a later step will need. Keep lines starting with "${OVERSIZE_MARK}" as they are.`,
+  'Then `<changes>` holding up to three plain Korean lines, one for each changed non-task section among 목표, 사용자 지시, 미결 질문 and 핵심 사실·경로. Name the changed item, for example "핵심 사실: codex 브리지 재시작 시 키 유실 확인" or "미결 질문 추가: ui.log가 --resume 후 남는지". Keep task changes in `<ops>`. Write `<changes></changes>` when no non-task section changed.',
   'Then `<ops>` holding a JSON array of tracker changes the removed turns show, and `</ops>`. Each op is one of:',
   '  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<evidence: the command or check and what it printed>"}',
   '  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped"}',
+  '  {"op":"retitle","issue":"<id from the issues>","title":"<new one line title>"}',
+  '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
   '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
   'Create an issue for each step finished (status done, with its evidence as note), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'Move an existing issue with a status op once the turns show it changed; never re-create it. Issues you do not mention stay as they are. Items listed under <legacy> have no issue yet: create one for each that still holds.',
-  'Write `<ops>[]</ops>` when nothing changed. Drop small talk and anything later turns replaced. Keep the notes under 600 words.',
+  'Write `<ops>[]</ops>` when no task changed.',
+  'Drop small talk and anything later turns replaced. Keep the notes under 600 words.',
 ].join('\n')
 
 export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): string {
@@ -107,15 +111,18 @@ export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): str
 
 export const normalizeLedger = (text: string) => text.trim().replace(/^```[a-z]*\n([\s\S]*?)\n```$/, '$1').trim()
 /** Splits a merge reply into notes and validated ops, or says why it is unusable. */
-export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number): { notes: string; ops: Payload[]; rejected: number } | string {
+export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number): { notes: string; ops: Payload[]; rejected: number; changes: string[] } | string {
   const m = /<ops>([\s\S]*?)<\/ops>/.exec(reply)
   if (!m) return 'reply has no <ops>…</ops> block'
-  const notes = normalizeLedger(reply.slice(0, m.index))
+  const [, body = ''] = /<changes>([\s\S]*?)<\/changes>/.exec(reply) ?? []
+  const lines = body.split('\n').map(line => line.trim()).filter(Boolean)
+  const changes = lines.every(line => !/[<>]/.test(line)) ? lines.slice(0, 3).map(line => clip(line, 80)) : []
+  const notes = normalizeLedger(reply.slice(0, m.index).replace(/<changes>[\s\S]*?(?:<\/changes>|$)/, ''))
   const heads = [...notes.matchAll(/^##\s+(.+?)\s*$/gm)].map(h => h[1]!)
   if (heads.join('|') !== NOTE_SECTIONS.join('|')) return `headers were [${heads.join(', ')}], expected the ${NOTE_SECTIONS.length} note sections in order`
   if (Math.ceil(notes.length / 4) > maxTokens) return `notes are ~${Math.ceil(notes.length / 4)}t, over the ${maxTokens}t cap`
   const ops = parseOps(normalizeLedger(m[1]!), known)
-  return typeof ops === 'string' ? ops : { notes, ...ops }
+  return typeof ops === 'string' ? ops : { notes, ...ops, changes }
 }
 export const issueList = (issues: readonly Issue[]) =>
   issues.length ? issues.map(i => `${i.id} | ${i.status} | ${i.title}${i.notes.length ? ` — ${i.notes.at(-1)}` : ''}`).join('\n') : '(none)'

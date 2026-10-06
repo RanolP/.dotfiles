@@ -15,6 +15,9 @@ type Create = { op: 'create'; title: string; status: IssueStatus; note?: string;
 export type TrackerEvent = Base & (
   | Create
   | { op: 'status'; status: IssueStatus }
+  | { op: 'retitle'; title: string }
+  | { op: 'progress'; done: number; total: number }
+  | { op: 'task'; taskId: string }
   | { op: 'note'; text: string }
   // Links `issue` to `origin.session`, so it is injected there whatever its repo.
   | { op: 'link' }
@@ -22,6 +25,9 @@ export type TrackerEvent = Base & (
 export type Payload =
   | Create
   | { op: 'status'; issue: string; status: IssueStatus }
+  | { op: 'retitle'; issue: string; title: string }
+  | { op: 'progress'; issue: string; done: number; total: number }
+  | { op: 'task'; issue: string; taskId: string }
   | { op: 'note'; issue: string; text: string }
   | { op: 'link'; issue: string }
 
@@ -29,6 +35,7 @@ export type Issue = {
   id: string
   title: string
   status: IssueStatus
+  progress?: { done: number; total: number }
   origin: Origin
   notes: string[]
   linked: string[]
@@ -68,6 +75,9 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
     const i = issues.get(e.issue)
     if (!i) continue
     if (e.op === 'status') i.status = e.status
+    else if (e.op === 'retitle') i.title = e.title
+    else if (e.op === 'progress') i.progress = { done: e.done, total: e.total }
+    else if (e.op === 'task') i.taskId = e.taskId
     else if (e.op === 'note') i.notes.push(e.text)
     else if (!i.linked.includes(e.origin.session)) i.linked.push(e.origin.session)
     i.updated = e.ts
@@ -84,6 +94,9 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
     switch (p.op) {
       case 'create': return { ...base, issue: issueId(origin.session, seq), ...p }
       case 'status': return { ...base, issue: p.issue, op: 'status', status: p.status }
+      case 'retitle': return { ...base, issue: p.issue, op: 'retitle', title: p.title }
+      case 'progress': return { ...base, issue: p.issue, op: 'progress', done: p.done, total: p.total }
+      case 'task': return { ...base, issue: p.issue, op: 'task', taskId: p.taskId }
       case 'note': return { ...base, issue: p.issue, op: 'note', text: p.text }
       case 'link': return { ...base, issue: p.issue, op: 'link' }
     }
@@ -123,7 +136,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s
 const flat = (s: string) => s.replace(/\s*\n\s*/g, ' ').trim()
 
 export const issueLine = (i: Issue) =>
-  `- ${i.status === 'doing' ? '(doing) ' : ''}${i.title}${i.notes.length ? ` — ${i.notes[i.notes.length - 1]}` : ''} [${i.id}]`
+  `- ${i.status === 'doing' ? '(doing) ' : ''}${i.title}${i.progress ? ` (${i.progress.done}/${i.progress.total})` : ''}${i.notes.length ? ` — ${i.notes[i.notes.length - 1]}` : ''} [${i.id}]`
 
 export function sectionLines(issues: readonly Issue[], section: string): string[] {
   const want = TRACKER_SECTIONS[section] ?? []
@@ -147,6 +160,7 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
   }
   if (!Array.isArray(list)) return 'ops are not a JSON array'
   const text = (v: unknown, n: number) => (typeof v === 'string' && v.trim() ? clip(flat(v), n) : undefined)
+  const integer = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v)
   const ops: Payload[] = []
   let rejected = 0
   for (const o of list as Record<string, unknown>[]) {
@@ -155,6 +169,10 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
       ops.push({ op: 'create', title, status: o.status, ...(note ? { note } : {}) })
     else if (o?.op === 'status' && typeof o.issue === 'string' && known.has(o.issue) && isStatus(o.status))
       ops.push({ op: 'status', issue: o.issue, status: o.status })
+    else if (o?.op === 'retitle' && typeof o.issue === 'string' && known.has(o.issue) && title)
+      ops.push({ op: 'retitle', issue: o.issue, title })
+    else if (o?.op === 'progress' && typeof o.issue === 'string' && known.has(o.issue) && integer(o.done) && integer(o.total) && o.total >= 1 && o.done >= 0 && o.done <= o.total)
+      ops.push({ op: 'progress', issue: o.issue, done: o.done, total: o.total })
     else if (o?.op === 'note' && typeof o.issue === 'string' && known.has(o.issue) && note)
       ops.push({ op: 'note', issue: o.issue, text: note })
     else rejected++
@@ -162,5 +180,35 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
   return { ops, rejected }
 }
 
-/** TaskUpdate's statuses in the tracker's words. */
-export const TASK_STATUS: Record<string, IssueStatus> = { pending: 'todo', in_progress: 'doing', completed: 'done', deleted: 'dropped' }
+const statusText: Record<IssueStatus, string> = {
+  doing: '착수', done: '완수', todo: '대기', question: '질문 대기', dropped: '중단',
+}
+
+/** Describes the notices caused by one append, using the state before it. */
+export function describe(events: readonly TrackerEvent[], before: readonly Issue[]): string[] {
+  const state = new Map(before.map(i => [i.id, { title: i.title, status: i.status }]))
+  const out: string[] = []
+  for (const e of events) {
+    const current = state.get(e.issue)
+    const title = current?.title ?? e.issue
+    if (e.op === 'create') {
+      state.set(e.issue, { title: e.title, status: e.status })
+      out.push(`작업 '${e.title}' 추가`)
+    } else if (e.op === 'status') {
+      if (current?.status !== e.status) out.push(`작업 '${title}' ${statusText[e.status]}`)
+      if (current) current.status = e.status
+    } else if (e.op === 'progress') {
+      out.push(`작업 '${title}' 진행 (${e.done}/${e.total})`)
+    } else if (e.op === 'retitle') {
+      out.push(`작업 '${title}' 재조정 -> '${e.title}'`)
+      if (current) current.title = e.title
+    } else if (e.op === 'task') {
+      // Task ids are projection state, not a user-facing tracker change.
+    } else if (e.op === 'note') {
+      out.push(`작업 '${title}' 메모: ${clip((e.text.split(/\r?\n/, 1)[0] ?? '').trim(), 60)}`)
+    } else {
+      out.push(`작업 '${title}' 연결: ${e.origin.repo}`)
+    }
+  }
+  return out
+}

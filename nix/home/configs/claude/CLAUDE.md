@@ -20,7 +20,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - WHEN: strategy 1 is chosen, or a command may run long or emit long output
 - DO: spawn one BACKGROUND worker per unit, with a brief that carries its goal and its files rather than the thread history, so token-heavy traces stay out of main context
 - DO: act on the completion notification when the harness re-invokes you -- continue other ready work, or end the turn
-- DO (multi-step): register every step with TaskCreate before the first one starts, then send everything with no unmet dependency out in ONE message
+- DO (multi-step): state the whole step set in the reply before the first one starts, which clm records into the task list panel, then send everything with no unmet dependency out in ONE message
 - DO: keep destructive Bash in the foreground, where its output lands in context
 - DO (typed result): when a worker's result feeds another agent, a routing decision or a synthesis pass, name its exact fields and types in the brief (or pass `schema:` to a Workflow agent) and require that shape with no prose wrapper, so main holds a small structured record rather than worker prose
 - DO (receipt): check the shape before using it, and on a mismatch `SendMessage` the same worker once to re-emit in shape, since its context is still intact and a resend costs less than a respawn
@@ -33,8 +33,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - WHY: the advisor tool double-counts context and force-compacts the session early; a subagent does not -- [[advisor-inflates-autocompact-threshold]]
 
 ## Plan mode -- present the plan before the first mutation
-- NOTE: the `clm` plugin folds older turns into a ledger (done, to do, key facts, open questions) at every turn end, so context stays bounded with no manual step from you
-- SETUP: at session start, ToolSearch `select:TaskCreate,TaskUpdate,TaskList` before any other work
+- NOTE: the `clm` plugin folds older turns into a ledger (done, to do, key facts, open questions) at every turn end, so context stays bounded with no manual step from you, and it alone writes the task list panel from the steps your replies state
 - WHEN (think): the shared "Plan after research, then act" rule's non-trivial bar is met, and the task's FIRST mutation has not happened yet
 - DO (think): finish the research inline FIRST, then present the plan in the chat reply for the user's agreement and continue in the same context -- the clm ledger carries state across folds, so no EnterPlanMode/ExitPlanMode round trip is needed
 - EXCEPT: act directly when the user handed you a ready-made plan, said to skip planning, or asked for a few-line fix

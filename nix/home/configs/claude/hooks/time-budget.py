@@ -187,13 +187,12 @@ def mins(seconds):
 # ---------------------------------------------------------------- messages
 
 TASK_LIST_START = (
-    "A plan of 2+ steps goes into TaskCreate now, so the visible task list "
-    "tracks the same units this budget measures.")
+    "State a plan of 2+ steps in your reply now; clm records it into the "
+    "visible task list, so the list tracks the same units this budget measures.")
 TASK_LIST_MIRROR = (
-    "Reflect this into the task list first: TaskUpdate each verified-done "
-    "item to completed, keep each open item pending or in_progress with its "
-    "next action in the description, and TaskCreate any newly discovered "
-    "work.")
+    "State this in your reply first, for clm to carry into the task list: "
+    "each verified-done step, each open step with its next action, and any "
+    "newly discovered work.")
 
 
 def start_message(token, budget, kind="sub"):

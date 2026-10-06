@@ -15,10 +15,10 @@ const ROWS = [
   M('user', 'run tests'), use('tu_c', 'Bash'), res('tu_c', 'pass ' + BIG), M('assistant', 'tests pass'),
   M('user', 'commit it'), M('assistant', 'done'),
 ]
-// The merge model writes the three note sections and an <ops> array; the
+// The merge model writes the three note sections, optional changes, and an <ops> array; the
 // tracker renders the other three.
 const NOTES = ['목표', '사용자 지시', '핵심 사실·경로']
-const ledger = (fact: string, ops = '[]') => `${NOTES.map(s => `## ${s}\n- ${s === '핵심 사실·경로' ? fact : '-'}`).join('\n\n')}\n\n<ops>${ops}</ops>`
+const ledger = (fact: string, ops = '[]', changes = '') => `${NOTES.map(s => `## ${s}\n- ${s === '핵심 사실·경로' ? fact : '-'}`).join('\n\n')}${changes ? `\n\n<changes>${changes}</changes>` : ''}\n\n<ops>${ops}</ops>`
 const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as any
 const OPTS = { options: { budget: 2000, tailTarget: 1200, reserve: 100 } }
 const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
@@ -30,7 +30,7 @@ const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 
 type State = { rows: any[]; replies: (string | null)[]; usage?: any }
 function bottoms(on: any, s: State) {
-  const seen = { store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], logs: [] as string[], results: [] as any[], engineCompactions: 0 }
+  const seen = { store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], logs: [] as string[], results: [] as any[], taskCalls: [] as any[], engineCompactions: 0 }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -69,6 +69,97 @@ async function turnEnds($: any, s: State, seen: { results: any[] }) {
   seen.results.push(await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) }))
 }
 const logEvents = (seen: { files: Record<string, string> }) => (seen.files[LOG_FILE] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
+
+// Regression caught: a fold-created issue reaches the built-in panel and a later completion updates its projected task.
+test('fold issues project to the task panel', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('fact 2', '[{"op":"status","issue":"s1-1","status":"done"}]')] }
+  const seen = bottoms(on, s)
+  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
+    seen.taskCalls.push(e)
+    return { result: { task: { id: 'panel-1', subject: e.subject } } }
+  })
+  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
+    seen.taskCalls.push(e)
+    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
+  })
+  await turnEnds($, s, seen)
+  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'complete the investigation'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'completed'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+  const create = seen.taskCalls.find(c => c.tool === 'TaskCreate')
+  const updates = seen.taskCalls.filter(c => c.tool === 'TaskUpdate')
+  expect(create.subject).toBe('clm 조사하기')
+  expect(create.description).toBe('조사 메모')
+  expect(updates.some(u => u.taskId === 'panel-1' && u.status === 'completed')).toBe(true)
+})
+
+// Regression caught: the model cannot write the panel directly, while clm's own projection call is allowed through.
+test('model task calls are denied outside clm projection', OPTS, async ($, on) => {
+  const s: State = { rows: [], replies: [] }
+  const seen = bottoms(on, s)
+  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
+    seen.taskCalls.push(e)
+    return { result: { task: { id: 'panel-1', subject: e.subject } } }
+  })
+  const r = await $.tool.call({ tool: 'TaskCreate', subject: 'model task', description: 'should be denied' })
+  expect('deny' in r).toBe(true)
+  expect(seen.taskCalls).toEqual([])
+})
+
+// Regression caught: a fold creating several issues re-entered the projection and created duplicate panel tasks.
+test('several fold issues create one panel task each', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"A","status":"todo"},{"op":"create","title":"B","status":"done"},{"op":"create","title":"C","status":"todo"}]')] }
+  const seen = bottoms(on, s)
+  let n = 0
+  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
+    seen.taskCalls.push(e)
+    return { result: { task: { id: `panel-${++n}`, subject: e.subject } } }
+  })
+  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
+    seen.taskCalls.push(e)
+    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
+  })
+  await turnEnds($, s, seen)
+  expect(seen.taskCalls.filter(c => c.tool === 'TaskCreate').map(c => c.subject)).toEqual(['A', 'B', 'C'])
+  expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate').map(c => [c.taskId, c.status])).toEqual([['panel-2', 'completed']])
+})
+
+// Regression caught: a refused panel write blocked the fold or the tracker append.
+test('a refused TaskCreate still lets the fold complete', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"clm 조사하기","status":"todo"}]')] }
+  const seen = bottoms(on, s)
+  on('tool.call', { tool: 'TaskCreate' }, () => ({ deny: 'refused in test' }))
+  await turnEnds($, s, seen)
+  expect(seen.results[0].messages[1].text).toContain('clm 조사하기')
+  expect(seen.logs).toContain("작업 'clm 조사하기' 추가")
+})
+
+// Regression caught: a changes block written before the notes emptied them and dropped the fold.
+test('a changes block before the notes still applies the fold', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [`<changes>핵심 사실: 순서가 바뀐 응답</changes>\n\n${ledger('fact')}`] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  expect(seen.results[0].messages[1].text).toContain('fact')
+  expect(seen.logs).toContain('맥락 갱신: 핵심 사실: 순서가 바뀐 응답')
+})
+
+// Regression caught: non-task ledger changes were lost from the fold or leaked into the session transcript.
+test('non-task merge changes show display-only notices', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[]', '핵심 사실: 브리지 재시작 시 키 유실 확인\n미결 질문 추가: ui.log가 --resume 후 남는지')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  expect(seen.logs).toContain('맥락 갱신: 핵심 사실: 브리지 재시작 시 키 유실 확인')
+  expect(seen.logs).toContain('맥락 갱신: 미결 질문 추가: ui.log가 --resume 후 남는지')
+  expect(seen.results[0].messages.some(m => m.text?.includes('맥락 갱신:'))).toBe(false)
+})
+
+// Regression caught: a merge reply without the optional changes block must still apply its ledger fold.
+test('a merge without non-task changes still applies the fold', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  expect(seen.results[0].messages[1].text).toContain('fact')
+  expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
+})
 
 // Regression caught: the automatic fold keeps the wrong rows (drops the request, keeps folded turns, or cuts between a tool_use and its tool_result).
 test('over budget, a fold keeps [first request, ledger, newest turns] with tool pairs intact', OPTS, async ($, on) => {

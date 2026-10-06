@@ -1,9 +1,43 @@
 import { test, expect } from 'claude-code/testing'
 
-import { injected, parseLog, snapshot, type TrackerEvent } from './tracker'
+import { describe, injected, parseLog, snapshot, type Issue, type TrackerEvent } from './tracker'
 
 const at = (session: string, repo: string) => ({ session, repo, cwd: '/w' })
 const line = (e: TrackerEvent) => JSON.stringify(e)
+
+const issue = (id: string, title: string, status: Issue['status'] = 'todo'): Issue => ({
+  id, title, status, origin: at('old-session', 'github.com/o/repo'), notes: [], linked: [], updated: '2026-10-06T00:00:00Z',
+})
+
+// Regression caught: tracker changes were written without a matching display notice for each operation.
+test('describes every tracker operation and suppresses a repeated status', async () => {
+  const origin = at('s1', 'github.com/o/repo')
+  const events: TrackerEvent[] = [
+    { ts: '2026-10-06T01:00:00Z', seq: 1, issue: 's1-1', origin, op: 'create', title: 'new task', status: 'todo' },
+    { ts: '2026-10-06T01:00:01Z', seq: 2, issue: 's1-1', origin, op: 'status', status: 'done' },
+    { ts: '2026-10-06T01:00:02Z', seq: 3, issue: 'old-1', origin, op: 'status', status: 'doing' },
+    { ts: '2026-10-06T01:00:03Z', seq: 4, issue: 'old-1', origin, op: 'status', status: 'doing' },
+    { ts: '2026-10-06T01:00:04Z', seq: 5, issue: 'old-1', origin, op: 'status', status: 'todo' },
+    { ts: '2026-10-06T01:00:05Z', seq: 6, issue: 'old-1', origin, op: 'status', status: 'question' },
+    { ts: '2026-10-06T01:00:06Z', seq: 7, issue: 'old-1', origin, op: 'status', status: 'dropped' },
+    { ts: '2026-10-06T01:00:07Z', seq: 8, issue: 'old-1', origin, op: 'progress', done: 4, total: 5 },
+    { ts: '2026-10-06T01:00:08Z', seq: 9, issue: 'old-1', origin, op: 'retitle', title: 'renamed task' },
+    { ts: '2026-10-06T01:00:09Z', seq: 10, issue: 'old-1', origin, op: 'note', text: 'first line\nsecond line' },
+    { ts: '2026-10-06T01:00:10Z', seq: 11, issue: 'old-1', origin, op: 'link' },
+  ]
+  expect(describe(events, [issue('old-1', 'old task')])).toEqual([
+    "작업 'new task' 추가",
+    "작업 'new task' 완수",
+    "작업 'old task' 착수",
+    "작업 'old task' 대기",
+    "작업 'old task' 질문 대기",
+    "작업 'old task' 중단",
+    "작업 'old task' 진행 (4/5)",
+    "작업 'old task' 재조정 -> 'renamed task'",
+    "작업 'renamed task' 메모: first line",
+    "작업 'renamed task' 연결: github.com/o/repo",
+  ])
+})
 
 // Regression caught: logs read in directory order (or per file) let an older status from another session overwrite a newer one.
 test('merging two session logs, the later status of one issue wins', async () => {

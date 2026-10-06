@@ -12,7 +12,7 @@ import {
   renderTurns,
 } from './ledger'
 import {
-  injected, normalizeRemote, parseLog, snapshot, TASK_STATUS, toEvents,
+  describe, injected, normalizeRemote, parseLog, snapshot, toEvents,
   type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
 
@@ -68,7 +68,7 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 
 // `ops` reach the tracker only when the fold is applied, so a planned fold
 // that never lands cannot leave issues behind for the next one to duplicate.
-type Pending = { notes: string; ops: Payload[]; seq: number; keepFp?: string; cuts: Record<string, number>; keptTurns: number; fallback: boolean }
+type Pending = { notes: string; ops: Payload[]; changes: string[]; seq: number; keepFp?: string; cuts: Record<string, number>; keptTurns: number; fallback: boolean }
 type Meta = { seq: number; lastClear?: string; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; probe?: { est: number; real: number } }
 const sid = ($: EngineInterface) => $.session.id()
 const metaKey = async ($: EngineInterface) => `ledger:${await sid($)}`
@@ -176,10 +176,8 @@ async function readAll($: EngineInterface): Promise<TrackerEvent[]> {
   return out
 }
 
-/** Appends to this session's log; only this session ever writes that file. */
-async function append($: EngineInterface, payloads: readonly Payload[], origin?: Origin): Promise<TrackerEvent[]> {
-  if (payloads.length === 0) return []
-  const o = origin ?? (await captureOrigin($))
+/** Writes events to this session's log; only this session ever writes that file. */
+async function writeEvents($: EngineInterface, payloads: readonly Payload[], o: Origin): Promise<TrackerEvent[]> {
   const p = await logFile($, o.session)
   const prev = (await $.fs.exists(p)) ? ((await $.fs.read(p)) as string) : ''
   const lastSeq = parseLog(prev).reduce((n, e) => Math.max(n, e.seq), 0)
@@ -187,6 +185,65 @@ async function append($: EngineInterface, payloads: readonly Payload[], origin?:
   const body = prev && !prev.endsWith('\n') ? `${prev}\n` : prev
   await $.fs.write(p, `${body}${events.map(e => JSON.stringify(e)).join('\n')}\n`)
   return events
+}
+
+// `project` is false where the caller projects later, once its own writes are done.
+async function append($: EngineInterface, payloads: readonly Payload[], origin?: Origin, project = true): Promise<TrackerEvent[]> {
+  if (payloads.length === 0) return []
+  const o = origin ?? (await captureOrigin($))
+  const before = snapshot(await readAll($))
+  const events = await writeEvents($, payloads, o)
+  try {
+    for (const l of describe(events, before)) $.ui.log(l)
+  } catch { /* display notices never block tracker writes */ }
+  if (project) await projectPanel($, o, events)
+  return events
+}
+
+const PANEL_STATUS: Record<Issue['status'], 'pending' | 'in_progress' | 'completed' | 'deleted'> = {
+  todo: 'pending', doing: 'in_progress', done: 'completed', dropped: 'deleted', question: 'pending',
+}
+const panelSubject = (i: Issue) => `${i.status === 'question' ? '질문: ' : ''}${i.title}${i.progress ? ` (${i.progress.done}/${i.progress.total})` : ''}`
+const panelDescription = (i: Issue) => i.notes.at(-1) ?? i.title
+
+async function createTask($: EngineInterface, issue: Issue): Promise<string> {
+  const r = await $.tool.call({ tool: 'TaskCreate', subject: panelSubject(issue), description: panelDescription(issue) })
+  if ('deny' in r || r.isError) throw new Error('TaskCreate was refused')
+  return r.result.task.id
+}
+
+async function updateTask($: EngineInterface, taskId: string, issue: Issue): Promise<void> {
+  const r = await $.tool.call({
+    tool: 'TaskUpdate', taskId, subject: panelSubject(issue), description: panelDescription(issue), status: PANEL_STATUS[issue.status],
+  })
+  if ('deny' in r || r.isError) throw new Error('TaskUpdate was refused')
+}
+
+// One pass over one snapshot: an issue without a task gets one (a dropped one
+// never needs it), a projected issue is updated only when `touched` names it,
+// and the new task ids land in one write that does not project again.
+async function syncPanel($: EngineInterface, origin: Origin, touched: ReadonlySet<string>): Promise<void> {
+  const issues = snapshot(await readAll($)).filter(i => i.origin.session === origin.session)
+  const links: Payload[] = []
+  for (const issue of issues) {
+    if (issue.taskId ? !touched.has(issue.id) : issue.status === 'dropped') continue
+    try {
+      const taskId = issue.taskId ?? (await createTask($, issue))
+      if (!issue.taskId) links.push({ op: 'task', issue: issue.id, taskId })
+      if (issue.taskId || PANEL_STATUS[issue.status] !== 'pending') await updateTask($, taskId, issue)
+    } catch (err) {
+      $.ui.log(`clm task panel: ${issue.id} not projected (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+  }
+  if (links.length) await writeEvents($, links, origin)
+}
+
+async function projectPanel($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]): Promise<void> {
+  try {
+    if (origin.session === await sid($)) await syncPanel($, origin, new Set(events.map(e => e.issue)))
+  } catch (err) {
+    $.ui.log(`clm task panel: projection failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+  }
 }
 
 // The board's drawing reads only `$.state`; the logs are read when it opens,
@@ -207,7 +264,7 @@ async function refreshBoardIfOpen($: EngineInterface) {
 
 // --- folding -------------------------------------------------------------
 
-type Fold = { plan: ClearPlan; notes: string; ops: Payload[]; seq: number; fallback: boolean }
+type Fold = { plan: ClearPlan; notes: string; ops: Payload[]; changes: string[]; seq: number; fallback: boolean }
 
 // The issues one session's ledger shows, with `ops` previewed on top when the
 // fold has not appended them yet; ids then match what append assigns.
@@ -234,6 +291,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   const issues = await trackerView($, here)
   let notes = notesOf(prev)
   let ops: Payload[] = []
+  let changes: string[] = []
   let fallback = false
   if (plan.dropped.length > 0) {
     const legacy = legacyItems(prev)
@@ -254,6 +312,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
     if (typeof merged !== 'string') {
       notes = merged.notes
       ops = merged.ops
+      changes = merged.changes
       meta.fails = 0
       if (merged.rejected) await logEvent($, 'ops-rejected', { ratio, reason: `${merged.rejected} op(s) failed validation; ${ops.length} kept` })
     } else {
@@ -282,7 +341,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   }
   if (Object.keys(plan.cuts).length)
     await logEvent($, 'truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
-  return { plan, notes, ops, seq, fallback }
+  return { plan, notes, ops, changes, seq, fallback }
 }
 
 async function maybeClear($: EngineInterface, opts: Opts) {
@@ -294,7 +353,7 @@ async function maybeClear($: EngineInterface, opts: Opts) {
   await writeMeta($, meta)
   if (typeof f === 'string') return skip($, f)
   const pending: Pending = {
-    notes: f.notes, ops: f.ops, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
+    notes: f.notes, ops: f.ops, changes: f.changes, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
     cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback,
   }
   await $.store.set(await pendingKey($), pending)
@@ -325,6 +384,7 @@ const GUIDE = [
   'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
   'That row records the goal, the user\'s instructions verbatim, what was done with its evidence, what is left, open questions and key facts; the turns it replaced are gone.',
   'Rely on it as your own memory of that work.',
+  'Describe task changes in the conversation; clm records them in the tracker and task panel.',
 ].join('\n')
 
 export const register: Register = (on, options) => {
@@ -413,11 +473,14 @@ export const register: Register = (on, options) => {
         $.ui.log(`clm: ${e.trigger} compaction left the conversation as it is: ${f}`)
         return { messages: all }
       }
-      use = { notes: f.notes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: rows.length - f.plan.tail.length }
+      use = { notes: f.notes, ops: f.ops, changes: f.changes, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: rows.length - f.plan.tail.length }
     }
 
     const here = await captureOrigin($)
-    await append($, use.ops, here)
+    const appended = await append($, use.ops, here, false)
+    try {
+      for (const line of use.changes) $.ui.log('맥락 갱신: ' + line)
+    } catch { /* display notices never block folds */ }
     const ledger = composeLedger(use.notes, await trackerView($, here))
     const text = ledgerRowText(use.seq, new Date().toISOString(), await ledgerPath($), ledger)
     const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
@@ -429,40 +492,18 @@ export const register: Register = (on, options) => {
     const offset = messages.findIndex(m => m.text === text)
     await writeMeta($, { ...meta, seq: use.seq, lastClear: new Date().toISOString(), lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset } })
     await logEvent($, 'clear', { tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1, reason: `${e.trigger}${use.fallback ? ', fallback ledger' : ''}` })
+    await projectPanel($, here, appended)
     return { messages, tokensBefore, tokensAfter }
   })
 
-  // The main loop's task list mirrored into the tracker. Task ids are numbered
-  // per session, so an update finds its issue among this session's own.
-  on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => {
-    const r = await next(e)
-    if (e.agentId !== undefined || r.deny !== undefined || r.isError) return r
-    try {
-      const taskId = (r.result as { task?: { id?: unknown } } | undefined)?.task?.id
-      await append($, [{ op: 'create', title: e.subject, status: 'todo', ...(typeof taskId === 'string' ? { taskId } : {}) }])
-      await refreshBoardIfOpen($)
-    } catch (err) {
-      $.ui.log(`clm tracker: TaskCreate not mirrored (${String(err).slice(0, 160)})`, { to: 'debug' })
-    }
-    return r
-  })
-
-  on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => {
-    const r = await next(e)
-    const status = e.status && TASK_STATUS[e.status]
-    if (e.agentId !== undefined || r.deny !== undefined || r.isError || !status) return r
-    try {
-      const session = await $.session.id()
-      const issue = snapshot(await readAll($)).find(i => i.origin.session === session && i.taskId === e.taskId)
-      if (issue && issue.status !== status) {
-        await append($, [{ op: 'status', issue: issue.id, status }])
-        await refreshBoardIfOpen($)
-      }
-    } catch (err) {
-      $.ui.log(`clm tracker: TaskUpdate not mirrored (${String(err).slice(0, 160)})`, { to: 'debug' })
-    }
-    return r
-  })
+  const taskDeny = '작업 목록은 clm이 원장에서 자동으로 갱신한다. 작업 변화는 대화에 쓰면 된다.'
+  on('tool.call', { tool: 'TaskCreate' }, ($, e, next) =>
+    e.agentId === undefined && next.origin.plugin !== 'clm' ? { deny: taskDeny } : next(e))
+  on('tool.call', { tool: 'TaskUpdate' }, ($, e, next) =>
+    e.agentId === undefined && next.origin.plugin !== 'clm' ? { deny: taskDeny } : next(e))
+  on('tool.describe', { tool: 'TaskCreate' }, ($, e) => ({ ...e, isDeferred: true }))
+  on('tool.describe', { tool: 'TaskUpdate' }, ($, e) => ({ ...e, isDeferred: true }))
+  on('prompt.attachment', { type: 'todo_reminder' }, () => ({ text: null }))
 
   on('ui.render', { component: 'Pane', requestId: BOARD }, async ($, e) =>
     BoardView($.ui.resolve(e), await read($, board), e.props.bodyColumns, {

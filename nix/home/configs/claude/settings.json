@@ -73,7 +73,7 @@
   "model": "opus",
   "outputStyle": "concise-adhd-korean",
   "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/clm:~/.claude/mods/codex-subagent",
+    "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/clm:~/.claude/mods/codex-subagent:~/.claude/mods/time-budget",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
     "DISABLE_AUTOUPDATER": "1",
@@ -131,10 +131,6 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/output-shape-reminder.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/time-budget.py"
           }
         ]
       }
@@ -259,15 +255,6 @@
             "command": "python3 ~/.claude/hooks/missing-tool-hint.py"
           }
         ]
-      },
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/time-budget.py"
-          }
-        ]
       }
     ],
     "SessionStart": [
@@ -294,30 +281,6 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/time-budget.py"
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/time-budget.py"
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/time-budget.py"
           }
         ]
       }

@@ -34,9 +34,9 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 
 ## Plan mode -- present the plan before the first mutation
 - NOTE: the `clm` plugin folds older turns into a ledger (done, to do, key facts, open questions) at every turn end, so context stays bounded with no manual step from you
-- SETUP: at session start, ToolSearch `select:TaskCreate,TaskUpdate,TaskList,EnterPlanMode,ExitPlanMode` before any other work, because a deferred EnterPlanMode is invisible at decision time
+- SETUP: at session start, ToolSearch `select:TaskCreate,TaskUpdate,TaskList` before any other work
 - WHEN (think): the shared "Plan after research, then act" rule's non-trivial bar is met, and the task's FIRST mutation has not happened yet
-- DO (think): finish the research inline FIRST, then call EnterPlanMode, then distill the findings into the plan file and present it via ExitPlanMode -- an inline plan paragraph does not count as presenting a plan
+- DO (think): finish the research inline FIRST, then present the plan in the chat reply for the user's agreement and continue in the same context -- the clm ledger carries state across folds, so no EnterPlanMode/ExitPlanMode round trip is needed
 - EXCEPT: act directly when the user handed you a ready-made plan, said to skip planning, or asked for a few-line fix
 
 ## Questions = explain only

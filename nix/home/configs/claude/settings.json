@@ -90,7 +90,7 @@
   "syncClaudeAiPlugins": false,
   "disableDeepLinkRegistration": "disable",
   "feedbackSurveyRate": 0,
-  "showClearContextOnPlanAccept": true,
+  "showClearContextOnPlanAccept": false,
   "skipWebFetchPreflight": true,
   "tui": "fullscreen",
   "viewMode": "focus",

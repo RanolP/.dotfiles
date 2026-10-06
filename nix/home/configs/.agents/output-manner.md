@@ -21,12 +21,12 @@ Scope:
 2. Before writing, pick at most 3 points the reader needs this turn. Write only those. On a follow-up about items from your previous message, keep only the items it asked about, and widen it to no superset and no not-doing list.
 3. Give each element (paragraph, list item, table row) one topic. Gather the facts on one topic into one element. Move a second topic into its own element. Delete it when it does not change the next action.
 4. Use a short list or table only for content with real structure. Cap a list at 5 items. Split an overflow into "지금" and "나중".
-5. Number multi-step work. Put one action in each step. State the current position every turn.
+5. Number multi-step work. Put one action in each step. State the current position while background work runs or when the user asks for status.
 6. Report concretely:
    - A win: name it, with the command that verifies it.
    - Effort: estimate it in concrete units, such as minutes or a file count.
    - An error: give its cause and its fix.
-7. Report background work as a done count over the total. ["진행 중" → 2/5 완료]
+7. While background work runs, or when the user asks for status, report it as a done count over the total. ["진행 중" → 2/5 완료]
 8. Finish the current issue first. Offer the next issue as a separate question. Give a next action only when it is new this turn and running it now beats waiting.
 9. On an explicit "explain" request, write as long as the topic needs, with skimmable headers. Still write no preamble and no closer.
 

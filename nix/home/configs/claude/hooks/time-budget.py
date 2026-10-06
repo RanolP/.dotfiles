@@ -11,7 +11,7 @@ the factor tracks how far off estimates really run.
 WHY THIS REPORT SHAPE: at each checkpoint the agent reports verified-done items,
 open items, and one next action per open item -- never a percentage. That list
 relieves the late-task pull toward closing over verifying (arXiv 2609.00823).
-Late checkpoints frame running out as "hand off state or ask for more time",
+Late checkpoints frame running out as "stop and report, or ask for more time",
 because "hurry up" wording produces premature done and skipped verification.
 
 Units and their clocks:
@@ -235,9 +235,9 @@ def checkpoint_message(kind, idx, token, elapsed_s, budget):
                 f"on stdin. {REPORT_SHAPE} Keep working meanwhile; a grant "
                 f"arrives on a later tool call. Asking for time is routine, and "
                 f"an open item with its next action is a complete report.")
-    return (f"{head} No extension was granted, so hand off here: make your final "
-            f"message {REPORT_SHAPE[0].lower()}{REPORT_SHAPE[1:]} Then stop; the "
-            f"main thread picks up the open items from that list.")
+    return (f"{head} No extension was granted, so stop and report here: make your "
+            f"final message {REPORT_SHAPE[0].lower()}{REPORT_SHAPE[1:]} Then stop; "
+            f"the open items go to the main thread in that list.")
 
 
 def report_message(token, unit, now):

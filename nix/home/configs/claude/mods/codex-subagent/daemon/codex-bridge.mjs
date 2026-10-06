@@ -3,8 +3,8 @@
 // A hooks module has no Node and no raw sockets: `$.http.fetch` with
 // `socketPath` is its only duplex channel, and codex app-server speaks
 // newline-delimited JSON-RPC, so this bridge translates one into the other.
-// The mod holds this process as a `$.process.spawn` child, so module unload or
-// session exit kills it; the parent-pid watch covers a parent that died hard.
+// The mod normally holds this process as a `$.process.spawn` child; the
+// parent-pid and socket watches cover module reloads and hard parent death.
 //
 // Codex runs in its own CODEX_HOME holding only auth.json and a config that
 // turns off codex's MCP servers, plugins, apps, skills, memories, hooks and web
@@ -24,8 +24,45 @@ import os from 'node:os'
 import path from 'node:path'
 
 const sock = process.argv[2]
-if (!sock) { console.error('usage: codex-bridge.mjs <socket-path>'); process.exit(2) }
-fs.mkdirSync(path.dirname(sock), { recursive: true })
+// The mod's hash of this file at spawn; /health reports it so a reloaded mod can spot a bridge running older code.
+const fingerprint = process.argv[3] ?? null
+if (!sock) { console.error('usage: codex-bridge.mjs <socket-path> [fingerprint]'); process.exit(2) }
+const runDir = path.dirname(sock)
+const sessionId = path.basename(sock).replace(/^codex-subagent-/, '').replace(/\.sock$/, '')
+const stateFile = path.join(runDir, `codex-subagent-${sessionId}.state.json`)
+const schemaCache = path.join(runDir, 'codex-subagent-schemas.json')
+const legacySchemaCache = path.join(runDir, `codex-subagent-schemas-${sessionId}.json`)
+const parent = process.ppid
+let sockIno
+
+fs.mkdirSync(runDir, { recursive: true })
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try { process.kill(pid, 0); return true } catch (err) { return err?.code === 'EPERM' }
+}
+
+function unlinkIfPresent(file) {
+  try { fs.unlinkSync(file) } catch (err) { if (err?.code !== 'ENOENT') throw err }
+}
+
+function pruneStaleRunFiles() {
+  for (const name of fs.readdirSync(runDir)) {
+    if (name.startsWith('codex-subagent-schemas-') && name.endsWith('.json')) {
+      try { unlinkIfPresent(path.join(runDir, name)) } catch (err) { console.error('[bridge] stale schema cache cleanup failed', name, String(err?.message ?? err)) }
+      continue
+    }
+    if (!name.startsWith('codex-subagent-') || !name.endsWith('.state.json')) continue
+    const file = path.join(runDir, name)
+    try {
+      const state = JSON.parse(fs.readFileSync(file, 'utf8'))
+      if (!pidAlive(state.ownerPid) && typeof state.socket === 'string') unlinkIfPresent(state.socket)
+    } catch (err) {
+      if (err?.code !== 'ENOENT') console.error('[bridge] stale state cleanup failed', file, String(err?.message ?? err))
+    }
+  }
+}
+pruneStaleRunFiles()
 try { fs.unlinkSync(sock) } catch {}
 
 // Outside /tmp: codex refuses to install its helper binaries under a temp dir.
@@ -33,14 +70,24 @@ const codexHome = path.join(os.homedir(), '.claude-work', 'run', 'codex-subagent
 const userCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
 fs.mkdirSync(codexHome, { recursive: true })
 const authLink = path.join(codexHome, 'auth.json')
-try { fs.unlinkSync(authLink) } catch {}
-fs.symlinkSync(path.join(userCodexHome, 'auth.json'), authLink)
+const authTarget = path.join(userCodexHome, 'auth.json')
+const authTemp = `${authLink}.${process.pid}.tmp`
+try { unlinkIfPresent(authTemp) } catch {}
+try {
+  fs.symlinkSync(authTarget, authTemp)
+  fs.renameSync(authTemp, authLink)
+} catch (err) {
+  try { unlinkIfPresent(authTemp) } catch {}
+  let pointsRight = false
+  try { pointsRight = path.resolve(path.dirname(authLink), fs.readlinkSync(authLink)) === path.resolve(authTarget) } catch {}
+  if (err?.code !== 'EEXIST' || !pointsRight) throw err
+}
 // The user's model choice carries over; nothing else from ~/.codex/config.toml does.
 let userConfig = ''
 try { userConfig = fs.readFileSync(path.join(userCodexHome, 'config.toml'), 'utf8') } catch {}
 const topLevel = userConfig.split(/^\[/m)[0]
 const inherited = topLevel.split('\n').filter(l => /^\s*(model|model_reasoning_effort)\s*=/.test(l))
-fs.writeFileSync(path.join(codexHome, 'config.toml'), [
+const config = [
   ...inherited,
   'web_search = "disabled"',
   '[tools]', 'web_search = false',
@@ -49,7 +96,11 @@ fs.writeFileSync(path.join(codexHome, 'config.toml'), [
     'browser_use_external', 'computer_use', 'in_app_browser', 'tool_suggest', 'skill_search', 'goals', 'shell_snapshot',
   ].map(f => `${f} = false`),
   '',
-].join('\n'))
+].join('\n')
+const configPath = path.join(codexHome, 'config.toml')
+const configTemp = `${configPath}.${process.pid}.tmp`
+fs.writeFileSync(configTemp, config, { mode: 0o600 })
+fs.renameSync(configTemp, configPath)
 
 const codex = spawn('codex', ['app-server', '--listen', 'stdio://'], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -62,6 +113,29 @@ const sessions = new Map() // caller key -> session
 const byThread = new Map() // codex threadId -> session
 const boxes = new Map() // caller key -> {queue, waiter}: events outlive the session's open and any absent waiter
 const inFlight = new Set() // caller keys whose /step run() has not settled
+const pendingInterrupts = new Set()
+let persisted = { ownerPid: process.pid, socket: sock, agents: {} }
+try {
+  const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'))
+  if (state && typeof state.agents === 'object') persisted.agents = state.agents
+} catch (err) { if (err?.code !== 'ENOENT') console.error('[bridge] state read failed', stateFile, String(err?.message ?? err)) }
+
+function writeJsonAtomic(file, value) {
+  const temp = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o600 })
+  fs.renameSync(temp, file)
+}
+
+function saveState() {
+  if (sockIno !== undefined) {
+    try { if (fs.statSync(sock).ino !== sockIno) return } catch { return }
+  }
+  persisted.ownerPid = process.pid
+  persisted.socket = sock
+  writeJsonAtomic(stateFile, persisted)
+}
+
+saveState()
 const box = key => { let b = boxes.get(key); if (!b) boxes.set(key, b = { queue: [], waiter: null }); return b }
 const WAIT_MS = 25000
 
@@ -71,6 +145,10 @@ const rpc = (method, params) => new Promise((resolve, reject) => {
   pending.set(id, { resolve, reject, method })
   send({ id, method, params })
 })
+
+function rejectPending(err) {
+  for (const [id, p] of pending) { pending.delete(id); p.reject(err) }
+}
 
 let buf = ''
 codex.stdout.on('data', d => {
@@ -140,6 +218,22 @@ function guardSubAgents(m, p) {
   }
 }
 
+async function interruptTurn(s) {
+  if (!s.turnId) return false
+  s.nextPrompt = undefined // an interrupted worker must not resume itself with a queued message
+  // A held tool call keeps the turn blocked; fail it so the interrupt lands.
+  for (const rpcId of s.held.values()) send({ id: rpcId, result: { contentItems: [{ type: 'inputText', text: 'interrupted by the user' }], success: false } })
+  s.held.clear()
+  await rpc('turn/interrupt', { threadId: s.threadId, turnId: s.turnId })
+  return true
+}
+
+async function waitInactive(s) {
+  const deadline = Date.now() + 5000
+  while (s.active && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50))
+  if (s.active) throw new Error(`thread ${s.threadId} remained active 5000ms after interrupt; turnId=${s.turnId ?? 'unknown'}`)
+}
+
 function onMessage(m) {
   if (m.id !== undefined && m.method === undefined) {
     const p = pending.get(m.id); pending.delete(m.id)
@@ -166,21 +260,52 @@ function onMessage(m) {
     console.error('[bridge] item', p.item.type, JSON.stringify(p.item).slice(0, 200))
   const s = byThread.get(p.threadId)
   if (!s) return
-  if (m.method === 'turn/started') s.turnId = p.turn?.id ?? s.turnId
+  if (m.method === 'turn/started') {
+    s.turnId = p.turn?.id ?? s.turnId
+    if (s.interruptRequested) {
+      s.interrupting = true
+      s.interruptRequested = false
+      interruptTurn(s).catch(err => {
+        s.errors.push(`interrupt failed: ${String(err?.message ?? err)}`)
+        console.error('[bridge] deferred interrupt failed', s.threadId, String(err?.message ?? err))
+      })
+    }
+  }
   else if (m.method === 'item/completed' && p.item?.type === 'agentMessage') s.messages.push(p.item.text)
   else if (m.method === 'error') s.errors.push(JSON.stringify(p))
   else if (m.method === 'turn/completed') {
+    if (s.nextPrompt !== undefined) {
+      // A message the running turn could not take opens the next turn instead of ending this step.
+      const prompt = s.nextPrompt
+      s.nextPrompt = undefined
+      s.turnId = null; s.interrupting = false; s.held.clear(); s.messages = []
+      startTurn(s, prompt).catch(err => emit(s.key, { error: `turn/start for the queued message failed: ${String(err?.message ?? err)}` }))
+      return
+    }
     const text = s.messages.length ? s.messages[s.messages.length - 1] : ''
     const ev = { final: { text, status: p.turn?.status, errors: s.errors } }
-    s.active = false; s.turnId = null; s.messages = []; s.errors = []
+    s.active = false; s.turnId = null; s.interrupting = false; s.held.clear(); s.messages = []; s.errors = []; s.nextPrompt = undefined
+    saveState()
     emit(s.key, ev)
   }
 }
 
-const ready = rpc('initialize', {
-  clientInfo: { name: 'codex-subagent', title: 'Claude Code codex-subagent', version: '0.2.0' },
-  capabilities: { experimentalApi: true },
-}).then(r => { send({ method: 'initialized' }); return r })
+let codexVersion = 'unknown'
+let initTimer
+const ready = Promise.race([
+  rpc('initialize', {
+    clientInfo: { name: 'codex-subagent', title: 'Claude Code codex-subagent', version: '0.2.0' },
+    capabilities: { experimentalApi: true },
+  }).then(r => { if (initTimer) clearTimeout(initTimer); codexVersion = String(r?.userAgent ?? 'unknown'); send({ method: 'initialized' }); return r }),
+  new Promise((_, reject) => {
+    initTimer = setTimeout(() => reject(new Error('codex initialize timed out after 15000ms')), 15000)
+    initTimer.unref()
+  }),
+]).catch(err => {
+  console.error('[bridge] codex initialize failed', String(err?.message ?? err))
+  shutdown(`codex initialize failed: ${String(err?.message ?? err)}`)
+  throw err
+})
 
 // MCP input schemas. Nothing the mod can reach carries them, but Claude Code
 // sends every connected MCP tool's full input_schema in its first /v1/messages
@@ -189,14 +314,14 @@ const ready = rpc('initialize', {
 // that keeps tools[] from that body and answers 400: no API call is made.
 // Request headers carry the user's credentials; the recorder deletes them on
 // arrival and never logs, stores or forwards any header.
-const sessionId = path.basename(sock).replace(/^codex-subagent-/, '').replace(/\.sock$/, '')
-const schemaCache = path.join(path.dirname(sock), `codex-subagent-schemas-${sessionId}.json`)
 let harvested = null // Promise<{ tools: Map<claudeName, inputSchema>, missingServers: string[] }>
 let missedAfterHarvest = new Set()
 
 function readSchemaCache() {
   try {
-    const c = JSON.parse(fs.readFileSync(schemaCache, 'utf8'))
+    const all = JSON.parse(fs.readFileSync(schemaCache, 'utf8'))
+    const c = all.versions?.[codexVersion]
+    if (!c) return null
     return { tools: new Map(Object.entries(c.tools)), missingServers: c.missingServers ?? [] }
   } catch { return null }
 }
@@ -207,10 +332,29 @@ function readSchemaCache() {
 // The <server> segment of mcp__<server>__<tool>, as Claude Code derives it from a server name.
 const mcpPrefix = server => server.replace(/[^A-Za-z0-9_-]/g, '_')
 
+export function parseProcessArgs(line) {
+  const argv = []
+  let word = '', quote = '', escaped = false
+  for (const c of line.trim()) {
+    if (escaped) { word += c; escaped = false; continue }
+    if (c === '\\' && quote !== "'") { escaped = true; continue }
+    if (quote) { if (c === quote) quote = ''; else word += c; continue }
+    if (c === "'" || c === '"') { quote = c; continue }
+    if (/\s/.test(c)) { if (word) { argv.push(word); word = '' }; continue }
+    word += c
+  }
+  if (escaped) word += '\\'
+  if (word) argv.push(word)
+  return argv
+}
+
 function parentMcpArgs() {
   let argv
   try { argv = fs.readFileSync(`/proc/${process.ppid}/cmdline`, 'utf8').split('\0').filter(Boolean) } catch {
-    argv = (spawnSync('ps', ['-o', 'args=', '-p', String(process.ppid)], { encoding: 'utf8' }).stdout ?? '').trim().split(/\s+/)
+    // macOS exposes only the command line through ps; honor its quoted/escaped
+    // arguments, while accepting that an unquoted space is not recoverable.
+    const ps = spawnSync('ps', ['-ww', '-o', 'command=', '-p', String(process.ppid)], { encoding: 'utf8' })
+    argv = parseProcessArgs(ps.stdout ?? '')
   }
   const out = []
   for (let i = 0; i < argv.length; i++) {
@@ -318,7 +462,13 @@ async function runHarvest(cwd, names) {
     throw new Error(`schema harvest captured nothing: ${JSON.stringify({ ...diag, stderrTail })}`)
   }
   const map = new Map(tools.map(t => [t.name, t.input_schema]))
-  fs.writeFileSync(schemaCache, JSON.stringify({ harvestedAt: new Date().toISOString(), missingServers, tools: Object.fromEntries(map) }), { mode: 0o600 })
+  let all = { versions: {} }
+  try {
+    const previous = JSON.parse(fs.readFileSync(schemaCache, 'utf8'))
+    if (previous?.versions && typeof previous.versions === 'object') all = previous
+  } catch (err) { if (err?.code !== 'ENOENT') console.error('[bridge] schema cache read failed', schemaCache, String(err?.message ?? err)) }
+  all.versions[codexVersion] = { harvestedAt: new Date().toISOString(), missingServers, tools: Object.fromEntries(map) }
+  writeJsonAtomic(schemaCache, all)
   console.error('[bridge] schema harvest', JSON.stringify({ ms: diag.ms, tools: map.size, cache: schemaCache, recorder: diag.recorder, child: diag.child, servers: diag.servers }))
   if (missingServers.length) console.error('[bridge] schema harvest: servers not connected in the harvest child:', missingServers.join(', '))
   return { tools: map, missingServers, fresh: true }
@@ -375,10 +525,44 @@ async function open(b) {
       r = await rpc('thread/start', { ...common, ephemeral: false, dynamicTools: b.dynamicTools ?? [] })
     }
   }
-  s = { key: b.key, threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, held: new Map(), messages: [], errors: [] }
+  const interruptRequested = pendingInterrupts.delete(b.key)
+  s = { key: b.key, agentType: b.agentType, cwd: b.cwd, threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, interruptRequested, interrupting: interruptRequested, held: new Map(), messages: [], errors: [] }
   sessions.set(b.key, s); byThread.set(s.threadId, s)
+  persisted.agents[b.key] = { type: s.agentType, cwd: s.cwd, threadId: s.threadId }
+  saveState()
   console.error('[bridge] thread', b.threadId ? 'resumed' : 'started', s.threadId, 'tools', (b.dynamicTools ?? []).map(t => t.name).join(','))
   return s
+}
+
+const textInput = text => [{ type: 'text', text, text_elements: [] }]
+
+async function startTurn(s, prompt) {
+  s.active = true
+  try {
+    await rpc('turn/start', { threadId: s.threadId, effort: s.effort ?? null, input: textInput(prompt) })
+  } catch (err) {
+    s.active = false
+    s.turnId = null
+    s.interruptRequested = false
+    s.interrupting = false
+    throw err
+  }
+}
+
+// A message delivered while a dynamic tool ran comes with that tool's result.
+// It joins the running turn as steered user input; when the turn will not take
+// it, it waits for turn/completed and opens the next turn, so codex reads it once.
+async function deliver(s, prompt) {
+  if (s.active && s.turnId) {
+    try {
+      await rpc('turn/steer', { threadId: s.threadId, expectedTurnId: s.turnId, input: textInput(prompt) })
+      return
+    } catch (err) {
+      console.error('[bridge] steer failed; queuing the message for the next turn', JSON.stringify({ thread: s.threadId, turnId: s.turnId, error: String(err?.message ?? err) }))
+    }
+  }
+  if (s.active) { s.nextPrompt = s.nextPrompt === undefined ? prompt : `${s.nextPrompt}\n\n${prompt}`; return }
+  await startTurn(s, prompt)
 }
 
 // Opening a thread can take a schema harvest (up to a minute), so all of it runs
@@ -386,16 +570,18 @@ async function open(b) {
 async function run(b) {
   await ready
   const s = await open(b)
+  if (b.effort !== undefined) s.effort = b.effort
   if (b.toolResult) {
     const rpcId = s.held.get(b.toolResult.callId)
     if (rpcId === undefined) throw new Error(`no held codex tool call ${b.toolResult.callId} on thread ${s.threadId} (bridge restarted mid-call?)`)
     s.held.delete(b.toolResult.callId)
     send({ id: rpcId, result: { contentItems: b.toolResult.contentItems, success: b.toolResult.success } })
+    if (b.prompt !== undefined) await deliver(s, b.prompt)
   } else if (b.prompt !== undefined) {
-    if (s.active) throw new Error(`thread ${s.threadId} already has a running turn`)
+    if (s.active && s.interrupting) await waitInactive(s)
+    if (s.active) throw new Error(`thread ${s.threadId} already has a running turn; turnId=${s.turnId ?? 'unknown'}`)
     box(b.key).queue.length = 0 // the end of an interrupted turn nobody waited for
-    s.active = true
-    await rpc('turn/start', { threadId: s.threadId, effort: b.effort ?? null, input: [{ type: 'text', text: b.prompt, text_elements: [] }] })
+    await startTurn(s, b.prompt)
   } else throw new Error('step needs prompt or toolResult')
 }
 
@@ -418,8 +604,9 @@ async function wait({ key }, res) {
   let w
   const ev = await new Promise(r => {
     w = r; b.waiter = w
-    const drop = () => { if (b.waiter === w) { b.waiter = null; r(null) } }
-    setTimeout(drop, WAIT_MS)
+    let timer
+    const drop = () => { clearTimeout(timer); if (b.waiter === w) { b.waiter = null; r(null) } }
+    timer = setTimeout(drop, WAIT_MS)
     res.on('close', drop)
   })
   if (!ev) return { pending: true }
@@ -429,12 +616,25 @@ async function wait({ key }, res) {
 
 async function interrupt({ key }) {
   const s = sessions.get(key)
-  if (!s?.active || !s.turnId) return { interrupted: false }
-  // A held tool call keeps the turn blocked; fail it so the interrupt lands.
-  for (const rpcId of s.held.values()) send({ id: rpcId, result: { contentItems: [{ type: 'inputText', text: 'interrupted by the user' }], success: false } })
-  s.held.clear()
-  await rpc('turn/interrupt', { threadId: s.threadId, turnId: s.turnId })
+  if (!s) { pendingInterrupts.add(key); return { interrupted: true, deferred: true } }
+  if (!s.active) return { interrupted: false }
+  if (!s.turnId) { s.interruptRequested = true; s.interrupting = true; return { interrupted: true, deferred: true } }
+  s.interrupting = true
+  await interruptTurn(s)
   return { interrupted: true }
+}
+
+function recover({ key }) {
+  const s = sessions.get(key)
+  const agent = s ? { type: s.agentType, cwd: s.cwd, threadId: s.threadId } : persisted.agents[key]
+  return agent?.type && agent.cwd ? { found: true, ...agent } : { found: false }
+}
+
+function remember({ key, type, cwd }) {
+  if (!key || !type || !cwd) throw new Error('remember needs key, type, and cwd')
+  persisted.agents[key] = { type, cwd, ...(persisted.agents[key]?.threadId ? { threadId: persisted.agents[key].threadId } : {}) }
+  saveState()
+  return { remembered: true }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -442,13 +642,16 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') {
       const init = await ready
-      return reply(200, { bridgePid: process.pid, codexPid: codex.pid, codexHome, threads: [...sessions.values()].map(s => [s.key, s.threadId]), userAgent: init?.userAgent })
+      const busy = [...new Set([...inFlight, ...[...sessions.values()].filter(s => s.active).map(s => s.key)])]
+      return reply(200, { bridgePid: process.pid, codexPid: codex.pid, codexHome, fingerprint, busy, threads:[...sessions.values()].map(s => [s.key, s.threadId]), userAgent: init?.userAgent })
     }
     let body = ''
     for await (const d of req) body += d
     if (req.method === 'POST' && req.url === '/step') return reply(200, step(JSON.parse(body)))
     if (req.method === 'POST' && req.url === '/wait') return reply(200, await wait(JSON.parse(body), res))
     if (req.method === 'POST' && req.url === '/interrupt') return reply(200, await interrupt(JSON.parse(body)))
+    if (req.method === 'POST' && req.url === '/recover') return reply(200, recover(JSON.parse(body)))
+    if (req.method === 'POST' && req.url === '/remember') return reply(200, remember(JSON.parse(body)))
     reply(404, { error: `no route ${req.method} ${req.url}` })
   } catch (err) {
     console.error('[bridge] request failed', req.method, req.url, err)
@@ -461,21 +664,45 @@ server.headersTimeout = 0
 // A module reload or a restart starts the new bridge before the old one exits,
 // on the same path; each bridge removes only the socket inode it created, and
 // one whose socket was replaced exits rather than run a second codex.
-let sockIno
+server.on('error', err => {
+  console.error('[bridge] socket server error', err)
+  shutdown(`socket server error: ${String(err?.message ?? err)}`)
+})
 server.listen(sock, () => {
-  sockIno = fs.statSync(sock).ino
+  try { sockIno = fs.statSync(sock).ino; saveState() } catch (err) { shutdown(`socket setup failed: ${String(err?.message ?? err)}`); return }
   console.log(JSON.stringify({ ready: true, sock, bridgePid: process.pid, codexPid: codex.pid, codexHome }))
 })
 
-const parent = process.ppid
+let shuttingDown = false
 function shutdown(why) {
+  if (shuttingDown) return
+  shuttingDown = true
   console.error('[bridge] exiting:', why)
   try { if (fs.statSync(sock).ino === sockIno) fs.unlinkSync(sock) } catch {}
+  try { unlinkIfPresent(legacySchemaCache) } catch (err) { console.error('[bridge] schema cache cleanup failed', String(err?.message ?? err)) }
+  rejectPending(new Error(`codex app-server stopped: ${why}`))
+  const finish = () => {
+    try { server.close() } catch {}
+    setImmediate(() => process.exit(0))
+  }
+  if (codex.exitCode !== null || codex.signalCode !== null) return finish()
   codex.kill('SIGTERM')
-  process.exit(0)
+  const force = setTimeout(() => {
+    if (codex.exitCode === null && codex.signalCode === null) codex.kill('SIGKILL')
+    setTimeout(finish, 500).unref()
+  }, 1000)
+  force.unref()
+  codex.once('exit', finish)
 }
 for (const s of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(s, () => shutdown(s))
-codex.on('exit', (code, sig) => shutdown(`codex app-server exited code=${code} signal=${sig}`))
+codex.on('error', err => {
+  rejectPending(new Error(`codex app-server spawn failed: ${String(err?.message ?? err)}`))
+  console.error('[bridge] codex app-server error', err)
+})
+codex.on('exit', (code, sig) => {
+  rejectPending(new Error(`codex app-server exited code=${code} signal=${sig}`))
+  shutdown(`codex app-server exited code=${code} signal=${sig}`)
+})
 setInterval(() => {
   if (process.ppid !== parent) shutdown(`parent ${parent} gone`)
   let ino

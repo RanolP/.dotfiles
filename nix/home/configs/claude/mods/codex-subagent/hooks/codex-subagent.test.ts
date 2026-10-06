@@ -1,9 +1,16 @@
-import { test, expect } from 'claude-code/testing'
-import type { ApiMessage, SessionMessage } from 'claude-code'
-import { abortable, codexName, inheritedContext, pendingPrompt, relaySet, settlePending, toolResultFor, typeOf, TYPES, unreachable } from './register'
+import { test, expect, mock, type MockClock } from 'claude-code/testing'
+import type { ApiMessage, SessionMessage, TimerCall } from 'claude-code'
+import { abortable, bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
+
+// $.clock.after over the mock clock: the test's `$` has no clock noun to hand the module.
+const timerOn = (clock: MockClock): TimerCall => (ms, fn) => {
+  let live = true
+  void clock.sleep(ms).then(() => { if (live) fn() })
+  return { cancel: () => { live = false } }
+}
 
 // Regression: a SendMessage resume re-sends the original spawn prompt to codex
 // instead of the follow-up, or a step after a tool-result row sends nothing.
@@ -120,10 +127,49 @@ test('settle retries a transient /wait failure without re-running /step', async 
       return { threadId: 'thread', resumed: false, bridgePid: 0, codexPid: 0, final: { text: 'done', errors: [] } }
     },
     error => retries.push(error),
+    async () => {},
   )
   expect(waits.count).toBe(2)
   expect(retries).toHaveLength(1)
   expect('final' in reply ? reply.final.text : undefined).toBe('done')
+})
+
+// Regression: a bridge that exits before its ready line used to leave every Codex step awaiting forever.
+test('bridgeReady rejects an early bridge exit with stderr', async (_$, on) => {
+  async function* exited() {
+    yield { stream: 'stderr', text: 'codex: command not found\n' }
+  }
+  await expect(bridgeReady(exited(), timerOn(mock.clock(on)))).rejects.toThrow('codex bridge exited before ready; exit code=unknown; stderr tail: codex: command not found')
+})
+
+// Regression: a bridge that stays alive but never prints its ready line leaves
+// every Codex step awaiting forever instead of failing with the startup timeout.
+test('bridgeReady rejects a silent bridge once the startup timeout passes', async (_$, on) => {
+  const clock = mock.clock(on)
+  async function* silent() {
+    yield { stream: 'stderr', text: 'still booting\n' }
+    await new Promise<never>(() => {})
+  }
+  let outcome = 'pending'
+  void bridgeReady(silent(), timerOn(clock)).then(() => { outcome = 'ready' }, (err: unknown) => { outcome = String(err) })
+  await clock.advance(14_999)
+  expect(outcome).toBe('pending')
+  await clock.advance(1)
+  expect(outcome).toBe('Error: codex bridge startup timed out after 15000ms; exit code=unknown; stderr tail: still booting\n')
+})
+
+// Regression: repeated 30-second /wait aborts used to recurse without a bound and never return an error.
+test('settle gives up after bounded aborted /wait retries', async () => {
+  let waits = 0
+  let healthChecks = 0
+  await expect(settlePending(
+    { pending: true },
+    async () => { waits++; throw new Error('aborted: no complete answer within 30000ms') },
+    () => {},
+    async () => { healthChecks++ },
+  )).rejects.toThrow('bridge /wait gave up after 3 retries')
+  expect(waits).toBe(4)
+  expect(healthChecks).toBe(3)
 })
 
 // Regression: a bridge error must end the turn instead of making /wait spin
@@ -163,4 +209,259 @@ test('an already-aborted handback wait ends immediately', async () => {
     error => error instanceof Error ? error.message : String(error),
   )
   expect(message).toBe('interrupted')
+})
+
+// Regression: codex thinks past the harness's 600 s stall watchdog without a
+// tool call, the turn yields nothing meanwhile, and the agent is killed as
+// "Agent stalled: no progress"; or the keepalive outlives an interrupt.
+test('keepalive yields empty thinking chunks while a slow step is pending, then its reply', async (_$, on) => {
+  const clock = mock.clock(on)
+  const after = timerOn(clock)
+  const slow = clock.sleep(95_000).then(() => 'reply')
+  let beats = 0
+  const chunks: unknown[] = []
+  const drain = async (gen: AsyncGenerator<unknown, string>) => {
+    let r = await gen.next()
+    while (!r.done) { chunks.push(r.value); r = await gen.next() }
+    return r.value
+  }
+  const done = drain(keepalive(slow, new AbortController().signal, () => { beats++ }, after))
+  await clock.advance(95_000)
+  expect(await done).toBe('reply')
+  expect(chunks).toEqual([0, 1, 2].map(() => ({ kind: 'thinking', index: 0, text: '' })))
+  expect(beats).toBe(3)
+
+  const stopped = new AbortController()
+  const hung = drain(keepalive(new Promise<string>(() => {}), stopped.signal, () => {}, after))
+  await clock.advance(31_000)
+  stopped.abort()
+  expect(await hung.then(() => 'completed', err => String(err))).toBe('Error: interrupted')
+})
+
+// Regression: the main session's Bash `cd` into a subdirectory moved
+// $.session.cwd(), and every later codex worker could write only there.
+test('a worker spawned after the session cd\'d into a subdirectory still gets the repo root as its writable root', async () => {
+  const asked: (string | undefined)[] = []
+  const git: Parameters<typeof workspaceRoot>[0] = async (argv, init) => {
+    asked.push(init?.cwd)
+    const inRepo = argv.join(' ') === 'git rev-parse --show-toplevel' && init?.cwd?.startsWith('/repo')
+    return { exitCode: inRepo ? 0 : 128, stdout: inRepo ? '/repo\n' : '', stderr: inRepo ? '' : 'fatal: not a git repository', isStdoutTruncated: false, isStderrTruncated: false }
+  }
+  expect(await workspaceRoot(git, '/repo/nix/home/configs/claude/mods/clm/hooks')).toBe('/repo')
+  expect(asked).toEqual(['/repo/nix/home/configs/claude/mods/clm/hooks'])
+  expect(await workspaceRoot(git, '/scratch/outside')).toBe('/scratch/outside')
+  expect(await workspaceRoot(async () => { throw new Error('git: not found') }, '/scratch/outside')).toBe('/scratch/outside')
+})
+
+// Incident: a codex worker ended its run with SubagentHandback, the harness
+// ran no further step, and the mod kept that handback pending in memory. The
+// next SendMessage (a 13-item review, ~4 KB) was answered "(report delivered
+// through SubagentHandback)" in 0.6 s without ever reaching codex.
+test('a resumed worker receives a long multi-line message and runs a new turn instead of returning the previous completion', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a8a97bfadb6fe4d4b'
+  const review = Array.from({ length: 13 }, (_, i) =>
+    `${i + 1}. \`hooks/fold.ts:${10 * i + 3}\` drops the "pending" row when \`ledger.flush()\` races;\n   fix: guard with \`if (!row) return\` and add a test.\n  ${'context '.repeat(20).trim()}`).join('\n')
+  expect(review.length).toBeGreaterThan(3000)
+
+  let api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  let rows: SessionMessage[] = [row('user', 'implement it')]
+  const steps: Record<string, unknown>[] = []
+  const finals = ['first report', 'review applied']
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const body = JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') { steps.push(body); return json({ pending: true }) }
+    if (route === '/wait') return json({ threadId: 'thread-1', resumed: false, bridgePid: 1, codexPid: 2, final: { text: finals[steps.length - 1], status: 'completed', errors: [] } })
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  const runStep = async (turnId: string) => {
+    const stream = $.turn.step({ turnId, index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+    let r = await stream.next()
+    while (!r.done) r = await stream.next()
+    return r.value
+  }
+
+  const first = await runStep('turn-1')
+  expect(first.toolUses.map(t => t.name)).toEqual(['SubagentHandback'])
+  const handbackId = `toolu_codex_handback_thread-1_0`
+  // The harness runs the handback tool, ends the run with no further step, then the SendMessage arrives.
+  api = [
+    ...api,
+    { role: 'assistant', content: [{ type: 'tool_use', id: handbackId, name: 'SubagentHandback', input: { message: 'first report' } }] },
+    { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: handbackId, content: '{"success":true,"message":"Report delivered to your caller."}' },
+      { type: 'text', text: `The coordinator sent a message while you were working:\n${review}` },
+    ] },
+  ]
+  rows = [
+    ...rows,
+    row('assistant', '', { toolUses: [{ tool_use_id: handbackId, tool: 'SubagentHandback', input: { message: 'first report' } }] }),
+    row('user', '', { toolResults: [{ tool_use_id: handbackId, text: 'Report delivered to your caller.', isError: false }] }),
+    row('user', `The coordinator sent a message while you were working:\n${review}`),
+  ]
+
+  const resumed = await runStep('turn-2')
+  expect(resumed.answer).toBe('')
+  expect(steps).toHaveLength(2)
+  expect(steps[1]?.prompt).toBe(`The coordinator sent a message while you were working:\n${review}`)
+  expect(steps[1]?.toolResult).toBeUndefined()
+  expect(resumed.toolUses.map(t => t.name)).toEqual(['SubagentHandback'])
+  expect(String((resumed.toolUses[0]?.input as { message?: unknown }).message)).toStartWith('review applied')
+})
+
+// Incident class: a SendMessage that reached a worker while one of its relayed
+// tools ran rides in the same user message as that tool's result; the step
+// handed codex the text as part of the tool output, never as the coordinator's.
+test('a coordinator message that arrives with a relayed tool result still reaches codex as the next prompt', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-coordinated'
+  const note = 'Stop editing `fold.ts`;\nreview item 4 is withdrawn.\nKeep "ledger.ts" as is.'
+  const delivered = `The coordinator sent a message while you were working:\n${note}`
+  let api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const steps: Record<string, unknown>[] = []
+  const replies: unknown[] = [
+    { threadId: 'thread-2', resumed: false, bridgePid: 1, codexPid: 2, toolCall: { callId: 'c1', tool: 'WebFetch', arguments: { url: 'https://example.com', prompt: 'p' } } },
+    { threadId: 'thread-2', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } },
+  ]
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [{ name: 'WebFetch', description: 'fetch', mcp: false }] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('session.receive', async (_$, e) => ({ text: e.text }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
+    if (route === '/wait') return json(replies[steps.length - 1])
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+  const runStep = async (turnId: string, index: number) => {
+    const stream = $.turn.step({ turnId, index, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+    let r = await stream.next()
+    while (!r.done) r = await stream.next()
+    return r.value
+  }
+
+  const first = await runStep('turn-1', 0)
+  expect(first.toolUses.map(t => t.name)).toEqual(['WebFetch'])
+  await $.session.receive({ origin: { kind: 'coordinator' }, text: note, agentId })
+  api = [
+    ...api,
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_codex_c1', name: 'WebFetch', input: { url: 'https://example.com', prompt: 'p' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_codex_c1', content: 'page text' }, { type: 'text', text: delivered }] },
+  ]
+  await runStep('turn-1', 1)
+
+  expect(steps).toHaveLength(2)
+  expect(steps[1]?.toolResult).toEqual({ callId: 'c1', contentItems: [{ type: 'inputText', text: 'page text' }], success: true })
+  expect(steps[1]?.prompt).toBe(delivered)
+})
+
+// Incident class: a bridge outlives a module reload, so the reloaded mod kept
+// stepping through a bridge whose run() predates `prompt` beside `toolResult`,
+// and the coordinator text that step carried was discarded without an error.
+test('a bridge started from older bridge code is replaced before the next step instead of silently dropping the new prompt field', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-stale-bridge'
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const spawns: string[][] = []
+  const log: string[] = []
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('agent.list', async () => ({ value: [] }))
+  on('fs.read', async () => ({ value: 'export const bridge = "current"\n' }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* (_$, e) {
+    spawns.push([...e.argv])
+    log.push('spawn')
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    log.push(route)
+    // The first bridge runs code from before /health reported a fingerprint.
+    if (route === '/health') return json(spawns.length === 1 ? { bridgePid: 1, threads: [] } : { bridgePid: 3, threads: [], busy: [], fingerprint: spawns.at(-1)?.[3] })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') return json({ pending: true })
+    if (route === '/wait') return json({ threadId: 'thread-3', resumed: false, bridgePid: 3, codexPid: 4, final: { text: 'done', status: 'completed', errors: [] } })
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  let r = await stream.next()
+  while (!r.done) r = await stream.next()
+
+  expect(spawns).toHaveLength(2)
+  expect(spawns[1]?.[3]).toMatch(/^[0-9a-f]{8,}$/)
+  expect(log.indexOf('/step')).toBeGreaterThan(log.lastIndexOf('spawn'))
+})
+
+// Incident class: the /wait retry probed /health with a POST the bridge does
+// not route, so every dropped long-poll ended the step although the bridge was fine.
+test('a transient /wait failure recovers when the bridge is healthy instead of failing the step', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-wait-retry'
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  let waits = 0
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const method = e.init?.method ?? 'GET'
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    // The bridge routes /health for GET only, as codex-bridge.mjs does.
+    if (route === '/health' && method === 'GET') return json({ bridgePid: 1, threads: [], busy: [], fingerprint: 'unused' })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') return json({ pending: true })
+    if (route === '/wait') {
+      if (++waits === 1) return { deny: 'fetch failed: aborted: no complete answer' }
+      return json({ threadId: 'thread-4', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'recovered answer', status: 'completed', errors: [] } })
+    }
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${method} ${route}` } }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  let r = await stream.next()
+  while (!r.done) r = await stream.next()
+
+  expect(waits).toBe(2)
+  expect(r.value.answer).toBe('')
+  expect((r.value.toolUses[0]?.input as { message?: string } | undefined)?.message).toStartWith('recovered answer')
 })

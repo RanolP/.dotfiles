@@ -1,4 +1,4 @@
-import type { ApiMessage, EngineInterface, Register, SessionMessage, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, TimerCall, TurnStepChunk, TurnStepResult } from 'claude-code'
 
 // codex-subagent: pinned GPT agent types, served by codex app-server.
 //
@@ -83,6 +83,20 @@ export function typeOf(subagentType: string): TypeName | undefined {
   return t in TYPES ? (t as TypeName) : undefined
 }
 
+// The thread cwd is codex's workspace-write root. $.session.cwd() follows a
+// shell `cd` in the main session, so a worker spawned from a subdirectory
+// could write only there; the repo root keeps the whole project writable.
+// Outside a repo (or with no git) the spawn directory itself stays the root.
+export async function workspaceRoot(run: EngineInterface['process']['run'], cwd: string): Promise<string> {
+  try {
+    const r = await run(['git', 'rev-parse', '--show-toplevel'], { cwd })
+    const top = r.stdout.trim()
+    return r.exitCode === 0 && top ? top : cwd
+  } catch {
+    return cwd
+  }
+}
+
 const stripReminders = (s: string) => s.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
 
 // The text this step must hand codex: the newest user row that is a real
@@ -119,7 +133,10 @@ function toItems(content: unknown): ContentItem[] {
 
 // The answer to a relayed call: its tool_result, plus the text blocks Claude
 // Code puts after it in the same message (a Skill's body arrives that way).
-export function toolResultFor(api: readonly ApiMessage[], toolUseId: string): { contentItems: ContentItem[]; success: boolean } | undefined {
+// A message delivered to the agent while the call ran (`delivered`, the texts
+// session.receive queued) rides in that same message but is not the tool's:
+// it comes back apart as `messages`, for codex to read as user input.
+export function toolResultFor(api: readonly ApiMessage[], toolUseId: string, delivered: readonly string[] = []): { contentItems: ContentItem[]; success: boolean; messages?: string[] } | undefined {
   const last = api[api.length - 1]
   if (!last || last.role !== 'user') return undefined
   const blocks = last.content as ApiBlock[]
@@ -127,10 +144,13 @@ export function toolResultFor(api: readonly ApiMessage[], toolUseId: string): { 
   if (i < 0) return undefined
   const r = blocks[i]
   if (!r) return undefined
+  const trailing = blocks.slice(i + 1).filter(b => b.type === 'text' || b.type === 'image')
+  const isDelivered = (b: ApiBlock) => b.type === 'text' && typeof b.text === 'string' && delivered.some(d => d !== '' && stripReminders(b.text!).includes(d))
+  const messages = trailing.filter(isDelivered).map(b => stripReminders(b.text!))
   const contentItems = r.toolDenialKind === 'user-rejected'
     ? [{ type: 'inputText' as const, text: 'user rejected this tool call' }]
-    : [...toItems(r.content), ...toItems(blocks.slice(i + 1).filter(b => b.type === 'text' || b.type === 'image'))]
-  return { contentItems: contentItems.length ? contentItems : [{ type: 'inputText', text: '(empty result)' }], success: !r.is_error }
+    : [...toItems(r.content), ...toItems(trailing.filter(b => !isDelivered(b)))]
+  return { contentItems: contentItems.length ? contentItems : [{ type: 'inputText', text: '(empty result)' }], success: !r.is_error, ...(messages.length ? { messages } : {}) }
 }
 
 // What the agent's first message carries ahead of the task itself: hook
@@ -162,7 +182,7 @@ type StepResult = StepMeta & ({ toolCall: { callId: string; tool: string; argume
 type StepEvent = StepResult | (StepMeta & { error: string })
 export type StepReply = { pending: true } | StepEvent | { error: string }
 
-type ApiBlock = { type: string; tool_use_id?: string; content?: unknown; is_error?: boolean; toolDenialKind?: string }
+type ApiBlock = { type: string; id?: string; name?: string; text?: string; input?: { message?: unknown }; tool_use_id?: string; content?: unknown; is_error?: boolean; toolDenialKind?: string }
 
 // $.http.fetch's text for a socket nothing listens on (missing, or left by a
 // dead bridge). Its 30 s "aborted: no complete answer" is not one: that bridge
@@ -181,50 +201,175 @@ export function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> 
 
 export const interrupted = (err: unknown) => err instanceof Error && err.message === 'interrupted'
 
-export function settlePending(reply: StepReply, wait: () => Promise<StepReply>, onRetry: (err: unknown) => void): Promise<StepResult> {
-  const settle = async (current: StepReply): Promise<StepResult> => {
-    if (!('pending' in current)) {
-      if ('error' in current) throw new Error(`bridge: ${current.error}`)
-      return current
+// The harness aborts a subagent whose stream yields nothing for 600 s, and
+// codex can think longer than that without a tool call. Every chunk the turn
+// streams counts as progress; an empty thinking chunk is the one the
+// transcript does not keep, so the answer stays clean. Pass $.clock.after,
+// not $.clock.sleep: a sleep is charged to the dispatch's own time budget.
+export const KEEPALIVE_MS = 30_000
+
+export async function* keepalive<T>(work: Promise<T>, signal: AbortSignal, onBeat: () => void, after: TimerCall, intervalMs = KEEPALIVE_MS): AsyncGenerator<TurnStepChunk, T> {
+  const settled = work.then(value => ({ value }), (error: unknown) => ({ error }))
+  for (;;) {
+    let timer: Timer | undefined
+    const beat = new Promise<'beat'>(resolve => { timer = after(intervalMs, () => resolve('beat')) })
+    const r = await abortable(Promise.race([settled, beat]), signal).finally(() => timer?.cancel())
+    if (r === 'beat') {
+      onBeat()
+      yield { kind: 'thinking', index: 0, text: '' }
+      continue
     }
+    if ('error' in r) throw r.error
+    return r.value
+  }
+}
+
+export const MAX_WAIT_RETRIES = 3
+
+export async function settlePending(
+  reply: StepReply,
+  wait: () => Promise<StepReply>,
+  onRetry: (err: unknown) => void,
+  health: () => Promise<unknown> = async () => {},
+): Promise<StepResult> {
+  let current = reply
+  let retries = 0
+  while ('pending' in current) {
     try {
-      return settle(await wait())
+      current = await wait()
     } catch (err) {
       if (!/aborted: no complete answer/.test(String(err))) throw err
+      if (retries >= MAX_WAIT_RETRIES) throw new Error(`bridge /wait gave up after ${MAX_WAIT_RETRIES} retries; last error: ${String(err)}`)
       onRetry(err)
-      return settle(current)
+      try {
+        await health()
+      } catch (healthErr) {
+        throw new Error(`bridge /wait health check failed after ${retries + 1} retries: ${String(healthErr)}; last /wait error: ${String(err)}`)
+      }
+      retries++
     }
   }
-  return settle(reply)
+  if ('error' in current) throw new Error(`bridge: ${current.error}`)
+  return current
+}
+
+type BridgeChunk = { stream: string; text: string; exitCode?: unknown; signal?: unknown }
+const BRIDGE_STARTUP_TIMEOUT_MS = 15_000
+
+function processStatus(err: unknown): string {
+  if (!err || typeof err !== 'object') return 'exit code=unknown'
+  const e = err as { exitCode?: unknown; code?: unknown; signal?: unknown }
+  const code = e.exitCode ?? e.code
+  return `${code === undefined ? 'exit code=unknown' : `exit code=${String(code)}`}${e.signal ? ` signal=${String(e.signal)}` : ''}`
+}
+
+// `after` is $.clock.after: the hook environment declares no setTimeout.
+export function bridgeReady(events: AsyncIterable<BridgeChunk>, after: TimerCall, timeoutMs = BRIDGE_STARTUP_TIMEOUT_MS): Promise<void> {
+  let resolve!: () => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej })
+  let stderrTail = ''
+  let status = 'exit code=unknown'
+  let settled = false
+  let timer: Timer | undefined
+  const finish = (error?: Error) => {
+    if (settled) return
+    settled = true
+    timer?.cancel()
+    if (error) reject(error)
+    else resolve()
+  }
+  timer = after(timeoutMs, () => finish(new Error(`codex bridge startup timed out after ${timeoutMs}ms; exit code=unknown; stderr tail: ${stderrTail || '(empty)'}`)))
+  void (async () => {
+    try {
+      for await (const { stream, text } of events) {
+        if (stream === 'stderr') stderrTail = (stderrTail + text).slice(-2000)
+        if (stream === 'exit') status = `${text || 'exit'}${status === 'exit code=unknown' ? '' : `; ${status}`}`
+        if (stream === 'stdout' && text.includes('"ready":true')) finish()
+      }
+      finish(new Error(`codex bridge exited before ready; ${status}; stderr tail: ${stderrTail || '(empty)'}`))
+    } catch (err) {
+      finish(new Error(`codex bridge failed before ready; ${processStatus(err)}; ${String(err)}; stderr tail: ${stderrTail || '(empty)'}`))
+    }
+  })()
+  return promise
+}
+
+// cyrb53: the fingerprint only has to tell one bridge source from another.
+export function contentHash(text: string): string {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 2654435761)
+    h2 = Math.imul(h2 ^ c, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0')
+}
+
+// The bridge's source as this module sees it on disk. A bridge outlives a
+// module reload, so a bridge whose /health reports another fingerprint runs
+// code this module was not written against.
+export const bridgeSource = ($: EngineInterface) => `${$.plugin.root}/daemon/codex-bridge.mjs`
+export const UNREAD_FINGERPRINT = 'unread'
+export async function bridgeFingerprint($: EngineInterface): Promise<string> {
+  try {
+    return contentHash(await $.fs.read(bridgeSource($)))
+  } catch (err) {
+    // An unreadable source must not keep the bridge from starting; it only skips the staleness check.
+    $.ui.log(`[codex-subagent] cannot fingerprint ${bridgeSource($)}: ${String(err)}`, { to: 'debug' })
+    return UNREAD_FINGERPRINT
+  }
 }
 
 // A bridge for the session's life; resolves once it listens. A step calls this
-// again when nothing listens on the socket (the bridge or codex died); the new
-// bridge resumes threads from the threadId the step sends.
+// again when nothing listens on the socket (the bridge or codex died), or when
+// the bridge runs stale code; the new bridge takes over the socket (the old one
+// exits once its socket is replaced) and resumes threads from the threadId the step sends.
 function startBridge($: EngineInterface, sock: string): Promise<void> {
-  const { promise: ready, resolve: markReady } = Promise.withResolvers<void>()
-  void (async () => {
-    const bridge = $.process.spawn({ argv: ['node', `${$.plugin.root}/daemon/codex-bridge.mjs`, sock] })
-    for await (const { stream, text } of bridge) {
-      if (stream === 'stdout' && text.includes('"ready":true')) markReady?.()
+  let stop: (() => void) | undefined
+  async function* output() {
+    const bridge = await $.process.spawn({ argv: ['node', bridgeSource($), sock, await bridgeFingerprint($)] })
+    stop = () => {
+      try { (bridge as unknown as { kill?: (signal?: string) => void }).kill?.('SIGTERM') } catch (err) { $.ui.log(`[codex-bridge] failed to stop after startup failure: ${String(err)}`, { to: 'debug' }) }
+    }
+    for await (const chunk of bridge) {
+      const { stream, text } = chunk
       // $.ui.log drops any text over 4096 characters, so long bridge lines go in pieces.
       for (const line of text.trimEnd().split('\n'))
         for (let i = 0; i < line.length; i += 3900) $.ui.log(`[codex-bridge ${stream}] ${line.slice(i, i + 3900)}`, { to: 'debug' })
+      yield chunk
     }
+    const status = bridge as unknown as { exitCode?: unknown; code?: unknown; signal?: unknown }
+    yield { stream: 'exit', text: processStatus(status), exitCode: status.exitCode ?? status.code, signal: status.signal }
     $.ui.log('[codex-bridge] exited', { to: 'debug' })
-  })()
+  }
+  const ready = bridgeReady(output(), (ms, fn) => $.clock.after(ms, fn))
+  void ready.catch(() => stop?.())
   return ready
+}
+
+async function socketPath($: EngineInterface): Promise<string> {
+  const home = (await $.env.get('HOME')) ?? '/tmp'
+  return `${home}/.claude-work/run/codex-subagent-${await $.session.id()}.sock`
 }
 
 export const register: Register = (on) => {
   const agents = new Map<string, Agent>()
+  // Messages delivered to a codex agent and not yet handed to codex, by agent id.
+  const inbox = new Map<string, string[]>()
+
+  on('session.receive', async ($, e, next) => {
+    const r = await next(e)
+    const text = r.text?.trim()
+    if (e.agentId && text && agents.has(e.agentId)) inbox.set(e.agentId, [...(inbox.get(e.agentId) ?? []), text])
+    return r
+  })
   let sock = ''
   let bridgeReady: Promise<void> | undefined
-
-  const socketPath = async ($: EngineInterface) => {
-    const home = (await $.env.get('HOME')) ?? '/tmp'
-    return `${home}/.claude-work/run/codex-subagent-${await $.session.id()}.sock`
-  }
+  // The bridgeReady whose /health matched this module's bridge source.
+  let verifiedBridge: Promise<void> | undefined
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -247,20 +392,56 @@ export const register: Register = (on) => {
   on('agent.spawn', async ($, e, next) => {
     const type = typeOf(e.subagentType)
     const r = await next(e)
-    if (type && r.agentId) agents.set(r.agentId, { type, cwd: e.cwd ?? (await $.session.cwd()) })
+    if (type && r.agentId) {
+      const cwd = await workspaceRoot((argv, init) => $.process.run(argv, init), e.cwd ?? (await $.session.cwd()))
+      agents.set(r.agentId, { type, cwd })
+      try {
+        sock ||= await socketPath($)
+        bridgeReady ??= startBridge($, sock)
+        const ready = bridgeReady
+        try { await abortable(ready, next.signal) } catch (err) { if (bridgeReady === ready) bridgeReady = undefined; throw err }
+        const res = await $.http.fetch('http://codex-bridge/remember', {
+          method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ key: r.agentId, type, cwd }),
+        })
+        if (!res.ok) throw new Error(`bridge POST /remember ${res.status}: ${res.text.slice(0, 2000)}`)
+      } catch (err) {
+        $.ui.log(`[codex-subagent] could not persist ${r.agentId}: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+      }
+    }
     return r
   })
 
   on('turn.step', async function* ($, e, next) {
-    const agent = e.agentId ? agents.get(e.agentId) : undefined
-    if (!agent) return yield* next(e)
     const agentId = e.agentId!
-    if (next.signal.aborted) return yield* endTurn(e, '[codex-subagent error] interrupted')
     const post = (route: string, payload: unknown) =>
       $.http.fetch(`http://codex-bridge${route}`, { method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
-    const onAbort = () => { void post('/interrupt', { key: agentId }).catch(() => {}) }
+    let agent = agentId ? agents.get(agentId) : undefined
+    if (!agent && agentId) {
+      try {
+        sock ||= await socketPath($)
+        bridgeReady ??= startBridge($, sock)
+        const ready = bridgeReady
+        try { await abortable(ready, next.signal) } catch (err) { if (bridgeReady === ready) bridgeReady = undefined; throw err }
+        const res = await abortable(post('/recover', { key: agentId }), next.signal)
+        if (!res.ok) throw new Error(`bridge POST /recover ${res.status}: ${res.text.slice(0, 2000)}`)
+        const recovered = JSON.parse(res.text) as { found?: boolean; type?: TypeName; cwd?: string; threadId?: string }
+        if (recovered.found && recovered.type && recovered.cwd)
+          agent = { type: recovered.type, cwd: recovered.cwd, threadId: recovered.threadId }
+      } catch (err) {
+        $.ui.log(`[codex-subagent] recovery lookup failed for ${agentId}: ${String(err)}`, { to: 'debug' })
+        const hinted = typeOf(String((e as { subagentType?: unknown }).subagentType ?? ''))
+        if (hinted) return yield* endTurn(e, `[codex-subagent error] cannot recover ${agentId}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      if (agent) agents.set(agentId, agent)
+    }
+    if (!agent) return yield* next(e)
+    if (next.signal.aborted) return yield* endTurn(e, '[codex-subagent error] interrupted')
+    const onAbort = () => { void post('/interrupt', { key: agentId }).catch(err => $.ui.log(`[codex-subagent] interrupt failed: ${String(err)}`, { to: 'debug' })) }
     next.signal.addEventListener('abort', onAbort)
-    const ask = async (route: string, payload: unknown) => {
+    // Block 0 holds the keepalive's thinking once it beats; the answer then streams in block 1.
+    let block = 0
+    const ask =async (route: string, payload: unknown) => {
       const res = await abortable(post(route, payload), next.signal)
       if (!res.ok) throw new Error(`bridge POST ${route} ${res.status}: ${res.text.slice(0, 2000)}`)
       const r = JSON.parse(res.text) as StepReply
@@ -268,23 +449,73 @@ export const register: Register = (on) => {
       return r
     }
 
+    // The bridge routes /health for GET only; every other route is a POST.
+    const getHealth = () => abortable($.http.fetch('http://codex-bridge/health', { method: 'GET', socketPath: sock }), next.signal)
+
     const settle = (reply: StepReply): Promise<StepResult> => settlePending(
       reply,
       () => ask('/wait', { key: agentId }),
       err => $.ui.log(`[codex-subagent] /wait failed (${String(err)}); retrying`, { to: 'debug' }),
+      async () => {
+        const res = await getHealth()
+        if (!res.ok) throw new Error(`bridge GET /health ${res.status}: ${res.text.slice(0, 2000)}`)
+      }
     )
+    // True once the listening bridge runs this module's bridge source. A stale
+    // bridge is replaced only while no other agent has a turn in it and this
+    // step holds none of its tool calls; otherwise the next step checks again.
+    const bridgeCurrent = async (body: Record<string, unknown>): Promise<boolean> => {
+      const ready = bridgeReady
+      if (!ready || verifiedBridge === ready) return true
+      const want = await bridgeFingerprint($)
+      if (want === UNREAD_FINGERPRINT) return true
+      const res = await getHealth()
+      if (!res.ok) {
+        $.ui.log(`[codex-subagent] bridge GET /health ${res.status}: ${res.text.slice(0, 2000)}; cannot check its code, stepping through it`, { to: 'debug' })
+        return true
+      }
+      const health = JSON.parse(res.text) as { fingerprint?: string; busy?: string[]; threads?: [string, string | null][] }
+      if (health.fingerprint === want) { verifiedBridge = ready; return true }
+      // A bridge from before /health reported `busy` still lists its threads;
+      // any of those agents the engine shows running may be mid-turn in it.
+      const known = new Set((health.threads ?? []).map(([key]) => key))
+      const others = Array.isArray(health.busy)
+        ? health.busy.filter(key => key !== agentId)
+        : (await $.agent.list()).filter(a => a.id !== agentId && a.status === 'running' && known.has(a.id)).map(a => a.id)
+      const holdsCall = body.toolResult !== undefined
+      if (others.length || holdsCall) {
+        $.ui.log(`[codex-subagent] bridge runs stale code (fingerprint ${health.fingerprint ?? '(none)'}, want ${want}); restart deferred: ${holdsCall ? `${agentId} answers a held tool call` : `turns running for ${others.join(', ')}`}`, { to: 'debug' })
+        return false
+      }
+      $.ui.log(`[codex-subagent] bridge runs stale code (fingerprint ${health.fingerprint ?? '(none)'}, want ${want}); replacing it`, { to: 'debug' })
+      const fresh = bridgeReady = startBridge($, sock)
+      try { await abortable(fresh, next.signal) } catch (err) { if (bridgeReady === fresh) bridgeReady = undefined; throw err }
+      verifiedBridge = fresh
+      return true
+    }
     const step = async (body: Record<string, unknown>): Promise<StepResult> => {
+      let submitted = false
       const roundTrip = async () => {
-        await bridgeReady
-        return ask('/step', body).then(settle)
+        const ready = bridgeReady ?? (bridgeReady = startBridge($, sock))
+        try { await abortable(ready, next.signal) } catch (err) { if (bridgeReady === ready) bridgeReady = undefined; throw err }
+        if (!(await bridgeCurrent(body)) && body.toolResult && body.prompt !== undefined) {
+          // A stale bridge may ignore `prompt` beside `toolResult`; the message
+          // rides in the tool's output instead, the one place it reaches codex.
+          const result = body.toolResult as { contentItems: ContentItem[] }
+          body.toolResult = { ...result, contentItems: [...result.contentItems, { type: 'inputText', text: body.prompt as string }] }
+          delete body.prompt
+        }
+        const reply = await ask('/step', body)
+        submitted = true
+        return settle(reply)
       }
       try {
         return await roundTrip()
       } catch (err) {
-        if (!unreachable(err)) throw err
+        if (!unreachable(err) || submitted) throw err
         $.ui.log(`[codex-subagent] bridge unreachable (${String(err)}); restarting it`, { to: 'debug' })
         bridgeReady = startBridge($, sock)
-        await bridgeReady
+        await abortable(bridgeReady, next.signal)
         return roundTrip()
       }
     }
@@ -294,23 +525,47 @@ export const register: Register = (on) => {
     try {
       const api = await $.session.messages({ agentId, as: 'api' })
       if (!Array.isArray(api)) throw new Error(`cannot read agent ${agentId}'s messages: ${api.deny}`)
+      const rows = await $.session.messages({ agentId })
+      const prompt = Array.isArray(rows) ? pendingPrompt(rows) : undefined
+      if (!agent.handback) {
+        const last = api[api.length - 1]
+        const handback = last?.role === 'assistant' ? (last.content as ApiBlock[]).find(b => b.type === 'tool_use' && b.name === HANDBACK && b.id && typeof b.input?.message === 'string') : undefined
+        if (handback?.id) agent.handback = { toolUseId: handback.id, text: handback.input!.message as string }
+      }
+      // A delivered SubagentHandback ends the run with no step after it, so the
+      // handback outlives it here; a user message after it is a SendMessage
+      // resume, which must start a codex turn rather than replay the old ending.
+      if (agent.handback && prompt !== undefined) agent.handback = undefined
       if (agent.handback) {
         // A refused or failed handback ends as plain text, which the harness then delivers.
         const { toolUseId, text } = agent.handback
         agent.handback = undefined
         return yield* endTurn(e, toolResultFor(api, toolUseId)?.success ? `(report delivered through ${HANDBACK})` : text)
       }
+      agent.relay ??= relaySet(await $.tool.list())
+      if (!agent.waiting) {
+        const last = api[api.length - 1]
+        const call = last?.role === 'assistant' ? (last.content as ApiBlock[]).find(b => b.type === 'tool_use' && b.id?.startsWith('toolu_codex_') && !b.id.startsWith('toolu_codex_handback_')) : undefined
+        if (call?.id) agent.waiting = { toolUseId: call.id, callId: call.id.slice('toolu_codex_'.length) }
+      }
       const type = TYPES[agent.type]
-      const body: Record<string, unknown> = { key: agentId, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox }
-      const answered = agent.waiting && toolResultFor(api, agent.waiting.toolUseId)
+      const body: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox }
+      const delivered = inbox.get(agentId) ?? []
+      const answered = agent.waiting && toolResultFor(api, agent.waiting.toolUseId, delivered)
       if (agent.waiting && answered) {
-        body.toolResult = { callId: agent.waiting.callId, ...answered }
+        const { messages, ...result } = answered
+        body.toolResult = { callId: agent.waiting.callId, ...result }
+        // The bridge answers the call first, then steers this text into the running turn.
+        if (messages) {
+          body.prompt = messages.join('\n\n')
+          const left = delivered.filter(d => !messages.some(m => m.includes(d)))
+          if (left.length) inbox.set(agentId, left)
+          else inbox.delete(agentId)
+        }
       } else {
-        const rows = await $.session.messages({ agentId })
-        const prompt = Array.isArray(rows) ? pendingPrompt(rows) : undefined
+        inbox.delete(agentId)
         if (!prompt) throw new Error(`agent ${agentId} has neither a pending prompt nor the tool_result for ${agent.waiting?.toolUseId ?? '(none)'}`)
         if (!agent.threadId) {
-          agent.relay = relaySet(await $.tool.list())
           body.dynamicTools = agent.relay.tools
           body.mcpTools = agent.relay.mcp
           body.developerInstructions = `${PREAMBLE}\n\n${inheritedContext(api)}`
@@ -320,7 +575,7 @@ export const register: Register = (on) => {
       agent.waiting = undefined
       sock ||= await socketPath($)
       bridgeReady ??= startBridge($, sock)
-      const reply = await step(body)
+      const reply = yield* keepalive(step(body), next.signal, () => { block = 1 }, (ms, fn) => $.clock.after(ms, fn))
       agent.threadId = reply.threadId
 
       if ('toolCall' in reply) {
@@ -329,8 +584,8 @@ export const register: Register = (on) => {
         const toolUseId = `toolu_codex_${callId.replace(/[^A-Za-z0-9_-]/g, '_')}`
         agent.waiting = { toolUseId, callId }
         const chunks: TurnStepChunk[] = [
-          { kind: 'tool', index: 0, id: toolUseId, name },
-          { kind: 'input', index: 0, json: JSON.stringify(input ?? {}) },
+          { kind: 'tool', index: block, id: toolUseId, name },
+          { kind: 'input', index: block, json: JSON.stringify(input ?? {}) },
           { kind: 'stop', stopReason: 'tool_use', usage: null },
         ]
         for (const c of chunks) yield c
@@ -343,22 +598,22 @@ export const register: Register = (on) => {
       const toolUseId = `toolu_codex_handback_${reply.threadId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
       agent.handback = { toolUseId, text }
       const input = { message: text }
-      yield { kind: 'tool', index: 0, id: toolUseId, name: HANDBACK }
-      yield { kind: 'input', index: 0, json: JSON.stringify(input) }
+      yield { kind: 'tool', index: block, id: toolUseId, name: HANDBACK }
+      yield { kind: 'input', index: block, json: JSON.stringify(input) }
       yield { kind: 'stop', stopReason: 'tool_use', usage: null }
       return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: HANDBACK, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
     } catch (err) {
       const text = `[codex-subagent error] ${err instanceof Error ? err.message : String(err)}`
       $.ui.log(text, { to: 'debug' })
-      return yield* endTurn(e, text)
+      return yield* endTurn(e, text, block)
     } finally {
       next.signal.removeEventListener('abort', onAbort)
     }
   })
 }
 
-async function* endTurn(e: { turnId: string; index: number }, text: string): AsyncGenerator<TurnStepChunk, TurnStepResult> {
-  yield { kind: 'text', index: 0, text }
+async function* endTurn(e: { turnId: string; index: number }, text: string, block = 0): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  yield { kind: 'text', index: block, text }
   yield { kind: 'stop', stopReason: 'end_turn', usage: null }
   return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null }
 }

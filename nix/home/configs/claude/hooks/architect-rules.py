@@ -37,13 +37,14 @@ ARCHITECT_MODELS = ("fable", "opus")
 RULES = """## Architect mode: the main thread talks, workers mutate
 - PURPOSE: keep the main thread free to talk with the user at every moment -- its context stays clear of read-before-write traces and no execution loop blocks it
 - WHEN: this session's main model is Fable or Opus (the statusline names it)
-- DO: keep the main thread on assessment -- read, diagnose, scope, brief, decide -- and put every code mutation inside a background worker's turn, because each Edit or Write needs a Read of its file first and those reads fill main context
+- DO: keep the main thread on assessment -- read, diagnose, scope, plan, brief, decide -- and put every code mutation inside a background worker's turn, because each Edit or Write needs a Read of its file first and those reads fill main context
 - DO: spawn one worker per unit as the unit starts, and send every unit with no unmet dependency out in one message so the workers run in parallel
-- DO: spend workers on producing work, and adopt a worker's checked result rather than spawning another worker to re-check it
-- DO (route): name the tier by its label -- `haiku`, `sonnet`, `opus` -- which the harness resolves to that tier's current model; send mechanical work to `haiku`, well-scoped edits and lookups to `sonnet`, and implementation and research to `opus`; Fable is reachable only through the oracle agent
-- DO (codex): `codex exec -o <outfile> "<self-contained brief>"` in the foreground when a second, outside implementer is wanted (gpt-5.5 / xhigh / workspace-write); codex sees none of this thread -- the brief carries goal, files, and the exact return shape, and the result is read back from `<outfile>`
+- DO: spend workers on producing work, and adopt a Claude worker's checked result rather than spawning another worker to re-check it
+- DO (route): name the Claude tier by its label -- `haiku`, `sonnet`, `opus` -- which the harness resolves to that tier's current model; send research and lookups to them (`haiku` mechanical, `sonnet` well-scoped, `opus` deep), plus every edit that needs this session's Claude-side context, such as model-facing prompt text under the prompt-authoring guard; Fable is reachable only through the oracle agent
+- DO (codex): hand code implementation from a settled plan to `codex-subagent:luna` (gpt-5.6-luna, xhigh, workspace-write), or to `codex-subagent:sol` (gpt-5.6-sol, medium) for a mechanical or small edit, spawned in the background; codex sees none of this thread, so the brief carries goal, files, constraints, the plan's decisions, verification commands, and the exact return shape
+- DO (review): once a codex implementer reports, spawn `code-reviewer` on its diff, or `codex-subagent:luna-ro` when the diff is small or mechanical and a cheaper read suffices; SendMessage every finding scored 70 or above back to the SAME codex implementer, whose thread still holds the code, and review again until clean, at most 3 rounds, then report the findings still open to the user
 - EXCEPT: the plan file, memory/evidence files, and a short read-only inspection (a couple of tool calls) stay the main thread's own work
-- WHY: Opus 5.5 already verifies its own work, so a spawn whose only job is re-checking adds wall time without adding quality (Anthropic's Opus 5 prompting guide, 2026-09-27)"""
+- WHY: Opus 5.5 already verifies its own work, so re-checking a Claude worker adds wall time without adding quality (Anthropic's Opus 5 prompting guide, 2026-09-27); a codex implementer is cheaper and sits outside that self-verification, so its diff earns an independent review loop"""
 
 LAZY_RULES = """## Delegation threshold: work inline until the task outgrows the thread
 - WHEN: this session's main model is neither Fable nor Opus (the statusline names it)

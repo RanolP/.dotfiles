@@ -384,7 +384,7 @@ async function step(b) {
   } else if (b.prompt !== undefined) {
     if (s.active) throw new Error(`thread ${s.threadId} already has a running turn`)
     s.active = true
-    await rpc('turn/start', { threadId: s.threadId, input: [{ type: 'text', text: b.prompt, text_elements: [] }] })
+    await rpc('turn/start', { threadId: s.threadId, effort: b.effort ?? null, input: [{ type: 'text', text: b.prompt, text_elements: [] }] })
   } else throw new Error('step needs prompt or toolResult')
   const ev = s.queue.length ? s.queue.shift() : await new Promise(r => { s.waiter = r })
   return { ...ev, threadId: s.threadId, model: s.model, resumed: s.resumed, bridgePid: process.pid, codexPid: codex.pid }

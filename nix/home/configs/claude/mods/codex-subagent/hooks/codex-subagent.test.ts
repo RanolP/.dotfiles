@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { codexName, inheritedContext, pendingPrompt, relaySet, toolResultFor, typeOf } from './register'
+import { codexName, inheritedContext, pendingPrompt, relaySet, toolResultFor, typeOf, TYPES } from './register'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) =>
   ({ role, text, toolUses: [], ...extra }) as any
@@ -16,10 +16,21 @@ test('pendingPrompt picks the newest real user message after the last answer', a
 // Regression: a Claude agent type gets hijacked into codex, or a codex type
 // slips past and is sent to Claude with a dummy model.
 test('typeOf claims only this plugin\'s registered types', async () => {
-  expect(typeOf('codex-subagent:gpt')).toBe('gpt')
-  expect(typeOf('codex-subagent:gpt-ro')).toBe('gpt-ro')
+  expect(typeOf('codex-subagent:luna')).toBe('luna')
+  expect(typeOf('codex-subagent:sol')).toBe('sol')
+  expect(typeOf('codex-subagent:luna-ro')).toBe('luna-ro')
   expect(typeOf('codex-subagent:other')).toBeUndefined()
   expect(typeOf('general-purpose')).toBeUndefined()
+})
+
+// Regression: luna-ro accidentally gains workspace-write access, or a pinned
+// model or effort silently falls back to the user's default Codex config.
+test('TYPES pins each Codex agent model, effort, and sandbox', async () => {
+  expect(TYPES).toEqual({
+    luna: { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'implementer for well-planned code changes' },
+    sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast implementer for mechanical or small changes' },
+    'luna-ro': { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'read-only', blurb: 'reviewer / inspector, never edits' },
+  })
 })
 
 // Regression: a relayed Skill call hands codex only "Launching skill: x" and

@@ -1,8 +1,8 @@
 import type { ApiMessage, EngineInterface, Register, SessionMessage, TurnStepChunk, TurnStepResult } from 'claude-code'
 
-// codex-subagent: agent types whose model is GPT, served by codex app-server.
+// codex-subagent: pinned GPT agent types, served by codex app-server.
 //
-// The Agent tool spawns `codex-subagent:gpt` (or `:gpt-ro`) like any agent, so
+// The Agent tool spawns `codex-subagent:luna` (or `:sol`, `:luna-ro`) like any agent, so
 // the engine owns the agentId, the background task, the completion
 // notification and SendMessage resumes. This plugin answers every `turn.step`
 // of those agents without `next`, so no Claude request is ever sent.
@@ -21,8 +21,9 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, TurnStepChu
 // JSON-RPC on stdio to `codex app-server`.
 
 export const TYPES = {
-  gpt: { sandbox: 'workspace-write', blurb: 'can edit files in its working directory' },
-  'gpt-ro': { sandbox: 'read-only', blurb: 'read-only: inspects and answers, never edits' },
+  luna: { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'implementer for well-planned code changes' },
+  sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast implementer for mechanical or small changes' },
+  'luna-ro': { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'read-only', blurb: 'reviewer / inspector, never edits' },
 } as const
 type TypeName = keyof typeof TYPES
 const PREFIX = 'codex-subagent:'
@@ -144,7 +145,12 @@ const PREAMBLE = `You are running as a subagent inside a Claude Code session; a 
 
 The Claude session's context for this agent follows.`
 
-type Agent = { type: TypeName; cwd: string; threadId?: string; waiting?: { toolUseId: string; callId: string }; relay?: Relay }
+// In auto mode the harness delivers a subagent's report only through a
+// SubagentHandback call and drops its final text, so the mod makes that call
+// with codex's answer; codex itself never sees the tool. `handback` holds the
+// report until the call's result shows whether it was delivered.
+const HANDBACK = 'SubagentHandback'
+type Agent = { type: TypeName; cwd: string; threadId?: string; waiting?: { toolUseId: string; callId: string }; relay?: Relay; handback?: { toolUseId: string; text: string } }
 type StepReply = {
   threadId: string; model?: string; resumed: boolean; bridgePid: number; codexPid: number
   toolCall?: { callId: string; tool: string; arguments: unknown }
@@ -182,17 +188,12 @@ export const register: Register = (on) => {
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
     const home = (await $.env.get('HOME')) ?? '/tmp'
     sock = `${home}/.claude-work/run/codex-subagent-${await $.session.id()}.sock`
-    // The model the codex config names, so the agent row reads as GPT, not as
-    // a Claude alias. It also fails closed: should a step ever reach the
-    // Claude API, the API refuses the GPT id rather than a Claude model answering.
-    const conf = await $.fs.read(`${(await $.env.get('CODEX_HOME')) ?? `${home}/.codex`}/config.toml`).catch(() => '')
-    const model = /^\s*model\s*=\s*"([^"]+)"/m.exec(typeof conf === 'string' ? conf : '')?.[1]
     for (const [name, t] of Object.entries(TYPES)) {
       await $.agent.register({
         name,
-        description: `Runs the task on an OpenAI GPT model through Codex (codex's own shell and edit tools, plus this session's MCP tools and skills relayed; ${t.blurb}). Use it like any subagent when a GPT model should do the work; SendMessage continues the same codex thread.`,
+        description: `Runs the task on OpenAI ${t.model} at ${t.effort} effort in the ${t.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's MCP tools and skills relayed; ${t.blurb}). SendMessage continues the same codex thread.`,
         prompt: 'This agent is served by Codex; this prompt is never sent to a Claude model.',
-        model: model ?? 'inherit', // never called: every step of this agent is answered by codex
+        model: t.model, // never called: every step of this agent is answered by codex
       })
     }
     bridgeReady = startBridge($, sock)
@@ -221,7 +222,14 @@ export const register: Register = (on) => {
     try {
       const api = await $.session.messages({ agentId, as: 'api' })
       if (!Array.isArray(api)) throw new Error(`cannot read agent ${agentId}'s messages: ${api.deny}`)
-      const body: Record<string, unknown> = { key: agentId, threadId: agent.threadId, cwd: agent.cwd, sandbox: TYPES[agent.type].sandbox }
+      if (agent.handback) {
+        // A refused or failed handback ends as plain text, which the harness then delivers.
+        const { toolUseId, text } = agent.handback
+        agent.handback = undefined
+        return yield* endTurn(e, toolResultFor(api, toolUseId)?.success ? `(report delivered through ${HANDBACK})` : text)
+      }
+      const type = TYPES[agent.type]
+      const body: Record<string, unknown> = { key: agentId, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox }
       const answered = agent.waiting && toolResultFor(api, agent.waiting.toolUseId)
       if (agent.waiting && answered) {
         body.toolResult = { callId: agent.waiting.callId, ...answered }
@@ -278,8 +286,20 @@ export const register: Register = (on) => {
     const f = reply.final ?? { text: '', errors: ['bridge reply had neither toolCall nor final'] }
     const errors = f.errors.length ? `\n\n[codex errors] ${f.errors.join('\n')}` : ''
     const text = `${f.text}${errors}\n\n[codex-subagent: model=${reply.model ?? '?'} thread=${reply.threadId}${reply.resumed ? ' (resumed)' : ''} codexPid=${reply.codexPid} bridgePid=${reply.bridgePid} status=${f.status}]`
-    yield { kind: 'text', index: 0, text }
-    yield { kind: 'stop', stopReason: 'end_turn', usage: null }
-    return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null } satisfies TurnStepResult
+    // Sent unconditionally: whether $.tool.list() is scoped to this agent is
+    // unverified, and outside auto mode the call fails into the plain-text path.
+    const toolUseId = `toolu_codex_handback_${reply.threadId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
+    agent.handback = { toolUseId, text }
+    const input = { message: text }
+    yield { kind: 'tool', index: 0, id: toolUseId, name: HANDBACK }
+    yield { kind: 'input', index: 0, json: JSON.stringify(input) }
+    yield { kind: 'stop', stopReason: 'tool_use', usage: null }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: HANDBACK, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
   })
+}
+
+async function* endTurn(e: { turnId: string; index: number }, text: string): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  yield { kind: 'text', index: 0, text }
+  yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+  return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null }
 }

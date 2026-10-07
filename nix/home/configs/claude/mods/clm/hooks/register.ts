@@ -6,12 +6,12 @@ import {
   type Boundary, type ClearPlan,
 } from './fold'
 import {
-  composeLedger, EMPTY_LEDGER, fallbackLedger, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, notesOf, oversizeLines, parseChanges, parseMerge,
+  composeLedger, EMPTY_LEDGER, fallbackLedger, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseChanges, parseMerge,
   preservedLines, preserveInstructions, rememberOversize, rememberPreserved, renderTurns, withheldLines, withheldPointer,
   WITHDRAWN_PREFIX,
 } from './ledger'
 import {
-  archivedDone, describe, injected, normalizeRemote, parseLog, snapshot, staleOpenCount, toEvents,
+  archivedDone, describe, injected, normalizeRemote, parseLog, parseOps, snapshot, staleOpenCount, toEvents,
   type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
 
@@ -68,8 +68,9 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 
 // A fold's `ops` wait here and reach the tracker only in session.compact, when
 // the fold is applied, so a planned fold that never lands (a headless session,
-// a re-fold) cannot leave issues behind for the next one to duplicate. The one
-// tracker write at call time is mirrorModelTask, for the model's own task calls.
+// a re-fold) cannot leave issues behind for the next one to duplicate. The
+// tracker writes at call time are mirrorModelTask, for the model's own task
+// calls, and stepOnce, for the steps each tool call shows.
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; foldMs?: number
@@ -215,13 +216,18 @@ async function writeEvents($: EngineInterface, payloads: readonly Payload[], o: 
   return events
 }
 
-// `project` is false where the caller projects later, once its own writes are done.
-async function append($: EngineInterface, payloads: readonly Payload[], origin?: Origin, project = true): Promise<TrackerEvent[]> {
+// `project` is false where the caller projects later, once its own writes are
+// done. `knownTitles` drops a model-derived create whose title an open or done
+// issue of this session already carries: per-tool-call steps and the fold read
+// overlapping turns, and whichever lands second must not add the step again.
+async function append($: EngineInterface, payloads: readonly Payload[], origin?: Origin, project = true, knownTitles = false): Promise<TrackerEvent[]> {
   if (payloads.length === 0) return []
   const o = origin ?? (await captureOrigin($))
   return serialized(o.session, async () => {
     const before = snapshot(await readAll($))
-    const fresh = payloads.filter(p => p.op !== 'status' || before.find(i => i.id === p.issue)?.status !== p.status)
+    const titles = new Set(knownTitles ? before.filter(i => i.origin.session === o.session && i.status !== 'dropped').map(i => i.title.trim()) : [])
+    const fresh = payloads.filter(p => (p.op !== 'status' || before.find(i => i.id === p.issue)?.status !== p.status)
+      && !(p.op === 'create' && titles.has(p.title.trim())))
     if (fresh.length === 0) return []
     const events = await writeEvents($, fresh, o)
     try {
@@ -581,6 +587,86 @@ async function showTurnChanges($: EngineInterface, e: { answer: string }) {
   }
 }
 
+// --- per-tool-call steps ----------------------------------------------------
+
+// Each main-loop tool call moves the tracker, and through append the notices
+// and the task panel, while the turn runs; the fold no longer holds every step
+// back until it lands. The tool.call hook only schedules this: the model call
+// runs detached, one at a time per session, and calls arriving meanwhile
+// collapse into one rerun over everything after the watermark.
+// clm-prompt
+export const STEP_SYSTEM = [
+  'You keep the task tracker of a coding session up to date while it works.',
+  'You receive the tracker\'s issues, the session rows added since your last update, and the tool call that just finished.',
+  'Reply with `<ops>` holding a JSON array of tracker changes those rows show, and `</ops>`, nothing else. Each op is one of:',
+  '  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<evidence: the command or check and what it printed>"}',
+  '  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped"}',
+  '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
+  '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
+  'Create an issue for each step the assistant announced (todo), started (doing) or finished with evidence (done), and each question waiting for the user (question).',
+  'Move an existing issue with a status op once the rows show it changed; never re-create it.',
+  'Write `<ops>[]</ops>` when no task changed.',
+].join('\n')
+const steppedKey = async ($: EngineInterface) => `stepped:${await sid($)}`
+const stepRuns = new Map<string, { queued?: string }>()
+
+const renderCall = ({ tool, agentId: _a, tool_use_id: _t, ...input }: { tool: string; agentId?: string; tool_use_id?: string }, r: { deny?: string; isError?: boolean; text?: string; result?: unknown }) => {
+  const out = r.deny !== undefined ? `denied: ${r.deny}` : `${r.isError ? 'error ' : ''}${r.text ?? JSON.stringify(r.result ?? null)}`
+  return `-> ${tool} ${JSON.stringify(input).slice(0, 600)}\n<- ${out.slice(0, 1500)}`
+}
+
+async function stepOnce($: EngineInterface, call: string): Promise<void> {
+  const meta = await readMeta($)
+  const rows = liveRows(await $.session.messages(), meta.boundary)
+  const key = await steppedKey($)
+  const mark = await $.store.get(key)
+  const fresh = rows.slice(typeof mark === 'string' ? rows.map(fingerprint).lastIndexOf(mark) + 1 : 0)
+  const here = await captureOrigin($)
+  const view = await trackerView($, here)
+  const r = await $.model.complete({
+    model: 'haiku',
+    system: STEP_SYSTEM,
+    prompt: [`<issues>\n${issueList(view.issues)}\n</issues>`, `<new_rows>\n${renderTurns(fresh, 20000)}\n</new_rows>`, `<tool_call>\n${call}\n</tool_call>`].join('\n\n'),
+    maxTokens: 1024,
+    timeoutMs: 30_000,
+  })
+  const body = r.isAnswered ? /<ops>([\s\S]*?)<\/ops>/.exec(r.text)?.[1] : undefined
+  const ops = body === undefined ? undefined : parseOps(normalizeLedger(body) || '[]', new Set(view.issues.map(i => i.id)))
+  if (ops === undefined || typeof ops === 'string') {
+    $.ui.log(`clm steps: no update (${r.isAnswered ? (ops ?? 'reply has no <ops>') : r.reason})`, { to: 'debug' })
+    return
+  }
+  await append($, ops.ops, here, true, true)
+  // Advanced only once the ops landed, so a fold covers whatever a failed step left out.
+  const last = rows.at(-1)
+  if (last) await $.store.set(key, fingerprint(last))
+}
+
+async function trackSteps($: EngineInterface, call: string): Promise<void> {
+  const session = await sid($)
+  const running = stepRuns.get(session)
+  if (running) {
+    running.queued = call
+    return
+  }
+  const run: { queued?: string } = {}
+  stepRuns.set(session, run)
+  try {
+    for (let next: string | undefined = call; next !== undefined; next = run.queued) {
+      run.queued = undefined
+      await stepOnce($, next)
+    }
+  } finally {
+    stepRuns.delete(session)
+  }
+}
+
+/** True when every row the fold drops lies at or before the per-tool-call watermark, so its steps were already emitted. */
+async function steppedThrough($: EngineInterface, rows: readonly SessionMessage[], keepFrom: number): Promise<boolean> {
+  const mark = await $.store.get(await steppedKey($))
+  return typeof mark === 'string' && rows.map(fingerprint).lastIndexOf(mark) >= keepFrom - 1
+}
+
 const WITHHELD = '.withheld-'
 
 // The files stay while a row or the ledger file points at them, so a resumed
@@ -794,7 +880,8 @@ export const register: Register = (on, options) => {
     }
 
     const here = await captureOrigin($)
-    const appended = await append($, use.ops, here, false)
+    const covered = await steppedThrough($, workingRows, use.keepFrom)
+    const appended = await append($, covered ? [] : use.ops, here, false, true)
     const currentView = await trackerView($, here)
     const ledger = composeLedger(use.notes, currentView.issues, currentView.stale)
     const fileLedger = composeLedger(use.fullNotes, currentView.issues, currentView.stale)
@@ -819,6 +906,14 @@ export const register: Register = (on, options) => {
     return { messages, tokensBefore, tokensAfter }
   })
 
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined && next.origin.plugin !== 'clm' && e.tool !== 'TaskCreate' && e.tool !== 'TaskUpdate') {
+      const call = renderCall(e, r)
+      void trackSteps($, call).catch(err => $.ui.log(`clm steps: ${String(err).slice(0, 160)}`, { to: 'debug' }))
+    }
+    return r
+  })
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyModelTask($, e)))
   on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyModelTask($, e)))
   on('tool.describe', { tool: 'TaskCreate' }, ($, e) => ({ ...e, isDeferred: true }))

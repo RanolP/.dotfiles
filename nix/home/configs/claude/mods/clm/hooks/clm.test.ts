@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { SessionCompactResult, SessionMessage, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { sessionIssues, trackIssue } from './register'
+import { sessionIssues, STEP_SYSTEM, trackIssue } from './register'
 import type { Meta } from './register'
 
 import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions } from './ledger'
@@ -37,10 +37,10 @@ const est = (m: any) => Math.ceil((m.text.length + m.toolUses.reduce((k: number,
 const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 
-type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; usage?: any; mergeDelays?: number[] }
+type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[] }
 function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -63,6 +63,11 @@ function bottoms(on: any, s: State) {
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
   // The merge call answers from s.replies, the turn-time change call from s.turnReplies.
   on('model.complete', async (_$: any, e: any) => {
+    if (e.system === STEP_SYSTEM) {
+      seen.stepPrompts.push(e.prompt)
+      if (s.stepDelay) await clock.sleep(s.stepDelay)
+      return { value: { isAnswered: true, text: s.stepReplies?.shift() ?? '<ops>[]</ops>', usage: {} } }
+    }
     if (e.system !== MERGE_SYSTEM) {
       seen.turnPrompts.push(e.prompt)
       return { value: { isAnswered: true, text: s.turnReplies?.shift() ?? '<changes></changes>', usage: {} } }
@@ -766,4 +771,74 @@ test('board page escapes a model-written title, so a <script> title cannot run i
   const html = boardHtml([{ id: 'a1', title: '<script>alert(1)</script>', status: 'todo', repo: 'github.com/x/y', updated: '2026-01-01T00:00:00Z' }], 'github.com/x/y', 'now')
   expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
   expect(html).not.toContain('<script>alert(1)')
+})
+
+// Regression caught: a session opened by /clear kept that command row as its first request, so every fold drew "/clear" above the ledger.
+test('fold row renders /clear or ledger text instead of the compacted line', OPTS, async ($, on) => {
+  const CLEAR = '<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>'
+  const rows = [M('user', CLEAR), M('user', '<local-command-stdout></local-command-stdout>'), ...ROWS]
+  const s: State = { rows, replies: [ledger('fact')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const out = seen.results[0].messages
+  expect(out.some((m: any) => m.text.includes('<command-name>/clear') || m.text.includes('<local-command-'))).toBe(false)
+  expect(out[0].text).toBe('please investigate the build')
+  const row = out.find((m: any) => m.text.startsWith('[clm ledger'))
+  expect(row.text).toContain('## 핵심 사실·경로\n- fact')
+  const drawn = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'UserMessage', props: { text: row.text, origin: { kind: 'composer' }, isExpanded: false } })
+  expect((await drawn.drawn()).children[0]).toMatch(/^\* clm compacted/)
+})
+
+// A main-loop tool call, answered by the test's Bash bottom; returns how long clm's hook held the call.
+async function bashCall($: any, on: any, command: string): Promise<number> {
+  const started = performance.now()
+  await $.tool.call({ tool: 'Bash', command })
+  return performance.now() - started
+}
+
+// Regression caught: steps reached the tracker, its notices and the task panel only when a fold landed, so the panel sat still for a whole turn.
+test('panel does not update until fold', OPTS, async ($, on) => {
+  const s: State = { rows: [...ROWS.slice(0, 2)], replies: [], stepDelay: 10_000, stepReplies: ['<ops>[{"op":"create","title":"빌드 로그 확인","status":"done","note":"make: a.ts:12"}]</ops>'] }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'make fails at a.ts:12', stderr: '', interrupted: false } }))
+  const heldMs = await bashCall($, on, 'make')
+  // The step model is still asleep on the mocked clock: the call did not wait for it.
+  expect(seen.taskCalls.length).toBe(0)
+  await seen.clock.advance(10_000)
+  await seen.clock.settle()
+  console.log(`per-tool hook held the call ${heldMs.toFixed(2)} ms`)
+  expect(heldMs).toBeLessThan(50)
+  expect(seen.stepPrompts[0]).toContain('-> Bash {"command":"make"}')
+  expect(seen.taskCalls.map(c => c.tool === 'TaskCreate' ? c.subject : c.status)).toEqual(['빌드 로그 확인', 'completed'])
+  expect(seen.prompts.length).toBe(0)
+  expect(seen.results.length).toBe(0)
+})
+
+// Regression caught: a fold appended the ops of turns whose steps the per-tool-call path had already emitted, so the panel and 한 일 showed each step twice.
+test('fold re-emits steps already emitted per tool call', OPTS, async ($, on) => {
+  const step = '<ops>[{"op":"create","title":"a.ts:12 수정","status":"done","note":"edited"}]</ops>'
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"a.ts:12 수정","status":"done","note":"fold"},{"op":"create","title":"테스트 통과","status":"done"}]')], stepReplies: [step] }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
+  await bashCall($, on, 'git diff')
+  await seen.clock.settle()
+  await turnEnds($, s, seen)
+  const issues = snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
+  expect(issues.map(i => i.title)).toEqual(['a.ts:12 수정'])
+  expect(seen.taskCalls.filter(c => c.tool === 'TaskCreate').length).toBe(1)
+})
+
+// Regression caught: when a step update failed, the fold also skipped the dropped turns' ops, and those steps were lost.
+test('a fold after a failed per-tool step still records the dropped turns', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"테스트 통과","status":"done"}]')], stepReplies: ['no ops here'] }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
+  await bashCall($, on, 'npm test')
+  await seen.clock.settle()
+  await turnEnds($, s, seen)
+  const issues = snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
+  expect(issues.map(i => i.title)).toEqual(['테스트 통과'])
 })

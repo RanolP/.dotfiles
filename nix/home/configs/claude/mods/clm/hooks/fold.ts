@@ -22,13 +22,17 @@ export const fingerprint = (m: SessionMessage): string =>
 const SYSTEM_ROW = {
   taskNotification: /^\s*<task-notification>/,
   remindersOnly: /^\s*(?:<system-reminder>[\s\S]*?<\/system-reminder>\s*)+$/,
+  // A session opened by /clear starts with that command's row; kept as the
+  // first request, every fold re-drew it above the ledger.
+  localCommand: /^\s*(?:<command-name>\/(?:clear|compact)<\/command-name>|<local-command-(?:stdout|stderr|caveat)>)/,
 }
 const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
+const isLocalCommand = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.localCommand.test(m.text)
 const isEmptyRow = (m: SessionMessage) => isBare(m) && (m.text.trim() === '' || (m.role === 'assistant' && m.text.trim() === '(no content)'))
 export const isSystemRow = (m: SessionMessage): boolean => {
   if (!isBare(m)) return false
   if (m.role === 'assistant') return isEmptyRow(m)
-  return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text)
+  return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text) || isLocalCommand(m)
 }
 export const ledgerRowSeq = (text: string): string | undefined => LEDGER_ROW.exec(text)?.[1]
 export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && ledgerRowSeq(m.text) !== undefined
@@ -128,7 +132,7 @@ const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMess
     : { ...m, toolResults: m.toolResults.map(r => (cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) })) }
 
 export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage): SessionMessage[] {
-  return [...plan.head, ledgerRow, ...plan.tail].filter(m => !isEmptyRow(m)).map(m => strip(applyCuts(m, plan.cuts)))
+  return [...plan.head, ledgerRow, ...plan.tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => strip(applyCuts(m, plan.cuts)))
 }
 
 export const ledgerRowText = (seq: number, at: string, path: string, ledger: string) =>

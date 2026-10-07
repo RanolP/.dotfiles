@@ -4,7 +4,7 @@ export type Report = {
   more_min?: number
 }
 
-/** One timed unit: the main thread's task since the user's prompt, or one subagent run. */
+/** One timed unit: a main-thread clm task, or one subagent run. */
 export type Unit = {
   kind: 'main' | 'sub'
   agentType?: string

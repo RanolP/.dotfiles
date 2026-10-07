@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { budgetFor, budgetLine, calibrationFactor, CHECKPOINTS, crossed, dueAt, extensionFrom, FLOOR_MIN, gate, parsePairs, projectedMin, TOOL } from './budget'
+import { budgetFor, budgetLine, calibrationFactor, CHECKPOINTS, crossed, dueAt, FLOOR_MIN, gate, parsePairs, projectedMin, TOOL } from './budget'
 
 test('history that ran 3x over scales the next budget 3x, clamped to [0.25, 10]', () => {
   expect(calibrationFactor([])).toBe(1)
@@ -12,12 +12,6 @@ test('history that ran 3x over scales the next budget 3x, clamped to [0.25, 10]'
 
 test('history that finished at one fifth of the estimate scales below one', () => {
   expect(calibrationFactor(Array(5).fill({ estimate_min: 10, actual_min: 2 }))).toBe(0.25)
-})
-
-test('an extension must be the whole prompt', () => {
-  expect(extensionFrom('+2m')).toBe(2)
-  expect(extensionFrom(' +2 minutes ')).toBe(2)
-  expect(extensionFrom('add +2 margin')).toBeUndefined()
 })
 
 test('python-written calibration.jsonl lines load and give the python factor', () => {
@@ -54,13 +48,14 @@ test('a codex prompt counts as budgeted only with "Budget: <N> min" as its first
   expect(budgetLine('Budget: 0 min\nx')).toBeUndefined()
 })
 
-test('before the estimate only estimate, ToolSearch and SubagentHandback pass', () => {
+// Regression: an unopen main task is ungated while unestimated subagents still need their estimate.
+test('an unopen main task is ungated; an unestimated subagent is gated', () => {
   const u = { kind: 'main' as const, start: 0, fired: 0 }
   expect(gate(u, TOOL.estimate, 0)).toBeUndefined()
   expect(gate(u, 'ToolSearch', 0)).toBeUndefined()
   expect(gate(u, 'SubagentHandback', 0)).toBeUndefined()
-  expect(gate(u, 'Read', 0)?.deny).toContain(TOOL.estimate)
-  expect(gate(u, TOOL.report, 0)?.deny).toContain(TOOL.estimate)
+  expect(gate(u, 'Read', 0)).toBeUndefined()
+  expect(gate({ kind: 'sub', start: 0, fired: 0 }, 'Read', 0)?.deny).toContain(TOOL.estimate)
 })
 
 // Regression: a 20 min budget put 5/6 at 999999.99… ms, so the timer fired with nothing crossed and spun at delay 0.

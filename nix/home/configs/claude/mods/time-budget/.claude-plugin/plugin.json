@@ -1,7 +1,8 @@
 {
   "name": "time-budget",
   "version": "0.1.0",
-  "description": "Enforces a time budget per unit of work: the first tool call of a unit must be the estimate, every tool waits on a report at 1/3, 1/2, 2/3 and 5/6 of the calibrated budget, and a projected overrun denies every tool but the report, then aborts the main turn after a grace period.",
+  "description": "Enforces a time budget per clm tracker task: every tool waits on a report at 1/3, 1/2, 2/3 and 5/6 of the calibrated budget, and a projected overrun denies every tool but the report, then aborts the main turn after a grace period.",
   "author": { "name": "RanolP" },
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "dependencies": ["clm"]
 }

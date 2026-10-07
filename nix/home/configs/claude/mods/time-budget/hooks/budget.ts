@@ -74,11 +74,6 @@ export const dueAt = (i: number, budgetMin: number) => Math.ceil(CHECKPOINTS[i]!
 /** How many checkpoints the elapsed time has passed. */
 export const crossed = (elapsedMs: number, budgetMin: number) => CHECKPOINTS.filter((_, i) => elapsedMs >= dueAt(i, budgetMin)).length
 
-export const extensionFrom = (prompt: string): number | undefined => {
-  const m = /^\s*\+(\d{1,4})\s*m(in(utes?)?)?\s*$/i.exec(prompt)
-  return m ? Number(m[1]) : undefined
-}
-
 /** `Budget: <N> min` as the prompt's first line: an optional spawner estimate; codex requires it because no gate reaches inside codex. */
 export const budgetLine = (prompt: string): number | undefined => {
   const m = /^\s*Budget:\s*(\d+(?:\.\d+)?)\s*min\s*$/i.exec(prompt.split('\n', 1)[0] ?? '')
@@ -100,13 +95,14 @@ const SHAPE = 'done (each item with the check that proved it), open (each item w
 export function gate(unit: Unit | undefined, tool: string, now: number): { deny: string } | undefined {
   if (!unit) return undefined
   if (unit.budgetMin === undefined) {
+    if (unit.kind === 'main') return undefined
     if (BEFORE_ESTIMATE.has(tool)) return undefined
     return { deny: `Call ${TOOL.estimate} first, with minutes (your estimate for the whole task), scope (one line) and steps (the plan). The user sees the calibrated budget; then call ${tool} again.` }
   }
   const elapsed = now - unit.start
   if (unit.halted) {
     if (WHILE_HALTED.has(tool)) return undefined
-    return { deny: `Stop here: ${unit.halted}. Call ${TOOL.report} with ${SHAPE}, then end the turn with that report and the extra minutes you ask for; the user continues by replying "+<N>m".` }
+    return { deny: `Stop here: ${unit.halted}. Call ${TOOL.report} with ${SHAPE}, then end the turn with that report; use an extension button above the prompt to continue.` }
   }
   if (unit.reportDue && !WHILE_REPORT_DUE.has(tool)) {
     return { deny: `Checkpoint ${unit.reportDue} (${mins(elapsed)}/${Math.round(unit.budgetMin)} min): call ${TOOL.report} with ${SHAPE}, then call ${tool} again.` }

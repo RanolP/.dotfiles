@@ -1,7 +1,7 @@
 import type { EngineInterface, Register, Timer, TurnStepChunk, TurnStepResult } from 'claude-code'
 import type { Report, Unit } from '../types'
 import {
-  CHECKPOINTS, GRACE_MS, LAST, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt, extensionFrom, gate, haltReason,
+  CHECKPOINTS, GRACE_MS, LAST, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt, gate, haltReason,
   isReport, mins, parsePairs, projectedMin, reportText, statusText, type Pair,
 } from './budget'
 
@@ -9,33 +9,31 @@ import {
 // "작업을 시작하기 전에 시간을 추정하고, 보고하라. 추정 시간 기준 1/3, 1/2, 2/3,
 // 5/6 지점에 중간 보고하라. 추정 시간을 넘을 것 같다면 즉시 작업을 중단하고 보고하라."
 //
-// A unit is the main thread's task from a user prompt on (a "+Nm" reply
-// continues it), or one subagent run. Its first tool call must be the estimate
-// tool unless the spawner declares a Budget line; at each checkpoint a timer
-// marks a report due and every other tool waits on it; a report that projects
-// past the budget, or the budget running out, denies every tool but the report,
-// and GRACE_MS after 6/6 a main turn still running is aborted. The calibration
-// history is time-budget.py's file, read and written in the same shape, one
-// pair per unit.
+// A unit is one clm tracker task on the main thread, or one subagent run. A
+// main thread with no doing task is ungated; once a task has a budget, each
+// checkpoint marks a report due and every other tool waits on it. A report
+// that projects past the budget, or the budget running out, denies every tool
+// but the report, and GRACE_MS after 6/6 a main turn still running is aborted.
+// The calibration history is time-budget.py's file, read and written in the
+// same shape, one pair per unit.
 
 const UNITS = { plugin: 'time-budget', key: 'units' } as const
-const MAIN = 'main'
 const CODEX = 'codex-subagent:'
 const MAIN_ABORT = 'main-abort'
-const USER_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 const STATUS_REFRESH_MS = 60_000
 
 const minutes = { type: 'number', exclusiveMinimum: 0 }
 const TOOLS = [
   {
     name: 'estimate',
-    description: 'Declare how long the task will take before any other tool call of the task. The harness scales the estimate by how far past estimates ran, shows the budget to the user, and asks for a report at 1/3, 1/2, 2/3 and 5/6 of it. Call it again to revise the estimate.',
+    description: 'Open a new clm tracker task and declare how long it will take, or pass task with an existing issue id to resume or re-estimate that task. The harness scales the estimate by how far past estimates ran, shows the budget to the user, and asks for a report at 1/3, 1/2, 2/3 and 5/6 of it.',
     inputSchema: {
       type: 'object',
       properties: {
         minutes: { ...minutes, description: 'Your estimate for the whole task, in minutes' },
         scope: { type: 'string', description: 'What the task covers, in one line' },
         steps: { type: 'array', items: { type: 'string' }, description: 'The planned steps, in order' },
+        task: { type: 'string', description: 'An existing clm issue id to resume' },
       },
       required: ['minutes', 'scope', 'steps'],
     },
@@ -55,7 +53,7 @@ const TOOLS = [
   },
   {
     name: 'grant',
-    description: 'Give a running subagent more minutes on its time budget, after reading its report.',
+    description: 'Give a running subagent more minutes from now on its time budget, after reading its report.',
     inputSchema: {
       type: 'object',
       properties: { agent_id: { type: 'string', description: 'The subagent id its report names' }, minutes },
@@ -69,6 +67,7 @@ type S = {
   units: Record<string, Unit>
   timers: Map<string, Timer>
   handedBack: Map<string, boolean>
+  extending: Set<string>
   runningTurn?: string
   pairs?: Pair[]
   calibrationWrite?: Promise<void>
@@ -90,12 +89,16 @@ async function save($: Ctx, s: S) {
 }
 
 async function showStatus($: Ctx, s: S) {
-  const u = s.units[MAIN]
+  const u = mainEntry(s)?.[1]
   try {
     $.ui.status(u ? statusText(u, await $.clock.now()) : undefined)
   } catch (err) {
     log($, `ui.status failed: ${errText(err)}`)
   }
+}
+
+function mainEntry(s: S): [string, Unit] | undefined {
+  return Object.entries(s.units).find(([, unit]) => unit.kind === 'main')
 }
 
 async function calibrationFile($: Ctx) {
@@ -151,7 +154,7 @@ function disarm(s: S, key: string) {
 
 function resume(s: S, key: string, u: Unit) {
   disarm(s, key)
-  if (key === MAIN) disarm(s, MAIN_ABORT)
+  if (u.kind === 'main') disarm(s, MAIN_ABORT)
   s.handedBack.delete(key)
   u.halted = undefined
   u.haltedAt = undefined
@@ -162,11 +165,11 @@ function resume(s: S, key: string, u: Unit) {
 }
 
 // A main turn still running GRACE_MS after the stop has had its chance to report.
-function armAbort($: Ctx, s: S) {
+function armAbort($: Ctx, s: S, key: string) {
   disarm(s, MAIN_ABORT)
   s.timers.set(MAIN_ABORT, $.clock.after(GRACE_MS, () => {
     const turnId = s.runningTurn
-    if (!s.units[MAIN]?.halted || !turnId) return
+    if (!s.units[key]?.halted || !turnId) return
     $.turn.abort({ turnId }).catch(err => log($, `turn.abort(${turnId}) failed: ${errText(err)}`))
   }))
 }
@@ -187,12 +190,12 @@ async function advance($: Ctx, s: S, key: string, now: number) {
     u.halted = reason
     u.haltedAt = now
     u.reportDue = undefined
-    if (key === MAIN) armAbort($, s)
+    if (u.kind === 'main') armAbort($, s, key)
     changed = true
   }
   if (!changed) return
   await save($, s)
-  if (key === MAIN) await showStatus($, s)
+  if (u.kind === 'main') await showStatus($, s)
 }
 
 async function arm($: Ctx, s: S, key: string) {
@@ -208,15 +211,71 @@ async function arm($: Ctx, s: S, key: string) {
   }))
 }
 
-async function closeMain($: Ctx, s: S, now: number) {
-  const u = s.units[MAIN]
+async function closeMain($: Ctx, s: S, now: number, key = mainEntry(s)?.[0]) {
+  if (!key) return
+  const u = s.units[key]
   if (!u) return
-  disarm(s, MAIN)
-  delete s.units[MAIN]
+  disarm(s, key)
+  if (u.kind === 'main') disarm(s, MAIN_ABORT)
+  delete s.units[key]
   await logPair($, s, u, u.lastEnd ?? now)
 }
 
-const openMain = (s: S, now: number): Unit => (s.units[MAIN] = { kind: 'main', start: now, fired: 0 })
+async function syncMainTask($: Ctx, s: S, now: number) {
+  const entry = mainEntry(s)
+  if (!entry) return
+  const [key] = entry
+  try {
+    const issue = (await $.clm.issues({ issue: key }))[0]
+    if (issue?.status === 'done' || issue?.status === 'dropped') {
+      await closeMain($, s, now, key)
+      await save($, s)
+    }
+  } catch (err) {
+    log($, `clm task status failed for ${key}: ${errText(err)}`)
+  }
+}
+
+function extend(s: S, key: string, u: Unit, extra: number, now: number): boolean {
+  if (u.budgetMin === undefined) return false
+  u.pausedMs = (u.pausedMs ?? 0) + Math.max(0, now - (u.lastEnd ?? now))
+  u.budgetMin = (now - u.start) / 60_000 + extra
+  resume(s, key, u)
+  u.fired = crossed(now - u.start, u.budgetMin)
+  return true
+}
+
+async function extendMain($: Ctx, s: S, extra: number): Promise<boolean> {
+  const entry = mainEntry(s)
+  if (!entry) return false
+  const [key, u] = entry
+  if (!u.halted || u.budgetMin === undefined || s.extending.has(key)) return false
+  s.extending.add(key)
+  const halted = u.halted
+  u.halted = 'extension in progress'
+  try {
+    const now = await $.clock.now()
+    const extended = extend(s, key, u, extra, now)
+    if (!extended) {
+      u.halted = halted
+      return false
+    }
+    await save($, s)
+    await arm($, s, key)
+    await showStatus($, s)
+    return true
+  } catch (err) {
+    u.halted = halted
+    throw err
+  } finally {
+    s.extending.delete(key)
+  }
+}
+
+function extensionMinutes(u: Unit): number[] {
+  const asked = u.report?.more_min
+  return [...new Set([10, 20, 30, ...(asked && asked > 0 ? [asked] : [])])]
+}
 
 function unreadReports(s: S, now: number): string[] {
   const out: string[] = []
@@ -229,7 +288,7 @@ function unreadReports(s: S, now: number): string[] {
 }
 
 export const register: Register = (on) => {
-  const s: S = { units: {}, timers: new Map(), handedBack: new Map() }
+  const s: S = { units: {}, timers: new Map(), handedBack: new Map(), extending: new Set() }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -238,6 +297,13 @@ export const register: Register = (on) => {
       s.units = read.value ? { ...read.value } : {}
     } catch (err) {
       log($, `state.get failed: ${errText(err)}`)
+    }
+    // The old prompt-scoped state used the literal key `main`; it cannot be tied to a clm issue.
+    if (s.units.main?.kind === 'main') {
+      disarm(s, 'main')
+      disarm(s, MAIN_ABORT)
+      delete s.units.main
+      await save($, s)
     }
     for (const t of TOOLS) {
       try {
@@ -259,38 +325,29 @@ export const register: Register = (on) => {
     return next(e)
   })
 
-  on('prompt.submit', async ($, e, next) => {
-    // A prompt typed into a running turn, or one the user did not type, belongs to the unit already running.
-    if (e.turnId || !USER_ORIGINS.has(e.origin.kind)) return next(e)
-    const now = await $.clock.now()
-    const u = s.units[MAIN]
-    const extra = extensionFrom(e.text)
-    let note: string
-    if (u && u.budgetMin !== undefined && extra !== undefined) {
-      const elapsed = (now - u.start) / 60_000
-      u.pausedMs = (u.pausedMs ?? 0) + (now - (u.lastEnd ?? now))
-      u.budgetMin = Math.max(u.budgetMin, elapsed) + extra
-      resume(s, MAIN, u)
-      u.fired = crossed(now - u.start, u.budgetMin)
-      note = `The user's reply continues the timed task on the same clock: +${extra} min, budget now ${Math.round(u.budgetMin)} min (${mins(now - u.start)} min elapsed).`
-      await arm($, s, MAIN)
-    } else {
-      await closeMain($, s, now)
-      openMain(s, now)
-      note = `Before your first tool call of this task, call ${TOOL.estimate} with minutes, scope and steps.`
-    }
-    await save($, s)
-    await showStatus($, s)
-    return next({ ...e, context: [...(e.context ?? []), note] })
-  })
-
   on('turn.start', async ($, e, next) => {
     s.runningTurn = e.turnId
-    if (!s.units[MAIN]) {
-      openMain(s, await $.clock.now())
-      await save($, s)
-    }
     return next(e)
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const entry = mainEntry(s)
+    const u = entry?.[1]
+    if (!u?.halted || e.props.hasSurvey) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const buttons = extensionMinutes(u).map(extra => Button({
+      key: `time-budget:+${extra}m`,
+      label: `+${extra}m`,
+      onPress: () => {
+        void (async () => {
+          if (await extendMain($, s, extra)) await $.prompt.submit({ text: 'Continue this task.', asUser: true })
+        })().catch(err => log($, `extension +${extra}m failed: ${errText(err)}`))
+      },
+    }))
+    return Box({
+      gap: 1,
+      children: [Text({ children: `Time budget stopped: ${u.halted}` }), ...buttons],
+    })
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -308,7 +365,8 @@ export const register: Register = (on) => {
       return r
     }
     if (s.runningTurn === e.turnId) s.runningTurn = undefined
-    const u = s.units[MAIN]
+    await syncMainTask($, s, now)
+    const u = mainEntry(s)?.[1]
     if (!u) return r
     u.lastEnd = now
     await save($, s)
@@ -340,38 +398,59 @@ export const register: Register = (on) => {
   })
 
   on('tool.call', async ($, e, next) => {
-    const key = e.agentId ?? MAIN
+    const key = e.agentId
+    const main = key === undefined
     const now = await $.clock.now()
     // An agent id no spawn of ours named (the engine's own forks) runs ungated.
-    if (!s.units[key] && key === MAIN) openMain(s, now)
-    const u = s.units[key]
-    if (u) await advance($, s, key, now)
+    if (main) await syncMainTask($, s, now)
+    let unitKey = key ?? mainEntry(s)?.[0]
+    let u = unitKey ? s.units[unitKey] : undefined
+    if (u && unitKey) await advance($, s, unitKey, now)
     const args = e as unknown as Record<string, unknown>
 
     if (e.tool === TOOL.estimate) {
       const m = args.minutes
       if (typeof m !== 'number' || !(m > 0)) return { deny: `Call ${TOOL.estimate} with minutes as a positive number, scope as one line and steps as a list.` }
-      const unit = s.units[key] ?? (s.units[key] = { kind: 'sub', start: now, fired: 0 })
       const factor = calibrationFactor(await loadPairs($, s))
       const budget = budgetFor(m, factor)
-      if (unit.budgetMin !== undefined && budget > unit.budgetMin) {
-        const ask = key === MAIN ? 'Ask the user for "+Nm" instead.' : `Put more_min in your ${TOOL.report} call; main can grant time.`
-        return { deny: `This re-estimate would increase the budget from ${Math.round(unit.budgetMin)} to ${Math.round(budget)} min. ${ask}` }
+      const scope = typeof args.scope === 'string' ? args.scope : ''
+      if (main) {
+        const requested = args.task
+        if (requested !== undefined && (typeof requested !== 'string' || !requested.trim()))
+          return { deny: `Call ${TOOL.estimate} with task as an existing clm issue id when resuming one.` }
+        const targetKey = typeof requested === 'string' ? requested : undefined
+        let issue
+        try {
+          issue = await $.clm.track({ title: scope, status: 'doing', ...(targetKey ? { issue: targetKey } : {}) })
+        } catch (err) {
+          return { deny: `${TOOL.estimate}: ${errText(err)}` }
+        }
+        if (unitKey && unitKey !== issue.id) await closeMain($, s, now, unitKey)
+        unitKey = issue.id
+        u = s.units[unitKey]
+        if (!u || u.kind !== 'main') u = s.units[unitKey] = { kind: 'main', start: now, fired: 0 }
+      } else {
+        unitKey = key
+        u = s.units[unitKey] ?? (s.units[unitKey] = { kind: 'sub', start: now, fired: 0 })
+        if (u.budgetMin !== undefined && budget > u.budgetMin)
+          return { deny: `Put more_min in your ${TOOL.report} call; main can grant time.` }
       }
+      if (!u || !unitKey) return { deny: `Could not open a time-budget unit for ${TOOL.estimate}.` }
+      const unit = u
       const first = unit.budgetMin === undefined
       if (first) unit.estimateMin = m
       unit.budgetMin = budget
-      unit.scope = typeof args.scope === 'string' ? args.scope : undefined
+      unit.scope = scope || undefined
       unit.steps = Array.isArray(args.steps) ? args.steps.filter((s): s is string => typeof s === 'string') : undefined
       if (first) {
         unit.fired = crossed(now - unit.start, unit.budgetMin)
         unit.reportDue = undefined
       } else {
-        await advance($, s, key, now)
+        await advance($, s, unitKey, now)
       }
       await save($, s)
-      await arm($, s, key)
-      if (key === MAIN) await showStatus($, s)
+      await arm($, s, unitKey)
+      if (main) await showStatus($, s)
       const at = CHECKPOINTS.slice(0, LAST - 1).map((c, i) => `${c.label} at ${mins(dueAt(i, unit.budgetMin!))}m`).join(', ')
       return { result: `Budget ${Math.round(unit.budgetMin)} min (estimate ${m} min × calibration ${factor.toFixed(2)}, floor 15); ${mins(now - unit.start)} min elapsed. Reports are due at ${at}; the budget ends at ${Math.round(unit.budgetMin)}m. State this budget and the steps to the user in your reply as you start.` }
     }
@@ -386,14 +465,14 @@ export const register: Register = (on) => {
       u.report = report
       u.reportAt = now
       u.reportDue = undefined
-      if (key !== MAIN) u.unread = true
-      await advance($, s, key, now)
+      if (!main) u.unread = true
+      if (unitKey) await advance($, s, unitKey, now)
       await save($, s)
-      if (key === MAIN) await showStatus($, s)
+      if (main) await showStatus($, s)
       const projected = Math.round(projectedMin(now - u.start, report))
       if (u.halted) {
-        const close = key === MAIN
-          ? 'End the turn now with this report and the extra minutes you ask for; the user continues by replying "+<N>m".'
+        const close = main
+          ? 'End the turn now with this report; use an extension button above the prompt to continue.'
           : `End your run now: call SubagentHandback with this report; main reads it and can grant time.`
         return { result: `Report recorded. Stop here: ${u.halted}. ${close}` }
       }
@@ -405,18 +484,16 @@ export const register: Register = (on) => {
       const id = String(args.agent_id ?? '')
       const extra = args.minutes
       const sub = s.units[id]
-      if (!sub || sub.budgetMin === undefined) return { deny: `Call ${TOOL.grant} with the agent_id of a running subagent that has a budget (one of: ${Object.keys(s.units).filter(k => k !== MAIN).join(', ') || 'none'}).` }
+      if (!sub || sub.kind === 'main' || sub.budgetMin === undefined) return { deny: `Call ${TOOL.grant} with the agent_id of a running subagent that has a budget (one of: ${Object.entries(s.units).filter(([, candidate]) => candidate.kind === 'sub').map(([candidateId]) => candidateId).join(', ') || 'none'}).` }
       if (typeof extra !== 'number' || !(extra > 0)) return { deny: `Call ${TOOL.grant} with minutes as a positive number.` }
-      sub.budgetMin += extra
-      resume(s, id, sub)
-      sub.fired = crossed(now - sub.start, sub.budgetMin)
+      extend(s, id, sub, extra, now)
       await save($, s)
       await arm($, s, id)
-      return { result: `Granted +${extra} min to ${id}; its budget is now ${Math.round(sub.budgetMin)} min.` }
+      return { result: `Granted +${extra} min from now to ${id}; its budget is now ${Math.round(sub.budgetMin)} min.` }
     }
 
     const r = await next(e)
-    if (key !== MAIN || 'deny' in r && r.deny !== undefined) return r
+    if (!main || 'deny' in r && r.deny !== undefined) return r
     const reports = unreadReports(s, now)
     if (!reports.length) return r
     await save($, s)

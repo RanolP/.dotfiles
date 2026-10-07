@@ -17,6 +17,13 @@ function world(on: any) {
   on('fs.exists', (_$: any, e: any) => ({ value: e.path in seen.files }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
+  on('process.run', (_$: any, e: any) => {
+    if (e.argv[0] === 'mv') {
+      seen.files[e.argv[2]] = seen.files[e.argv[1]]
+      delete seen.files[e.argv[1]]
+    }
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
   on('ui.status', (_$: any, e: any) => { seen.status.push(e.text); return { value: undefined } })
   on('ui.log', () => ({ value: undefined }))
   on('tool.register', (_$: any, e: any) => ({ value: { tool: `mcp__time-budget__${e.name}` } }))
@@ -73,15 +80,15 @@ test('ToolSearch passes before estimate', async ($, on) => {
 })
 
 // Regression: a subagent rides on main's estimate, or main is blocked by a subagent's missing one.
-test("a subagent's first tool call is gated on its own unit, not main's", async ($, on) => {
+test("a subagent's Budget line opens its own unit without an estimate call", async ($, on) => {
   world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
-  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'work', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
-  expect(denied(await call($, 'Read', { file_path: '/x', agentId: 'ag1' }))).toContain(TOOL.estimate)
-  expect((await call($, 'Read', { file_path: '/x' })).result).toBe('ran')
-  await estimate($, 10, 'ag1')
+  const unbudgeted = await $.agent.spawn({ tool_use_id: 'tu0', prompt: 'work', description: 'ag0', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
+  expect(unbudgeted.agentId).toBe('ag0')
+  expect(denied(await call($, 'Read', { file_path: '/x', agentId: 'ag0' }))).toContain(TOOL.estimate)
+  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'Budget: 10 min\nwork', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
   expect((await call($, 'Read', { file_path: '/x', agentId: 'ag1' })).result).toBe('ran')
 })
 
@@ -107,8 +114,7 @@ test("a subagent's report reaches main's next tool result exactly once", async (
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
-  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'work', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
-  await estimate($, 30, 'ag1')
+  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'Budget: 30 min\nwork', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
   await report($, 1, 1, 'ag1')
   const first = await call($, 'Read', { file_path: '/x' })
   expect((first.context ?? []).join('\n')).toContain('Subagent report (general-purpose ag1')
@@ -137,7 +143,7 @@ test('a +20m reply continues the same clock: start unchanged, budget +20', async
   await estimate($, 30)
   await clock.advance(30 * MIN + 1)
   expect(denied(await call($, 'Bash', { command: 'ls' }))).toContain('budget of 30 min is spent')
-  await prompt($, 'ok +20m')
+  await prompt($, '+20m')
   expect(seen.status.at(-1)).toMatch(/^budget 30\/50m/)
   expect((await call($, 'Bash', { command: 'ls' })).result).toBe('ran')
   expect(pairs(seen)).toEqual([])
@@ -163,8 +169,7 @@ test("a halted subagent's step past the grace sends no model request and hands b
   await start($)
   await prompt($, 'go')
   await estimate($, 60)
-  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'work', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
-  await estimate($, 15, 'ag1')
+  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'Budget: 15 min\nwork', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
   await clock.advance(15 * MIN + 1)
   await clock.advance(GRACE_MS)
   const chunks: any[] = []
@@ -173,6 +178,124 @@ test("a halted subagent's step past the grace sends no model request and hands b
   expect(seen.steps).toBe(0)
   expect(chunks.find(c => c.kind === 'tool')?.name).toBe('SubagentHandback')
   expect(chunks.find(c => c.kind === 'input')?.json).toContain('Stopped by the time budget')
+})
+
+test('a re-estimate can shrink a budget but calibration keeps the first estimate', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 30)
+  expect((await estimate($, 10)).result).toContain('estimate 10 min')
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  await prompt($, 'next task')
+  expect(pairs(seen)[0]).toMatchObject({ estimate_min: 30, budget_min: 15 })
+})
+
+test('a larger re-estimate is denied and leaves the current checkpoint intact', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 30)
+  await clock.advance(10 * MIN + 1)
+  const r = denied(await estimate($, 60))
+  expect(r).toContain('Ask the user for "+Nm"')
+  expect(denied(await call($, 'Edit', { file_path: '/x' }))).toContain('Checkpoint 1/3')
+})
+
+test('a smaller re-estimate cannot bypass a report already due', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 30)
+  await clock.advance(10 * MIN + 1)
+  await report($, 1, 0)
+  expect((await estimate($, 10)).result).toContain('estimate 10 min')
+  expect(denied(await call($, 'Edit', { file_path: '/x' }))).toContain('Checkpoint 2/3')
+})
+
+test('an extension accounts for idle time: status reads 30/35m after +5m at 30m', async ($, on) => {
+  const { seen, clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 15)
+  await clock.advance(30 * MIN + 1)
+  expect(denied(await call($, 'Bash', { command: 'ls' }))).toContain('budget of 15 min is spent')
+  await prompt($, '+5m')
+  expect(seen.status.at(-1)).toMatch(/^budget 30\/35m/)
+  expect((await call($, 'Bash', { command: 'ls' })).result).toBe('ran')
+  await clock.advance(GRACE_MS)
+  expect(seen.aborted).toEqual([])
+})
+
+test('an extension cancels a pending main abort timer', async ($, on) => {
+  const { seen, clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await $.turn.start({ text: 'go', turnId: 'turn-1' })
+  await estimate($, 15)
+  await clock.advance(15 * MIN + 1)
+  await prompt($, '+1m')
+  // Move just beyond the 16-minute halt boundary so the old 17-minute timer
+  // fires during the next advance while the replacement grace runs to 18m.
+  await clock.advance(1 * MIN + 2)
+  await clock.advance(GRACE_MS - 1 * MIN + 1)
+  expect(seen.aborted).toEqual([])
+  await clock.advance(1 * MIN)
+  expect(seen.aborted).toEqual(['turn-1'])
+})
+
+test('grant clears a stopped subagent report before resuming it', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 60)
+  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'Budget: 15 min\nwork', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
+  await clock.advance(11 * MIN)
+  await report($, 1, 3, 'ag1')
+  expect(denied(await call($, 'Read', { file_path: '/x', agentId: 'ag1' }))).toContain('Stop here')
+  expect((await call($, TOOL.grant, { agent_id: 'ag1', minutes: 5 })).result).toContain('Granted +5 min')
+  expect((await estimate($, 20, 'ag1')).result).toContain('Budget 20 min')
+  expect((await call($, 'Read', { file_path: '/x', agentId: 'ag1' })).result).toBe('ran')
+})
+
+test('calibration rewrites retain the full history beyond the factor window', async ($, on) => {
+  const { seen } = world(on)
+  seen.files[CAL] = `${Array.from({ length: 50 }, (_, i) => JSON.stringify({ kind: 'main', agent_type: null, estimate_min: 10, budget_min: 15, actual_min: 10, at: i })).join('\n')}\n`
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 20)
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  await prompt($, 'next task')
+  const logged = pairs(seen)
+  expect(logged).toHaveLength(51)
+  expect(logged[0]?.at).toBe(0)
+  expect(Object.keys(seen.files).filter(path => path.includes('.tmp-'))).toEqual([])
+})
+
+test('a subagent cannot ask the user for time when re-estimating upward', async ($, on) => {
+  world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 60)
+  await $.agent.spawn({ tool_use_id: 'tu1', prompt: 'Budget: 10 min\nwork', description: 'ag1', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: 'm' } as any)
+  const r = denied(await estimate($, 20, 'ag1'))
+  expect(r).toContain(`Put more_min in your ${TOOL.report} call; main can grant time.`)
+  expect(r).not.toContain('Ask the user')
+})
+
+test('calibration actual excludes the idle gap after an extension', async ($, on) => {
+  const { seen, clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 10)
+  await clock.advance(15 * MIN + 1)
+  await $.turn.complete({ answer: 'a', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as any)
+  await clock.advance(60 * MIN)
+  await prompt($, '+5m')
+  await clock.advance(5 * MIN)
+  await $.turn.complete({ answer: 'b', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' } as any)
+  await prompt($, 'next task')
+  expect(pairs(seen)[0]?.actual_min).toBe(20)
 })
 
 // Regression: a codex agent runs with no estimate because no gate reaches inside codex.

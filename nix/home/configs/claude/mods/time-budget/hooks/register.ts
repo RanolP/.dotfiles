@@ -11,17 +11,17 @@ import {
 //
 // A unit is the main thread's task from a user prompt on (a "+Nm" reply
 // continues it), or one subagent run. Its first tool call must be the estimate
-// tool; at each checkpoint a timer marks a report due and every other tool
-// waits on it; a report that projects past the budget, or the budget running
-// out, denies every tool but the report, and GRACE_MS after 6/6 a main turn
-// still running is aborted. A codex agent runs its shell inside codex where
-// no gate reaches, so its spawner declares the estimate as the prompt's first
-// line. The calibration history is time-budget.py's file, read and written in
-// the same shape, one pair per unit.
+// tool unless the spawner declares a Budget line; at each checkpoint a timer
+// marks a report due and every other tool waits on it; a report that projects
+// past the budget, or the budget running out, denies every tool but the report,
+// and GRACE_MS after 6/6 a main turn still running is aborted. The calibration
+// history is time-budget.py's file, read and written in the same shape, one
+// pair per unit.
 
 const UNITS = { plugin: 'time-budget', key: 'units' } as const
 const MAIN = 'main'
 const CODEX = 'codex-subagent:'
+const MAIN_ABORT = 'main-abort'
 const USER_ORIGINS = new Set(['composer', 'bridge', 'sdk'])
 const STATUS_REFRESH_MS = 60_000
 
@@ -71,6 +71,7 @@ type S = {
   handedBack: Map<string, boolean>
   runningTurn?: string
   pairs?: Pair[]
+  calibrationWrite?: Promise<void>
   refresh?: Timer
 }
 
@@ -119,16 +120,28 @@ async function logPair($: Ctx, s: S, u: Unit, end: number) {
   if (u.estimateMin === undefined || u.budgetMin === undefined) return
   const pair: Pair = {
     kind: u.kind, agent_type: u.agentType ?? null, estimate_min: u.estimateMin, budget_min: u.budgetMin,
-    actual_min: Math.round(((end - u.start) / 60_000) * 100) / 100, at: Math.floor(end / 1000),
+    actual_min: Math.round(((end - u.start - (u.pausedMs ?? 0)) / 60_000) * 100) / 100, at: Math.floor(end / 1000),
   }
-  const path = await calibrationFile($)
-  try {
-    const prev = (await $.fs.exists(path)) ? ((await $.fs.read(path)) as string) : ''
-    await $.fs.write(path, `${prev}${prev && !prev.endsWith('\n') ? '\n' : ''}${JSON.stringify(pair)}\n`)
-    ;(await loadPairs($, s)).push(pair)
-  } catch (err) {
-    log($, `cannot append ${JSON.stringify(pair)} to ${path}: ${errText(err)}`)
+  const write = async () => {
+    const path = await calibrationFile($)
+    try {
+      const prev = (await $.fs.exists(path)) ? ((await $.fs.read(path)) as string) : ''
+      const existing = parsePairs(prev)
+      const next = [...existing, pair]
+      const text = `${next.map(p => JSON.stringify(p)).join('\n')}\n`
+      // A random temp avoids same-second collisions; separate sessions can still lose an update between read and rename.
+      const temp = `${path}.tmp-${pair.at}-${Math.random().toString(36).slice(2)}`
+      await $.fs.write(temp, text)
+      const moved = await $.process.run(['mv', temp, path], { timeoutMs: 5_000 })
+      if (moved.exitCode !== 0) throw new Error(`mv ${temp} ${path} failed (${moved.exitCode}): ${moved.stderr}`)
+      s.pairs = next
+    } catch (err) {
+      log($, `cannot append ${JSON.stringify(pair)} to ${path}: ${errText(err)}`)
+    }
   }
+  const pending = s.calibrationWrite ?? Promise.resolve()
+  s.calibrationWrite = pending.catch(() => undefined).then(write)
+  await s.calibrationWrite
 }
 
 function disarm(s: S, key: string) {
@@ -136,13 +149,26 @@ function disarm(s: S, key: string) {
   s.timers.delete(key)
 }
 
+function resume(s: S, key: string, u: Unit) {
+  disarm(s, key)
+  if (key === MAIN) disarm(s, MAIN_ABORT)
+  s.handedBack.delete(key)
+  u.halted = undefined
+  u.haltedAt = undefined
+  u.reportDue = undefined
+  u.report = undefined
+  u.reportAt = undefined
+  u.unread = undefined
+}
+
 // A main turn still running GRACE_MS after the stop has had its chance to report.
 function armAbort($: Ctx, s: S) {
-  $.clock.after(GRACE_MS, () => {
+  disarm(s, MAIN_ABORT)
+  s.timers.set(MAIN_ABORT, $.clock.after(GRACE_MS, () => {
     const turnId = s.runningTurn
     if (!s.units[MAIN]?.halted || !turnId) return
     $.turn.abort({ turnId }).catch(err => log($, `turn.abort(${turnId}) failed: ${errText(err)}`))
-  })
+  }))
 }
 
 // Moves the unit to the checkpoint the clock has reached; the timer and every tool call run it.
@@ -241,10 +267,10 @@ export const register: Register = (on) => {
     const extra = extensionFrom(e.text)
     let note: string
     if (u && u.budgetMin !== undefined && extra !== undefined) {
-      u.budgetMin += extra
-      u.halted = undefined
-      u.haltedAt = undefined
-      u.reportDue = undefined
+      const elapsed = (now - u.start) / 60_000
+      u.pausedMs = (u.pausedMs ?? 0) + (now - (u.lastEnd ?? now))
+      u.budgetMin = Math.max(u.budgetMin, elapsed) + extra
+      resume(s, MAIN, u)
       u.fired = crossed(now - u.start, u.budgetMin)
       note = `The user's reply continues the timed task on the same clock: +${extra} min, budget now ${Math.round(u.budgetMin)} min (${mins(now - u.start)} min elapsed).`
       await arm($, s, MAIN)
@@ -327,12 +353,22 @@ export const register: Register = (on) => {
       if (typeof m !== 'number' || !(m > 0)) return { deny: `Call ${TOOL.estimate} with minutes as a positive number, scope as one line and steps as a list.` }
       const unit = s.units[key] ?? (s.units[key] = { kind: 'sub', start: now, fired: 0 })
       const factor = calibrationFactor(await loadPairs($, s))
-      unit.estimateMin = m
-      unit.budgetMin = budgetFor(m, factor)
+      const budget = budgetFor(m, factor)
+      if (unit.budgetMin !== undefined && budget > unit.budgetMin) {
+        const ask = key === MAIN ? 'Ask the user for "+Nm" instead.' : `Put more_min in your ${TOOL.report} call; main can grant time.`
+        return { deny: `This re-estimate would increase the budget from ${Math.round(unit.budgetMin)} to ${Math.round(budget)} min. ${ask}` }
+      }
+      const first = unit.budgetMin === undefined
+      if (first) unit.estimateMin = m
+      unit.budgetMin = budget
       unit.scope = typeof args.scope === 'string' ? args.scope : undefined
       unit.steps = Array.isArray(args.steps) ? args.steps.filter((s): s is string => typeof s === 'string') : undefined
-      unit.fired = crossed(now - unit.start, unit.budgetMin)
-      unit.reportDue = undefined
+      if (first) {
+        unit.fired = crossed(now - unit.start, unit.budgetMin)
+        unit.reportDue = undefined
+      } else {
+        await advance($, s, key, now)
+      }
       await save($, s)
       await arm($, s, key)
       if (key === MAIN) await showStatus($, s)
@@ -372,9 +408,7 @@ export const register: Register = (on) => {
       if (!sub || sub.budgetMin === undefined) return { deny: `Call ${TOOL.grant} with the agent_id of a running subagent that has a budget (one of: ${Object.keys(s.units).filter(k => k !== MAIN).join(', ') || 'none'}).` }
       if (typeof extra !== 'number' || !(extra > 0)) return { deny: `Call ${TOOL.grant} with minutes as a positive number.` }
       sub.budgetMin += extra
-      sub.halted = undefined
-      sub.haltedAt = undefined
-      sub.reportDue = undefined
+      resume(s, id, sub)
       sub.fired = crossed(now - sub.start, sub.budgetMin)
       await save($, s)
       await arm($, s, id)

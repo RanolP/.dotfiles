@@ -1,13 +1,23 @@
 import { test, expect } from 'claude-code/testing'
-import { budgetFor, budgetLine, calibrationFactor, CHECKPOINTS, crossed, dueAt, FLOOR_MIN, gate, parsePairs, projectedMin, TOOL } from './budget'
+import { budgetFor, budgetLine, calibrationFactor, CHECKPOINTS, crossed, dueAt, extensionFrom, FLOOR_MIN, gate, parsePairs, projectedMin, TOOL } from './budget'
 
-test('history that ran 3x over scales the next budget 3x, clamped to [1, 10]', () => {
+test('history that ran 3x over scales the next budget 3x, clamped to [0.25, 10]', () => {
   expect(calibrationFactor([])).toBe(1)
   expect(budgetFor(5, 1)).toBe(FLOOR_MIN)
   const hist = [...Array(9).fill({ estimate_min: 10, actual_min: 30 }), { estimate_min: 10, actual_min: 5 }]
   expect(calibrationFactor(hist)).toBe(3)
   expect(calibrationFactor(Array(9).fill({ estimate_min: 1, actual_min: 99 }))).toBe(10)
-  expect(calibrationFactor(Array(9).fill({ estimate_min: 10, actual_min: 2 }))).toBe(1)
+  expect(calibrationFactor(Array(9).fill({ estimate_min: 10, actual_min: 2 }))).toBe(0.25)
+})
+
+test('history that finished at one fifth of the estimate scales below one', () => {
+  expect(calibrationFactor(Array(5).fill({ estimate_min: 10, actual_min: 2 }))).toBe(0.25)
+})
+
+test('an extension must be the whole prompt', () => {
+  expect(extensionFrom('+2m')).toBe(2)
+  expect(extensionFrom(' +2 minutes ')).toBe(2)
+  expect(extensionFrom('add +2 margin')).toBeUndefined()
 })
 
 test('python-written calibration.jsonl lines load and give the python factor', () => {

@@ -28,6 +28,8 @@ export type Unit = {
   unread?: boolean
   /** The last time a main turn of this unit ended: the unit's actual end for calibration. */
   lastEnd?: number
+  /** Wall-clock time spent waiting for the user after a main turn ended. */
+  pausedMs?: number
 }
 
 declare module 'claude-code' {

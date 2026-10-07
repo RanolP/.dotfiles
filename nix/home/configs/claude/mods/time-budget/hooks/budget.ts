@@ -4,7 +4,7 @@
 // WHY THE HARNESS MEASURES: a model's own time estimate runs 3-10x off, and a
 // mid-task "percent done" self-report is unreliable (arXiv 2609.08589). So the
 // wall clock lives here, and the estimate only seeds a budget after it is
-// scaled by the p90 of actual/estimate over past units, clamped to [1, 10].
+// scaled by the p90 of actual/estimate over past units, clamped to [0.25, 10].
 // A report lists verified-done and open items, never a percentage, which
 // relieves the late-task pull toward closing over verifying (arXiv 2609.00823).
 
@@ -22,8 +22,8 @@ export const LAST = CHECKPOINTS.length
 
 export const FLOOR_MIN = 15
 const MIN_HISTORY = 5
-const HISTORY_WINDOW = 50
-const FACTOR_MIN = 1
+export const HISTORY_WINDOW = 50
+const FACTOR_MIN = 0.25
 const FACTOR_MAX = 10
 // After 6/6, a main turn that is still running gets this long to write its
 // report with every tool but `report` denied, then it is aborted.
@@ -75,11 +75,11 @@ export const dueAt = (i: number, budgetMin: number) => Math.ceil(CHECKPOINTS[i]!
 export const crossed = (elapsedMs: number, budgetMin: number) => CHECKPOINTS.filter((_, i) => elapsedMs >= dueAt(i, budgetMin)).length
 
 export const extensionFrom = (prompt: string): number | undefined => {
-  const m = /\+(\d{1,4})\s*m/.exec(prompt)
+  const m = /^\s*\+(\d{1,4})\s*m(in(utes?)?)?\s*$/i.exec(prompt)
   return m ? Number(m[1]) : undefined
 }
 
-/** `Budget: <N> min` as the prompt's first line: the spawner's estimate for a codex agent, which no gate inside codex can ask for. */
+/** `Budget: <N> min` as the prompt's first line: an optional spawner estimate; codex requires it because no gate reaches inside codex. */
 export const budgetLine = (prompt: string): number | undefined => {
   const m = /^\s*Budget:\s*(\d+(?:\.\d+)?)\s*min\s*$/i.exec(prompt.split('\n', 1)[0] ?? '')
   const n = m ? Number(m[1]) : NaN

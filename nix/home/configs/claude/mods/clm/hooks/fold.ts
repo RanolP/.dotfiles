@@ -1,7 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 
 const LEDGER_TAG = '[clm ledger'
-const RESULT_FLOOR = 128 // tokens each kept tool result may shrink to, at least
+const RESULT_FLOOR = 1024 // tokens each older kept tool result may shrink to, at least
 
 // --- rows ----------------------------------------------------------------
 
@@ -67,9 +67,16 @@ export type ClearPlan = {
   cuts: Record<string, number>
 }
 
+const sumAfterCuts = (rows: readonly SessionMessage[], cuts: Record<string, number>): number => rows.reduce((n, m) => {
+  const raw = (m.toolResults ?? []).reduce((total, r) => total + Math.ceil(r.text.length / 4), 0)
+  const clipped = (m.toolResults ?? []).reduce((total, r) => total + Math.min(Math.ceil(r.text.length / 4), cuts[r.tool_use_id] ?? Infinity), 0)
+  return n + estTokens(m) - raw + clipped
+}, 0)
+
 // Turns open on a real user prompt, so whole turns never split a tool_use
 // from its tool_result. The tail is the newest turns that fit `target`
-// alongside the head and the ledger, and always holds the newest one.
+// alongside the head and the ledger after older result trimming, and always
+// holds the newest one.
 export function planClear(msgs: readonly SessionMessage[], target: number, ledgerTokens: number): ClearPlan | undefined {
   const first = protectedIndex(msgs)
   const starts = msgs.flatMap((m, i) => (i > first && isPrompt(m) ? [i] : []))
@@ -78,21 +85,29 @@ export function planClear(msgs: readonly SessionMessage[], target: number, ledge
   let keepFrom = starts.length ? starts[starts.length - 1]! : first + 1
   let keptTurns = starts.length ? 1 : 0
   for (let t = starts.length - 2; t >= 0; t--) {
-    if (fixed + sum(msgs.slice(starts[t]!)) > target) break
+    const candidate = msgs.slice(starts[t]!)
+    if (fixed + sum(candidate) > target) {
+      const candidateCuts = shareResults(candidate, target - fixed, starts[starts.length - 1]! - starts[t]!)
+      if (Object.keys(candidateCuts).length === 0 || fixed + sumAfterCuts(candidate, candidateCuts) > target) break
+    }
     keepFrom = starts[t]!
     keptTurns++
   }
   const tail = msgs.slice(keepFrom)
   const dropped = msgs.slice(first + 1, keepFrom).filter(m => !isLedgerRow(m) && !isSystemRow(m))
-  const cuts = fixed + sum(tail) > target ? shareResults(tail, target - fixed) : {}
+  // The newest turn may still be in progress when compaction is requested;
+  // preserve its tool results whole so a live command's output is not lost.
+  const newestStart = starts.at(-1)
+  const cuttable = newestStart === undefined ? tail.length : Math.max(0, newestStart - keepFrom)
+  const cuts = fixed + sum(tail) > target ? shareResults(tail, target - fixed, cuttable) : {}
   if (dropped.length === 0 && Object.keys(cuts).length === 0) return undefined
   return { head, dropped, tail, keptTurns, cuts }
 }
 
 // Each tool result in the tail gets an equal slice of the room left after the
 // tail's other text; only results bigger than their slice are cut.
-function shareResults(tail: readonly SessionMessage[], room: number): Record<string, number> {
-  const results = tail.flatMap(m => m.toolResults ?? [])
+function shareResults(tail: readonly SessionMessage[], room: number, cuttableLength = tail.length): Record<string, number> {
+  const results = tail.slice(0, cuttableLength).flatMap(m => m.toolResults ?? [])
   if (results.length === 0) return {}
   const other = sum(tail) - results.reduce((n, r) => n + Math.ceil(r.text.length / 4), 0)
   const share = Math.max(RESULT_FLOOR, Math.floor((room - other) / results.length))

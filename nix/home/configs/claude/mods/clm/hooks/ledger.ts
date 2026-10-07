@@ -82,9 +82,8 @@ export function composeLedger(notes: string, issues: readonly Issue[], stale = 0
 // A ledger written before instructions were stored as JSON strings holds
 // free-form lines (`"..." (UI 검증)`, `PR 병합에 대해: "..."`); each is kept
 // verbatim, and only a fully quoted line is unquoted.
-const instructionValue = (line: string): string | undefined => {
-  const raw = line.trim().replace(/^-\s*/, '')
-  if (!raw || raw === '(none yet)' || raw.startsWith('[additional user instructions in ')) return undefined
+export const WITHDRAWN_PREFIX = '(withdrawn) '
+const storedInstructionValue = (raw: string): string => {
   if (!(raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"'))) return raw
   try {
     const value: unknown = JSON.parse(raw)
@@ -93,6 +92,12 @@ const instructionValue = (line: string): string | undefined => {
     // Quoted but not valid JSON: strip the outer quotes only.
   }
   return raw.slice(1, -1)
+}
+const instructionValue = (line: string): string | undefined => {
+  const raw = line.trim().replace(/^-\s*/, '')
+  if (!raw || raw === '(none yet)' || raw.startsWith('[additional user instructions in ')) return undefined
+  if (!raw.startsWith(WITHDRAWN_PREFIX)) return storedInstructionValue(raw)
+  return `${WITHDRAWN_PREFIX}${JSON.stringify(storedInstructionValue(raw.slice(WITHDRAWN_PREFIX.length)))}`
 }
 /** The one key two spellings of an instruction share: whitespace runs, line breaks included, collapse to one space. */
 export const instructionKey = (text: string) => text.replace(/\s+/g, ' ').trim()
@@ -109,8 +114,8 @@ export const INSTRUCTION_CLIP = 2000
 export type PreservedInstructions = { notes: string; fullNotes: string }
 /**
  * Owns 사용자 지시: the earlier instructions (`prior`, from the ledger file),
- * plus every prompt in `dropped`, minus the `withdrawn` ones, each once by
- * instructionKey. `fullNotes` keeps every line whole for the ledger file;
+ * plus every prompt in `dropped`, each once by instructionKey. Visible notes
+ * omit `withdrawn` instructions; `fullNotes` keeps them marked for the ledger file;
  * `notes` clips a line over INSTRUCTION_CLIP chars and the section over `cap`,
  * each with a pointer to that file.
  */
@@ -119,30 +124,39 @@ export function preserveInstructions(
   withdrawn: readonly string[] = [], cap = INSTRUCTION_CAP,
 ): PreservedInstructions {
   const gone = new Set(withdrawn.map(instructionKey))
-  const seen = new Set<string>()
-  const values: string[] = []
-  for (const text of [...prior, ...dropped.filter(isPrompt).map(m => m.text)]) {
+  const seen = new Map<string, { text: string; withdrawn: boolean }>()
+  for (const raw of [...prior, ...dropped.filter(isPrompt).map(m => m.text)]) {
+    const alreadyWithdrawn = raw.startsWith(WITHDRAWN_PREFIX)
+    const text = alreadyWithdrawn ? storedInstructionValue(raw.slice(WITHDRAWN_PREFIX.length)) : raw
     const key = instructionKey(text)
-    if (!key || seen.has(key) || gone.has(key)) continue
-    seen.add(key)
-    values.push(text)
+    if (!key) continue
+    const previous = seen.get(key)
+    if (previous) {
+      seen.delete(key)
+      seen.set(key, { text, withdrawn: alreadyWithdrawn || gone.has(key) })
+      continue
+    }
+    seen.set(key, { text, withdrawn: alreadyWithdrawn || gone.has(key) })
   }
-  const full = values.map(v => `- ${JSON.stringify(v)}`)
-  const shown = values.map(v => v.length > INSTRUCTION_CLIP
+  const records = [...seen.values()]
+  const visible = records.filter(v => !v.withdrawn).map(v => v.text)
+  const full = records.map(v => v.withdrawn ? `- ${WITHDRAWN_PREFIX}${JSON.stringify(v.text)}` : `- ${JSON.stringify(v.text)}`)
+  const shown = visible.map(v => v.length > INSTRUCTION_CLIP
     ? `- ${JSON.stringify(v.slice(0, INSTRUCTION_CLIP))}…[${v.length - INSTRUCTION_CLIP} chars cut, see ${pointer}]`
     : `- ${JSON.stringify(v)}`)
   const available = Math.max(0, cap - `## ${INSTRUCTIONS}\n`.length)
   let used = 0
-  const kept: string[] = []
-  for (const line of shown) {
-    const extra = kept.length ? 1 : 0
+  const newestFirst: string[] = []
+  for (const line of [...shown].reverse()) {
+    const extra = newestFirst.length ? 1 : 0
     if (used + extra + line.length > available) break
-    kept.push(line)
+    newestFirst.push(line)
     used += extra + line.length
   }
+  const kept = newestFirst.reverse()
   const overflow = shown.length > kept.length ? [`- [additional user instructions in ${pointer}]`] : []
   const body = (lines: readonly string[]) => (lines.length ? lines.join('\n') : '- (none yet)')
-  return { notes: withSection(notes, INSTRUCTIONS, body([...kept, ...overflow])), fullNotes: withSection(notes, INSTRUCTIONS, body(full)) }
+  return { notes: withSection(notes, INSTRUCTIONS, body([...overflow, ...kept])), fullNotes: withSection(notes, INSTRUCTIONS, body(full)) }
 }
 
 // Deterministic stand-in when the merge model keeps failing: the notes stay as

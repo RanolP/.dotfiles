@@ -4,12 +4,13 @@ import type { BuiltinToolInputs, EngineInterface, Register, SessionMessage } fro
 import type { ClmBoard } from '../types'
 import { BoardView } from './board'
 import {
-  buildCleared, fingerprint, isPrompt, isSystemRow, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
+  buildCleared, fingerprint, isLedgerRow, isPrompt, isSystemRow, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
   type Boundary, type ClearPlan,
 } from './fold'
 import {
   composeLedger, EMPTY_LEDGER, fallbackLedger, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, notesOf, oversizeLines, parseChanges, parseMerge,
   preservedLines, preserveInstructions, rememberOversize, rememberPreserved, renderTurns, withheldLines, withheldPointer,
+  WITHDRAWN_PREFIX,
 } from './ledger'
 import {
   archivedDone, describe, injected, normalizeRemote, parseLog, snapshot, staleOpenCount, toEvents,
@@ -71,7 +72,10 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 // the fold is applied, so a planned fold that never lands (a headless session,
 // a re-fold) cannot leave issues behind for the next one to duplicate. The one
 // tracker write at call time is mirrorModelTask, for the model's own task calls.
-type Pending = { notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; cuts: Record<string, number>; keptTurns: number; fallback: boolean }
+type Pending = {
+  notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
+  cuts: Record<string, number>; keptTurns: number; fallback: boolean
+}
 // `foldTokens` is the usage reading taken when the last fold landed: the
 // engine keeps reporting it until the next API response, so an equal reading
 // describes the transcript before that fold and is ignored.
@@ -86,7 +90,8 @@ const isMeta = (v: unknown): v is Partial<Meta> =>
   && optional(v.foldTokens, 'number') && optional(v.lastFoldAt, 'number') && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
 const isPending = (v: unknown): v is Pending =>
   isRecord(v) && typeof v.notes === 'string' && typeof v.fullNotes === 'string' && Array.isArray(v.ops) && typeof v.seq === 'number'
-  && optional(v.keepFp, 'string') && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean'
+  && optional(v.keepFp, 'string') && typeof v.keepFrom === 'number' && Array.isArray(v.dropFps) && v.dropFps.every(f => typeof f === 'string')
+  && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean'
 async function readMeta($: EngineInterface): Promise<Meta> {
   const stored = await $.store.get(await metaKey($))
   return { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
@@ -433,7 +438,8 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   let notes = notesOf(prev)
   // Taken before the merge, which may drop them, so a withheld file keeps its pointer.
   const kept = [...preservedLines(notes), ...withheldLines(plan.dropped)]
-  const instructions = instructionValues(notes)
+  const storedInstructions = instructionValues(notes)
+  const instructions = storedInstructions.filter(i => !i.startsWith(WITHDRAWN_PREFIX))
   let ops: Payload[] = []
   let withdrawn: string[] = []
   let fallback = false
@@ -476,7 +482,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   }
   // Backstop for the merge model: a step already recorded as done is never created twice.
   ops = ops.filter(o => !(o.op === 'create' && o.status === 'done' && view.doneTitles.has(o.title.trim())))
-  const preserved = preserveInstructions(notes, instructions, plan.dropped, await ledgerPath($), withdrawn)
+  const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await ledgerPath($), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
   const fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
 
@@ -512,6 +518,7 @@ async function maybeClear($: EngineInterface, opts: Opts) {
   if (typeof f === 'string') return skip($, f)
   const pending: Pending = {
     notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
+    keepFrom: rows.length - f.plan.tail.length, dropFps: f.plan.dropped.map(fingerprint),
     cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback,
   }
   await $.store.set(await pendingKey($), pending)
@@ -678,7 +685,7 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     if (e.agentId !== undefined) return res
     try {
-      await showTurnChanges($, e)
+      void showTurnChanges($, e).catch(err => $.ui.log(`clm: turn context refresh failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
       await maybeClear($, opts)
     } catch (err) {
       $.ui.log(`clm: fold failed, ${String(err).slice(0, 200)}`, { to: 'debug' })
@@ -703,14 +710,17 @@ export const register: Register = (on, options) => {
     const pending = isPending(stored) ? stored : undefined
     if (stored !== undefined) await $.store.delete(key)
 
-    let use: (Omit<Pending, 'keepFp'> & { keepFrom: number }) | undefined
+    let use: (Omit<Pending, 'keepFp' | 'keepFrom' | 'dropFps'> & { keepFrom: number }) | undefined
     if (pending) {
-      let keepFrom = pending.keepFp === undefined ? workingRows.length : -1
-      for (let i = workingRows.length - 1; i > first && keepFrom < 0; i--) {
-        const row = workingRows[i]
-        if (row && fingerprint(row) === pending.keepFp) keepFrom = i
-      }
-      if (keepFrom >= 0) use = { ...pending, keepFrom }
+      const keepFrom = pending.keepFrom
+      const row = keepFrom < workingRows.length ? workingRows[keepFrom] : undefined
+      const expectedDropped = workingRows.slice(first + 1, keepFrom).filter(m => !isLedgerRow(m) && !isSystemRow(m)).map(fingerprint)
+      const sameDropped = expectedDropped.length === pending.dropFps.length
+        && expectedDropped.every((fp, i) => fp === pending.dropFps[i])
+      const sameKept = pending.keepFp === undefined
+        ? keepFrom === workingRows.length
+        : row !== undefined && fingerprint(row) === pending.keepFp
+      if (keepFrom >= first + 1 && keepFrom <= workingRows.length && sameKept && sameDropped) use = { ...pending, keepFrom }
     }
     let escaped = false
     if (!use) {

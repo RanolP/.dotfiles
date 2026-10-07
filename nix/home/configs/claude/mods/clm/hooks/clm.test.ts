@@ -344,28 +344,60 @@ test('the tail keeps the newest turn even when that turn alone exceeds the tail 
   expect(shape(out.slice(2))).toEqual(['dump logs', 'tu_e', 'tu_e', 'dumped'])
 })
 
-// Regression caught (guards 2 and 6): one huge tool result in the kept tail keeps the context over budget after every fold, and the model forgets which command flooded it.
-test('an oversized tool result in the kept tail is cut to head and tail and its command is remembered', OPTS, async ($, on) => {
-  const rows = [...ROWS, M('user', 'dump logs'), use('tu_e', 'Bash'), res('tu_e', 'HEAD' + 'z'.repeat(8000) + 'TAIL'), M('assistant', 'dumped')]
+// Regression caught: a pending plan found the newer of two identical prompts and deleted the rows between it and the planned boundary.
+test('a pending fold keeps both identical tail prompts and the turn between them', OPTS, async ($, on) => {
+  const rows = [
+    M('user', 'start'), M('assistant', 'x'.repeat(9000)),
+    M('user', 'old work'), M('assistant', 'x'.repeat(9000)),
+    M('user', 'continue'), M('assistant', 'first continuation'),
+    M('user', 'between'), M('assistant', 'middle result'),
+    M('user', 'continue'), M('assistant', 'second continuation'),
+    M('user', 'last'), M('assistant', 'done'),
+  ]
   const s: State = { rows, replies: [ledger('x')] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const out = seen.results[0].messages
-  const cut = out.find((m: any) => m.toolResults?.[0]?.tool_use_id === 'tu_e').toolResults[0].text
-  expect(cut.startsWith('HEAD')).toBe(true)
-  expect(cut.endsWith('TAIL')).toBe(true)
-  expect(cut).toMatch(/…\[clm: \d+ of 8008 chars cut at fold time\]…/)
-  // Cut to its share of the 1200-token tail target, not to a fixed size.
-  expect(cut.length).toBeLessThan(4 * 1200)
-  expect(out[1].text).toContain('- 출력 과다: Bash {"id":"tu_e"}')
-  expect(seen.files[LEDGER_FILE]).toContain('출력 과다:')
-  expect(logEvents(seen).map(e => e.event)).toContain('truncation')
+  expect(out.filter((m: any) => m.text === 'continue').length).toBe(2)
+  expect(shape(out)).toContain('between')
+  expect(shape(out)).toContain('first continuation')
 })
 
-// Regression caught (guard 6): oversize notes pile up in the ledger without bound across folds.
+// Regression caught: a deferred plan used a tail-relative boundary, so one appended turn forced a second merge.
+test('a plan deferred past one appended turn is applied without a second merge', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('planned ledger')] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  expect(seen.store['pending:s1']).toBeDefined()
+  s.rows = [...ROWS, M('user', 'new turn'), M('assistant', 'new result')]
+  const out: any = await $.session.compact({ trigger: 'auto', messages: handled(s.rows) } as any)
+  expect(seen.prompts.length).toBe(1)
+  expect(out.messages[1].text).toContain('planned ledger')
+  expect(out.messages.some((m: any) => m.text === 'new turn')).toBe(true)
+})
+
+// Regression caught (guards 2 and 6): a fold cut the tool result of the newest turn while that command was still in progress.
+test('an oversized result in an older kept turn is cut while the newest turn stays whole', { options: { budget: 5000, tailTarget: 3000, reserve: 100 } }, async ($, on) => {
+  const olderResult = 'HEAD' + 'z'.repeat(16000) + 'TAIL'
+  const rows = [...ROWS, M('user', 'dump logs'), use('tu_e', 'Bash'), res('tu_e', olderResult), M('assistant', 'dumped'), M('user', 'ok'), M('assistant', 'ok')]
+  const s: State = { rows, replies: [ledger('x')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const out = seen.results[0].messages
+  const result = out.find((m: any) => m.toolResults?.[0]?.tool_use_id === 'tu_e').toolResults[0].text
+  expect(result.startsWith('HEAD')).toBe(true)
+  expect(result.endsWith('TAIL')).toBe(true)
+  expect(result).toMatch(new RegExp(`…\\[clm: \\d+ of ${olderResult.length} chars cut at fold time\\]…`))
+  expect(result.length).toBeLessThan(4 * 1200)
+  expect(out[1].text).toContain('- 출력 과다: Bash {"id":"tu_e"}')
+  expect(logEvents(seen).map(e => e.event)).toContain('truncation')
+  expect(out.find((m: any) => m.text === 'ok')).toBeDefined()
+})
+
+// Regression caught: oversize notes pile up in the ledger without bound across folds.
 test('only the last five oversize notes stay in the ledger', OPTS, async ($, on) => {
   const old = ['a', 'b', 'c', 'd', 'e'].map(c => `- 출력 과다: Bash old-${c}`).join('\n')
-  const rows = [...ROWS, M('user', 'dump logs'), use('tu_e', 'Bash'), res('tu_e', 'z'.repeat(8000)), M('assistant', 'dumped')]
+  const rows = [...ROWS, M('user', 'dump logs'), use('tu_e', 'Bash'), res('tu_e', 'z'.repeat(16000)), M('assistant', 'dumped'), M('user', 'ok'), M('assistant', 'ok')]
   const s: State = { rows, replies: [ledger(`kept fact\n${old}`)] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
@@ -462,7 +494,7 @@ test('a bad option is logged with the value actually used', { options: { budget:
 })
 
 // Regression caught: with no plan pending, the engine's threshold or a /compact runs its own summarizer and replaces the ledger with an engine summary.
-test('auto compaction with no pending plan produces an engine summary instead of a clm ledger', OPTS, async ($, on) => {
+test('auto compaction with no pending plan produces a clm ledger instead of an engine summary', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('INLINE-FACT'), 'not a ledger'] }
   const seen = bottoms(on, s)
   const auto: any = await $.session.compact({ trigger: 'auto', messages: handled(ROWS) } as any)
@@ -511,6 +543,31 @@ test('an oversized prompt is kept once, whole in the file and clipped with its p
   const again = preserveInstructions(first.fullNotes, [prompt], dropped, '/ledger.md')
   expect(again.fullNotes.split(JSON.stringify(prompt)).length).toBe(2)
   expect(again.notes.match(/chars cut/g)?.length).toBe(1)
+})
+
+// Regression caught: the instruction cap kept old lines first, hiding the newest correction behind the overflow pointer.
+test('the newest user instruction survives the visible instruction cap', async () => {
+  const prev = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
+  const old = Array.from({ length: 12 }, (_, i) => `old instruction ${i} ${'x'.repeat(24)}`)
+  const out = preserveInstructions(prev, old, [M('user', 'newest correction')], '/ledger.md', [], 180)
+  expect(out.notes).toContain('- "newest correction"')
+  expect(out.notes).toContain('[additional user instructions in /ledger.md]')
+})
+
+// Regression caught: a withdrawn instruction disappeared from the full ledger file along with the visible notes.
+test('a withdrawn instruction stays in fullNotes as withdrawn but leaves visible notes', async () => {
+  const prev = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
+  const out = preserveInstructions(prev, ['keep this', 'take this back'], [], '/ledger.md', ['take this back'])
+  expect(out.notes).toContain('- "keep this"')
+  expect(out.notes).not.toContain('take this back')
+  expect(out.fullNotes).toContain('- (withdrawn) "take this back"')
+})
+
+// Regression caught: re-issuing a previously withdrawn instruction stayed hidden because withdrawal state was sticky.
+test('a re-issued withdrawn instruction becomes visible in its newest slot', async () => {
+  const prev = '## 목표\n- g\n\n## 사용자 지시\n- (withdrawn) "use tabs"\n\n## 핵심 사실·경로\n- f'
+  const out = preserveInstructions(prev, instructionValues(prev), [M('user', 'use tabs')], '/ledger.md')
+  expect(out.notes).toContain('- "use tabs"')
 })
 
 // Regression caught: a model TaskUpdate's subject and description were dropped silently, or an unknown task id got a deny that never said where the change belongs.
@@ -598,7 +655,7 @@ test('a failed escape retry hands the engine the withheld rows without their han
 })
 
 // Regression caught: the engine spends a summarizer call ahead of time and can install that summary at the next compaction.
-test('precompute runs the engine summarizer ahead of time', OPTS, async ($, on) => {
+test('precompute skips the engine summarizer', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [] }
   const seen = bottoms(on, s)
   const r: any = await $.session.compact({ trigger: 'precompute', messages: handled(ROWS) } as any)

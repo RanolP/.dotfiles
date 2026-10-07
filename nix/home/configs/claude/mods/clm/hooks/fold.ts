@@ -39,8 +39,10 @@ export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && ledgerRow
 export const isPrompt = (m: SessionMessage) =>
   m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m)
 
+// A ledger row ahead of every prompt means the first request was already
+// folded away; the ledger then marks the head, and buildCleared replaces it.
 export const protectedIndex = (msgs: readonly SessionMessage[]): number => {
-  const i = msgs.findIndex(isPrompt)
+  const i = msgs.findIndex(m => isPrompt(m) || isLedgerRow(m))
   return i < 0 ? 0 : i
 }
 export const visibleTokens = (msgs: readonly SessionMessage[]) => msgs.reduce((n, m) => n + (isSystemRow(m) ? 0 : estTokens(m)), 0)
@@ -132,7 +134,7 @@ const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMess
     : { ...m, toolResults: m.toolResults.map(r => (cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) })) }
 
 export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage): SessionMessage[] {
-  return [...plan.head, ledgerRow, ...plan.tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => strip(applyCuts(m, plan.cuts)))
+  return [...plan.head.filter(m => !isLedgerRow(m)), ledgerRow, ...plan.tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => strip(applyCuts(m, plan.cuts)))
 }
 
 export const ledgerRowText = (seq: number, at: string, path: string, ledger: string) =>

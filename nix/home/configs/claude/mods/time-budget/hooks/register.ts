@@ -379,7 +379,8 @@ export const register: Register = (on) => {
     if (!u) return r
     u.lastEnd = now
     await save($, s)
-    if (u.budgetMin === undefined) return r
+    // The status line already shows the budget; a line under every answer becomes a focus-view notice row.
+    if (u.budgetMin === undefined || !(u.halted || u.reportDue)) return r
     const head = `⏱ estimate ${u.estimateMin}m → ${statusText(u, now)}`
     const line = u.report ? `${head}\n${reportText(u.report)}` : head
     // A text other than the answer is shown beneath it; another plugin's line stays above ours.

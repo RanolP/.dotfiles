@@ -842,3 +842,16 @@ test('a fold after a failed per-tool step still records the dropped turns', OPTS
   const issues = snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
   expect(issues.map(i => i.title)).toEqual(['테스트 통과'])
 })
+
+// Regression caught: a session folded before /clear became a system row kept [/clear, ledger] as its head, so the next fold pinned the stale ledger above the new one.
+test('a fold over an older fold drops the /clear row and the stale ledger', OPTS, async ($, on) => {
+  const CLEAR = '<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>'
+  const OLD = '[clm ledger #3 · 2026-10-06T00:00:00.000Z] Earlier turns of this session were folded into these notes by the harness (file: x). They are your memory of that work.\n\n## 목표\n- old'
+  const s: State = { rows: [M('user', CLEAR), M('user', OLD), ...ROWS], replies: [ledger('fact')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const out = seen.results[0].messages
+  expect(out.some((m: any) => m.text.includes('<command-name>/clear'))).toBe(false)
+  expect(out.filter((m: any) => m.text.startsWith('[clm ledger')).map((m: any) => m.text.slice(0, 14))).toEqual(['[clm ledger #1'])
+  expect(out[0].text.startsWith('[clm ledger #1')).toBe(true)
+})

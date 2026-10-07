@@ -505,13 +505,16 @@ test('a done clm issue closes the main unit once', async ($, on) => {
   expect(pairs(seen)).toHaveLength(1)
 })
 
-// Regression: the user never sees the budget unless the model chooses to say it.
-test('a main answer carries the budget line beneath it', async ($, on) => {
-  world(on)
+// Regression: a budget line under every answer showed as a notice row in focus view,
+// or a due report went unannounced once that line was dropped.
+test('a main answer carries the budget line only when a report is due', async ($, on) => {
+  const { clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 20)
-  const r = await complete($, 't1', 'done')
-  expect(r.text).toContain('estimate 20m')
-  expect(r.text).toContain('budget 0/20m')
+  await estimate($, 30)
+  expect((await complete($, 't1', 'done')).text).toBe('done')
+  await clock.advance(11 * MIN)
+  const r = await complete($, 't2', 'done')
+  expect(r.text).toContain('estimate 30m')
+  expect(r.text).toContain('report due')
 })

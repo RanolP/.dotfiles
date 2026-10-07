@@ -2,7 +2,7 @@
 
 Keyboard remapping.
 
-**Managed by:** `nix/home/configs/karabiner/karabiner.json` (via `home.file`, `force = true`), installed via Homebrew cask
+**Managed by:** `nix/home/darwin/configs/karabiner/karabiner.json` (linked by `nix/home/darwin/default.nix`), installed via Homebrew cask
 
 ## MacBook Internal Keyboard — Windows-style Layout
 
@@ -29,3 +29,7 @@ External keyboard remapping for the Dareu Z82.
 ## F18 → 한영
 
 F18 is mapped to the Korean input method toggle (symbolic hotkey ID 60) via the macOS activation script in `nix/darwin/default.nix`.
+
+## Ghostty Shortcuts
+
+In Ghostty, Karabiner routes Cmd+D, Cmd+Shift+D, Cmd+T, and Cmd+W to `herdr-key`. The helper sends the action to Herdr when its window is active and otherwise redispatches the split or tab action to Ghostty.

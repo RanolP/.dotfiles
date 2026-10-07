@@ -9,16 +9,17 @@ System configuration layer. Managed by nix-darwin with home-manager.
 | Input | Source | Notes |
 |-------|--------|-------|
 | nixpkgs | nixpkgs-unstable | Main package set |
-| nixpkgs-mise | pinned nixpkgs rev | Avoids Rust source build for mise on aarch64-darwin |
+| nixpkgs-mise | pinned nixpkgs revision | Supplies the cached aarch64-darwin mise package |
 | nix-darwin | LnL7/nix-darwin master | macOS system config |
 | home-manager | nix-community master | User config |
-| nix-homebrew | zhaofengli/nix-homebrew | Declarative Homebrew |
-| NUR | nix-community/NUR | Community packages (Firefox Dev Edition) |
+| homebrew-brew | Homebrew/brew | Locked Homebrew source |
+| nix-homebrew | zhaofengli/nix-homebrew | Declarative Homebrew integration |
+| nur | nix-community/NUR | Community package set, including Firefox add-ons |
 
 ## Overlays
 
-- **nixpkgs-mise:** pulls `mise` from a pinned nixpkgs rev where the aarch64-darwin binary is cached — avoids building from Rust source on every `darwin-rebuild`
-- **direnv:** `doCheck = false` — direnv's test suite hangs in the macOS Nix sandbox (FSEvents/tmpdir/process-spawn blocked); upstream has no fix
+- **nixpkgs-mise:** overlays the pinned `mise` package on macOS to use the cached aarch64-darwin binary.
+- **nur:** exposes the NUR package set as `pkgs.nur` (Firefox add-ons).
 
 ## Nix Settings
 
@@ -31,12 +32,20 @@ System configuration layer. Managed by nix-darwin with home-manager.
 
 | Package | Purpose |
 |---------|---------|
+| age | Encryption tool |
+| bun | Runtime for the Herdr browser plugin |
+| ffmpeg | Composes Jira QA review videos |
 | gnupg | GPG toolchain |
-| pinentry_mac | GPG passphrase prompt (macOS) |
-| pinentry-tty | GPG passphrase prompt (TTY fallback) |
 | nix-your-shell | nix develop/nix-shell → nushell |
-| xcodes | Xcode version manager (prebuilt) |
-| docker-compose | Compose CLI, linked into `~/.docker/cli-plugins/` |
-| gmp | Required by cocoapods |
-| libyaml | Required by cocoapods |
-| espanso | Text expander (via `services.espanso`) |
+
+macOS adds `pinentry_mac`, `pinentry-tty`, `xcodes`, `docker-compose`, `gmp`, and `libyaml` in `nix/home/darwin/default.nix`. Home Manager links the Compose plugin and installs the Xcodes release binary from `nix/home/darwin/packages/xcodes.nix`.
+
+## macOS Defaults
+
+`nix/darwin/default.nix` enables Touch ID for `sudo`, hides the Dock automatically, disables recent apps, shows file extensions and hidden files in Finder, selects dark appearance, speeds up key repeat, and enables trackpad clicking and three-finger drag. It also disables the Bluetooth menu-bar item.
+
+The activation script assigns the bottom-left Dock hot corner to Lock Screen, maps F18 to the Korean input toggle, disables Spotlight's Cmd+Space shortcut, and maps Cmd+Shift+S to the screenshot toolbar. It also disables the macOS 26 SwiftUI glass effect and patches `sdkmanager` to call `/usr/bin/awk`.
+
+## Services
+
+macOS enables Syncthing and Espanso through Home Manager. Espanso's signed 2.3.0 app is downloaded and copied during activation; its match packages are declared in `nix/home/darwin/default.nix`.

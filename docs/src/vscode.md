@@ -1,6 +1,6 @@
 # VS Code
 
-**Managed by:** `nix/home/programs/vscode.nix` via `programs.vscode` (home-manager)
+**Managed by:** `nix/home/darwin/programs/vscode.nix` via `programs.vscode` (home-manager)
 
 `mutableExtensionsDir = false` — extensions are fully declarative; manually installed extensions are removed on rebuild.
 
@@ -15,8 +15,9 @@
 | eamodio.gitlens | Git history / blame |
 | github.copilot | AI completions |
 | github.copilot-chat | AI chat |
+| github.vscode-pull-request-github | GitHub pull requests |
 | thenuprojectcontributors.vscode-nushell-lang | Nushell language support |
-| shd101wyy.markdown-preview-enhanced | Enhanced markdown preview |
+| shd101wyy.markdown-preview-enhanced 0.8.25 | Enhanced markdown preview |
 
 ## Undeclared Extensions (installed manually)
 
@@ -37,11 +38,15 @@ These are present but not yet declared in nix — they get wiped on rebuild:
 | editor.minimap.enabled | true |
 | workbench.colorTheme | Nord |
 | workbench.iconTheme | vscode-icons |
+| update.mode | none |
+| extensions.autoUpdate | off |
+| extensions.autoCheckUpdates | false |
 | files.autoSave | onFocusChange |
 | diffEditor.hideUnchangedRegions.enabled | true |
 | scm.defaultViewMode | tree |
 | terminal.integrated.defaultProfile.osx | nu |
-| terminal.integrated.profiles.osx.nu.path | `/run/current-system/sw/bin/nu` |
+| terminal.integrated.profiles.osx.nu.path | Home Manager profile's `nu` executable |
+| git.autofetch | all, every 60 seconds |
 
 ## Keybinds
 

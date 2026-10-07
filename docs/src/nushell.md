@@ -2,24 +2,26 @@
 
 Primary interactive shell.
 
-**Managed by:** `nix/home/programs/nushell.nix`, `nix/home/configs/nushell/`
+**Managed by:** `nix/home/programs/nushell.nix` and the files under `nix/home/configs/nushell/`
 
 ## Config Files
 
-| File | Purpose |
-|------|---------|
-| `env.nu` | PATH, environment variables |
-| `config.nu` | Shell init (nix-your-shell, banner off) |
+| Source file | Purpose |
+|-------------|---------|
+| `nix/home/configs/nushell/env.common.nu` | Shared PATH, editor, GitHub token, and Claude updater settings |
+| `nix/home/configs/nushell/env.darwin.nu` | macOS PATH, Android SDK, and Colima socket |
+| `nix/home/configs/nushell/env.linux.nu` | Linux profile PATH |
+| `nix/home/configs/nushell/config.nu` | Startup hooks, prompt behavior, and `ccc` profile selector |
 
 ## PATH Order (highest to lowest priority)
 
 1. `~/Library/Android/sdk/emulator`
 2. `~/Library/Android/sdk/platform-tools`
-3. `~/.local/bin`
-4. `~/.local/share/mise/shims`
-5. `/etc/profiles/per-user/ranolp/bin` (nix per-user)
+3. `/etc/profiles/per-user/ranolp/bin` (nix per-user)
+4. `~/.local/bin`
+5. `~/.local/share/mise/shims`
 6. `/nix/var/nix/profiles/default/bin` (nix default)
-7. `/opt/homebrew/bin`, `/opt/homebrew/sbin`
+7. Existing `PATH`, with Homebrew's `bin` and `sbin` appended on macOS
 
 ## Environment Variables
 

@@ -2,7 +2,7 @@
 
 Android development environment.
 
-**Managed by:** `nix/home/default.nix` (activation script + casks)
+**Managed by:** Homebrew casks in `nix/darwin/default.nix` and SDK activation in `nix/home/darwin/default.nix`
 
 ## Components
 
@@ -19,7 +19,7 @@ Android development environment.
 | `ANDROID_HOME` | `~/Library/Android/sdk` |
 | `JAVA_HOME` | resolved via `/usr/libexec/java_home` |
 
-Android SDK paths are also prepended to `PATH` in `env.nu` — see [Nushell](./nushell.md).
+Android SDK paths are also prepended to `PATH` in `nix/home/configs/nushell/env.darwin.nu` — see [Nushell](./nushell.md).
 
 ## SDK Packages (auto-installed on activation)
 
@@ -27,7 +27,8 @@ Android SDK paths are also prepended to `PATH` in `env.nu` — see [Nushell](./n
 - `platforms;android-35`
 - `build-tools;35.0.0`
 - `emulator`
+- `system-images;android-35;google_apis;arm64-v8a`
 
 ## sdkmanager awk Workaround
 
-`sdkmanager` is a bash script that calls bare `awk`, which isn't in `PATH` during nix-darwin activation. The activation script patches the `sdkmanager` binary to use `/usr/bin/awk` — applied after every `darwin-rebuild` to survive brew upgrades.
+`nix/darwin/default.nix` patches `sdkmanager` to use `/usr/bin/awk` during activation when its script contains a bare `awk` command.

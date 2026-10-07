@@ -1,6 +1,6 @@
 # Introduction
 
-macOS dotfiles managed with [nix-darwin](https://github.com/LnL7/nix-darwin) + [home-manager](https://github.com/nix-community/home-manager). GUI apps via Homebrew casks, CLI tools via [mise](https://mise.jdx.dev/).
+macOS dotfiles managed with [nix-darwin](https://github.com/LnL7/nix-darwin) and [home-manager](https://github.com/nix-community/home-manager). Homebrew provides GUI apps; CLI tools are declared across Nix and [mise](https://mise.jdx.dev/).
 
 ## Applying
 
@@ -16,4 +16,4 @@ rebuild
 
 ## Secrets
 
-Copy `nix/home/local.nix.example` → `nix/home/local.nix` and fill in secrets (GPG signing key, etc.). `local.nix` is gitignored.
+Copy `nix/home/local.nix.example` to `nix/home/local.nix` and fill in private values (GPG signing key); `local.nix` is gitignored.

@@ -2,7 +2,7 @@
 
 Tool version manager. Replaces nvm, pyenv, rbenv, etc.
 
-**Managed by:** `nix/home/default.nix` via `programs.mise` (home-manager)
+**Managed by:** `nix/home/default.nix` via `programs.mise` (home-manager). Shared pins live in `nix/home/mise-global.toml`; macOS adds a small platform-specific set.
 
 ## Settings
 
@@ -10,27 +10,41 @@ Tool version manager. Replaces nvm, pyenv, rbenv, etc.
 |---------|-------|
 | experimental | true |
 | pipx.uvx | true (use uv as pipx backend) |
+| Nushell integration | disabled; shims are on PATH |
+| Zsh integration | enabled |
 
 ## Tools
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| node | 24.16.0 | JavaScript runtime |
-| python | 3.14.5 | Python runtime |
-| uv | 0.11.14 | Fast Python package manager |
-| colima | 0.10.3 | Docker-compatible container runtime |
-| lima | 2.1.2 | Linux VM (colima dependency) |
-| docker-cli | 29.5.3 | Docker CLI |
-| fzf | 0.73.1 | Fuzzy finder |
-| bat | 0.26.1 | `cat` with syntax highlighting |
-| eza | 0.23.4 | Modern `ls` |
-| ripgrep | 15.1.0 | Fast `grep` |
-| fd | 10.4.2 | Fast `find` |
-| jq | 1.8.1 | JSON processor |
-| vim | 9.2.0623 | Editor |
-| gh | 2.93.0 | GitHub CLI |
-| delta | 0.19.2 | Git diff pager |
-| claude | 2.1.175 | Claude Code CLI |
-| npm:@mariozechner/pi-coding-agent | 0.73.1 | Pi coding agent |
-| npm:@getgrit/cli | 0.1.0-alpha.1743007075 | Grit codemods CLI |
-| npm:@openai/codex | 0.139.0 | OpenAI Codex CLI |
+| Tool | Version | Scope |
+|------|---------|-------|
+| node | 24.18.0 | Shared |
+| python | 3.14.6 | Shared |
+| rust | 1.96.1 | Shared |
+| uv | 0.11.29 | Shared |
+| fzf | 0.74.0 | Shared |
+| bat | 0.26.1 | Shared |
+| eza | 0.23.4 | Shared |
+| ripgrep | 15.2.0 | Shared |
+| fd | 10.4.2 | Shared |
+| jq | 1.8.2 | Shared |
+| duckdb | 1.5.4 | Shared |
+| gh | 2.100.0 | Shared |
+| delta | 0.19.2 | Shared |
+| difftastic | 0.70.0 | Shared |
+| claude | 2.1.288 | Shared |
+| npm:@earendil-works/pi-coding-agent | 0.80.10 | Shared |
+| npm:@getgrit/cli | 0.1.0-alpha.1743007075 | Shared |
+| codex | 0.155.1 | Shared |
+| npm:agent-browser | 0.34.0 | Shared |
+| npm:agent-device | 0.20.9 | Shared |
+| npm:ntn | 0.21.8 | Shared |
+| npm:slopless | 0.2.23 | Shared |
+| pipx:reuse | 6.2.0 | Shared |
+| pipx:google-colab-cli | 0.7.4 | Shared |
+| ubi:namespacelabs/foundation (`nsc`) | 0.0.573 | Shared |
+| colima | 0.10.3 | macOS |
+| lima | 2.1.4 | macOS |
+| docker-cli | 29.6.0 | macOS |
+| herdr | 0.7.5 | macOS |
+
+On macOS, a Home Manager launchd agent runs the pin-bump script daily at 10:30; the script's seven-day guard limits successful updates to weekly. Its source is `nix/home/configs/mise/bump.py`.

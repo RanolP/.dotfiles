@@ -10,6 +10,8 @@ Cross-shell prompt.
 
 The `$fill` module is a spacer — it pushes `cmd_duration` and `time` to the right edge of the terminal on the same line as the left modules.
 
+When Nushell is in a WSL Windows-drive directory under `/mnt/`, it switches to `starship-winfs.toml`, which omits language modules that scan project files. The generated variant is declared in `nix/home/programs/starship.nix`.
+
 ## Module Settings
 
 | Module | Setting | Value |

@@ -26,7 +26,3 @@ These mirror the split bindings in [Ghostty](./ghostty.md).
 ## Layout
 
 Bare default layout — no tab bar, just a pane area (`children`).
-
-## zjstatus
-
-Status bar plugin. Pinned at v0.23.0, fetched as a `.wasm` binary from GitHub releases.

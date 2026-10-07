@@ -195,6 +195,9 @@ path = [
     "nix/home/configs/jira-cli/fixture.adf.json",
     "nix/home/programs/jira-cli.nix",
     "docs/src/jira-cli.md",
+    "docs/src/codex.md",
+    "docs/src/fast-apply.md",
+    "docs/src/herdr.md",
     "docs/src/agent-incidents.md",
 ]
 precedence = "aggregate"

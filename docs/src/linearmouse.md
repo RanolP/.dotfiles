@@ -2,7 +2,7 @@
 
 Mouse and trackpad customization.
 
-**Managed by:** `nix/home/configs/linearmouse/linearmouse.json`, installed via Homebrew cask
+**Managed by:** `nix/home/darwin/configs/linearmouse/linearmouse.json`, linked by `nix/home/darwin/default.nix`; the app comes from the Homebrew cask
 
 ## Ghostty: Middle-Click
 

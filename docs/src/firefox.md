@@ -2,16 +2,15 @@
 
 Firefox Developer Edition browser.
 
-**Managed by:** the `firefox@developer-edition` Homebrew cask in `nix/darwin/default.nix` installs the app itself, so it lands in `/Applications` and self-updates through Homebrew.
-The profile and addons are declared separately in `nix/home/darwin/programs/firefox.nix`.
+**Managed by:** the `firefox@developer-edition` Homebrew cask in `nix/darwin/default.nix` installs the app; `nix/home/darwin/programs/firefox.nix` declares the default profile and add-ons.
 
 ## What firefox.nix does
 
-Home Manager's `programs.firefox` module manages the profile, not the app: `package = null` stops it from installing its own nix-store Firefox, since the Homebrew cask already owns that job.
+Home Manager's `programs.firefox` module manages the profile, not the app: `package = null` leaves installation to the Homebrew cask.
 
-Because Home Manager used to install Firefox from the nix store before this switch, old copies stayed behind in the store and registered with macOS LaunchServices. An activation script unregisters every stale nix-store Firefox copy, then makes the Homebrew build the default HTTPS handler by invoking Firefox's own `-setDefaultBrowser` (macOS refuses a third-party `duti` setter for https).
+The activation script unregisters stale nix-store Firefox copies and asks the Homebrew app to become the default HTTPS handler with Firefox's `-setDefaultBrowser` option.
 
-The default profile pulls most addons (Bitwarden, uBlock Origin, Dark Reader, Tampermonkey) from `nur.repos.rycee.firefox-addons`. Five more (`react-devtools`, `kagi-search`, `maxfocus`, `simple-translate`, `multi-account-containers`) aren't in that NUR set, so they're pinned by hand to an immutable AMO file URL and hash rather than the moving `latest.xpi` alias, which breaks the build the moment the author publishes a new version.
+The profile gets Bitwarden, uBlock Origin, Dark Reader, and Tampermonkey from NUR. It also pins `react-devtools`, `kagi-search`, `maxfocus`, `simple-translate`, and `multi-account-containers` to immutable AMO file URLs and hashes in `nix/home/darwin/programs/firefox.nix`.
 
 ## Why Firefox Developer Edition
 
@@ -37,4 +36,4 @@ Opera Neon, Zen, Arc, Dia: interesting new-style browsers, but judged too risky 
 
 ## Other platforms
 
-Windows uses winget `Mozilla.Firefox.DeveloperEdition` (manual install, not managed in this repo). WSL skips Firefox entirely.
+Windows installs the `Mozilla.Firefox.DeveloperEdition` winget package declared in `xpkg/windows/default.toml`. WSL skips Firefox entirely.

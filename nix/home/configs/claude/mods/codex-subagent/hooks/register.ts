@@ -8,7 +8,7 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, Time
 // of those agents without `next`, so no Claude request is ever sent.
 //
 // Codex keeps its own shell and apply_patch, sandboxed by the agent type. The
-// Claude-side tools codex lacks (every MCP tool, Skill, WebFetch, WebSearch)
+// Claude-side tools codex lacks (read-only MCP tools, Skill, WebFetch, WebSearch)
 // are handed to codex as dynamic tools. When codex calls one, the step answers
 // with that tool_use and stops with `tool_use`, so Claude Code runs the tool
 // inside this agent's loop (hooks, permissions, MCP auth all apply); the next
@@ -66,8 +66,11 @@ export function relaySet(tools: readonly { name: string; description: string; mc
   const claudeName = new Map<string, string>()
   const mcp: Record<string, string> = {}
   const out: DynamicTool[] = []
+  const readOnly = /^(?:[a-z0-9]+_)*?(get|list|read|search|fetch|query|lookup|find|preview|whoami|guide)(?:_|$|[A-Z])/i
   for (const t of tools) {
     if (!t.mcp && !(t.name in BUILTIN_RELAY)) continue
+    const toolName = t.name.slice(t.name.lastIndexOf('__') + 2)
+    if (t.mcp && (!t.name.startsWith('mcp__') || !readOnly.test(toolName))) continue
     const name = codexName(t.name)
     claudeName.set(name, t.name)
     if (t.mcp) mcp[name] = t.name
@@ -171,7 +174,7 @@ export function inheritedContext(api: readonly ApiMessage[]): string {
 
 const PREAMBLE = `You are running as a subagent inside a Claude Code session; a Claude model delegated this task to you and reads your final message as the result.
 - Do file reads, edits and commands with your own shell and apply_patch tools.
-- The Claude session's other tools are relayed to you as dynamic tools: every mcp__<server>__<tool> as claude_mcp__<server>__<tool>, Skill (load a skill from the listing below by name, then follow what it returns), WebFetch and WebSearch. Call them through tools.<name> in exec. Claude Code runs them with its own permissions and returns the result.
+- The Claude session's other tools are relayed to you as dynamic tools: read-only mcp__<server>__<tool> as claude_mcp__<server>__<tool>, Skill (load a skill from the listing below by name, then follow what it returns), WebFetch and WebSearch. Call them through tools.<name> in exec. Claude Code runs them with its own permissions and returns the result.
 - Never call spawn_agent, followup_task, send_message, wait_agent, interrupt_agent or list_agents: this task runs in one agent, you.
 - Where the instructions below name Claude tools you do not have (Read, Edit, Write, Bash, Grep, Glob, Agent, Task*), use your shell or apply_patch for the same effect, or skip the step.
 
@@ -390,7 +393,7 @@ export const register: Register = (on) => {
     for (const [name, t] of Object.entries(TYPES)) {
       await $.agent.register({
         name,
-        description: `Runs the task on OpenAI ${t.model} at ${t.effort} effort in the ${t.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's MCP tools and skills relayed; ${t.blurb}). SendMessage continues the same codex thread.`,
+        description: `Runs the task on OpenAI ${t.model} at ${t.effort} effort in the ${t.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; ${t.blurb}). SendMessage continues the same codex thread.`,
         prompt: 'This agent is served by Codex; this prompt is never sent to a Claude model.',
         model: t.model, // never called: every step of this agent is answered by codex
       })
@@ -437,7 +440,7 @@ export const register: Register = (on) => {
   })
 
   on('turn.step', async function* ($, e, next) {
-    const agentId = e.agentId!
+    const agentId = e.agentId
     const post = (route: string, payload: unknown) =>
       $.http.fetch(`http://codex-bridge${route}`, { method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
     const ours = typeForModel(e.model)
@@ -451,7 +454,9 @@ export const register: Register = (on) => {
       })
       agent = agents.get(agentId)
     }
+    let rebuilt = false
     if (!agent && agentId) {
+      let found = false
       try {
         sock ||= await socketPath($)
         bridgeReady ??= startBridge($, sock)
@@ -460,26 +465,30 @@ export const register: Register = (on) => {
         const res = await abortable(post('/recover', { key: agentId }), next.signal)
         if (!res.ok) throw new Error(`bridge POST /recover ${res.status}: ${res.text.slice(0, 2000)}`)
         const recovered = JSON.parse(res.text) as { found?: boolean; type?: TypeName; cwd?: string; threadId?: string }
-        if (recovered.found && recovered.type && recovered.cwd)
+        found = recovered.found === true
+        if (found && recovered.type && recovered.cwd)
           agent = { type: recovered.type, cwd: recovered.cwd, threadId: recovered.threadId }
       } catch (err) {
         $.ui.log(`[codex-subagent] recovery lookup failed for ${agentId}: ${String(err)}`, { to: 'debug' })
-        if (ours) return yield* endTurn(e, `[codex-subagent error] cannot recover ${agentId}: ${err instanceof Error ? err.message : String(err)}`)
+        if (ours) return yield* endTurn(e, `[codex-subagent error] cannot reach the bridge to recover ${agentId}: ${err instanceof Error ? err.message : String(err)}; send the message again`)
       }
       // Neither this module nor the bridge has seen the spawn: the model names
       // the type, and the session's repo root is the cwd the spawn would pick.
-      if (!agent && ours) {
+      if (!agent && !found && ours) {
         try {
           agent = { type: ours, cwd: await workspaceRoot((argv, init) => $.process.run(argv, init), await $.session.cwd()) }
+          rebuilt = true
           $.ui.log(`[codex-subagent] ${agentId} unknown to spawn and bridge; serving it as ${ours} in ${agent.cwd}`, { to: 'debug' })
         } catch (err) {
-          return yield* endTurn(e, `[codex-subagent error] cannot resolve ${agentId}: ${err instanceof Error ? err.message : String(err)}`)
+          return yield* endTurn(e, `[codex-subagent error] cannot recover ${agentId ?? '(unknown agent)'}: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
-      if (agent) agents.set(agentId, agent)
+      if (agent && agentId) agents.set(agentId, agent)
     }
-    if (!agent && ours) return yield* endTurn(e, `[codex-subagent error] ${e.model} step carries no agent id`)
-    if (!agent) return yield* next(e)
+    if (!agent) {
+      if (ours) return yield* endTurn(e, agentId ? `[codex-subagent error] cannot recover ${agentId}` : `[codex-subagent error] ${e.model} step carries no agent id`)
+      return yield* next(e)
+    }
     if (next.signal.aborted) return yield* endTurn(e, '[codex-subagent error] interrupted')
     const onAbort = () => { void post('/interrupt', { key: agentId }).catch(err => $.ui.log(`[codex-subagent] interrupt failed: ${String(err)}`, { to: 'debug' })) }
     next.signal.addEventListener('abort', onAbort)
@@ -558,8 +567,8 @@ export const register: Register = (on) => {
       } catch (err) {
         if (!unreachable(err) || submitted) throw err
         $.ui.log(`[codex-subagent] bridge unreachable (${String(err)}); restarting it`, { to: 'debug' })
-        bridgeReady = startBridge($, sock)
-        await abortable(bridgeReady, next.signal)
+        const fresh = bridgeReady = startBridge($, sock)
+        try { await abortable(fresh, next.signal) } catch (err) { if (bridgeReady === fresh) bridgeReady = undefined; throw err }
         return roundTrip()
       }
     }
@@ -593,7 +602,7 @@ export const register: Register = (on) => {
         if (call?.id) agent.waiting = { toolUseId: call.id, callId: call.id.slice('toolu_codex_'.length) }
       }
       const type = TYPES[agent.type]
-      const body: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox }
+      const body: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox, mcpTools: agent.relay.mcp }
       const delivered = inbox.get(agentId) ?? []
       const answered = agent.waiting && toolResultFor(api, agent.waiting.toolUseId, delivered)
       if (agent.waiting && answered) {
@@ -611,7 +620,6 @@ export const register: Register = (on) => {
         if (!prompt) throw new Error(`agent ${agentId} has neither a pending prompt nor the tool_result for ${agent.waiting?.toolUseId ?? '(none)'}`)
         if (!agent.threadId) {
           body.dynamicTools = agent.relay.tools
-          body.mcpTools = agent.relay.mcp
           body.developerInstructions = `${PREAMBLE}\n\n${inheritedContext(api)}`
         }
         body.prompt = prompt
@@ -619,12 +627,19 @@ export const register: Register = (on) => {
       agent.waiting = undefined
       sock ||= await socketPath($)
       bridgeReady ??= startBridge($, sock)
-      const reply = yield* keepalive(step(body), next.signal, () => { block = 1 }, (ms, fn) => $.clock.after(ms, fn))
+      let reply = yield* keepalive(step(body), next.signal, () => { block = 1 }, (ms, fn) => $.clock.after(ms, fn))
       agent.threadId = reply.threadId
 
-      if ('toolCall' in reply) {
+      for (;;) {
+        if (!('toolCall' in reply)) break
         const { callId, tool, arguments: input } = reply.toolCall
-        const name = agent.relay?.claudeName.get(tool) ?? tool
+        const name = agent.relay?.claudeName.get(tool)
+        if (!name) {
+          const failed = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox, toolResult: { callId, contentItems: [{ type: 'inputText', text: `tool not relayed: ${tool}` }], success: false } }
+          reply = yield* keepalive(step(failed), next.signal, () => { block = 1 }, (ms, fn) => $.clock.after(ms, fn))
+          agent.threadId = reply.threadId
+          continue
+        }
         const toolUseId = `toolu_codex_${callId.replace(/[^A-Za-z0-9_-]/g, '_')}`
         agent.waiting = { toolUseId, callId }
         const chunks: TurnStepChunk[] = [
@@ -638,8 +653,9 @@ export const register: Register = (on) => {
 
       const f = 'final' in reply ? reply.final : { text: '', status: undefined, errors: ['bridge reply had neither toolCall nor final'] }
       const errors = f.errors.length ? `\n\n[codex errors] ${f.errors.join('\n')}` : ''
-      const text = `${f.text}${errors}\n\n[codex-subagent: model=${reply.model ?? '?'} thread=${reply.threadId}${reply.resumed ? ' (resumed)' : ''} codexPid=${reply.codexPid} bridgePid=${reply.bridgePid} status=${f.status}]`
-      const toolUseId = `toolu_codex_handback_${reply.threadId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
+      const notice = rebuilt && api.some(m => m.role === 'assistant') ? '[codex-subagent: the earlier codex thread was not recoverable; this answer comes from a fresh thread]\n\n' : ''
+      const text = `${notice}${f.text}${errors}\n\n[codex-subagent: model=${reply.model ?? '?'} thread=${reply.threadId}${reply.resumed ? ' (resumed)' : ''} codexPid=${reply.codexPid} bridgePid=${reply.bridgePid} status=${f.status}]`
+      const toolUseId = `toolu_codex_handback_${reply.threadId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.turnId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
       agent.handback = { toolUseId, text }
       const input = { message: text }
       yield { kind: 'tool', index: block, id: toolUseId, name: HANDBACK }

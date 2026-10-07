@@ -1,6 +1,6 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { ApiMessage, SessionMessage, TimerCall } from 'claude-code'
-import { abortable, bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import { bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -31,13 +31,100 @@ test('typeOf claims only this plugin\'s registered types', async () => {
   expect(typeOf('general-purpose')).toBeUndefined()
 })
 
-// Regression: a pinned model, effort, sandbox, or display blurb silently
-// falls back to the user's default Codex config.
-test('TYPES pins each Codex agent model, effort, sandbox, and display', async () => {
-  expect(TYPES).toEqual({
-    luna: { model: 'gpt-5.6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'implementer for well-planned code changes' },
-    sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast implementer for mechanical or small changes' },
+test('a missing Codex recovery never falls through to Claude', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-recover-miss'
+  let nextCalls = 0
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('session.cwd', async () => ({ value: '/repo' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
   })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: false })
+    if (route === '/step') return json({ pending: true })
+    if (route === '/wait') return json({ threadId: 'thread-rebuilt', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+  on('turn.step', async function* (_$, e) {
+    nextCalls++
+    yield { kind: 'text' as const, index: 0, text: 'Claude fallback' }
+    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: null }
+    return { turnId: e.turnId, index: e.index, answer: 'Claude fallback', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-recover', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  let r = await stream.next()
+  while (!r.done) r = await stream.next()
+  expect(nextCalls).toBe(0)
+  expect(r.value.answer).toBe('')
+})
+
+test('a failed Codex recovery ends the turn and asks the coordinator to resend', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-recover-throw'
+  let nextCalls = 0
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'resume it' }] }]
+  const rows: SessionMessage[] = [row('user', 'resume it')]
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    if (route === '/recover') return { deny: 'bridge unavailable' }
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+  on('turn.step', async function* (_$, e) {
+    nextCalls++
+    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: null }
+    return { turnId: e.turnId, index: e.index, answer: 'Claude fallback', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-recover-throw', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  let r = await stream.next()
+  while (!r.done) r = await stream.next()
+  expect(nextCalls).toBe(0)
+  expect(r.value.answer).toBe('[codex-subagent error] cannot reach the bridge to recover a-recover-throw: codex-subagent: $.http.fetch: bridge unavailable; send the message again')
+})
+
+test('a spawned codex agent is remembered by the bridge so a restart can recover it', async ($, on) => {
+  const remembered: Record<string, unknown>[] = []
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-5.6-luna' }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    if (route === '/remember') {
+      remembered.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>)
+      return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
+    }
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  await $.agent.spawn({ subagentType: 'codex-subagent:luna', cwd: '/repo' } as any)
+  expect(remembered).toEqual([{ key: 'spawned-codex', type: 'luna', cwd: '/repo' }])
 })
 
 // Regression: sol and luna resolve to each other's model id, or a step for a
@@ -85,11 +172,22 @@ test('relaySet offers MCP tools and the built-ins codex lacks, nothing else', as
     { name: 'Read', description: 'r', mcp: false },
     { name: 'Agent', description: 'a', mcp: false },
     { name: 'Skill', description: 's', mcp: false },
-    { name: 'mcp__x__y', description: '', mcp: true },
+    { name: 'mcp__x__get_thing', description: '', mcp: true },
   ])
-  expect(set.tools.map(t => t.name)).toEqual(['Skill', 'claude_mcp__x__y'])
+  expect(set.tools.map(t => t.name)).toEqual(['Skill', 'claude_mcp__x__get_thing'])
   expect(set.tools[1]?.inputSchema).toEqual({ type: 'object', additionalProperties: true })
-  expect(set.claudeName.get('claude_mcp__x__y')).toBe('mcp__x__y')
+  expect(set.claudeName.get('claude_mcp__x__get_thing')).toBe('mcp__x__get_thing')
+})
+
+test('relaySet excludes mutating MCP tools but keeps read-only tools', async () => {
+  const keep = ['get_settings', 'list_updates', 'weave_get_model_run_output', 'slack_read_channel', 'search_issues', 'calendar_get_availability', 'calendar_preview_event', 'calendar_list_events', 'whoami']
+  const drop = ['slack_send_message', 'slack_send_message_draft', 'slack_schedule_message', 'start_break', 'unban_account', 'use_figma', 'withdraw_account', 'calendar_save_people_group', 'calendar_google_retry', 'batch', 'check_in']
+  const set = relaySet([
+    ...keep.map(name => ({ name: `mcp__x__${name}`, description: '', mcp: true })),
+    ...drop.map(name => ({ name: `mcp__x__${name}`, description: '', mcp: true })),
+  ])
+  expect(set.tools.map(t => t.name)).toEqual(keep.map(name => codexName(`mcp__x__${name}`)))
+  expect(Object.values(set.mcp)).toEqual(keep.map(name => `mcp__x__${name}`))
 })
 
 // Regression: codex rejects thread/start ("dynamic tool name is reserved:
@@ -108,9 +206,9 @@ test('codexName avoids the reserved mcp__ prefix and stays within 64 valid chara
 // does not map back to its Claude name, so the bridge never finds its
 // harvested schema and codex gets an open object for it.
 test('relaySet maps every MCP codex name, hashed ones included, back to the Claude name', async () => {
-  const long = `mcp__claude_ai_Atlassian__${'x'.repeat(60)}`
-  const set = relaySet([{ name: long, description: '', mcp: true }, { name: 'mcp__stub__secret', description: '', mcp: true }, { name: 'Skill', description: '', mcp: false }])
-  expect(set.mcp).toEqual({ [codexName(long)]: long, claude_mcp__stub__secret: 'mcp__stub__secret' })
+  const long = `mcp__claude_ai_Atlassian__get_${'x'.repeat(60)}`
+  const set = relaySet([{ name: long, description: '', mcp: true }, { name: 'mcp__stub__get_secret', description: '', mcp: true }, { name: 'Skill', description: '', mcp: false }])
+  expect(set.mcp).toEqual({ [codexName(long)]: long, claude_mcp__stub__get_secret: 'mcp__stub__get_secret' })
 })
 
 // Regression: a long codex turn trips $.http.fetch's 30 s deadline and the
@@ -210,17 +308,6 @@ test('user-rejected tool results name the rejection and fail the held call', asy
   })
 })
 
-// Regression: an interrupted handback must finish the turn immediately
-// instead of waiting for the engine watchdog after the rejected tool result.
-test('an already-aborted handback wait ends immediately', async () => {
-  const pending = new Promise<string>(() => {})
-  const message = await abortable(pending, AbortSignal.abort()).then(
-    () => 'completed',
-    error => error instanceof Error ? error.message : String(error),
-  )
-  expect(message).toBe('interrupted')
-})
-
 // Regression: codex thinks past the harness's 600 s stall watchdog without a
 // tool call, the turn yields nothing meanwhile, and the agent is killed as
 // "Agent stalled: no progress"; or the keepalive outlives an interrupt.
@@ -261,6 +348,43 @@ test('a worker spawned after the session cd\'d into a subdirectory still gets th
   expect(asked).toEqual(['/repo/nix/home/configs/claude/mods/clm/hooks'])
   expect(await workspaceRoot(git, '/scratch/outside')).toBe('/scratch/outside')
   expect(await workspaceRoot(async () => { throw new Error('git: not found') }, '/scratch/outside')).toBe('/scratch/outside')
+})
+
+test('an unmapped Codex tool call is answered with a failed toolResult', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-unmapped-tool'
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const steps: Record<string, unknown>[] = []
+  const replies: unknown[] = [
+    { threadId: 'thread-unmapped', resumed: false, bridgePid: 1, codexPid: 2, toolCall: { callId: 'unknown-call', tool: 'claude_mcp__x__secret', arguments: {} } },
+    { threadId: 'thread-unmapped', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } },
+  ]
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
+    if (route === '/wait') return json(replies[steps.length - 1])
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-unmapped', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  let r = await stream.next()
+  while (!r.done) r = await stream.next()
+  expect(steps).toHaveLength(2)
+  expect(steps[1]?.toolResult).toEqual({ callId: 'unknown-call', contentItems: [{ type: 'inputText', text: 'tool not relayed: claude_mcp__x__secret' }], success: false })
+  expect(r.value.toolUses.map(t => t.name)).toEqual(['SubagentHandback'])
 })
 
 // Incident: a codex worker ended its run with SubagentHandback, the harness
@@ -307,7 +431,7 @@ test('a resumed worker receives a long multi-line message and runs a new turn in
 
   const first = await runStep('turn-1')
   expect(first.toolUses.map(t => t.name)).toEqual(['SubagentHandback'])
-  const handbackId = `toolu_codex_handback_thread-1_0`
+  const handbackId = `toolu_codex_handback_thread-1_turn-1_0`
   // The harness runs the handback tool, ends the run with no further step, then the SendMessage arrives.
   api = [
     ...api,

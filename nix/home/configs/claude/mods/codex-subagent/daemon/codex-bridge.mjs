@@ -587,6 +587,7 @@ async function run(b) {
 
 function step(b) {
   if (!b.key) throw new Error('step needs key')
+  if (b.prompt !== undefined) pendingInterrupts.delete(b.key)
   inFlight.add(b.key)
   run(b).catch(err => { console.error('[bridge] step failed', b.key, err); emit(b.key, { error: String(err?.message ?? err) }) }).finally(() => inFlight.delete(b.key))
   return { pending: true }
@@ -616,7 +617,11 @@ async function wait({ key }, res) {
 
 async function interrupt({ key }) {
   const s = sessions.get(key)
-  if (!s) { pendingInterrupts.add(key); return { interrupted: true, deferred: true } }
+  if (!s) {
+    if (!inFlight.has(key)) return { interrupted: false }
+    pendingInterrupts.add(key)
+    return { interrupted: true, deferred: true }
+  }
   if (!s.active) return { interrupted: false }
   if (!s.turnId) { s.interruptRequested = true; s.interrupting = true; return { interrupted: true, deferred: true } }
   s.interrupting = true

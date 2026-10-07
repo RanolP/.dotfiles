@@ -1,8 +1,6 @@
-import { atom, read, update } from 'claude-code'
 import type { BuiltinToolInputs, EngineInterface, Register, SessionMessage } from 'claude-code'
 
-import type { ClmBoard } from '../types'
-import { BoardView } from './board'
+import { boardHtml } from './board'
 import {
   buildCleared, fingerprint, isLedgerRow, isPrompt, isSystemRow, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
   type Boundary, type ClearPlan,
@@ -399,20 +397,17 @@ async function syncPanelSafely($: EngineInterface, origin: Origin, events: reado
 const projectPanel = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) =>
   serialized(origin.session, () => syncPanelSafely($, origin, events))
 
-// The board's drawing reads only `$.state`; the logs are read when it opens,
-// on its refresh button, and after this session appends while it is open.
-const BOARD = 'clm-board'
-const board = atom({ plugin: 'clm', key: 'board' } as const, { issues: [], repo: '', filter: 'repo' } as ClmBoard)
-
-async function refreshBoard($: EngineInterface) {
+// `/clm board` reads every session's log, writes a self-contained page and opens it.
+async function openBoard($: EngineInterface) {
   const [events, here] = await Promise.all([readAll($), captureOrigin($)])
   const issues = snapshot(events).map(i => ({
     id: i.id, title: i.title, status: i.status, repo: i.origin.repo, ...(i.origin.branch ? { branch: i.origin.branch } : {}), updated: i.updated,
   }))
-  await update($, board, b => ({ ...b, issues, repo: here.repo }))
-}
-async function refreshBoardIfOpen($: EngineInterface) {
-  if ((await $.ui.panes()).some(p => p.id === BOARD)) await refreshBoard($)
+  const path = `${await basePath($)}.board.html`
+  await $.fs.write(path, boardHtml(issues, here.repo, new Date().toISOString()))
+  const r = await $.process.run(['open', path], { timeoutMs: 5000 })
+  if (r.exitCode !== 0) $.ui.log(`clm: could not open the board at ${path} (exit ${r.exitCode}: ${r.stderr.slice(0, 160)})`)
+  else $.ui.log(`clm: board opened (${path})`)
 }
 
 // --- folding -------------------------------------------------------------
@@ -685,7 +680,7 @@ export const register: Register = (on, options) => {
     for (const p of problems) $.ui.log(`clm: option ${p}`)
     await $.command.register({
       name: 'clm',
-      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board, `link <id>` brings another repo\'s issue into this session (shown to you only).',
+      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session (shown to you only).',
       immediate: true,
     })
     return next(e)
@@ -697,9 +692,7 @@ export const register: Register = (on, options) => {
     // `$.command.run` documents a left-out args as "", yet the test kit hands it over undefined.
     const [sub, arg] = (e.args ?? '').trim().split(/\s+/)
     if (sub === 'board') {
-      await refreshBoard($)
-      const opened = await $.ui.open({ id: BOARD, title: 'clm board' })
-      if (!opened.isPlaced) $.ui.log(`clm: the board is not shown (${opened.reason})`)
+      await openBoard($)
       return {}
     }
     if (sub === 'link') {
@@ -709,7 +702,6 @@ export const register: Register = (on, options) => {
         return {}
       }
       await append($, [{ op: 'link', issue: issue.id }])
-      await refreshBoardIfOpen($)
       $.ui.log(`clm: ${issue.id} "${issue.title}" (${issue.origin.repo}) is linked to this session and shows in its ledger from the next fold`)
       return {}
     }
@@ -815,7 +807,6 @@ export const register: Register = (on, options) => {
     // On the escape path the pre-fold rows still name every withheld file;
     // otherwise a file named by neither a kept row nor the ledger is unreachable.
     await pruneWithheld($, escaped ? workingRows : messages, fileLedger)
-    if (use.ops.length) await refreshBoardIfOpen($)
     const offset = messages.findIndex(m => m.text === text)
     const foldedAt = await $.clock.now()
     await writeMeta($, {
@@ -842,12 +833,6 @@ export const register: Register = (on, options) => {
     const { Text } = $.ui.resolve(e)
     return Text({ children: [text] })
   })
-
-  on('ui.render', { component: 'Pane', requestId: BOARD }, async ($, e) =>
-    BoardView($.ui.resolve(e), await read($, board), e.props.bodyColumns, {
-      filter: f => update($, board, b => ({ ...b, filter: f })),
-      refresh: () => refreshBoard($),
-    }))
 
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)

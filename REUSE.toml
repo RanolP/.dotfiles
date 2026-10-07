@@ -122,7 +122,7 @@ path = [
     "nix/home/configs/claude/mods/clm/hooks/clm.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/tracker.ts",
     "nix/home/configs/claude/mods/clm/hooks/tracker.test.ts",
-    "nix/home/configs/claude/mods/clm/hooks/board.tsx",
+    "nix/home/configs/claude/mods/clm/hooks/board.ts",
     "nix/home/configs/claude/mods/clm/types/index.d.ts",
     "nix/home/configs/claude/mods/codex-subagent/.claude-plugin/plugin.json",
     "nix/home/configs/claude/mods/codex-subagent/hooks/hooks.json",

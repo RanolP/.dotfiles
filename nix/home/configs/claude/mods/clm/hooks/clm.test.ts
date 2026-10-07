@@ -1,6 +1,8 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
+import type { SessionCompactResult, SessionMessage, ToolCallInput } from 'claude-code'
 
+import { boardHtml } from './board'
 import { sessionIssues, trackIssue } from './register'
 import type { Meta } from './register'
 
@@ -38,7 +40,7 @@ const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; usage?: any; mergeDelays?: number[] }
 function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], logs: [] as string[], results: [] as any[], taskCalls: [] as any[], engineCompactions: 0, engineInputs: [] as any[][] }
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -83,7 +85,7 @@ function bottoms(on: any, s: State) {
 }
 // The plugin raises its compaction from turn.complete; the engine answers by
 // running the chain again with the live transcript, which a test raises itself.
-async function turnEnds($: any, s: State, seen: { results: any[] }, answer = '') {
+async function turnEnds($: any, s: State, seen: { results: SessionCompactResult[] }, answer = '') {
   await $.turn.complete({ ...TURN, answer })
   seen.results.push(await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) }))
 }
@@ -758,4 +760,10 @@ test('each folded ledger renders its own compact duration and ledger-like user t
   })
   expect((await ordinary.drawn()).children).toEqual(["[clm ledger is what I'd call it"])
   expect(passed).toBe(2)
+})
+
+test('board page escapes a model-written title, so a <script> title cannot run in the browser', () => {
+  const html = boardHtml([{ id: 'a1', title: '<script>alert(1)</script>', status: 'todo', repo: 'github.com/x/y', updated: '2026-01-01T00:00:00Z' }], 'github.com/x/y', 'now')
+  expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+  expect(html).not.toContain('<script>alert(1)')
 })

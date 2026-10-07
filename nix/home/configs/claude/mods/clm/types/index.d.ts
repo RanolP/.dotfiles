@@ -7,13 +7,6 @@ export type ClmBoardIssue = {
   updated: string
 }
 
-export type ClmBoard = {
-  issues: ClmBoardIssue[]
-  /** The repository the session runs in, which the `repo` filter keeps. */
-  repo: string
-  filter: 'repo' | 'all'
-}
-
 export type ClmIssueStatus = ClmBoardIssue['status']
 
 export type ClmIssue = {
@@ -44,9 +37,5 @@ export type Clm = {
 declare module 'claude-code' {
   interface EngineInterface {
     clm: Clm
-  }
-
-  interface PluginState {
-    clm: { board: ClmBoard }
   }
 }

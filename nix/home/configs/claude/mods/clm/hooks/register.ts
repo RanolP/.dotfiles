@@ -4,7 +4,7 @@ import type { BuiltinToolInputs, EngineInterface, Register, SessionMessage } fro
 import type { ClmBoard } from '../types'
 import { BoardView } from './board'
 import {
-  buildCleared, fingerprint, isLedgerRow, isPrompt, isSystemRow, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
+  buildCleared, fingerprint, isLedgerRow, isPrompt, isSystemRow, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
   type Boundary, type ClearPlan,
 } from './fold'
 import {
@@ -74,24 +74,25 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 // tracker write at call time is mirrorModelTask, for the model's own task calls.
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
-  cuts: Record<string, number>; keptTurns: number; fallback: boolean
+  cuts: Record<string, number>; keptTurns: number; fallback: boolean; foldMs?: number
 }
 // `foldTokens` is the usage reading taken when the last fold landed: the
 // engine keeps reporting it until the next API response, so an equal reading
 // describes the transcript before that fold and is ignored.
-export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number }
+export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number }
 const sid = ($: EngineInterface) => $.session.id()
 const metaKey = async ($: EngineInterface) => `ledger:${await sid($)}`
 const pendingKey = async ($: EngineInterface) => `pending:${await sid($)}`
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) && Object.values(v).every(n => typeof n === 'number')
 const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
 const isMeta = (v: unknown): v is Partial<Meta> =>
   isRecord(v) && optional(v.seq, 'number') && optional(v.fails, 'number') && optional(v.ratio, 'number') && optional(v.overhead, 'number')
-  && optional(v.foldTokens, 'number') && optional(v.lastFoldAt, 'number') && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
+  && optional(v.foldTokens, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
 const isPending = (v: unknown): v is Pending =>
   isRecord(v) && typeof v.notes === 'string' && typeof v.fullNotes === 'string' && Array.isArray(v.ops) && typeof v.seq === 'number'
   && optional(v.keepFp, 'string') && typeof v.keepFrom === 'number' && Array.isArray(v.dropFps) && v.dropFps.every(f => typeof f === 'string')
-  && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean'
+  && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean' && optional(v.foldMs, 'number')
 async function readMeta($: EngineInterface): Promise<Meta> {
   const stored = await $.store.get(await metaKey($))
   return { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
@@ -231,6 +232,32 @@ async function append($: EngineInterface, payloads: readonly Payload[], origin?:
     if (project) await syncPanelSafely($, o, events)
     return events
   })
+}
+
+export async function sessionIssues($: EngineInterface, query: { issue?: string; status?: Issue['status'] } = {}): Promise<Issue[]> {
+  const session = (await captureOrigin($)).session
+  return snapshot(await readAll($)).filter(i => i.origin.session === session
+    && (query.issue === undefined || i.id === query.issue)
+    && (query.status === undefined || i.status === query.status))
+}
+
+export async function trackIssue($: EngineInterface, input: { title: string; status: Issue['status']; issue?: string }): Promise<Issue> {
+  const origin = await captureOrigin($)
+  if (input.issue !== undefined) {
+    const before = (await sessionIssues($, { issue: input.issue }))[0]
+    if (!before) throw new Error(`clm issue ${input.issue} does not belong to this session`)
+    if (before.status !== input.status) await append($, [{ op: 'status', issue: input.issue, status: input.status }], origin)
+    const updated = (await sessionIssues($, { issue: input.issue }))[0]
+    if (!updated) throw new Error('clm tracker did not return the tracked issue')
+    return updated
+  }
+  const title = input.title.trim()
+  if (!title) throw new Error('clm issue title must not be empty')
+  const events = await append($, [{ op: 'create', title, status: input.status }], origin)
+  const issueId = events[0]?.issue
+  const issue = issueId ? (await sessionIssues($, { issue: issueId }))[0] : undefined
+  if (!issue) throw new Error('clm tracker did not return the tracked issue')
+  return issue
 }
 
 const PANEL_STATUS: Record<Issue['status'], 'pending' | 'in_progress' | 'completed' | 'deleted'> = {
@@ -513,13 +540,15 @@ async function maybeClear($: EngineInterface, opts: Opts) {
   // near the ceiling before folding again, so suffix-cache busts stay rare.
   const trigger = Math.max(opts.budget - opts.reserve, Math.floor(opts.budget * HYSTERESIS_FLOOR))
   if (used <= trigger) return
+  const startedAt = await $.clock.now()
   const f = await fold($, opts, rows, meta, false, reading)
+  const foldMs = Math.max(0, (await $.clock.now()) - startedAt)
   await writeMeta($, meta)
   if (typeof f === 'string') return skip($, f)
   const pending: Pending = {
     notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
     keepFrom: rows.length - f.plan.tail.length, dropFps: f.plan.dropped.map(fingerprint),
-    cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback,
+    cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, foldMs,
   }
   await $.store.set(await pendingKey($), pending)
   try {
@@ -638,6 +667,20 @@ const GUIDE = [
 export const register: Register = (on, options) => {
   const { opts, problems } = readOpts(options as Record<string, unknown>)
 
+  on('engine.create', async ($, e, next) => {
+    const built = await next(e)
+    return {
+      ...built,
+      clm: {
+        track: () => { throw new Error('clm.track is handled by the clm plugin') },
+        issues: () => { throw new Error('clm.issues is handled by the clm plugin') },
+      },
+    }
+  })
+
+  on('clm.track', async ($, e) => ({ value: await trackIssue($, e) }))
+  on('clm.issues', async ($, e) => ({ value: await sessionIssues($, e ?? {}) }))
+
   on('session.start', async ($, e, next) => {
     for (const p of problems) $.ui.log(`clm: option ${p}`)
     await $.command.register({
@@ -701,6 +744,7 @@ export const register: Register = (on, options) => {
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
     // Without a transcript there is nothing to rewrite; a pending plan waits.
     if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
+    const compactStartedAt = await $.clock.now()
     const all = e.messages
     const meta = await readMeta($)
     let workingRows = liveRows(all, meta.boundary)
@@ -754,7 +798,7 @@ export const register: Register = (on, options) => {
         $.ui.log(`clm: ${e.trigger} compaction left the conversation as it is: ${f}`)
         return { messages: all }
       }
-      use = { notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: workingRows.length - f.plan.tail.length }
+      use = { notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: workingRows.length - f.plan.tail.length, foldMs: 0 }
     }
 
     const here = await captureOrigin($)
@@ -773,8 +817,11 @@ export const register: Register = (on, options) => {
     await pruneWithheld($, escaped ? workingRows : messages, fileLedger)
     if (use.ops.length) await refreshBoardIfOpen($)
     const offset = messages.findIndex(m => m.text === text)
+    const foldedAt = await $.clock.now()
     await writeMeta($, {
-      ...meta, seq: use.seq, lastClear: new Date().toISOString(), lastFoldAt: await $.clock.now(), foldTokens: await usageReading($), lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset },
+      ...meta, seq: use.seq, lastClear: new Date().toISOString(), lastFoldAt: foldedAt,
+      foldDurationsMs: { ...meta.foldDurationsMs, [String(use.seq)]: (use.foldMs ?? 0) + Math.max(0, foldedAt - compactStartedAt) },
+      foldTokens: await usageReading($), lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset },
     })
     await logEvent($, 'clear', { tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1, reason: `${e.trigger}${use.fallback ? ', fallback ledger' : ''}` })
     await projectPanel($, here, appended)
@@ -786,6 +833,15 @@ export const register: Register = (on, options) => {
   on('tool.describe', { tool: 'TaskCreate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('tool.describe', { tool: 'TaskUpdate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('prompt.attachment', { type: 'todo_reminder' }, () => ({ text: null }))
+
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    const seq = ledgerRowSeq(e.props.text)
+    if (e.props.isExpanded || e.props.from !== undefined || e.props.task !== undefined || seq === undefined) return next(e)
+    const durationMs = (await readMeta($)).foldDurationsMs?.[seq]
+    const text = durationMs === undefined ? '* clm compacted' : `* clm compacted in ${(durationMs / 1000).toFixed(1)} s`
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: [text] })
+  })
 
   on('ui.render', { component: 'Pane', requestId: BOARD }, async ($, e) =>
     BoardView($.ui.resolve(e), await read($, board), e.props.bodyColumns, {

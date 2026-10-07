@@ -1,6 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 
-const LEDGER_TAG = '[clm ledger'
+const LEDGER_ROW = /^\[clm ledger #(\d+) · [^\]]+\] Earlier turns of this session were folded into these notes by the harness/
 const RESULT_FLOOR = 1024 // tokens each older kept tool result may shrink to, at least
 
 // --- rows ----------------------------------------------------------------
@@ -30,7 +30,8 @@ export const isSystemRow = (m: SessionMessage): boolean => {
   if (m.role === 'assistant') return isEmptyRow(m)
   return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text)
 }
-export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && m.text.startsWith(LEDGER_TAG)
+export const ledgerRowSeq = (text: string): string | undefined => LEDGER_ROW.exec(text)?.[1]
+export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && ledgerRowSeq(m.text) !== undefined
 export const isPrompt = (m: SessionMessage) =>
   m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m)
 
@@ -131,4 +132,4 @@ export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, le
 }
 
 export const ledgerRowText = (seq: number, at: string, path: string, ledger: string) =>
-  `${LEDGER_TAG} #${seq} · ${at}] Earlier turns of this session were folded into these notes by the harness (file: ${path}). They are your memory of that work.\n\n${ledger}`
+  `[clm ledger #${seq} · ${at}] Earlier turns of this session were folded into these notes by the harness (file: ${path}). They are your memory of that work.\n\n${ledger}`

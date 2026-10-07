@@ -1,6 +1,7 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
 
+import { sessionIssues, trackIssue } from './register'
 import type { Meta } from './register'
 
 import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions } from './ledger'
@@ -34,10 +35,10 @@ const est = (m: any) => Math.ceil((m.text.length + m.toolUses.reduce((k: number,
 const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 
-type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; usage?: any }
+type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; usage?: any; mergeDelays?: number[] }
 function bottoms(on: any, s: State) {
-  mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], logs: [] as string[], results: [] as any[], taskCalls: [] as any[], engineCompactions: 0, engineInputs: [] as any[][] }
+  const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], logs: [] as string[], results: [] as any[], taskCalls: [] as any[], engineCompactions: 0, engineInputs: [] as any[][] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -59,12 +60,14 @@ function bottoms(on: any, s: State) {
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
   // The merge call answers from s.replies, the turn-time change call from s.turnReplies.
-  on('model.complete', (_$: any, e: any) => {
+  on('model.complete', async (_$: any, e: any) => {
     if (e.system !== MERGE_SYSTEM) {
       seen.turnPrompts.push(e.prompt)
       return { value: { isAnswered: true, text: s.turnReplies?.shift() ?? '<changes></changes>', usage: {} } }
     }
     seen.prompts.push(e.prompt)
+    const delay = s.mergeDelays?.shift()
+    if (delay !== undefined) await clock.sleep(delay)
     const text = s.replies.shift()
     if (text instanceof Error) throw text
     return { value: text === null ? { isAnswered: false, reason: 'aborted' } : { isAnswered: true, text: text ?? '', usage: {} } }
@@ -85,6 +88,44 @@ async function turnEnds($: any, s: State, seen: { results: any[] }, answer = '')
   seen.results.push(await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) }))
 }
 const logEvents = (seen: { files: Record<string, string> }) => (seen.files[LOG_FILE] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
+
+// Regression caught: the time-budget noun could not create, update, filter, or reject cross-session tracker issues.
+test('the clm noun tracks only this session\'s issues', OPTS, async ($, on) => {
+  const files: Record<string, string> = {}
+  const engine = {
+    session: { id: async () => 'noun-test', cwd: async () => '/work/repo' },
+    env: { get: async (name: string) => name === 'HOME' ? '/home/t' : undefined },
+    fs: {
+      exists: async (path: string) => path in files || Object.keys(files).some(file => file.startsWith(`${path}/`)),
+      list: async (path: string) => Object.keys(files).filter(file => file.startsWith(`${path}/`))
+        .map(file => ({ name: file.slice(path.length + 1), kind: 'file', size: files[file]?.length ?? 0, mtimeMs: 0, isLink: false })),
+      read: async (path: string) => files[path] ?? '',
+      write: async (path: string, text: string) => { files[path] = text },
+    },
+    process: { run: async (argv: string[]) => ({ exitCode: 0, stdout: argv.includes('get-url') ? 'git@github.com:o/repo.git\n' : 'main\n', stderr: '' }) },
+    ui: { log: () => undefined, panes: async () => [] },
+    tool: { call: async () => ({ result: { success: true, task: { id: 'panel-1' } } }) },
+  }
+  let error: unknown
+  const created = await trackIssue(engine, { title: 'track me', status: 'doing' })
+  expect(created.title).toBe('track me')
+  expect(created.status).toBe('doing')
+  const completed = await trackIssue(engine, { title: 'ignored', status: 'done', issue: created.id })
+  expect(completed.status).toBe('done')
+  expect((await sessionIssues(engine, { status: 'done' })).map(issue => issue.id)).toEqual([created.id])
+  files['/home/t/.claude-work/tracker/events/s2.jsonl'] = `${JSON.stringify({
+    ts: '2026-10-06T00:00:00.000Z', seq: 1, issue: 's2-1',
+    origin: { session: 's2', repo: 'github.com/o/repo', cwd: '/work/repo' },
+    op: 'create', title: 'foreign', status: 'doing',
+  })}\n`
+  try {
+    await trackIssue(engine, { title: 'foreign', status: 'done', issue: 's2-1' })
+  } catch (err) {
+    error = err
+  }
+  expect(created.id).toBe('noun-tes-1')
+  expect(error instanceof Error ? error.message : String(error)).toContain('does not belong')
+})
 
 // Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.
 test('fold issues project to the task panel', OPTS, async ($, on) => {
@@ -665,4 +706,56 @@ test('precompute skips the engine summarizer', OPTS, async ($, on) => {
   // A subagent's own transcript is still the engine's to compact.
   await $.session.compact({ trigger: 'auto', agentId: 'a1', messages: handled(ROWS) } as any)
   expect(seen.engineCompactions).toBe(1)
+})
+
+// Regression caught: every ledger row showed the latest fold's duration, deferred time leaked into it, expanded rows were hidden, and ledger-like user text was intercepted.
+test('each folded ledger renders its own compact duration and ledger-like user text passes through', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('FIRST-FACT'), ledger('FIRST-FACT; SECOND-FACT')], mergeDelays: [1200, 3400] }
+  const seen = bottoms(on, s)
+  let passed = 0
+  on('ui.render', { component: 'UserMessage' }, ($, e) => {
+    passed++
+    const { Text } = $.ui.resolve(e)
+    return Text({ children: [e.props.text] })
+  })
+
+  const firstCompact = $.session.compact({ trigger: 'manual', messages: handled(ROWS) })
+  await seen.clock.settle()
+  await seen.clock.advance(1200)
+  const first = await firstCompact
+  if (!('messages' in first)) throw new Error('first compaction returned no messages')
+  const firstRow = first.messages.find((m: any) => m.text.startsWith('[clm ledger'))
+  s.rows = [...ROWS, ...first.messages, M('user', 'add docs'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'docs added'), M('user', 'push'), M('assistant', 'pushed')]
+  const secondCompact = $.session.compact({ trigger: 'manual', messages: handled(s.rows) })
+  await seen.clock.settle()
+  await seen.clock.advance(3400)
+  const second = await secondCompact
+  if (!('messages' in second)) throw new Error('second compaction returned no messages')
+  const secondRow = second.messages.find((m: any) => m.text.startsWith('[clm ledger'))
+
+  const firstLedger = await $.ui.mount({
+    plugin: 'clm', surface: 'terminal', component: 'UserMessage',
+    props: { text: firstRow.text, origin: { kind: 'composer' }, isExpanded: false },
+  })
+  expect((await firstLedger.drawn()).children).toEqual(['* clm compacted in 1.2 s'])
+  const secondLedger = await $.ui.mount({
+    plugin: 'clm', surface: 'terminal', component: 'UserMessage',
+    props: { text: secondRow.text, origin: { kind: 'composer' }, isExpanded: false },
+  })
+  expect((await secondLedger.drawn()).children).toEqual(['* clm compacted in 3.4 s'])
+  expect(passed).toBe(0)
+
+  const expanded = await $.ui.mount({
+    plugin: 'clm', surface: 'terminal', component: 'UserMessage',
+    props: { text: firstRow.text, origin: { kind: 'composer' }, isExpanded: true },
+  })
+  expect((await expanded.drawn()).children).toEqual([firstRow.text])
+  expect(passed).toBe(1)
+
+  const ordinary = await $.ui.mount({
+    plugin: 'clm', surface: 'terminal', component: 'UserMessage',
+    props: { text: "[clm ledger is what I'd call it", origin: { kind: 'composer' }, isExpanded: false },
+  })
+  expect((await ordinary.drawn()).children).toEqual(["[clm ledger is what I'd call it"])
+  expect(passed).toBe(2)
 })

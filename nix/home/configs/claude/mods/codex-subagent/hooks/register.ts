@@ -92,6 +92,21 @@ export function typeForModel(model: string): TypeName | undefined {
   return (Object.keys(TYPES) as TypeName[]).find(t => TYPES[t].model === model)
 }
 
+// A Claude model as the engine names one: an id, a provider-prefixed id, or an alias.
+const CLAUDE_MODEL = /claude|anthropic|^(?:opus|sonnet|haiku|fable|opusplan|best|default)(?:\[|-|$)/i
+
+// Whether a step belongs to codex, and which type serves it. The agent's type
+// decides first: a model may be a stale definition's (`gpt-5.6-luna` from
+// before a reload) or an Agent-tool override (`opus`), and either must still
+// stay off Claude. Any non-Claude model also counts, since Anthropic would 404 it.
+export type Claim = { ours: boolean; type?: TypeName }
+export function codexClaim(model: string, subagentType?: string): Claim {
+  if (subagentType?.startsWith(PREFIX)) return { ours: true, type: typeOf(subagentType) ?? typeForModel(model) }
+  const type = typeForModel(model)
+  if (type) return { ours: true, type }
+  return { ours: model !== '' && !CLAUDE_MODEL.test(model) }
+}
+
 // The thread cwd is codex's workspace-write root. $.session.cwd() follows a
 // shell `cd` in the main session, so a worker spawned from a subdirectory
 // could write only there; the repo root keeps the whole project writable.
@@ -370,7 +385,69 @@ async function socketPath($: EngineInterface): Promise<string> {
   return `${home}/.claude-work/run/codex-subagent-${await $.session.id()}.sock`
 }
 
+// What one load of this module keeps: a hot reload starts it over.
+type ModState = {
+  hookLog?: { path: string; text: string }
+  logChain: Promise<void>
+  registration?: Promise<void>
+  registrationLogged: boolean
+  // Each agent's definition (`codex-subagent:luna`, `general-purpose`, ...), by id.
+  subagentTypes: Map<string, string>
+}
+
+// The hook-side log beside the bridge's: `$.fs.write` replaces a whole file,
+// so the module keeps the text and writes it back, cut to its newest half
+// once it passes LOG_MAX.
+const LOG_MAX = 1 << 20
+function diag(st: ModState, $: EngineInterface, line: string): void {
+  try { $.ui.log(`[codex-subagent] ${line}`, { to: 'debug' }) } catch {}
+  st.logChain = st.logChain.then(async () => {
+    if (!st.hookLog) {
+      const path = (await socketPath($)).replace(/\.sock$/, '.hook.log')
+      st.hookLog = { path, text: await $.fs.read(path).catch(() => '') }
+    }
+    st.hookLog.text += `${new Date().toISOString()} ${line}\n`
+    if (st.hookLog.text.length > LOG_MAX) st.hookLog.text = st.hookLog.text.slice(-(LOG_MAX >> 1))
+    await $.fs.write(st.hookLog.path, st.hookLog.text)
+  }).catch(() => {})
+}
+
+// A hot reload runs register() again but not session.start, so the first
+// hook of a fresh module registers the types once more; a re-registered name
+// is replaced, so a TYPES model change reaches the running session.
+function ensureRegistered(st: ModState, $: EngineInterface): Promise<void> {
+  return st.registration ??= (async () => {
+    if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return
+    for (const [name, t] of Object.entries(TYPES)) {
+      await $.agent.register({
+        name,
+        description: `Runs the task on OpenAI ${t.model} at ${t.effort} effort in the ${t.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; ${t.blurb}). SendMessage continues the same codex thread.`,
+        prompt: 'This agent is served by Codex; this prompt is never sent to a Claude model.',
+        model: t.model, // never called: every step of this agent is answered by codex
+      })
+    }
+  })().catch(err => {
+    st.registration = undefined
+    if (!st.registrationLogged) { st.registrationLogged = true; diag(st, $, `agent type registration failed (retried on the next hook): ${String(err)}`) }
+  })
+}
+
+async function subagentTypeOf(st: ModState, $: EngineInterface, agents: ReadonlyMap<string, Agent>, agentId: string | undefined): Promise<string | undefined> {
+  if (!agentId) return undefined
+  const known = agents.get(agentId)
+  if (known) return `${PREFIX}${known.type}`
+  if (!st.subagentTypes.has(agentId)) {
+    try {
+      for (const a of await $.agent.list()) st.subagentTypes.set(a.id, a.type)
+    } catch (err) {
+      diag(st, $, `agent list failed while classifying ${agentId}: ${String(err)}`)
+    }
+  }
+  return st.subagentTypes.get(agentId)
+}
+
 export const register: Register = (on) => {
+  const st: ModState = { logChain: Promise.resolve(), registrationLogged: false, subagentTypes: new Map() }
   const agents = new Map<string, Agent>()
   // Messages delivered to a codex agent and not yet handed to codex, by agent id.
   const inbox = new Map<string, string[]>()
@@ -380,6 +457,8 @@ export const register: Register = (on) => {
   // .catch handler writes its error there, past the chunks the failed hook left.
   const freeBlock = new Map<string, number>()
   const stepKey = (e: { agentId?: string; turnId: string; index: number }) => `${e.agentId ?? ''}|${e.turnId}|${e.index}`
+  // Agents a step has claimed for codex: the .catch handler reads it without awaiting.
+  const claimed = new Set<string>()
 
   on('session.receive', async ($, e, next) => {
     const r = await next(e)
@@ -399,19 +478,13 @@ export const register: Register = (on) => {
     // API; were this plugin installed there, it would start a bridge of its own.
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
     sock = await socketPath($)
-    for (const [name, t] of Object.entries(TYPES)) {
-      await $.agent.register({
-        name,
-        description: `Runs the task on OpenAI ${t.model} at ${t.effort} effort in the ${t.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; ${t.blurb}). SendMessage continues the same codex thread.`,
-        prompt: 'This agent is served by Codex; this prompt is never sent to a Claude model.',
-        model: t.model, // never called: every step of this agent is answered by codex
-      })
-    }
+    await ensureRegistered(st, $)
     bridgeReady = startBridge($, sock, dropFailedBridge)
     return started
   })
 
   on('agent.spawn', async ($, e, next) => {
+    void ensureRegistered(st, $)
     const type = typeOf(e.subagentType)
     if (!type) return next(e)
     // A background agent's loop starts before next(e) resolves, so its first
@@ -425,7 +498,7 @@ export const register: Register = (on) => {
     try {
       cwd = await workspaceRoot((argv, init) => $.process.run(argv, init), e.cwd ?? (await $.session.cwd()))
       r = await next(e)
-      if (r.agentId) agents.set(r.agentId, { type, cwd })
+      if (r.agentId) { agents.set(r.agentId, { type, cwd }); st.subagentTypes.set(r.agentId, e.subagentType) }
     } finally {
       spawning.delete(spawned)
       done()
@@ -442,7 +515,7 @@ export const register: Register = (on) => {
         })
         if (!res.ok) throw new Error(`bridge POST /remember ${res.status}: ${res.text.slice(0, 2000)}`)
       } catch (err) {
-        $.ui.log(`[codex-subagent] could not persist ${r.agentId}: ${err instanceof Error ? err.message : String(err)}`, { to: 'debug' })
+        diag(st, $, `could not persist ${r.agentId}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
     return r
@@ -471,14 +544,18 @@ export const register: Register = (on) => {
     })
     const post = (route: string, payload: unknown) =>
       $.http.fetch(`http://codex-bridge${route}`, { method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
-    const ours = typeForModel(e.model)
+    void ensureRegistered(st, $)
     let agent = agentId ? agents.get(agentId) : undefined
-    if (!agent && agentId && ours && spawning.size) {
-      // This may be the first step of a spawn still inside next(e); a spawn
-      // that never resolves must not hold the step, so the wait is bounded.
+    if (!agent && agentId && spawning.size) {
+      // This may be the first step of a codex spawn still inside next(e); a
+      // spawn that never resolves must not hold the step, so the wait is bounded.
       await withinBudget(Promise.all(spawning).then(() => {}), SPAWN_WAIT_MS, () => {})
       agent = agents.get(agentId)
     }
+    const subagentType = await subagentTypeOf(st, $, agents, agentId)
+    const claim: Claim = agent ? { ours: true, type: agent.type } : codexClaim(e.model, subagentType)
+    if (claim.ours && agentId) claimed.add(agentId)
+    const cause = `model=${e.model} type=${subagentType ?? '(unknown)'}`
     let rebuilt = false
     if (!agent && agentId) {
       let found = false
@@ -494,16 +571,21 @@ export const register: Register = (on) => {
         if (found && recovered.type && recovered.cwd)
           agent = { type: recovered.type, cwd: recovered.cwd, threadId: recovered.threadId }
       } catch (err) {
-        $.ui.log(`[codex-subagent] recovery lookup failed for ${agentId}: ${String(err)}`, { to: 'debug' })
-        if (ours) return yield* finish(`[codex-subagent error] cannot reach the bridge to recover ${agentId}: ${err instanceof Error ? err.message : String(err)}; send the message again`)
+        diag(st, $, `recovery lookup failed for ${agentId} (${cause}): ${String(err)}`)
+        if (claim.ours) return yield* finish(`[codex-subagent error] cannot reach the bridge to recover ${agentId}: ${err instanceof Error ? err.message : String(err)}; send the message again`)
       }
-      // Neither this module nor the bridge has seen the spawn: the model names
-      // the type, and the session's repo root is the cwd the spawn would pick.
-      if (!agent && !found && ours) {
+      // Neither this module nor the bridge has seen the spawn: the agent's
+      // type (or its model) names the codex type, and the session's repo root
+      // is the cwd the spawn would pick.
+      if (!agent && !found && claim.ours) {
+        if (!claim.type) {
+          diag(st, $, `${agentId} is a codex step no type serves (${cause})`)
+          return yield* finish(`[codex-subagent error] cannot serve ${agentId} on codex: neither its agent type nor its model names a codex-subagent type (${cause}); this step was not sent to Claude`)
+        }
         try {
-          agent = { type: ours, cwd: await workspaceRoot((argv, init) => $.process.run(argv, init), await $.session.cwd()) }
+          agent = { type: claim.type, cwd: await workspaceRoot((argv, init) => $.process.run(argv, init), await $.session.cwd()) }
           rebuilt = true
-          $.ui.log(`[codex-subagent] ${agentId} unknown to spawn and bridge; serving it as ${ours} in ${agent.cwd}`, { to: 'debug' })
+          diag(st, $, `${agentId} unknown to spawn and bridge; serving it as ${claim.type} in ${agent.cwd} (${cause})`)
         } catch (err) {
           return yield* finish(`[codex-subagent error] cannot recover ${agentId ??'(unknown agent)'}: ${err instanceof Error ? err.message : String(err)}`)
         }
@@ -511,11 +593,14 @@ export const register: Register = (on) => {
       if (agent && agentId) agents.set(agentId, agent)
     }
     if (!agent || !agentId) {
-      if (ours) return yield* finish(agentId ? `[codex-subagent error] cannot recover ${agentId}` : `[codex-subagent error] ${e.model} step carries no agent id`)
+      if (claim.ours) {
+        diag(st, $, `ending an unservable codex step for ${agentId ?? '(no agent id)'} (${cause})`)
+        return yield* finish(agentId ? `[codex-subagent error] cannot recover ${agentId} (${cause})` : `[codex-subagent error] ${e.model} step carries no agent id`)
+      }
       return yield* next(e)
     }
     if (next.signal.aborted) return yield* finish('[codex-subagent error] interrupted')
-    const onAbort = () => { void post('/interrupt', { key: agentId }).catch(err => $.ui.log(`[codex-subagent] interrupt failed: ${String(err)}`, { to: 'debug' })) }
+    const onAbort = () => { void post('/interrupt', { key: agentId }).catch(err => diag(st, $, `interrupt failed: ${String(err)}`)) }
     next.signal.addEventListener('abort', onAbort)
     // Block 0 holds the keepalive's thinking once it beats; the answer then streams in block 1.
     let block = 0
@@ -533,7 +618,7 @@ export const register: Register = (on) => {
     const settle = (reply: StepReply): Promise<StepResult> => settlePending(
       reply,
       () => ask('/wait', { key: agentId }),
-      err => $.ui.log(`[codex-subagent] /wait failed (${String(err)}); retrying`, { to: 'debug' }),
+      err => diag(st, $, `/wait failed (${String(err)}); retrying`),
       async () => {
         const res = await getHealth()
         if (!res.ok) throw new Error(`bridge GET /health ${res.status}: ${res.text.slice(0, 2000)}`)
@@ -549,7 +634,7 @@ export const register: Register = (on) => {
       if (want === UNREAD_FINGERPRINT) return true
       const res = await getHealth()
       if (!res.ok) {
-        $.ui.log(`[codex-subagent] bridge GET /health ${res.status}: ${res.text.slice(0, 2000)}; cannot check its code, stepping through it`, { to: 'debug' })
+        diag(st, $, `bridge GET /health ${res.status}: ${res.text.slice(0, 2000)}; cannot check its code, stepping through it`)
         return true
       }
       const health = JSON.parse(res.text) as { fingerprint?: string; busy?: string[]; threads?: [string, string | null][] }
@@ -562,10 +647,10 @@ export const register: Register = (on) => {
         : (await $.agent.list()).filter(a => a.id !== agentId && a.status === 'running' && known.has(a.id)).map(a => a.id)
       const holdsCall = body.toolResult !== undefined
       if (others.length || holdsCall) {
-        $.ui.log(`[codex-subagent] bridge runs stale code (fingerprint ${health.fingerprint ?? '(none)'}, want ${want}); restart deferred: ${holdsCall ? `${agentId} answers a held tool call` : `turns running for ${others.join(', ')}`}`, { to: 'debug' })
+        diag(st, $, `bridge runs stale code (fingerprint ${health.fingerprint ?? '(none)'}, want ${want}); restart deferred: ${holdsCall ? `${agentId} answers a held tool call` : `turns running for ${others.join(', ')}`}`)
         return false
       }
-      $.ui.log(`[codex-subagent] bridge runs stale code (fingerprint ${health.fingerprint ?? '(none)'}, want ${want}); replacing it`, { to: 'debug' })
+      diag(st, $, `bridge runs stale code (fingerprint ${health.fingerprint ?? '(none)'}, want ${want}); replacing it`)
       const fresh = bridgeReady = startBridge($, sock, dropFailedBridge)
       await bridgeUp(fresh)
       verifiedBridge = fresh
@@ -591,7 +676,7 @@ export const register: Register = (on) => {
         return await roundTrip()
       } catch (err) {
         if (!unreachable(err) || submitted) throw err
-        $.ui.log(`[codex-subagent] bridge unreachable (${String(err)}); restarting it`, { to: 'debug' })
+        diag(st, $, `bridge unreachable (${String(err)}); restarting it`)
         const fresh = bridgeReady = startBridge($, sock, dropFailedBridge)
         await bridgeUp(fresh)
         return roundTrip()
@@ -693,15 +778,27 @@ export const register: Register = (on) => {
       next.signal.removeEventListener('abort', onAbort)
     }
   }).catch(async function* ($, e, next) {
-    // A codex step must never reach `next`: beneath it is the Claude request
-    // that 404s on a codex model. Nothing here awaits before the turn ends, so
-    // the handler cannot overrun its grace and leave the hook absent.
-    if (typeForModel(e.model) === undefined && !(e.agentId !== undefined && agents.has(e.agentId))) return yield* next(e)
+    // A codex step must never reach `next`: beneath it is the Claude request.
+    // The hook classifies the step before anything in it can fail, so this
+    // reads that verdict without awaiting; only a step that failed before then
+    // asks $.agent.list, bounded well inside the 1 s grace.
+    const agentId = e.agentId
+    const known = agentId !== undefined && (claimed.has(agentId) || agents.has(agentId))
+    let ours = known || codexClaim(e.model, agentId ? st.subagentTypes.get(agentId) : undefined).ours
+    if (!ours && agentId && !st.subagentTypes.has(agentId)) {
+      let timer: Timer | undefined
+      const listed = await Promise.race([
+        $.agent.list().catch(() => [] as { id: string; type: string }[]),
+        new Promise<{ id: string; type: string }[]>(resolve => { timer = $.clock.after(300, () => resolve([])) }),
+      ]).finally(() => timer?.cancel())
+      ours = codexClaim(e.model, listed.find(a => a.id === agentId)?.type).ours
+    }
+    if (!ours) return yield* next(e)
     const key = stepKey(e)
     const index = freeBlock.get(key) ?? 0
     freeBlock.delete(key)
     const { kind, message } = next.error
-    try { $.ui.log(`[codex-subagent] turn.step ${kind} for ${e.agentId ?? '(no agent id)'}: ${message ?? '(no message)'}`, { to: 'debug' }) } catch {}
+    try { diag(st, $, `turn.step ${kind} for ${e.agentId ?? '(no agent id)'}: ${message ?? '(no message)'}`) } catch {}
     return yield* endTurn(e, `[codex-subagent error] step hook ${kind}: ${message ?? '(no message)'}; send the message again`, index)
   })
 }

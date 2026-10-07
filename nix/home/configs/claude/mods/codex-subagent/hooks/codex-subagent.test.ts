@@ -760,3 +760,82 @@ test('a bridge start slower than the step budget is reused on the next step, not
 
   expect(spawns).toBe(1)
 })
+
+const listed = (id: string, type: string) => ({ id, type, description: id, status: 'running' })
+
+// Regression: a hot reload left running agents on the stale definition model
+// gpt-5.6-luna, which typeForModel no longer knew, so the step and its .catch
+// fell through to next(e) and Anthropic answered 404.
+test('a step on the stale definition model gpt-5.6-luna ends in codex or error text, never next(e)', async ($, on) => {
+  mock.clock(on)
+  let stepFails = false
+  const steps: Record<string, unknown>[] = []
+  on('agent.list', async () => ({ value: [listed('a-stale-typed', 'codex-subagent:luna')] }))
+  const { api, claude } = codexStepHarness(on, route => {
+    if (route === '/recover') return reply({ found: false })
+    if (route === '/step') {
+      if (stepFails) return reply({ error: 'codex app-server exited' }, 500)
+      steps.push({})
+      return reply({ threadId: 't-stale', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
+    }
+    return reply({ error: `no route ${route}` }, 404)
+  })
+
+  const served = await drainStep($.turn.step({ turnId: 'turn-stale-1', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId: 'a-stale-typed' }))
+  expect(steps).toHaveLength(1)
+  expect(served.result.answer).toBe('')
+
+  const untyped = await drainStep($.turn.step({ turnId: 'turn-stale-2', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId: 'a-stale-untyped' }))
+  expect(untyped.result.answer).toStartWith('[codex-subagent error] cannot serve a-stale-untyped on codex')
+
+  stepFails = true
+  const thrown = await drainStep($.turn.step({ turnId: 'turn-stale-3', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId: 'a-stale-typed' }))
+  expect(thrown.result.answer).toStartWith('[codex-subagent error] step hook throw')
+
+  expect(claude.steps).toBe(0)
+})
+
+// Regression: an Agent-tool model override ('opus') on a codex-subagent spawn
+// gave the step a Claude model; once a reload cleared the agents Map nothing
+// marked it as codex's, so it ran on Claude.
+test('a codex-subagent agent with model override opus after the agents Map was cleared never calls next(e)', async ($, on) => {
+  mock.clock(on)
+  let stepFails = false
+  const steps: Record<string, unknown>[] = []
+  on('agent.list', async () => ({ value: [listed('a-opus', 'codex-subagent:luna'), listed('a-claude', 'general-purpose')] }))
+  const { api, claude } = codexStepHarness(on, route => {
+    if (route === '/recover') return reply({ found: false })
+    if (route === '/step') {
+      if (stepFails) return reply({ error: 'codex app-server exited' }, 500)
+      steps.push({})
+      return reply({ threadId: 't-opus', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
+    }
+    return reply({ error: `no route ${route}` }, 404)
+  })
+
+  await drainStep($.turn.step({ turnId: 'turn-opus-1', index: 0, model: 'opus', messageCount: api.length, agentId: 'a-opus' }))
+  expect(steps).toHaveLength(1)
+  stepFails = true
+  const thrown = await drainStep($.turn.step({ turnId: 'turn-opus-2', index: 0, model: 'opus', messageCount: api.length, agentId: 'a-opus' }))
+  expect(thrown.result.answer).toStartWith('[codex-subagent error] step hook throw')
+  expect(claude.steps).toBe(0)
+
+  // A real Claude subagent still goes to Claude.
+  await drainStep($.turn.step({ turnId: 'turn-claude', index: 0, model: 'opus', messageCount: api.length, agentId: 'a-claude' }))
+  expect(claude.steps).toBe(1)
+})
+
+// Regression: definitions were registered only in session.start, which a hot
+// reload does not fire, so a TYPES model change never reached a running session.
+test('a reloaded module re-registers its agent types on the first hook without session.start', async ($, on) => {
+  mock.clock(on)
+  const registered: { name: string; model?: string }[] = []
+  on('agent.register', async (_$, e) => { registered.push({ name: e.name, model: e.model }); return { value: { agent: `codex-subagent:${e.name}` } } })
+  const { api, claude } = codexStepHarness(on, route => reply({ error: `no route ${route}` }, 404))
+
+  await drainStep($.turn.step({ turnId: 'turn-main-1', index: 0, model: 'claude-opus-4-1', messageCount: api.length }))
+  await drainStep($.turn.step({ turnId: 'turn-main-2', index: 1, model: 'claude-opus-4-1', messageCount: api.length }))
+
+  expect(claude.steps).toBe(2)
+  expect(registered).toEqual(Object.entries(TYPES).map(([name, t]) => ({ name, model: t.model })))
+})

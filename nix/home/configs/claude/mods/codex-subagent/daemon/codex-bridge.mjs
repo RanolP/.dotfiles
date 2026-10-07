@@ -37,6 +37,26 @@ let sockIno
 
 fs.mkdirSync(runDir, { recursive: true })
 
+// Everything the bridge prints also lands, timestamped, in a log beside its
+// socket, so a failure reads off the file without --debug. Past LOG_MAX the
+// file moves to `.1`, so the pair stays under 2 MB.
+const logFile = path.join(runDir, `codex-subagent-${sessionId}.bridge.log`)
+const LOG_MAX = 1 << 20
+function logLines(stream, chunk) {
+  try {
+    let size = 0
+    try { size = fs.statSync(logFile).size } catch {}
+    if (size > LOG_MAX) fs.renameSync(logFile, `${logFile}.1`)
+    const stamp = `${new Date().toISOString()} pid=${process.pid} ${stream}`
+    fs.appendFileSync(logFile, String(chunk).replace(/\n$/, '').split('\n').map(l => `${stamp} ${l}\n`).join(''))
+  } catch {}
+}
+for (const [name, out] of [['stdout', process.stdout], ['stderr', process.stderr]]) {
+  const write = out.write.bind(out)
+  out.write = (chunk, ...rest) => { logLines(name, chunk); return write(chunk, ...rest) }
+}
+process.on('exit', code => logLines('exit', `code=${code}`))
+
 function pidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false
   try { process.kill(pid, 0); return true } catch (err) { return err?.code === 'EPERM' }

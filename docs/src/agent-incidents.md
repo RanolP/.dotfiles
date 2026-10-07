@@ -12,6 +12,12 @@ The answer to "upgrade X" is to edit the declaration and hand the rebuild over. 
 
 `declarative-package-guard.py` now denies the imperative form -- `npm i -g`, `pipx install`, `cargo install`, `brew install|upgrade`, `mise use -g`, `nix profile install` -- and names the file to edit instead.
 
+## 2026-10-07 -- uncommitted fixes were stashed by another session, which fixed the same bug again
+
+Several Claude sessions work in this one `~/.dotfiles` checkout at once, all on `main`. A session finished fixes to the codex-subagent, clm and time-budget plugins, ran their tests and the nix build, and left them uncommitted while it waited for a "commit" request. Another session needed a clean tree, stashed those changes, and committed its own fix for the same codex 404 bug as `b86b66b` (claude: keep codex worker steps from falling through to Claude). Unstashing then conflicted in `codex-subagent/hooks/register.ts` and its test, and the work had to be reconciled by hand.
+
+The user's verdict: "니가 커밋 안해서 그렇잖아..." and then "checkpoint마다 main에 커밋하고 푸시 전에 rebase를 해야하지". So a finished unit goes onto local `main` as a commit the moment its tests and build pass, with no permission asked. A commit is visible to every other session through `git log`, and a commit cannot be stashed out from under its author. The push still waits for an explicit request, and it always runs `git fetch` and `git rebase origin/main` first, because another session may have pushed in between. The `ship` skill carries the full sequence.
+
 ## 2026-08-31 -- a clean dry-run was handed over and the real rebuild died on simple-translate
 
 `nix build ... --dry-run` never downloads anything. It prints the plan and stops. That makes it the right tool for auditing the "will be built" list for a source compile, and completely blind to a fixed-output hash mismatch, an eval error, or a failing builder.

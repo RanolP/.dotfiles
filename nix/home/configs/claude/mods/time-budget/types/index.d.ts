@@ -30,10 +30,13 @@ export type Unit = {
   lastEnd?: number
   /** Wall-clock time spent waiting for the user after a main turn ended. */
   pausedMs?: number
+  /** The unit's calibration pair is already logged; a resumed main task logs none again. */
+  calibrated?: boolean
 }
 
 declare module 'claude-code' {
   interface PluginState {
-    'time-budget': { units: Record<string, Unit> }
+    /** `parked`: closed main units whose clm task can still be resumed, keyed by issue id. */
+    'time-budget': { units: Record<string, Unit>; parked: Record<string, Unit> }
   }
 }

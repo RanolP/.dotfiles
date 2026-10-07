@@ -18,6 +18,7 @@ import {
 // same shape, one pair per unit.
 
 const UNITS = { plugin: 'time-budget', key: 'units' } as const
+const PARKED = { plugin: 'time-budget', key: 'parked' } as const
 const CODEX = 'codex-subagent:'
 const MAIN_ABORT = 'main-abort'
 const STATUS_REFRESH_MS = 60_000
@@ -65,6 +66,7 @@ const TOOLS = [
 type Ctx = EngineInterface
 type S = {
   units: Record<string, Unit>
+  parked: Record<string, Unit>
   timers: Map<string, Timer>
   handedBack: Map<string, boolean>
   extending: Set<string>
@@ -82,7 +84,8 @@ function log($: Ctx, text: string) {
 
 async function save($: Ctx, s: S) {
   try {
-    await $.state.set(UNITS, JSON.parse(JSON.stringify(s.units)) as Record<string, Unit>)
+    await $.state.set(UNITS, structuredClone(s.units))
+    await $.state.set(PARKED, structuredClone(s.parked))
   } catch (err) {
     log($, `state.set failed: ${errText(err)}`)
   }
@@ -218,7 +221,9 @@ async function closeMain($: Ctx, s: S, now: number, key = mainEntry(s)?.[0]) {
   disarm(s, key)
   if (u.kind === 'main') disarm(s, MAIN_ABORT)
   delete s.units[key]
-  await logPair($, s, u, u.lastEnd ?? now)
+  // Its clm issue can be resumed by id, so the start and budget it ran under are kept for that.
+  if (u.kind === 'main') s.parked[key] = { ...u, calibrated: true }
+  if (!u.calibrated) await logPair($, s, u, u.lastEnd ?? now)
 }
 
 async function syncMainTask($: Ctx, s: S, now: number) {
@@ -239,7 +244,9 @@ async function syncMainTask($: Ctx, s: S, now: number) {
 function extend(s: S, key: string, u: Unit, extra: number, now: number): boolean {
   if (u.budgetMin === undefined) return false
   u.pausedMs = (u.pausedMs ?? 0) + Math.max(0, now - (u.lastEnd ?? now))
-  u.budgetMin = (now - u.start) / 60_000 + extra
+  const fromNow = (now - u.start) / 60_000 + extra
+  // A halted unit restarts from now; a running one is never shortened by a grant.
+  u.budgetMin = u.halted ? fromNow : Math.max(u.budgetMin, fromNow)
   resume(s, key, u)
   u.fired = crossed(now - u.start, u.budgetMin)
   return true
@@ -288,13 +295,15 @@ function unreadReports(s: S, now: number): string[] {
 }
 
 export const register: Register = (on) => {
-  const s: S = { units: {}, timers: new Map(), handedBack: new Map(), extending: new Set() }
+  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set() }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     try {
       const read = await $.state.get(UNITS)
       s.units = read.value ? { ...read.value } : {}
+      const parked = await $.state.get(PARKED)
+      s.parked = parked.value ? { ...parked.value } : {}
     } catch (err) {
       log($, `state.get failed: ${errText(err)}`)
     }
@@ -419,6 +428,12 @@ export const register: Register = (on) => {
         if (requested !== undefined && (typeof requested !== 'string' || !requested.trim()))
           return { deny: `Call ${TOOL.estimate} with task as an existing clm issue id when resuming one.` }
         const targetKey = typeof requested === 'string' ? requested : undefined
+        // Opening, switching or raising a task would bypass the stop, the due report, or the user's extension buttons.
+        if (u?.halted) return { deny: `Stop here: ${u.halted}. Call ${TOOL.report}, then end the turn; the user extends with a button above the prompt.` }
+        if (u?.reportDue && targetKey !== unitKey) return { deny: `Checkpoint ${u.reportDue}: call ${TOOL.report} before opening or re-estimating a task.` }
+        const prior = targetKey === undefined ? undefined : targetKey === unitKey ? u : s.parked[targetKey]
+        if (prior?.budgetMin !== undefined && budget > prior.budgetMin)
+          return { deny: `The budget of ${Math.round(prior.budgetMin)} min only grows by the user's extension button; put more_min in your ${TOOL.report} call and the button appears when it projects past the budget.` }
         let issue
         try {
           issue = await $.clm.track({ title: scope, status: 'doing', ...(targetKey ? { issue: targetKey } : {}) })
@@ -428,7 +443,12 @@ export const register: Register = (on) => {
         if (unitKey && unitKey !== issue.id) await closeMain($, s, now, unitKey)
         unitKey = issue.id
         u = s.units[unitKey]
-        if (!u || u.kind !== 'main') u = s.units[unitKey] = { kind: 'main', start: now, fired: 0 }
+        const parked = s.parked[unitKey]
+        delete s.parked[unitKey]
+        // A resumed task keeps its first start and budget; a lower estimate applies below.
+        if (!u || u.kind !== 'main') u = s.units[unitKey] = parked
+          ? { ...parked, lastEnd: undefined }
+          : { kind: 'main', start: now, fired: 0 }
       } else {
         unitKey = key
         u = s.units[unitKey] ?? (s.units[unitKey] = { kind: 'sub', start: now, fired: 0 })
@@ -486,10 +506,15 @@ export const register: Register = (on) => {
       const sub = s.units[id]
       if (!sub || sub.kind === 'main' || sub.budgetMin === undefined) return { deny: `Call ${TOOL.grant} with the agent_id of a running subagent that has a budget (one of: ${Object.entries(s.units).filter(([, candidate]) => candidate.kind === 'sub').map(([candidateId]) => candidateId).join(', ') || 'none'}).` }
       if (typeof extra !== 'number' || !(extra > 0)) return { deny: `Call ${TOOL.grant} with minutes as a positive number.` }
+      const before = sub.budgetMin
+      const wasHalted = Boolean(sub.halted)
       extend(s, id, sub, extra, now)
       await save($, s)
       await arm($, s, id)
-      return { result: `Granted +${extra} min from now to ${id}; its budget is now ${Math.round(sub.budgetMin)} min.` }
+      const after = Math.round(sub.budgetMin)
+      return { result: wasHalted || sub.budgetMin > before
+        ? `Granted +${extra} min from now to ${id}; its budget is now ${after} min.`
+        : `${id} already has more than +${extra} min left; its budget stays ${after} min.` }
     }
 
     const r = await next(e)

@@ -42,7 +42,7 @@ Here, a mod is a Claude Code plugin directory with a manifest and hook module. T
 
 ### codex-subagent
 
-`codex-subagent` registers two Agent tool types: `luna` uses `gpt-5.6-luna` at `xhigh` effort in `workspace-write`, and `sol` uses `gpt-5.6-sol` at `medium` effort in `workspace-write`.
+`codex-subagent` registers two Agent tool types: `luna` uses `gpt-6-luna` at `xhigh` effort in `workspace-write`, and `sol` uses `gpt-5.6-sol` at `medium` effort in `workspace-write`.
 
 The mod starts one Node bridge per Claude session; the bridge runs `codex app-server`, speaks HTTP over a Unix socket to the hook, and speaks JSON-RPC over stdio to Codex. `SendMessage` continues the same Codex thread.
 

@@ -1,5 +1,5 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
-import type { ApiMessage, SessionMessage, TimerCall } from 'claude-code'
+import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionMessage, TimerCall } from 'claude-code'
 import { bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
@@ -63,7 +63,7 @@ test('a missing Codex recovery never falls through to Claude', async ($, on) => 
     return { turnId: e.turnId, index: e.index, answer: 'Claude fallback', toolUses: [], stopReason: 'end_turn' as const, usage: null }
   })
 
-  const stream = $.turn.step({ turnId: 'turn-recover', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  const stream = $.turn.step({ turnId: 'turn-recover', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
   let r = await stream.next()
   while (!r.done) r = await stream.next()
   expect(nextCalls).toBe(0)
@@ -97,7 +97,7 @@ test('a failed Codex recovery ends the turn and asks the coordinator to resend',
     return { turnId: e.turnId, index: e.index, answer: 'Claude fallback', toolUses: [], stopReason: 'end_turn' as const, usage: null }
   })
 
-  const stream = $.turn.step({ turnId: 'turn-recover-throw', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  const stream = $.turn.step({ turnId: 'turn-recover-throw', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
   let r = await stream.next()
   while (!r.done) r = await stream.next()
   expect(nextCalls).toBe(0)
@@ -109,7 +109,7 @@ test('a spawned codex agent is remembered by the bridge so a restart can recover
   mock.env(on, { HOME: '/home/test' })
   on('session.id', async () => ({ value: 'test-session' }))
   on('ui.log', async () => ({ value: undefined }))
-  on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-5.6-luna' }))
+  on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-6-luna' }))
   on('process.spawn', async function* () {
     yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
     return { value: { code: 0, signal: null } }
@@ -130,9 +130,9 @@ test('a spawned codex agent is remembered by the bridge so a restart can recover
 // Regression: sol and luna resolve to each other's model id, or a step for a
 // codex model is not recognized as one and goes to Claude.
 test('typeForModel maps each Codex model back to its own type', async () => {
-  expect(TYPES.luna.model).toBe('gpt-5.6-luna')
+  expect(TYPES.luna.model).toBe('gpt-6-luna')
   expect(TYPES.sol.model).toBe('gpt-5.6-sol')
-  expect(typeForModel('gpt-5.6-luna')).toBe('luna')
+  expect(typeForModel('gpt-6-luna')).toBe('luna')
   expect(typeForModel('gpt-5.6-sol')).toBe('sol')
   expect(typeForModel('claude-opus-5-5')).toBeUndefined()
 })
@@ -379,7 +379,7 @@ test('an unmapped Codex tool call is answered with a failed toolResult', async (
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
   })
 
-  const stream = $.turn.step({ turnId: 'turn-unmapped', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  const stream = $.turn.step({ turnId: 'turn-unmapped', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
   let r = await stream.next()
   while (!r.done) r = await stream.next()
   expect(steps).toHaveLength(2)
@@ -423,7 +423,7 @@ test('a resumed worker receives a long multi-line message and runs a new turn in
   })
 
   const runStep = async (turnId: string) => {
-    const stream = $.turn.step({ turnId, index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+    const stream = $.turn.step({ turnId, index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
     let r = await stream.next()
     while (!r.done) r = await stream.next()
     return r.value
@@ -492,7 +492,7 @@ test('a coordinator message that arrives with a relayed tool result still reache
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
   })
   const runStep = async (turnId: string, index: number) => {
-    const stream = $.turn.step({ turnId, index, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+    const stream = $.turn.step({ turnId, index, model: 'gpt-6-luna', messageCount: api.length, agentId })
     let r = await stream.next()
     while (!r.done) r = await stream.next()
     return r.value
@@ -549,7 +549,7 @@ test('a bridge started from older bridge code is replaced before the next step i
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
   })
 
-  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
   let r = await stream.next()
   while (!r.done) r = await stream.next()
 
@@ -591,7 +591,7 @@ test('a transient /wait failure recovers when the bridge is healthy instead of f
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${method} ${route}` } }
   })
 
-  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId })
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
   let r = await stream.next()
   while (!r.done) r = await stream.next()
 
@@ -602,7 +602,7 @@ test('a transient /wait failure recovers when the bridge is healthy instead of f
 
 // Incident: a background codex worker's first step raced agent.spawn's async
 // tail, /recover answered found:false, and the step fell through to a Claude
-// request for gpt-5.6-luna, which died with 404 model_not_found.
+// request for the luna model (then gpt-5.6-luna), which died with 404 model_not_found.
 test('a step for a codex model is never sent to Claude, even for an agent spawn has not registered', async ($, on) => {
   mock.clock(on)
   const agentId = 'a-unregistered'
@@ -644,4 +644,119 @@ test('a step for a codex model is never sent to Claude, even for an agent spawn 
   expect(claudeSteps).toBe(0)
   expect(steps).toHaveLength(1)
   expect(steps[0]).toMatchObject({ key: agentId, agentType: 'sol', model: 'gpt-5.6-sol', cwd: '/repo' })
+})
+
+// Incident: a luna worker's first step ended with Anthropic's 404 for the
+// codex model. A turn.step hook that throws is skipped and the step runs on
+// beneath it, which is the Claude request; the hook's .catch must end it.
+type HttpFetchResult = { value: HttpResponse }
+type On = Parameters<Extract<Parameters<typeof test>[1], (...a: never[]) => unknown>>[1]
+const codexStepHarness = (on: On, fetch: (route: string) => HttpFetchResult | Promise<HttpFetchResult>, startDelay?: () => Promise<void>) => {
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const claude = { steps: 0 }
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('session.cwd', async () => ({ value: '/repo' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '/repo\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.spawn', async function* () {
+    await startDelay?.()
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => await fetch(new URL(e.url).pathname))
+  on('turn.step', async function* (_$, e) {
+    claude.steps++
+    yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: null }
+    return { turnId: e.turnId, index: e.index, answer: 'claude', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
+  return { api, claude }
+}
+const reply = (body: unknown, status = 200) => ({ value: { status, ok: status < 400, headers: {}, text: JSON.stringify(body) } })
+const drainStep = async (stream: AsyncGenerator<unknown, { answer: string }>) => {
+  const chunks: unknown[] = []
+  let r = await stream.next()
+  while (!r.done) { chunks.push(r.value); r = await stream.next() }
+  return { chunks, result: r.value }
+}
+
+test('a codex step whose hook throws ends with an error turn and never reaches Claude', async ($, on) => {
+  mock.clock(on)
+  const { api, claude } = codexStepHarness(on, route => {
+    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') return reply({ error: 'codex app-server exited' }, 500)
+    return reply({ error: `no route ${route}` }, 404)
+  })
+
+  const { chunks, result } = await drainStep($.turn.step({ turnId: 'turn-throw', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-throw' }))
+
+  expect(claude.steps).toBe(0)
+  expect(result.answer).toStartWith('[codex-subagent error] step hook throw: bridge POST /step 500')
+  expect(result.answer).toEndWith('; send the message again')
+  expect(chunks[0]).toMatchObject({ kind: 'text', index: 0 })
+})
+
+// The failed hook's chunks stay in the response, so an error written at
+// block 0 after a keepalive beat would collide with that thinking block.
+test('a codex step that fails after a keepalive beat writes its error past the thinking block', async ($, on) => {
+  const clock = mock.clock(on)
+  const { promise: atWait, resolve: reachedWait } = Promise.withResolvers<void>()
+  const { promise: gate, resolve: failWait } = Promise.withResolvers<void>()
+  const { api, claude } = codexStepHarness(on, async route => {
+    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') return reply({ pending: true })
+    if (route === '/wait') { reachedWait(); await gate; return reply({ error: 'bridge lost the thread' }, 500) }
+    return reply({ error: `no route ${route}` }, 404)
+  })
+
+  const done = drainStep($.turn.step({ turnId: 'turn-midstream', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-midstream' }))
+  await atWait
+  await clock.advance(30_000)
+  failWait()
+  const { chunks, result } = await done
+
+  expect(claude.steps).toBe(0)
+  expect(chunks[0]).toEqual({ kind: 'thinking', index: 0, text: '' })
+  expect(chunks.find(c => (c as { kind: string }).kind === 'text')).toMatchObject({ index: 1 })
+  expect(result.answer).toStartWith('[codex-subagent error] step hook throw: bridge POST /wait 500')
+})
+
+// Incident class: the step waited on a spawn that never registered past the
+// hook's 10 s budget; an overrun hook is skipped and the step reaches Claude.
+test('a codex step whose hook overruns its budget ends with an error turn and never reaches Claude', { timeoutMs: 30_000 }, async ($, on) => {
+  mock.clock(on)
+  on('agent.spawn', () => new Promise(() => {}))
+  const spawnArgs: AgentSpawnArgs = { prompt: 'implement it', subagentType: 'codex-subagent:luna', cwd: '/repo' }
+  const { api, claude } = codexStepHarness(on, route => reply({ error: `no route ${route}` }, 404))
+  void $.agent.spawn(spawnArgs).catch(() => {})
+
+  const { result } = await drainStep($.turn.step({ turnId: 'turn-timeout', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-timeout' }))
+
+  expect(claude.steps).toBe(0)
+  expect(result.answer).toStartWith('[codex-subagent error] step hook timeout')
+})
+
+// Regression: a bridge start slower than the step budget was dropped from
+// bridgeReady while still starting, so the next step spawned a second bridge on the same socket.
+test('a bridge start slower than the step budget is reused on the next step, not started twice', { timeoutMs: 60_000 }, async ($, on) => {
+  const clock = mock.clock(on)
+  let spawns = 0
+  const { promise: started, resolve: finishStart } = Promise.withResolvers<void>()
+  const { api } = codexStepHarness(on, route => {
+    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') return reply({ text: 'done' })
+    return reply({ error: `no route ${route}` }, 404)
+  }, async () => { if (++spawns === 1) await started })
+
+  const firstStep = drainStep($.turn.step({ turnId: 'turn-slow-1', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-slow' }))
+  await clock.advance(10_000)
+  const first = await firstStep
+  expect(first.result.answer).toContain('still starting')
+  finishStart()
+  await drainStep($.turn.step({ turnId: 'turn-slow-2', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-slow' }))
+
+  expect(spawns).toBe(1)
 })

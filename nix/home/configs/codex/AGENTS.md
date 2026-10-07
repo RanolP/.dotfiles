@@ -7,7 +7,7 @@ These rules supplement the shared `AGENTS.md` loaded into Codex.
 - WHEN: a unit can be carried by an independent worker, or a command may run long or emit long output.
 - DO: delegate the unit proactively without asking again; this user asked Codex to spawn `luna xhigh` workers aggressively.
 - DO: choose the named native role that matches the unit, and keep the worker's brief self-contained with its goal, files, constraints, and return shape.
-- DO: set every child to `model = "gpt-5.6-luna"` and `model_reasoning_effort = "xhigh"`; `gpt-5.6-luna` is the installed model slug for the user's `luna` request.
+- DO: set every child to `model = "gpt-6-luna"` and `model_reasoning_effort = "xhigh"`; `gpt-6-luna` is the installed model slug for the user's `luna` request.
 
 ## Parallel work and typed handoffs
 

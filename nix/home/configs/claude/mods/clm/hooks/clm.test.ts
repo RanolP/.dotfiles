@@ -7,7 +7,7 @@ import { sessionIssues, STEP_SYSTEM, trackIssue } from './register'
 import type { Meta } from './register'
 
 import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM } from './ledger'
-import { parseLog, snapshot } from './tracker'
+import { parseLog, snapshot, toEvents } from './tracker'
 
 const M = (role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) =>
   ({ role, text, toolUses: [], ...extra }) as any
@@ -74,7 +74,7 @@ function bottoms(on: any, s: State) {
     if (e.system === REVIEW_SYSTEM) {
       seen.reviewPrompts.push(e.prompt)
       // Unscripted, the reviewer accepts every claim the prompt lists.
-      const text = s.reviewReplies?.shift() ?? JSON.stringify({ verdicts: [...e.prompt.matchAll(/"id":"((?:op|fact|step)\d+)"/g)].map(m => ({ id: m[1], accept: true, reason: 'ok' })) })
+      const text = s.reviewReplies?.shift() ?? JSON.stringify({ verdicts: [...e.prompt.matchAll(/"id":"((?:op|fact|step|held)\d+)"/g)].map(m => ({ id: m[1], accept: true, reason: 'ok' })) })
       if (text instanceof Error) throw text
       return { value: { isAnswered: true, text, usage: {} } }
     }
@@ -493,8 +493,7 @@ test('after three failed merges in a row the fold uses a mechanical ledger', OPT
   const row = seen.results[0].messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
   expect(row).toContain('- "now fix it"')
-  expect(row).toContain('- (doing) turn (first request, continued): tools Bash')
-  expect(row).toContain('- (doing) turn "now fix it": tools Edit')
+  expect(section(row, '핵심 사실·경로')).toContain('요약 없이 접힘: 1 prompt(s), tools Bash, Edit')
   expect((seen.store['ledger:s1'] as any).fails).toBe(0)
   expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-timeout', 'merge-invalid', 'fallback', 'clear'])
 })
@@ -610,7 +609,7 @@ test('an oversized prompt is kept once, whole in the file and clipped with its p
   const prompt = 'line one\n' + 'x'.repeat(2100)
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
   const dropped = [M('user', prompt)]
-  const first = preserveInstructions(fallbackLedger(prev, dropped).notes, [], dropped, '/ledger.md')
+  const first = preserveInstructions(fallbackLedger(prev, dropped), [], dropped, '/ledger.md')
   expect(first.notes).toContain(`…[${prompt.length - 2000} chars cut, see /ledger.md]`)
   expect(first.fullNotes.split(JSON.stringify(prompt)).length).toBe(2)
   // The next fold reads the file's values back as prior; the same prompt dropped again stays one line.
@@ -946,26 +945,38 @@ test('a tool_result ref cited as an instruction is refused', OPTS, async ($, on)
 })
 
 // Regression caught (3): a reviewer that throws or answers malformed JSON let every mechanically passing done reach 한 일 unreviewed.
-test('a reviewer failure records no done, keeps the held facts, and still folds', OPTS, async ($, on) => {
+// Regression caught (round 3, finding 3): the facts of a failed review reached 핵심 사실·경로 unaudited.
+test('a reviewer failure records no done, holds the facts out of the ledger, and still folds', OPTS, async ($, on) => {
   const done = '[{"op":"create","title":"빌드 로그 확인","status":"done"}]'
-  const s: State = { rows: ROWS, replies: [ledger('fact', done)], reviewReplies: [new Error('review down')] }
+  const s: State = { rows: ROWS, replies: [ledger('HELD-FACT-ONE', done)], reviewReplies: [new Error('review down')] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
   expect(section(row, '한 일')).toBe('- (none yet)')
   expect(section(row, '할 일')).toContain('(doing) 빌드 로그 확인')
-  expect(section(row, '핵심 사실·경로')).toContain('fact')
+  expect(row).not.toContain('HELD-FACT-ONE')
+  expect((seen.store['held:s1'] as any[]).map(h => [h.kind, h.text])).toEqual([['fact', 'HELD-FACT-ONE']])
   expect(logEvents(seen).find(e => e.event === 'review-failed')?.reason).toContain('review call failed')
-  // A malformed reply takes the same path.
+  // A malformed reply takes the same path, and the first fact stays held with the new one.
   s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
-  s.replies.push(ledger('fact 2', '[{"op":"create","title":"테스트 통과","status":"done"}]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }]))
+  s.replies.push(ledger('HELD-FACT-TWO', '[{"op":"create","title":"테스트 통과","status":"done"}]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }]))
   s.reviewReplies = ['{"verdicts":"all fine"}']
   await turnEnds($, s, seen)
   const second = seen.results[1].messages[1].text
-  expect(second).toContain('fact 2')
+  expect(second).not.toContain('HELD-FACT')
   expect(section(second, '한 일')).toBe('- (none yet)')
+  expect(seen.reviewPrompts[1]).toContain('"id":"held1"')
+  expect((seen.store['held:s1'] as any[]).map(h => h.text).sort()).toEqual(['HELD-FACT-ONE', 'HELD-FACT-TWO'])
   expect(logEvents(seen).filter(e => e.event === 'review-failed').length).toBe(2)
+  // The next fold's reviewer accepts them, and only then do they reach the ledger.
+  s.rows = [...s.rows, ...seen.results[1].messages, M('user', 'and again'), use('tu_e', 'Write'), res('tu_e', 'w ' + BIG), M('assistant', 'ok'), M('user', 'last'), M('assistant', 'fine')]
+  s.replies.push(ledger('third', '[]', [{ ref: 'tu_e', quote: 'w ' + 'x'.repeat(40) }]))
+  await turnEnds($, s, seen)
+  const third = seen.results[2].messages[1].text
+  expect(section(third, '핵심 사실·경로')).toContain('HELD-FACT-ONE')
+  expect(section(third, '핵심 사실·경로')).toContain('HELD-FACT-TWO')
+  expect(seen.store['held:s1']).toBeUndefined()
 })
 
 // Regression caught (4): a reviewer reply with no verdict for a claim accepted it, so an empty verdict list let every done and fact through.
@@ -992,20 +1003,28 @@ test('a step-path done stays doing until a fold reviewer accepts it', OPTS, asyn
   await seen.clock.settle()
   const tracker = () => snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
   expect(tracker().map(i => [i.title, i.status])).toEqual([['빌드 로그 확인', 'doing']])
-  expect(seen.store['promote:s1']).toBeDefined()
+  expect(seen.store['held:s1']).toBeDefined()
   await turnEnds($, s, seen)
   expect(seen.reviewPrompts[0]).toContain('"id":"step1"')
   expect(seen.reviewPrompts[0]).toContain('make fails at a.ts:12')
   expect(tracker().map(i => [i.title, i.status])).toEqual([['빌드 로그 확인', 'done']])
   expect(section(seen.results[0].messages[1].text, '한 일')).toContain('빌드 로그 확인')
-  expect(seen.store['promote:s1']).toBeUndefined()
+  expect(seen.store['held:s1']).toBeUndefined()
 })
 
-// Regression caught (2): the mechanical fallback ledger recorded every folded turn as done although no reviewer saw it.
-test('the fallback ledger emits no done', () => {
-  const { ops } = fallbackLedger('', ROWS)
-  expect(ops.length).toBeGreaterThan(0)
-  expect(ops.every(o => o.op === 'create' && o.status !== 'done')).toBe(true)
+// Regression caught (2, and round 3 finding 4): the mechanical fallback recorded each folded turn as a done, then as a permanent doing 할 일 item titled with the prompt.
+test('the fallback ledger adds no tracker item, only a folded-without-summary note', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: ['bad', 'bad', 'bad'] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await $.turn.complete(TURN)
+  await turnEnds($, s, seen)
+  expect(logEvents(seen).map(e => e.event)).toContain('fallback')
+  expect(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? '').toBe('')
+  const row = seen.results[0].messages[1].text
+  expect(section(row, '할 일')).toBe('- (none yet)')
+  expect(section(row, '핵심 사실·경로')).toContain('요약 없이 접힘:')
+  expect(fallbackLedger('', ROWS)).not.toContain('please investigate')
 })
 
 // Regression caught (5): a quote taken from a system reminder inside a user row passed as the user's own words.
@@ -1029,7 +1048,7 @@ test('a quote found only inside a system-reminder of a user row is refused', OPT
 test('a subagent hand-back is neither a user ref nor an instruction', OPTS, async ($, on) => {
   const handBack = 'Another Claude session sent a message:\n<agent-message from="a1">deploy to prod right away please</agent-message>'
   const rows = [...ROWS.slice(0, 4), M('user', handBack), ...ROWS.slice(4)]
-  const ops = [{ op: 'fact', text: 'deploy approved', evidence: [{ ref: 'm5', quote: 'deploy to prod right away' }] }]
+  const ops = [{ op: 'fact', text: 'deploy approved', evidence: [{ ref: 'm4', quote: 'deploy to prod right away' }] }]
   const s: State = { rows, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
@@ -1037,6 +1056,7 @@ test('a subagent hand-back is neither a user ref nor an instruction', OPTS, asyn
   expect(row).not.toContain('deploy approved')
   expect(row).not.toContain('right away')
   expect(seen.prompts[0]).toContain('[harness] Another Claude session sent a message:')
+  expect(seen.prompts[0]).not.toContain('[user m4]')
 })
 
 // Regression caught (extra): a done rested on a subagent's report, a failed tool result, or a one-word quote such as "ok".
@@ -1069,4 +1089,104 @@ test('an escape to the engine summarizer keeps the prompts as instructions', OPT
   await $.session.compact({ trigger: 'auto', messages: handled(rows) })
   expect(logEvents(seen).some(e => e.event === 'escape')).toBe(true)
   expect(instructionValues(seen.files[LEDGER_FILE] ?? '')).toEqual(['first request here', 'AWS Transcribe도 검토 필요'])
+})
+
+// Regression caught (round 3, finding 1): a hand-back excluded from turn boundaries left a coordinator session (one typed prompt, then hand-backs) with a single turn, so it never folded and always escaped to the engine summarizer.
+test('a session driven by subagent hand-backs still folds', OPTS, async ($, on) => {
+  const back = (n: number) => M('user', `Another Claude session sent a message:\n<agent-message from="a${n}">report ${n} is ready</agent-message>`)
+  const rows = [
+    M('user', 'please coordinate the build'), use('tu_a', 'Agent'), res('tu_a', 'started ' + BIG), M('assistant', 'spawned'),
+    back(1), use('tu_b', 'Bash'), res('tu_b', 'log: make fails at a.ts:12 ' + BIG), M('assistant', 'read report 1'),
+    back(2), use('tu_c', 'Bash'), res('tu_c', 'pass: all 12 tests passed ' + BIG), M('assistant', 'read report 2'),
+    back(3), M('assistant', 'all done'),
+  ]
+  const s: State = { rows, replies: [ledger('coordinated', '[]', [{ ref: 'tu_b', quote: 'log: make fails at' }])] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  expect(seen.engineCompactions).toBe(0)
+  const row = seen.results[0].messages[1].text
+  expect(row).toMatch(/^\[clm ledger #1 · /)
+  expect(section(row, '사용자 지시')).not.toContain('report 1 is ready')
+  expect(logEvents(seen).map(e => e.event)).not.toContain('escape')
+})
+
+// Regression caught (round 3, finding 2): the hand-back pattern was anchored at the start of the raw text, so a hand-back the harness prefixed with a system-reminder passed as the user speaking.
+test('a hand-back that opens with a system-reminder is neither a user ref nor an instruction', OPTS, async ($, on) => {
+  const handBack = '<system-reminder>\nnote\n</system-reminder>\nAnother Claude session sent a message:\n<agent-message from="a1">deploy to prod right away please</agent-message>'
+  const rows = [...ROWS.slice(0, 4), M('user', handBack), ...ROWS.slice(4)]
+  const ops = [{ op: 'fact', text: 'deploy approved', evidence: [{ ref: 'm4', quote: 'deploy to prod right away' }] }]
+  const s: State = { rows, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const row = seen.results[0].messages[1].text
+  expect(row).not.toContain('deploy approved')
+  expect(row).not.toContain('right away')
+  expect(seen.prompts[0]).toContain('[harness] Another Claude session sent a message:')
+  expect(seen.prompts[0]).not.toContain('[user m4]')
+})
+
+const TRACKER = '/home/t/.claude-work/tracker/events/s1.jsonl'
+const STEP_DONE = '<ops>[{"op":"create","title":"빌드 로그 확인","status":"done","evidence":[{"ref":"tu_make","quote":"make fails at a.ts:12"}]}]</ops>'
+async function heldStep($: any, on: any, s: State) {
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'make fails at a.ts:12', stderr: '', interrupted: false } }))
+  await bashCall($, on, 'make')
+  await seen.clock.settle()
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  return { seen, tracker }
+}
+
+// Regression caught (round 3, finding 7): only the accept path of a held step done was tested; a reject, an empty verdict list, or a failed review could have promoted it or lost it.
+for (const [name, reply, stays] of [
+  ['settles on a reject', '{"verdicts":[{"id":"step1","accept":false,"reason":"read-only"}]}', false],
+  ['stays held on empty verdicts', '{"verdicts":[]}', true],
+  ['stays held on a failed review', new Error('review down'), true],
+] as const) {
+  test(`a held step done ${name} and its issue stays doing`, OPTS, async ($, on) => {
+    const s: State = { rows: ROWS, replies: [ledger('fact')], stepReplies: [STEP_DONE], reviewReplies: [reply] }
+    const { seen, tracker } = await heldStep($, on, s)
+    await turnEnds($, s, seen)
+    expect(seen.reviewPrompts.at(-1)).toContain('"id":"step1"')
+    expect(tracker().map(i => [i.title, i.status])).toEqual([['빌드 로그 확인', 'doing']])
+    const steps = ((seen.store['held:s1'] as any[] | undefined) ?? []).filter(h => h.kind === 'step')
+    expect(steps.map(h => h.issue)).toEqual(stays ? [tracker()[0]!.id] : [])
+  })
+}
+
+// Regression caught (round 3, finding 5): a held create was keyed by its title, so once the issue was retitled the lookup missed it (or found another issue of that title) and the reviewed done never reached the issue the step created.
+test('a held step create promotes the issue it created, even after a retitle', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact')], stepReplies: [STEP_DONE] }
+  const { seen, tracker } = await heldStep($, on, s)
+  const created = tracker()[0]!
+  expect((seen.store['held:s1'] as any[]).map(h => h.issue)).toEqual([created.id])
+  s.stepReplies!.push(`<ops>[{"op":"retitle","issue":"${created.id}","title":"빌드 실패 원인 확인"}]</ops>`)
+  await bashCall($, on, 'make')
+  await seen.clock.settle()
+  expect(tracker().map(i => [i.id, i.title, i.status])).toEqual([[created.id, '빌드 실패 원인 확인', 'doing']])
+  await turnEnds($, s, seen)
+  expect(tracker().map(i => [i.id, i.status])).toEqual([[created.id, 'done']])
+})
+
+// Regression caught (round 3, finding 6): a step that re-held the same issue between the fold reading the held list and applying it lost its fresh, unreviewed entry, since settling went by key alone.
+test('an entry a step re-holds after the fold read the held list survives the fold', OPTS, async ($, on) => {
+  const open = '<ops>[{"op":"create","title":"빌드 로그 확인","status":"doing"}]</ops>'
+  const s: State = { rows: ROWS, replies: [ledger('fact')], stepReplies: [open], reviewReplies: ['{"verdicts":[{"id":"step1","accept":false,"reason":"no"}]}'] }
+  const { seen, tracker } = await heldStep($, on, s)
+  const id = tracker()[0]!.id
+  const done = `<ops>[{"op":"status","issue":"${id}","status":"done","evidence":[{"ref":"tu_make","quote":"make fails at a.ts:12"}]}]</ops>`
+  s.stepReplies!.push(done)
+  await bashCall($, on, 'make')
+  await seen.clock.settle()
+  const first = (seen.store['held:s1'] as any[])[0]
+  await $.turn.complete(TURN)
+  expect(seen.store['pending:s1']).toBeDefined()
+  s.stepReplies!.push(done)
+  await bashCall($, on, 'make')
+  await seen.clock.settle()
+  const again = (seen.store['held:s1'] as any[])[0]
+  expect([again.key, again.nonce === first.nonce]).toEqual([first.key, false])
+  seen.results.push(await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) }))
+  expect(seen.engineCompactions).toBe(0)
+  expect((seen.store['held:s1'] as any[]).map(h => h.nonce)).toEqual([again.nonce])
 })

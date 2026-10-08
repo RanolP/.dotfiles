@@ -1,13 +1,15 @@
 import type { SessionMessage } from 'claude-code'
 
-import { readEvidence, stripReminders, type Evidence } from './evidence'
-import { isPrompt } from './fold'
+import { readEvidence, type Evidence } from './evidence'
+import { isUserTyped, stripReminders } from './fold'
 import { isTrackerSection, parseOps, sectionLines, type Issue, type Payload } from './tracker'
 
 export const SECTIONS = ['목표', '사용자 지시', '한 일', '할 일', '미결 질문', '핵심 사실·경로'] as const
 export const EMPTY_LEDGER = SECTIONS.map(s => `## ${s}\n- (none yet)`).join('\n\n')
 const OVERSIZE_MARK = '출력 과다:'
 const OVERSIZE_KEEP = 5
+const FOLDED_MARK = '요약 없이 접힘:'
+const FOLDED_KEEP = 3
 export const INSTRUCTION_CAP = 4000
 
 // --- ledger text ---------------------------------------------------------
@@ -120,7 +122,7 @@ function withSection(notes: string, name: string, body: string): string {
 
 export const FACT_KEEP = 25
 export type Fact = { text: string; evidence: Evidence[] }
-const isMarked = (line: string) => line.includes(OVERSIZE_MARK) || line.includes(PRESERVED_MARK)
+const isMarked = (line: string) => line.includes(OVERSIZE_MARK) || line.includes(PRESERVED_MARK) || line.includes(FOLDED_MARK)
 const factBody = (line: string) => line.trim().replace(/^-\s*/, '')
 /** The fact lines a ledger holds, the harness's oversize and preserved-output lines aside. */
 export const factLines = (notes: string) =>
@@ -155,7 +157,7 @@ export function preserveInstructions(
 ): PreservedInstructions {
   const gone = new Set(withdrawn.map(instructionKey))
   const seen = new Map<string, { text: string; withdrawn: boolean }>()
-  for (const raw of [...prior, ...dropped.filter(isPrompt).map(m => stripReminders(m.text))]) {
+  for (const raw of [...prior, ...dropped.filter(isUserTyped).map(m => stripReminders(m.text))]) {
     const alreadyWithdrawn = raw.startsWith(WITHDRAWN_PREFIX)
     const text = alreadyWithdrawn ? storedInstructionValue(raw.slice(WITHDRAWN_PREFIX.length)) : raw
     const key = instructionKey(text)
@@ -190,20 +192,13 @@ export function preserveInstructions(
 }
 
 // Deterministic stand-in when the merge model keeps failing: the notes stay as
-// they were (preserveInstructions adds the dropped prompts), and one done
-// issue per dropped turn names the tools it used.
-export function fallbackLedger(prevNotes: string, dropped: readonly SessionMessage[]): { notes: string; ops: Payload[] } {
-  const turns: { prompt?: string; tools: string[] }[] = []
-  for (const m of dropped) {
-    if (isPrompt(m) || turns.length === 0) turns.push({ prompt: isPrompt(m) ? m.text : undefined, tools: [] })
-    turns[turns.length - 1]!.tools.push(...m.toolUses.map(u => u.tool))
-  }
-  // No reviewer saw these turns, so a tool having run is recorded as doing, never done.
-  const ops = turns.map((t): Payload => ({
-    op: 'create', status: 'doing',
-    title: `turn ${t.prompt ? `"${clip(oneLine(t.prompt), 60)}"` : '(first request, continued)'}: tools ${t.tools.length ? [...new Set(t.tools)].join(', ') : 'none'}`,
-  }))
-  return { notes: prevNotes, ops }
+// they were (preserveInstructions adds the dropped prompts) plus one marked line
+// saying turns were folded unsummarized. No reviewer saw those turns, so they
+// add no tracker item: an open item would read as work still pending.
+export function fallbackLedger(prevNotes: string, dropped: readonly SessionMessage[]): string {
+  const turns = dropped.filter(isUserTyped).length
+  const tools = [...new Set(dropped.flatMap(m => m.toolUses.map(u => u.tool)))]
+  return rememberLines(prevNotes, FOLDED_MARK, FOLDED_KEEP, [`- ${FOLDED_MARK} ${turns} prompt(s), tools ${tools.length ? tools.join(', ') : 'none'}; the prompts are under 사용자 지시`])
 }
 
 const EVIDENCE_FIELD = '"evidence":[{"ref":"<ref>","quote":"<text copied exactly from that row>"}]'

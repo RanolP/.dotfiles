@@ -37,12 +37,18 @@ export const isSystemRow = (m: SessionMessage): boolean => {
 }
 export const ledgerRowSeq = (text: string): string | undefined => LEDGER_ROW.exec(text)?.[1]
 export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && ledgerRowSeq(m.text) !== undefined
-// User-role rows the harness writes into the conversation, which stay in the
-// fold's input but are not the user speaking: a subagent's hand-back and a
-// loaded skill's body.
-const HARNESS_TEXT = /^\s*(?:Another Claude session sent a message:|Base directory for this skill: )/
 export const isPrompt = (m: SessionMessage) =>
-  m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m) && !HARNESS_TEXT.test(m.text)
+  m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m)
+
+const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
+export const stripReminders = (text: string) => text.replace(REMINDER, '').trim()
+// User-role rows the harness writes into the conversation: a subagent's
+// hand-back and a loaded skill's body. They still open a turn (isPrompt), so
+// a session driven by hand-backs keeps its fold boundaries, but they are not
+// the user speaking, so they are neither citable as the user nor instructions.
+const HARNESS_TEXT = /^(?:Another Claude session sent a message:|Base directory for this skill: )/
+/** A prompt the user wrote: what may be quoted as the user and kept under 사용자 지시. */
+export const isUserTyped = (m: SessionMessage) => isPrompt(m) && !HARNESS_TEXT.test(stripReminders(m.text))
 
 // A ledger row ahead of every prompt means the first request was already
 // folded away; the ledger then marks the head, and buildCleared replaces it.

@@ -1,6 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 
-import { isPrompt } from './fold'
+import { isUserTyped, stripReminders } from './fold'
 import type { Payload } from './tracker'
 
 // A summary claim (a done step, a key fact, a user instruction) stands only on
@@ -27,8 +27,6 @@ const tooShort = (quote: string) => quote.split(' ').length < MIN_WORDS && !(CJK
 // A subagent's report or a message relay is another model's prose, so it proves no step done.
 const RELAY_TOOLS = new Set(['Agent', 'Task', 'SendMessage'])
 
-const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
-export const stripReminders = (text: string) => text.replace(REMINDER, '').trim()
 
 /** The ref of a user row: its 1-based position in the rendered range. */
 export const rowRef = (i: number) => `m${i + 1}`
@@ -47,7 +45,7 @@ export function renderRange(rows: readonly SessionMessage[], cap = 120_000): { t
     if (shown) {
       const text = clip(shown, TEXT_CLIP)
       if (m.role === 'assistant') head = `[assistant] ${text}`
-      else if (isPrompt(m)) {
+      else if (isUserTyped(m)) {
         head = `[user ${rowRef(i)}] ${text}`
         sources.push([rowRef(i), { kind: 'user', text }])
       } else head = `[harness] ${text}`

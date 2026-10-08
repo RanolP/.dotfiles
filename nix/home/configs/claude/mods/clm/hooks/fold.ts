@@ -37,8 +37,12 @@ export const isSystemRow = (m: SessionMessage): boolean => {
 }
 export const ledgerRowSeq = (text: string): string | undefined => LEDGER_ROW.exec(text)?.[1]
 export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && ledgerRowSeq(m.text) !== undefined
+// User-role rows the harness writes into the conversation, which stay in the
+// fold's input but are not the user speaking: a subagent's hand-back and a
+// loaded skill's body.
+const HARNESS_TEXT = /^\s*(?:Another Claude session sent a message:|Base directory for this skill: )/
 export const isPrompt = (m: SessionMessage) =>
-  m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m)
+  m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m) && !HARNESS_TEXT.test(m.text)
 
 // A ledger row ahead of every prompt means the first request was already
 // folded away; the ledger then marks the head, and buildCleared replaces it.

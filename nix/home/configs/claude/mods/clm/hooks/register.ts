@@ -6,11 +6,11 @@ import {
   type Boundary, type ClearPlan,
 } from './fold'
 import {
-  checkEvidence, describeOp, downgrade, evidenceProblem, gateOps, isDoneClaim, renderRange,
+  checkEvidence, describeOp, downgrade, gateOps, isDoneClaim, renderRange,
   type Evidence, type Source,
 } from './evidence'
 import {
-  composeLedger, EMPTY_LEDGER, factLines, fallbackLedger, instructionKey, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
+  composeLedger, EMPTY_LEDGER, factLines, fallbackLedger, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
   parseChanges, parseMerge, parseReview, preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
   withNotes, WITHDRAWN_PREFIX, type Fact,
 } from './ledger'
@@ -86,6 +86,7 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; foldMs?: number
+  promoted?: Payload[]; settled?: string[]
 }
 // `foldTokens` is the usage reading taken when the last fold landed: the
 // engine keeps reporting it until the next API response, so an equal reading
@@ -104,6 +105,7 @@ const isPending = (v: unknown): v is Pending =>
   isRecord(v) && typeof v.notes === 'string' && typeof v.fullNotes === 'string' && Array.isArray(v.ops) && typeof v.seq === 'number'
   && optional(v.keepFp, 'string') && typeof v.keepFrom === 'number' && Array.isArray(v.dropFps) && v.dropFps.every(f => typeof f === 'string')
   && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean' && optional(v.foldMs, 'number')
+  && (v.promoted === undefined || Array.isArray(v.promoted)) && (v.settled === undefined || (Array.isArray(v.settled) && v.settled.every(k => typeof k === 'string')))
 async function readMeta($: EngineInterface): Promise<Meta> {
   const stored = await $.store.get(await metaKey($))
   return { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
@@ -121,7 +123,7 @@ async function readText($: EngineInterface, p: string): Promise<string | undefin
 }
 
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
-  | 'evidence-rejected' | 'review-rejected' | 'review-added' | 'review-failed'
+  | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'escape-instructions-lost'
 type LogFields = { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; reason?: string }
 const LOG_KEEP = 200
 async function logEvent($: EngineInterface, event: LogEvent, f: LogFields) {
@@ -445,7 +447,7 @@ async function openBoard($: EngineInterface) {
 // `finished` is this session's archived done issues, shown to the merge model
 // only, so it does not re-create them from the turns being folded.
 type TrackerView = { issues: Issue[]; finished: Issue[]; doneTitles: Set<string> }
-type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean }
+type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; settled: string[] }
 
 // The issues one session's ledger shows, with `ops` previewed on top when the
 // fold has not appended them yet; ids then match what append assigns.
@@ -479,26 +481,63 @@ async function gateMerge($: EngineInterface, ops: readonly Payload[], evidence: 
   return { ops: gated.ops, evidence: gated.evidence, facts: kept }
 }
 
+// A done the per-tool-call step saw is held as doing until a fold's reviewer
+// accepts it: the step path has the mechanical check only. Each entry keeps
+// the cited rows' text, since those rows may be gone by the time a fold runs.
+type Promotion = { key: string; issue?: string; title?: string; evidence: Evidence[]; sources: Record<string, Source> }
+const promoteKey = async ($: EngineInterface) => `promote:${await sid($)}`
+const isPromotion = (v: unknown): v is Promotion =>
+  isRecord(v) && typeof v.key === 'string' && optional(v.issue, 'string') && optional(v.title, 'string') && Array.isArray(v.evidence) && isRecord(v.sources)
+async function readPromotions($: EngineInterface): Promise<Promotion[]> {
+  const v = await $.store.get(await promoteKey($))
+  return Array.isArray(v) ? v.filter(isPromotion) : []
+}
+async function writePromotions($: EngineInterface, list: readonly Promotion[]): Promise<void> {
+  if (list.length) await $.store.set(await promoteKey($), list)
+  else await $.store.delete(await promoteKey($))
+}
+
+/** A step's done claim, ready for review: the issue it moves and its evidence re-checked against the stored rows. */
+type StepClaim = { key: string; issue: Issue; evidence: Evidence[]; sources: Record<string, Source> }
+
+/** Resolves each held promotion to this session's open issue; one whose issue is gone, already done, or whose evidence no longer holds is settled without a claim. */
+function stepClaims(promotions: readonly Promotion[], issues: readonly Issue[], session: string): { claims: StepClaim[]; settled: string[] } {
+  const mine = issues.filter(i => i.origin.session === session)
+  const claims: StepClaim[] = [], settled: string[] = []
+  for (const p of promotions) {
+    const issue = p.issue !== undefined ? mine.find(i => i.id === p.issue) : mine.find(i => i.title.trim() === p.title && i.status !== 'done')
+    const { held } = checkEvidence(p.evidence, new Map(Object.entries(p.sources)), undefined, true)
+    if (!issue || issue.status === 'done' || issue.status === 'dropped' || !held.length) settled.push(p.key)
+    else claims.push({ key: p.key, issue, evidence: held, sources: p.sources })
+  }
+  return { claims, settled }
+}
+
 type ReviewInput = {
   ops: readonly Payload[]; evidence: readonly Evidence[][]; facts: readonly Fact[]; issues: readonly Issue[]
-  range: { text: string; sources: ReadonlyMap<string, Source> }; instructions: readonly string[]; ratio: number
+  steps: readonly StepClaim[]; range: { text: string; sources: ReadonlyMap<string, Source> }; ratio: number
 }
-type Reviewed = { ops: Payload[]; facts: Fact[]; missing: string[] }
+type Reviewed = { ops: Payload[]; facts: Fact[]; promoted: Payload[]; settled: string[] }
 
 /**
- * A second model call audits the gated ops and facts against the folded
- * range: a rejected done is downgraded, any other rejected op or fact is
- * dropped, and the user instructions the ledger missed are added once their
- * quote passes the mechanical check against a user row. A failed or malformed
- * review keeps the mechanical result and never blocks the fold.
+ * A second model call audits the gated ops, the facts and the step path's
+ * held dones against the folded range. A done reaches 한 일 only on an accept:
+ * a rejected or unverdicted done is downgraded, and a failed or malformed
+ * review downgrades every done while keeping the mechanically held facts. A
+ * rejected non-done op or fact is dropped, and so is an unverdicted fact. A
+ * held step done is promoted on accept, settled as doing on reject, and stays
+ * held for the next fold otherwise. The review never blocks the fold.
  */
 async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): Promise<Reviewed> {
   const title = (id: string) => input.issues.find(i => i.id === id)?.title
   const claims = [
     ...input.ops.map((o, i) => ({ id: `op${i + 1}`, claim: describeOp(o, 'issue' in o ? title(o.issue) : undefined), evidence: input.evidence[i] ?? [] })),
     ...input.facts.map((f, i) => ({ id: `fact${i + 1}`, claim: `fact: ${f.text}`, evidence: f.evidence })),
+    ...input.steps.map((c, i) => ({
+      id: `step${i + 1}`, claim: describeOp({ op: 'status', issue: c.issue.id, status: 'done' }, c.issue.title), evidence: c.evidence,
+      source: Object.fromEntries(c.evidence.map(e => [e.ref, c.sources[e.ref]?.text ?? ''])),
+    })),
   ]
-  const unchanged: Reviewed = { ops: [...input.ops], facts: [...input.facts], missing: [] }
   let review
   try {
     const r = await $.model.complete({
@@ -506,7 +545,6 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
       system: REVIEW_SYSTEM,
       prompt: [
         `<claims>\n${claims.map(c => JSON.stringify(c)).join('\n') || '(none)'}\n</claims>`,
-        `<instructions>\n${input.instructions.map(i => JSON.stringify(i)).join('\n') || '(none)'}\n</instructions>`,
         `<folded_range>\n${input.range.text}\n</folded_range>`,
       ].join('\n\n'),
       maxTokens: 2048,
@@ -517,36 +555,35 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
     review = `review call failed (${String(err).slice(0, 120)})`
   }
   if (typeof review === 'string') {
-    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; kept the ${claims.length} mechanically checked claim(s)` })
-    return unchanged
+    const dones = input.ops.filter(isDoneClaim).length
+    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) downgraded to doing, ${input.steps.length} step done(s) held for the next fold, ${input.facts.length} held fact(s) kept` })
+    return { ops: input.ops.map(o => (isDoneClaim(o) ? downgrade(o) : o)), facts: [...input.facts], promoted: [], settled: [] }
   }
-  // A claim the reviewer left without a verdict keeps its mechanical result.
-  const rejected = new Map(review.verdicts.filter(v => !v.accept).map(v => [v.id, v.reason]))
+  const verdict = new Map(review.map(v => [v.id, v]))
   const lines: string[] = []
   const ops = input.ops.flatMap((o, i): Payload[] => {
-    const why = rejected.get(`op${i + 1}`)
-    if (why === undefined) return [o]
+    const v = verdict.get(`op${i + 1}`)
+    if (v?.accept) return [o]
+    if (!v && !isDoneClaim(o)) return [o]
+    const why = v ? v.reason : 'no verdict'
     lines.push(`op${i + 1} ${describeOp(o)}: ${isDoneClaim(o) ? 'done downgraded to doing' : 'dropped'} (${why})`)
     return isDoneClaim(o) ? [downgrade(o)] : []
   })
   const facts = input.facts.filter((f, i) => {
-    const why = rejected.get(`fact${i + 1}`)
-    if (why !== undefined) lines.push(`fact${i + 1} "${f.text}" dropped (${why})`)
-    return why === undefined
+    const v = verdict.get(`fact${i + 1}`)
+    if (!v?.accept) lines.push(`fact${i + 1} "${f.text}" dropped (${v ? v.reason : 'no verdict'})`)
+    return v?.accept === true
+  })
+  const promoted: Payload[] = [], settled: string[] = []
+  input.steps.forEach((c, i) => {
+    const v = verdict.get(`step${i + 1}`)
+    if (!v) return lines.push(`step${i + 1} issue ${c.issue.id}: held as doing (no verdict)`)
+    settled.push(c.key)
+    if (v.accept) promoted.push({ op: 'status', issue: c.issue.id, status: 'done' })
+    else lines.push(`step${i + 1} issue ${c.issue.id}: stays doing (${v.reason})`)
   })
   if (lines.length) await logEvent($, 'review-rejected', { ratio: input.ratio, reason: lines.join(' | ').slice(0, 2000) })
-  const known = input.instructions.map(instructionKey)
-  const missing: string[] = []
-  const refused: string[] = []
-  for (const e of review.missing) {
-    const problem = evidenceProblem(e, input.range.sources, ['user'])
-    const key = instructionKey(e.quote)
-    if (problem) refused.push(`missing instruction refused: ${problem}`)
-    else if (!known.some(k => k.includes(key)) && !missing.some(m => instructionKey(m) === key)) missing.push(e.quote.trim())
-  }
-  if (refused.length) await logEvent($, 'evidence-rejected', { ratio: input.ratio, reason: refused.join(' | ').slice(0, 2000) })
-  if (missing.length) await logEvent($, 'review-added', { ratio: input.ratio, reason: `${missing.length} user instruction(s) the ledger missed` })
-  return { ops, facts, missing }
+  return { ops, facts, promoted, settled }
 }
 
 /**
@@ -588,8 +625,10 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   let facts: Fact[] = []
   let retracted: string[] = []
   let withdrawn: string[] = []
-  let missing: string[] = []
   let fallback = false
+  let promoted: Payload[] = []
+  const steps = stepClaims(await readPromotions($), view.issues, here.session)
+  let settled = steps.settled
   if (plan.dropped.length > 0) {
     const legacy = legacyItems(prev)
     const r = await $.model.complete({
@@ -629,24 +668,24 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
       $.ui.log(`clm: merge failed (${bad}); folded with a mechanical ledger instead`, { to: 'debug' })
       await logEvent($, 'fallback', { ratio, reason: bad })
     }
-    // The fallback's ops are the harness's own record of which tools ran, so only the merge's claims go to review.
+    // The fallback's ops claim no done, so only the merge's claims and the held step dones go to review.
     const reviewed = await reviewFold($, opts, {
-      ops: fallback ? [] : ops, evidence: fallback ? [] : evidence, facts, issues: view.issues, range,
-      instructions: withdrawable, ratio,
+      ops: fallback ? [] : ops, evidence: fallback ? [] : evidence, facts, issues: view.issues, steps: steps.claims, range, ratio,
     })
     if (!fallback) ops = reviewed.ops
     facts = reviewed.facts
-    missing = reviewed.missing
+    promoted = reviewed.promoted
+    settled = [...settled, ...reviewed.settled]
   }
   // Backstop for the merge model: a step already recorded as done is never created twice.
   ops = ops.filter(o => !(o.op === 'create' && o.status === 'done' && view.doneTitles.has(o.title.trim())))
   notes = rememberFacts(notes, facts, retracted)
-  const preserved = preserveInstructions(notes, [...storedInstructions, ...missing], plan.dropped, await ledgerPath($), withdrawn)
+  const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await ledgerPath($), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
   const fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
 
   const seq = meta.seq + 1
-  const currentView = await trackerView($, here, ops)
+  const currentView = await trackerView($, here, [...ops, ...promoted])
   const text = ledgerRowText(seq, new Date().toISOString(), await ledgerPath($), composeLedger(notes, currentView.issues))
   const tokensBefore = messageTokens(rows, observed, meta)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
@@ -659,7 +698,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   if (Object.keys(plan.cuts).length)
     await logEvent($, 'truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
   if (calib !== undefined) meta.overhead = Math.max(0, calib - estimated)
-  return { plan, notes, fullNotes, ops, seq, fallback }
+  return { plan, notes, fullNotes, ops, seq, fallback, promoted, settled }
 }
 
 async function maybeClear($: EngineInterface, opts: Opts) {
@@ -682,7 +721,7 @@ async function maybeClear($: EngineInterface, opts: Opts) {
   const pending: Pending = {
     notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
     keepFrom: rows.length - f.plan.tail.length, dropFps: f.plan.dropped.map(fingerprint),
-    cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, foldMs,
+    cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, foldMs, promoted: f.promoted, settled: f.settled,
   }
   await $.store.set(await pendingKey($), pending)
   try {
@@ -751,7 +790,7 @@ const stepRuns = new Map<string, { queued?: StepCall }>()
 const renderCall = ({ tool, agentId: _a, tool_use_id: id, ...input }: { tool: string; agentId?: string; tool_use_id?: string }, r: { deny?: string; isError?: boolean; text?: string; result?: unknown }): StepCall => {
   const out = (r.deny !== undefined ? `denied: ${r.deny}` : `${r.isError ? 'error ' : ''}${r.text ?? JSON.stringify(r.result ?? null)}`).slice(0, 1500)
   const text = `-> ${tool} ${JSON.stringify(input).slice(0, 600)}\n<- ${id ? `[${id}] ` : ''}${out}`
-  return id && r.deny === undefined ? { text, source: [id, { kind: 'tool_result', text: out }] } : { text }
+  return id && r.deny === undefined ? { text, source: [id, { kind: 'tool_result', text: out, tool, isError: r.isError === true }] } : { text }
 }
 
 async function stepOnce($: EngineInterface, call: StepCall): Promise<void> {
@@ -780,7 +819,22 @@ async function stepOnce($: EngineInterface, call: StepCall): Promise<void> {
   }
   const gated = gateOps(ops.ops, ops.evidence, sources)
   if (gated.rejections.length) await logEvent($, 'evidence-rejected', { reason: `step: ${gated.rejections.join(' | ')}`.slice(0, 2000) })
-  await append($, gated.ops, here, true, true)
+  // No reviewer runs here, so a done that passed the mechanical check is recorded as doing and held for the next fold's review.
+  const held: Promotion[] = []
+  const stepOps = gated.ops.map((o, i) => {
+    if (!isDoneClaim(o) || (o.op !== 'create' && o.op !== 'status')) return o
+    const evidence = gated.evidence[i] ?? []
+    const cited = Object.fromEntries(evidence.flatMap(e => { const src = sources.get(e.ref); return src ? [[e.ref, src]] : [] }))
+    held.push(o.op === 'status'
+      ? { key: `issue:${o.issue}`, issue: o.issue, evidence, sources: cited }
+      : { key: `title:${o.title.trim()}`, title: o.title.trim(), evidence, sources: cited })
+    return downgrade(o)
+  })
+  if (held.length) {
+    const keys = new Set(held.map(p => p.key))
+    await writePromotions($, [...(await readPromotions($)).filter(p => !keys.has(p.key)), ...held])
+  }
+  await append($, stepOps, here, true, true)
   // Advanced only once the ops landed, so a fold covers whatever a failed step left out.
   const last = rows.at(-1)
   if (last) await $.store.set(key, fingerprint(last))
@@ -809,6 +863,21 @@ async function trackSteps($: EngineInterface, call: StepCall): Promise<void> {
 async function steppedThrough($: EngineInterface, rows: readonly SessionMessage[], keepFrom: number): Promise<boolean> {
   const mark = await $.store.get(await steppedKey($))
   return typeof mark === 'string' && rows.map(fingerprint).lastIndexOf(mark) >= keepFrom - 1
+}
+
+// The engine summarizer, not clm, folds the rows on the escape path, so their
+// prompts would reach the next clm fold only as the summary's paraphrase.
+/** Records every user prompt in `rows` under 사용자 지시 in the ledger file, which the next fold reads as its prior instructions. */
+async function keepEscapedInstructions($: EngineInterface, rows: readonly SessionMessage[]): Promise<void> {
+  try {
+    const path = await ledgerPath($)
+    const notes = notesOf((await readText($, path)) ?? EMPTY_LEDGER)
+    const preserved = preserveInstructions(notes, instructionValues(notes), rows.slice(protectedIndex(rows)), path)
+    const view = await trackerView($, await captureOrigin($))
+    await $.fs.write(path, composeLedger(preserved.fullNotes, view.issues) + '\n')
+  } catch (err) {
+    await logEvent($, 'escape-instructions-lost', { reason: String(err).slice(0, 160) })
+  }
 }
 
 const WITHHELD = '.withheld-'
@@ -1012,6 +1081,7 @@ export const register: Register = (on, options) => {
         }
         if (typeof f === 'string') {
           await logEvent($, 'escape', { reason: e.trigger + ': ' + f })
+          await keepEscapedInstructions($, workingRows)
           // The engine summarizes the withheld rows, so the escape still shrinks what it reads.
           return next(escapedRows ? { ...e, messages: [...prefix, ...escapedRows] } : e)
         }
@@ -1021,12 +1091,17 @@ export const register: Register = (on, options) => {
         $.ui.log(`clm: ${e.trigger} compaction left the conversation as it is: ${f}`)
         return { messages: all }
       }
-      use = { notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: workingRows.length - f.plan.tail.length, foldMs: 0 }
+      use = { notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: workingRows.length - f.plan.tail.length, foldMs: 0, promoted: f.promoted, settled: f.settled }
     }
 
     const here = await captureOrigin($)
     const covered = await steppedThrough($, workingRows, use.keepFrom)
-    const appended = await append($, covered ? [] : use.ops, here, false, true)
+    // A held step done the reviewer accepted lands whether or not the step path covered the fold's turns.
+    const appended = await append($, [...(covered ? [] : use.ops), ...(use.promoted ?? [])], here, false, true)
+    if (use.settled?.length) {
+      const settled = new Set(use.settled)
+      await writePromotions($, (await readPromotions($)).filter(p => !settled.has(p.key)))
+    }
     const currentView = await trackerView($, here)
     const ledger = composeLedger(use.notes, currentView.issues)
     const fileLedger = composeLedger(use.fullNotes, currentView.issues)

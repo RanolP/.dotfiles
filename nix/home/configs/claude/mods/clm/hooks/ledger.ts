@@ -1,6 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 
-import { readEvidence, type Evidence } from './evidence'
+import { readEvidence, stripReminders, type Evidence } from './evidence'
 import { isPrompt } from './fold'
 import { isTrackerSection, parseOps, sectionLines, type Issue, type Payload } from './tracker'
 
@@ -155,7 +155,7 @@ export function preserveInstructions(
 ): PreservedInstructions {
   const gone = new Set(withdrawn.map(instructionKey))
   const seen = new Map<string, { text: string; withdrawn: boolean }>()
-  for (const raw of [...prior, ...dropped.filter(isPrompt).map(m => m.text)]) {
+  for (const raw of [...prior, ...dropped.filter(isPrompt).map(m => stripReminders(m.text))]) {
     const alreadyWithdrawn = raw.startsWith(WITHDRAWN_PREFIX)
     const text = alreadyWithdrawn ? storedInstructionValue(raw.slice(WITHDRAWN_PREFIX.length)) : raw
     const key = instructionKey(text)
@@ -198,8 +198,9 @@ export function fallbackLedger(prevNotes: string, dropped: readonly SessionMessa
     if (isPrompt(m) || turns.length === 0) turns.push({ prompt: isPrompt(m) ? m.text : undefined, tools: [] })
     turns[turns.length - 1]!.tools.push(...m.toolUses.map(u => u.tool))
   }
+  // No reviewer saw these turns, so a tool having run is recorded as doing, never done.
   const ops = turns.map((t): Payload => ({
-    op: 'create', status: 'done',
+    op: 'create', status: 'doing',
     title: `turn ${t.prompt ? `"${clip(oneLine(t.prompt), 60)}"` : '(first request, continued)'}: tools ${t.tools.length ? [...new Set(t.tools)].join(', ') : 'none'}`,
   }))
   return { notes: prevNotes, ops }
@@ -291,20 +292,18 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
 // clm-prompt
 export const REVIEW_SYSTEM = [
   'You audit a ledger update before it replaces the conversation turns it summarizes. Treat each claim as unproven until its cited quote proves it.',
-  'You receive <claims>, one JSON object per line with an id, the claim, and the evidence it cites (a ref and a quote); <instructions>, the user instructions already recorded; and <folded_range>, the turns, where a user message is headed `[user mN]`, a tool result `<- [id]`, and assistant rows carry no ref.',
-  'Judge each claim against the row its ref names in <folded_range>:',
+  'You receive <claims>, one JSON object per line with an id, the claim, the evidence it cites (a ref and a quote) and, where the cited row lies outside the range, that row\'s text as `source`; and <folded_range>, the turns, where a user message is headed `[user mN]`, a tool result `<- [id]`, and assistant rows carry no ref.',
+  'Judge each claim against the row its ref names, in <folded_range> or in its `source`:',
   '- A claim that a step is done stands only when a cited row shows the state-changing action executed: a tool result with its outcome, or the user saying it happened. A proposal, a recommendation, a plan, or a read-only look at the current state (a PR shown OPEN, a status printed) supports todo or question, so reject the done.',
   '- Every id, number and date in the claim appears in the cited row for the same object; a date or number belonging to another PR, branch, ticket or file is a reject.',
   '- A fact stands when the cited row states it. Any other claim stands when the turns show it.',
-  'Then list each user instruction in a `[user mN]` row of <folded_range> that <instructions> does not already carry: a request, preference, constraint or decision, quoted exactly from that row.',
-  'Reply with only this JSON object:',
-  '{"verdicts":[{"id":"<claim id>","accept":true,"reason":"<one line>"}],"missing_instructions":[{"ref":"<mN>","quote":"<text copied exactly from that row>"}]}',
+  'Give every claim id exactly one verdict. Reply with only this JSON object:',
+  '{"verdicts":[{"id":"<claim id>","accept":true,"reason":"<one line>"}]}',
 ].join('\n')
 
 export type Verdict = { id: string; accept: boolean; reason: string }
-export type Review = { verdicts: Verdict[]; missing: Evidence[] }
-/** Reads the reviewer's JSON object strictly: any other shape is a reason string, and the caller keeps the mechanical result. */
-export function parseReview(reply: string): Review | string {
+/** Reads the reviewer's JSON object strictly: any other shape is a reason string, and the caller takes the failure path. */
+export function parseReview(reply: string): Verdict[] | string {
   const body = normalizeLedger(reply)
   const start = body.indexOf('{'), end = body.lastIndexOf('}')
   if (start < 0 || end < start) return 'review reply holds no JSON object'
@@ -312,13 +311,13 @@ export function parseReview(reply: string): Review | string {
   try { v = JSON.parse(body.slice(start, end + 1)) } catch (err) { return `review is not JSON (${String(err).slice(0, 80)})` }
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return 'review is not a JSON object'
   const o = v as Record<string, unknown>
-  if (!Array.isArray(o.verdicts) || !Array.isArray(o.missing_instructions)) return 'review lacks the verdicts or missing_instructions array'
+  if (!Array.isArray(o.verdicts)) return 'review lacks the verdicts array'
   const verdicts: Verdict[] = []
   for (const x of o.verdicts) {
     if (typeof x !== 'object' || x === null || typeof x.id !== 'string' || typeof x.accept !== 'boolean') return `review verdict ${JSON.stringify(x).slice(0, 80)} is not {id, accept, reason}`
     verdicts.push({ id: x.id, accept: x.accept, reason: typeof x.reason === 'string' ? x.reason : '' })
   }
-  return { verdicts, missing: readEvidence(o.missing_instructions) }
+  return verdicts
 }
 
 export const issueList = (issues: readonly Issue[]) =>

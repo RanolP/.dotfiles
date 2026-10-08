@@ -6,12 +6,16 @@ import {
   type Boundary, type ClearPlan,
 } from './fold'
 import {
-  composeLedger, EMPTY_LEDGER, fallbackLedger, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseChanges, parseMerge,
-  preservedLines, preserveInstructions, rememberOversize, rememberPreserved, renderTurns, withheldLines, withheldPointer,
-  WITHDRAWN_PREFIX,
+  checkEvidence, describeOp, downgrade, evidenceProblem, gateOps, isDoneClaim, renderRange,
+  type Evidence, type Source,
+} from './evidence'
+import {
+  composeLedger, EMPTY_LEDGER, factLines, fallbackLedger, instructionKey, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
+  parseChanges, parseMerge, parseReview, preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
+  withNotes, WITHDRAWN_PREFIX, type Fact,
 } from './ledger'
 import {
-  archivedDone, describe, injected, normalizeRemote, parseLog, parseOps, snapshot, staleOpenCount, toEvents,
+  archivedDone, describe, injected, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
   type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
 
@@ -36,7 +40,7 @@ const HYSTERESIS_FLOOR = 0.9
 
 // --- options -------------------------------------------------------------
 
-export type Opts = { budget: number; tailTarget: number; reserve: number }
+export type Opts = { budget: number; tailTarget: number; reserve: number; model: string; reviewModel: string }
 /** Reads userConfig, naming every value it could not use and the value used instead. */
 export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: string[] } {
   const problems: string[] = []
@@ -61,7 +65,15 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
     if (isInt(o.reserve) && o.reserve > 0 && o.reserve < budget) reserve = o.reserve
     else problems.push(`reserve=${JSON.stringify(o.reserve)} must be a positive integer under the budget (${budget}); using ${defReserve}`)
   }
-  return { opts: { budget, tailTarget, reserve }, problems }
+  const name = (key: 'model' | 'reviewModel', fallback: string) => {
+    const v = o[key]
+    if (v === undefined || v === '') return fallback
+    if (typeof v === 'string' && v.trim()) return v.trim()
+    problems.push(`${key}=${JSON.stringify(v)} must be a model name; using ${fallback}`)
+    return fallback
+  }
+  const model = name('model', 'haiku')
+  return { opts: { budget, tailTarget, reserve, model, reviewModel: name('reviewModel', model) }, problems }
 }
 
 // --- session state -------------------------------------------------------
@@ -109,6 +121,7 @@ async function readText($: EngineInterface, p: string): Promise<string | undefin
 }
 
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
+  | 'evidence-rejected' | 'review-rejected' | 'review-added' | 'review-failed'
 type LogFields = { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; reason?: string }
 const LOG_KEEP = 200
 async function logEvent($: EngineInterface, event: LogEvent, f: LogFields) {
@@ -139,6 +152,17 @@ async function usageReading($: EngineInterface): Promise<number | undefined> {
   }
 }
 const freshReal = (reading: number | undefined, meta: Meta) => (reading !== meta.foldTokens ? reading : undefined)
+/**
+ * The message tokens the budget counts: the live reading less `meta.overhead`
+ * (system prompt and tool schemas), never below the rows' own estimate. Until
+ * a reading has set that baseline the reading cannot be split, so the
+ * estimate stands; counting the whole reading put ~35k of system prompt
+ * against a 32k budget and folded every few calls.
+ */
+export const messageTokens = (rows: readonly SessionMessage[], observed: number | undefined, meta: Pick<Meta, 'overhead'>) => {
+  const estimated = sum(rows)
+  return observed === undefined || meta.overhead === undefined ? estimated : Math.max(estimated, observed - meta.overhead)
+}
 const clampRatio = (n: number) => Math.round(Math.min(RATIO_MAX, Math.max(RATIO_MIN, n)) * 1000) / 1000
 
 async function skip($: EngineInterface, why: string) {
@@ -420,7 +444,7 @@ async function openBoard($: EngineInterface) {
 
 // `finished` is this session's archived done issues, shown to the merge model
 // only, so it does not re-create them from the turns being folded.
-type TrackerView = { issues: Issue[]; stale: number; finished: Issue[]; doneTitles: Set<string> }
+type TrackerView = { issues: Issue[]; finished: Issue[]; doneTitles: Set<string> }
 type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean }
 
 // The issues one session's ledger shows, with `ops` previewed on top when the
@@ -432,9 +456,97 @@ async function trackerView($: EngineInterface, here: Origin, ops: readonly Paylo
   const archived = archivedDone(all, here.session)
   const done = all.filter(i => i.status === 'done' && i.origin.session === here.session)
   return {
-    issues: injected(all, here), stale: staleOpenCount(all, here),
+    issues: injected(all, here),
     finished: done.filter(i => archived.has(i.id)), doneTitles: new Set(done.map(i => i.title.trim())),
   }
+}
+
+// --- evidence gate and review ------------------------------------------------
+
+type Gated = { ops: Payload[]; evidence: Evidence[][]; facts: Fact[] }
+
+/** The mechanical check: a done claim without a held quote is downgraded, a fact without one dropped, and each rejection logged. */
+async function gateMerge($: EngineInterface, ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number): Promise<Gated> {
+  const gated = gateOps(ops, evidence, sources)
+  const rejections = [...gated.rejections]
+  const kept: Fact[] = []
+  for (const f of facts) {
+    const { held, problems } = checkEvidence(f.evidence, sources)
+    if (held.length) kept.push({ text: f.text, evidence: held })
+    else rejections.push(`fact "${f.text}" dropped (${problems.join('; ') || 'no evidence'})`)
+  }
+  if (rejections.length) await logEvent($, 'evidence-rejected', { ratio, reason: rejections.join(' | ').slice(0, 2000) })
+  return { ops: gated.ops, evidence: gated.evidence, facts: kept }
+}
+
+type ReviewInput = {
+  ops: readonly Payload[]; evidence: readonly Evidence[][]; facts: readonly Fact[]; issues: readonly Issue[]
+  range: { text: string; sources: ReadonlyMap<string, Source> }; instructions: readonly string[]; ratio: number
+}
+type Reviewed = { ops: Payload[]; facts: Fact[]; missing: string[] }
+
+/**
+ * A second model call audits the gated ops and facts against the folded
+ * range: a rejected done is downgraded, any other rejected op or fact is
+ * dropped, and the user instructions the ledger missed are added once their
+ * quote passes the mechanical check against a user row. A failed or malformed
+ * review keeps the mechanical result and never blocks the fold.
+ */
+async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): Promise<Reviewed> {
+  const title = (id: string) => input.issues.find(i => i.id === id)?.title
+  const claims = [
+    ...input.ops.map((o, i) => ({ id: `op${i + 1}`, claim: describeOp(o, 'issue' in o ? title(o.issue) : undefined), evidence: input.evidence[i] ?? [] })),
+    ...input.facts.map((f, i) => ({ id: `fact${i + 1}`, claim: `fact: ${f.text}`, evidence: f.evidence })),
+  ]
+  const unchanged: Reviewed = { ops: [...input.ops], facts: [...input.facts], missing: [] }
+  let review
+  try {
+    const r = await $.model.complete({
+      model: opts.reviewModel,
+      system: REVIEW_SYSTEM,
+      prompt: [
+        `<claims>\n${claims.map(c => JSON.stringify(c)).join('\n') || '(none)'}\n</claims>`,
+        `<instructions>\n${input.instructions.map(i => JSON.stringify(i)).join('\n') || '(none)'}\n</instructions>`,
+        `<folded_range>\n${input.range.text}\n</folded_range>`,
+      ].join('\n\n'),
+      maxTokens: 2048,
+      timeoutMs: 60_000,
+    })
+    review = r.isAnswered ? parseReview(r.text) : `review model gave no text (${r.reason})`
+  } catch (err) {
+    review = `review call failed (${String(err).slice(0, 120)})`
+  }
+  if (typeof review === 'string') {
+    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; kept the ${claims.length} mechanically checked claim(s)` })
+    return unchanged
+  }
+  // A claim the reviewer left without a verdict keeps its mechanical result.
+  const rejected = new Map(review.verdicts.filter(v => !v.accept).map(v => [v.id, v.reason]))
+  const lines: string[] = []
+  const ops = input.ops.flatMap((o, i): Payload[] => {
+    const why = rejected.get(`op${i + 1}`)
+    if (why === undefined) return [o]
+    lines.push(`op${i + 1} ${describeOp(o)}: ${isDoneClaim(o) ? 'done downgraded to doing' : 'dropped'} (${why})`)
+    return isDoneClaim(o) ? [downgrade(o)] : []
+  })
+  const facts = input.facts.filter((f, i) => {
+    const why = rejected.get(`fact${i + 1}`)
+    if (why !== undefined) lines.push(`fact${i + 1} "${f.text}" dropped (${why})`)
+    return why === undefined
+  })
+  if (lines.length) await logEvent($, 'review-rejected', { ratio: input.ratio, reason: lines.join(' | ').slice(0, 2000) })
+  const known = input.instructions.map(instructionKey)
+  const missing: string[] = []
+  const refused: string[] = []
+  for (const e of review.missing) {
+    const problem = evidenceProblem(e, input.range.sources, ['user'])
+    const key = instructionKey(e.quote)
+    if (problem) refused.push(`missing instruction refused: ${problem}`)
+    else if (!known.some(k => k.includes(key)) && !missing.some(m => instructionKey(m) === key)) missing.push(e.quote.trim())
+  }
+  if (refused.length) await logEvent($, 'evidence-rejected', { ratio: input.ratio, reason: refused.join(' | ').slice(0, 2000) })
+  if (missing.length) await logEvent($, 'review-added', { ratio: input.ratio, reason: `${missing.length} user instruction(s) the ledger missed` })
+  return { ops, facts, missing }
 }
 
 /**
@@ -458,7 +570,8 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
     meta.lastObserved = calib
   }
   const prev = (await readText($, await ledgerPath($))) ?? EMPTY_LEDGER
-  const plan = planClear(rows, Math.max(0, (opts.tailTarget - overhead) / ratio), Math.ceil(prev.length / 4) + 60)
+  // tailTarget counts message tokens, as the budget does; the system prompt and tool schemas are outside it.
+  const plan = planClear(rows, Math.max(0, opts.tailTarget / ratio), Math.ceil(prev.length / 4) + 60)
   if (!plan) return 'nothing left to fold'
 
   const here = await captureOrigin($)
@@ -468,56 +581,74 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   const kept = [...preservedLines(notes), ...withheldLines(plan.dropped)]
   const storedInstructions = instructionValues(notes)
   const instructions = storedInstructions.filter(i => !i.startsWith(WITHDRAWN_PREFIX))
+  const priorFacts = factLines(notes)
+  const range = renderRange(plan.dropped)
   let ops: Payload[] = []
+  let evidence: Evidence[][] = []
+  let facts: Fact[] = []
+  let retracted: string[] = []
   let withdrawn: string[] = []
+  let missing: string[] = []
   let fallback = false
   if (plan.dropped.length > 0) {
     const legacy = legacyItems(prev)
     const r = await $.model.complete({
-      model: 'haiku',
+      model: opts.model,
       system: MERGE_SYSTEM,
       prompt: [
         `<notes>\n${mergeableNotes(notes)}\n</notes>`,
         `<instructions>\n${instructions.map(i => JSON.stringify(i)).join('\n') || '(none)'}\n</instructions>`,
+        `<facts>\n${priorFacts.join('\n') || '(none)'}\n</facts>`,
         `<issues>\n${issueList(view.issues)}\n</issues>`,
         ...(view.finished.length ? [`<finished_earlier>\n${view.finished.map(i => `- ${i.title}`).join('\n')}\n</finished_earlier>`] : []),
         ...(legacy.length ? [`<legacy>\n${legacy.join('\n')}\n</legacy>`] : []),
-        `<removed_turns>\n${renderTurns(plan.dropped)}\n</removed_turns>`,
+        `<removed_turns>\n${range.text}\n</removed_turns>`,
       ].join('\n\n'),
       maxTokens: 4096,
       timeoutMs: 120_000,
     })
     const withdrawable = [...instructions, ...plan.dropped.filter(isPrompt).map(m => m.text)]
-    const merged = r.isAnswered ? parseMerge(r.text, new Set(view.issues.map(i => i.id)), Math.max(500, Math.floor(opts.budget / 4)), withdrawable) : 'merge model gave no text (' + r.reason + ')'
+    const merged = r.isAnswered ? parseMerge(r.text, new Set(view.issues.map(i => i.id)), Math.max(500, Math.floor(opts.budget / 4)), withdrawable, priorFacts) : 'merge model gave no text (' + r.reason + ')'
     const bad = typeof merged === 'string' ? merged : undefined
     if (typeof merged !== 'string') {
-      notes = merged.notes
-      ops = merged.ops
-      withdrawn = merged.withdrawn
+      notes = withNotes(notes, merged.notes)
+      ;({ ops, evidence, facts, retracted, withdrawn } = merged)
       meta.fails = 0
       if (merged.rejected) await logEvent($, 'ops-rejected', { ratio, reason: `${merged.rejected} op(s) failed validation; ${ops.length} kept` })
+      const gated = await gateMerge($, ops, evidence, facts, range.sources, ratio)
+      ;({ ops, evidence, facts } = gated)
     } else {
       meta.fails += 1
       await logEvent($, !r.isAnswered && r.reason === 'aborted' ? 'merge-timeout' : 'merge-invalid', { ratio, reason: `${bad} (failure ${meta.fails} in a row)` })
       if (!mustFold && meta.fails < FAILS_BEFORE_FALLBACK) return `merged ledger rejected: ${bad}`
       // A merge that never succeeds must not block folding forever.
       ;({ notes, ops } = fallbackLedger(notes, plan.dropped))
+      evidence = ops.map(() => [])
       fallback = true
       meta.fails = 0
       $.ui.log(`clm: merge failed (${bad}); folded with a mechanical ledger instead`, { to: 'debug' })
       await logEvent($, 'fallback', { ratio, reason: bad })
     }
+    // The fallback's ops are the harness's own record of which tools ran, so only the merge's claims go to review.
+    const reviewed = await reviewFold($, opts, {
+      ops: fallback ? [] : ops, evidence: fallback ? [] : evidence, facts, issues: view.issues, range,
+      instructions: withdrawable, ratio,
+    })
+    if (!fallback) ops = reviewed.ops
+    facts = reviewed.facts
+    missing = reviewed.missing
   }
   // Backstop for the merge model: a step already recorded as done is never created twice.
   ops = ops.filter(o => !(o.op === 'create' && o.status === 'done' && view.doneTitles.has(o.title.trim())))
-  const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await ledgerPath($), withdrawn)
+  notes = rememberFacts(notes, facts, retracted)
+  const preserved = preserveInstructions(notes, [...storedInstructions, ...missing], plan.dropped, await ledgerPath($), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
   const fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
 
   const seq = meta.seq + 1
   const currentView = await trackerView($, here, ops)
-  const text = ledgerRowText(seq, new Date().toISOString(), await ledgerPath($), composeLedger(notes, currentView.issues, currentView.stale))
-  const tokensBefore = Math.max(estimated, observed ?? 0)
+  const text = ledgerRowText(seq, new Date().toISOString(), await ledgerPath($), composeLedger(notes, currentView.issues))
+  const tokensBefore = messageTokens(rows, observed, meta)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
   if (tokensAfter >= tokensBefore) {
     const why = `the fold would not shrink the context (${tokensBefore} -> ${tokensAfter} est. tokens)`
@@ -536,7 +667,9 @@ async function maybeClear($: EngineInterface, opts: Opts) {
   const rows = liveRows(await $.session.messages(), meta.boundary)
   const reading = await usageReading($)
   const observed = freshReal(reading, meta)
-  const used = Math.max(sum(rows), observed ?? 0)
+  // Before any fold has set the overhead baseline, a reading's excess over the
+  // rows' estimate is taken as system prompt and tool schemas.
+  const used = messageTokens(rows, observed, { overhead: meta.overhead ?? (observed === undefined ? undefined : Math.max(0, observed - sum(rows))) })
   // The tail target is the lower post-fold bound; wait until the context is
   // near the ceiling before folding again, so suffix-cache busts stay rare.
   const trigger = Math.max(opts.budget - opts.reserve, Math.floor(opts.budget * HYSTERESIS_FLOOR))
@@ -569,7 +702,8 @@ async function showTurnChanges($: EngineInterface, e: { answer: string }) {
   const hasToolUse = rows.slice(-8).some(m => m.toolUses.length > 0 || (m.toolResults?.length ?? 0) > 0)
   if (!hasToolUse && e.answer.trim().length < 200) return
   try {
-    const ledger = mergeableNotes(notesOf((await readText($, await ledgerPath($))) ?? EMPTY_LEDGER))
+    const stored = notesOf((await readText($, await ledgerPath($))) ?? EMPTY_LEDGER)
+    const ledger = `${mergeableNotes(stored)}\n\n## 핵심 사실·경로\n${factLines(stored).map(l => `- ${l}`).join('\n') || '- (none yet)'}`
     // clm-prompt
     const prompt = `<ledger_goal_and_key_facts>\n${ledger}\n</ledger_goal_and_key_facts>\n<finished_turn>\n${renderTurns(rows.slice(-8), 20000)}\n</finished_turn>`
     const r = await $.model.complete({ model: 'haiku', system: TURN_CHANGE_SYSTEM, prompt, maxTokens: 300, timeoutMs: 15000 })
@@ -598,24 +732,29 @@ async function showTurnChanges($: EngineInterface, e: { answer: string }) {
 export const STEP_SYSTEM = [
   'You keep the task tracker of a coding session up to date while it works.',
   'You receive the tracker\'s issues, the session rows added since your last update, and the tool call that just finished.',
+  'A user message is headed `[user mN]` and a tool result `<- [id]`; mN and id are refs you cite. Assistant rows carry no ref: they show what the assistant said or proposed, and the tool results and the user\'s words show what actually happened.',
   'Reply with `<ops>` holding a JSON array of tracker changes those rows show, and `</ops>`, nothing else. Each op is one of:',
-  '  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<evidence: the command or check and what it printed>"}',
-  '  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped"}',
+  '  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<one line>","evidence":[{"ref":"<ref>","quote":"<text copied exactly from that row>"}]}',
+  '  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped","evidence":[{"ref":"<ref>","quote":"<text copied exactly from that row>"}]}',
   '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
   '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
-  'Create an issue for each step the assistant announced (todo), started (doing) or finished with evidence (done), and each question waiting for the user (question).',
+  'Every done carries evidence: the ref of a tool result or user message showing the state-changing action ran, and a quote copied character for character from that row. A step the assistant proposed or recommended, and a read-only check of the current state, is todo or question.',
+  'Create an issue for each step the assistant announced (todo), started (doing) or finished (done, with evidence), and each question waiting for the user (question).',
   'Move an existing issue with a status op once the rows show it changed; never re-create it.',
   'Write `<ops>[]</ops>` when no task changed.',
 ].join('\n')
 const steppedKey = async ($: EngineInterface) => `stepped:${await sid($)}`
-const stepRuns = new Map<string, { queued?: string }>()
+// The finished call, rendered, and its result as a citable source when the call carries an id.
+type StepCall = { text: string; source?: [string, Source] }
+const stepRuns = new Map<string, { queued?: StepCall }>()
 
-const renderCall = ({ tool, agentId: _a, tool_use_id: _t, ...input }: { tool: string; agentId?: string; tool_use_id?: string }, r: { deny?: string; isError?: boolean; text?: string; result?: unknown }) => {
-  const out = r.deny !== undefined ? `denied: ${r.deny}` : `${r.isError ? 'error ' : ''}${r.text ?? JSON.stringify(r.result ?? null)}`
-  return `-> ${tool} ${JSON.stringify(input).slice(0, 600)}\n<- ${out.slice(0, 1500)}`
+const renderCall = ({ tool, agentId: _a, tool_use_id: id, ...input }: { tool: string; agentId?: string; tool_use_id?: string }, r: { deny?: string; isError?: boolean; text?: string; result?: unknown }): StepCall => {
+  const out = (r.deny !== undefined ? `denied: ${r.deny}` : `${r.isError ? 'error ' : ''}${r.text ?? JSON.stringify(r.result ?? null)}`).slice(0, 1500)
+  const text = `-> ${tool} ${JSON.stringify(input).slice(0, 600)}\n<- ${id ? `[${id}] ` : ''}${out}`
+  return id && r.deny === undefined ? { text, source: [id, { kind: 'tool_result', text: out }] } : { text }
 }
 
-async function stepOnce($: EngineInterface, call: string): Promise<void> {
+async function stepOnce($: EngineInterface, call: StepCall): Promise<void> {
   const meta = await readMeta($)
   const rows = liveRows(await $.session.messages(), meta.boundary)
   const key = await steppedKey($)
@@ -623,10 +762,13 @@ async function stepOnce($: EngineInterface, call: string): Promise<void> {
   const fresh = rows.slice(typeof mark === 'string' ? rows.map(fingerprint).lastIndexOf(mark) + 1 : 0)
   const here = await captureOrigin($)
   const view = await trackerView($, here)
+  const range = renderRange(fresh, 20000)
+  const sources = new Map(range.sources)
+  if (call.source) sources.set(...call.source)
   const r = await $.model.complete({
     model: 'haiku',
     system: STEP_SYSTEM,
-    prompt: [`<issues>\n${issueList(view.issues)}\n</issues>`, `<new_rows>\n${renderTurns(fresh, 20000)}\n</new_rows>`, `<tool_call>\n${call}\n</tool_call>`].join('\n\n'),
+    prompt: [`<issues>\n${issueList(view.issues)}\n</issues>`, `<new_rows>\n${range.text}\n</new_rows>`, `<tool_call>\n${call.text}\n</tool_call>`].join('\n\n'),
     maxTokens: 1024,
     timeoutMs: 30_000,
   })
@@ -636,23 +778,25 @@ async function stepOnce($: EngineInterface, call: string): Promise<void> {
     $.ui.log(`clm steps: no update (${r.isAnswered ? (ops ?? 'reply has no <ops>') : r.reason})`, { to: 'debug' })
     return
   }
-  await append($, ops.ops, here, true, true)
+  const gated = gateOps(ops.ops, ops.evidence, sources)
+  if (gated.rejections.length) await logEvent($, 'evidence-rejected', { reason: `step: ${gated.rejections.join(' | ')}`.slice(0, 2000) })
+  await append($, gated.ops, here, true, true)
   // Advanced only once the ops landed, so a fold covers whatever a failed step left out.
   const last = rows.at(-1)
   if (last) await $.store.set(key, fingerprint(last))
 }
 
-async function trackSteps($: EngineInterface, call: string): Promise<void> {
+async function trackSteps($: EngineInterface, call: StepCall): Promise<void> {
   const session = await sid($)
   const running = stepRuns.get(session)
   if (running) {
     running.queued = call
     return
   }
-  const run: { queued?: string } = {}
+  const run: { queued?: StepCall } = {}
   stepRuns.set(session, run)
   try {
-    for (let next: string | undefined = call; next !== undefined; next = run.queued) {
+    for (let next: StepCall | undefined = call; next !== undefined; next = run.queued) {
       run.queued = undefined
       await stepOnce($, next)
     }
@@ -738,10 +882,11 @@ export function report(ledger: string | undefined, rows: readonly SessionMessage
   ].join('\n')
 }
 
+// clm-prompt
 const GUIDE = [
   'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
-  'That row records the goal, the user\'s instructions verbatim, what was done with its evidence, what is left, open questions and key facts; the turns it replaced are gone.',
-  'Rely on it as your own memory of that work.',
+  'That row is a Haiku summary: the goal, the user\'s instructions verbatim, what was done, what is left, open questions and key facts, each done step and key fact citing a quote from the user or a tool result. The turns it replaced are gone.',
+  'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
 ].join('\n')
 
@@ -883,8 +1028,8 @@ export const register: Register = (on, options) => {
     const covered = await steppedThrough($, workingRows, use.keepFrom)
     const appended = await append($, covered ? [] : use.ops, here, false, true)
     const currentView = await trackerView($, here)
-    const ledger = composeLedger(use.notes, currentView.issues, currentView.stale)
-    const fileLedger = composeLedger(use.fullNotes, currentView.issues, currentView.stale)
+    const ledger = composeLedger(use.notes, currentView.issues)
+    const fileLedger = composeLedger(use.fullNotes, currentView.issues)
     const text = ledgerRowText(use.seq, new Date().toISOString(), await ledgerPath($), ledger)
     const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
     const messages = buildCleared({ head: workingRows.slice(0, first + 1), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow)

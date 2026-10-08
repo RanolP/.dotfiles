@@ -1,5 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 
+import { readEvidence, type Evidence } from './evidence'
 import { isPrompt } from './fold'
 import { isTrackerSection, parseOps, sectionLines, type Issue, type Payload } from './tracker'
 
@@ -53,16 +54,21 @@ export const oversizeLines = (tail: readonly SessionMessage[], cuts: Record<stri
   tail.flatMap(m => m.toolUses).filter(u => cuts[u.tool_use_id] !== undefined)
     .map(u => `- ${OVERSIZE_MARK} ${clip(oneLine(`${u.tool} ${JSON.stringify(u.input ?? {})}`), 70)}`)
 
-// The merged half of the ledger: the sections the merge model rewrites. 사용자
-// 지시 is kept beside them in the notes but owned by preserveInstructions, and
-// the other three sections come from the tracker.
+// The merged half of the ledger: the sections the merge model rewrites, 목표
+// alone. 사용자 지시 is owned by preserveInstructions and 핵심 사실·경로 by
+// rememberFacts, so each of their lines traces to a quote; the other three
+// sections come from the tracker.
 const INSTRUCTIONS = '사용자 지시'
-export const NOTE_SECTIONS = SECTIONS.filter(s => !isTrackerSection(s) && s !== INSTRUCTIONS)
+const FACTS = '핵심 사실·경로'
+export const NOTE_SECTIONS = SECTIONS.filter(s => !isTrackerSection(s) && s !== INSTRUCTIONS && s !== FACTS)
 const STORED_SECTIONS = SECTIONS.filter(s => !isTrackerSection(s))
 const EMPTY_NOTES = STORED_SECTIONS.map(s => `## ${s}\n- (none yet)`).join('\n\n')
 export const notesOf = (ledger: string) =>
   sectionsOf(ledger).filter(p => STORED_SECTIONS.some(s => isSection(p, s))).join('').trimEnd() || EMPTY_NOTES
-/** The notes the merge model rewrites: everything but the instruction section. */
+/** The stored notes with the merge model's sections taken from `merged`. */
+export const withNotes = (stored: string, merged: string) =>
+  STORED_SECTIONS.map(s => (sectionsOf(NOTE_SECTIONS.includes(s) ? merged : stored).find(p => isSection(p, s))?.trimEnd() ?? `## ${s}\n- (none yet)`)).join('\n\n')
+/** The notes the merge model rewrites. */
 export const mergeableNotes = (notes: string) =>
   sectionsOf(notes).filter(p => NOTE_SECTIONS.some(s => isSection(p, s))).join('').trimEnd()
 // A ledger written before the tracker existed holds merged items in the
@@ -72,10 +78,10 @@ export const legacyItems = (ledger: string) =>
   sectionsOf(ledger).filter(p => [...SECTIONS].some(s => isTrackerSection(s) && isSection(p, s)))
     .flatMap(p => p.split('\n').slice(1)).filter(l => /^\s*- /.test(l) && l.trim() !== '- (none yet)' && !/\[[^\]\s]+-\d+\]\s*$/.test(l))
 
-export function composeLedger(notes: string, issues: readonly Issue[], stale = 0): string {
+export function composeLedger(notes: string, issues: readonly Issue[]): string {
   const parts = sectionsOf(notes)
   return SECTIONS.map(s =>
-    isTrackerSection(s) ? `## ${s}\n${sectionLines(issues, s, stale).join('\n')}` : (parts.find(p => isSection(p, s))?.trimEnd() ?? `## ${s}\n- (none yet)`),
+    isTrackerSection(s) ? `## ${s}\n${sectionLines(issues, s).join('\n')}` : (parts.find(p => isSection(p, s))?.trimEnd() ?? `## ${s}\n- (none yet)`),
   ).join('\n\n')
 }
 
@@ -108,6 +114,30 @@ export const instructionValues = (notes: string): string[] =>
 /** Rebuilds the stored note sections in ledger order, taking `name`'s body from `body`. */
 function withSection(notes: string, name: string, body: string): string {
   return STORED_SECTIONS.map(s => (s === name ? `## ${s}\n${body}` : (sectionOf(notes, s)?.trimEnd() ?? `## ${s}\n- (none yet)`))).join('\n\n')
+}
+
+// --- key facts -------------------------------------------------------------
+
+export const FACT_KEEP = 25
+export type Fact = { text: string; evidence: Evidence[] }
+const isMarked = (line: string) => line.includes(OVERSIZE_MARK) || line.includes(PRESERVED_MARK)
+const factBody = (line: string) => line.trim().replace(/^-\s*/, '')
+/** The fact lines a ledger holds, the harness's oversize and preserved-output lines aside. */
+export const factLines = (notes: string) =>
+  (sectionOf(notes, FACTS) ?? '').split('\n').slice(1).filter(l => /^\s*- /.test(l) && l.trim() !== '- (none yet)' && !isMarked(l)).map(factBody)
+/** One fact line: the claim, then the quote that carries it. */
+export const factLine = (f: Fact) => `${f.text} — quote: ${JSON.stringify(clip(f.evidence[0]?.quote.replace(/\s+/g, ' ').trim() ?? '', 120))}`
+/**
+ * Owns 핵심 사실·경로: the facts already there minus `retracted` (matched by
+ * instructionKey), then `added`, newest FACT_KEEP; the harness's marked lines
+ * stay after them for rememberOversize and rememberPreserved.
+ */
+export function rememberFacts(notes: string, added: readonly Fact[], retracted: readonly string[] = []): string {
+  const gone = new Set(retracted.map(r => instructionKey(factBody(r))))
+  const marked = (sectionOf(notes, FACTS) ?? '').split('\n').slice(1).filter(isMarked)
+  const facts = [...new Set([...factLines(notes).filter(l => !gone.has(instructionKey(l))), ...added.map(factLine)])].slice(-FACT_KEEP)
+  const lines = [...facts.map(f => `- ${f}`), ...marked]
+  return withSection(notes, FACTS, lines.length ? lines.join('\n') : '- (none yet)')
 }
 
 export const INSTRUCTION_CLIP = 2000
@@ -175,28 +205,32 @@ export function fallbackLedger(prevNotes: string, dropped: readonly SessionMessa
   return { notes: prevNotes, ops }
 }
 
+const EVIDENCE_FIELD = '"evidence":[{"ref":"<ref>","quote":"<text copied exactly from that row>"}]'
+// clm-prompt
 export const MERGE_SYSTEM = [
   'You keep the working ledger of a coding session whose oldest turns are about to be deleted.',
-  'You receive the current notes, the user\'s standing instructions, the open issues of the session\'s tracker, and the turns being removed.',
-  'Reply with the updated notes and then `<ops>`, starting directly with the first heading and writing the notes as plain markdown.',
-  `First the updated notes, using exactly these level-2 headings, each once, in this order: ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')}.`,
+  'You receive the goal notes, the user\'s standing instructions, the recorded key facts, the open issues of this session\'s tracker, and the turns being removed.',
+  'In <removed_turns> a user message is headed `[user mN]` and a tool result `<- [id]`; mN and id are refs you cite. Assistant rows carry no ref: they show what the assistant said or proposed, and the tool results and the user\'s words show what actually happened.',
+  `Reply with the updated notes and then \`<ops>\`, starting directly with the heading ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')} and writing the notes as plain markdown.`,
   '- 목표: what the session is trying to achieve, updated if the turns changed it.',
-  `- 핵심 사실·경로: file paths with line numbers, ids, versions, numbers and decisions a later step will need. Keep lines starting with "${OVERSIZE_MARK}" as they are.`,
-  'Then `<ops>` holding a JSON array of tracker changes the removed turns show, and `</ops>`. Each op is one of:',
-  '  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<evidence: the command or check and what it printed>"}',
-  '  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped"}',
+  'Then `<ops>` holding a JSON array of changes the removed turns show, and `</ops>`. Each op is one of:',
+  `  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<one line>",${EVIDENCE_FIELD}}`,
+  `  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped",${EVIDENCE_FIELD}}`,
   '  {"op":"retitle","issue":"<id from the issues>","title":"<new one line title>"}',
   '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
   '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
-  // clm-prompt
+  `  {"op":"fact","text":"<a file path with line number, id, version, number or decision a later step needs>",${EVIDENCE_FIELD}}`,
+  '  {"op":"retract","fact":"<one line of <facts>, copied exactly>"} when the removed turns show that fact no longer holds.',
   '  {"op":"withdraw","instruction":"<one line of <instructions>, copied exactly>"} when the removed turns show the user taking that instruction back.',
-  'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you, so the notes carry only the sections above.',
-  'Create an issue for each step finished (status done, with its evidence as note), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
+  'Every done (a create with status done, or a status op to done) and every fact carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
+  'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
+  'Every id, number and date in one claim comes from the same row and names the same object as that row.',
+  'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you.',
+  'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'Move an existing issue with a status op once the turns show it changed; never re-create it. Issues you do not mention stay as they are. Items listed under <legacy> have no issue yet: create one for each that still holds.',
-  // clm-prompt
   'Steps listed under <finished_earlier> are already recorded; leave them as they are.',
-  'Write `<ops>[]</ops>` when no task changed.',
-  'Drop small talk and anything later turns replaced. Keep the notes under 600 words.',
+  'Write `<ops>[]</ops>` when nothing changed.',
+  'Drop small talk and anything later turns replaced. Keep the notes under 300 words.',
 ].join('\n')
 
 export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): string {
@@ -218,13 +252,16 @@ export function parseChanges(reply: string): string[] {
 type Withdraw = { op: 'withdraw'; instruction: string }
 const isWithdraw = (o: unknown): o is Withdraw =>
   typeof o === 'object' && o !== null && 'op' in o && o.op === 'withdraw' && 'instruction' in o && typeof o.instruction === 'string'
+const isOp = (o: unknown, op: string): o is Record<string, unknown> => typeof o === 'object' && o !== null && 'op' in o && o.op === op
+export type Merge = { notes: string; ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; retracted: string[]; withdrawn: string[]; rejected: number }
 /**
- * Splits a merge reply into notes, validated tracker ops and the instructions
- * it withdraws, or says why it is unusable. A withdraw naming no line of
- * `instructions` is dropped and counted as rejected.
+ * Splits a merge reply into notes, validated tracker ops (with the evidence
+ * each cited), proposed facts, retracted facts and withdrawn instructions, or
+ * says why it is unusable. A withdraw naming no line of `instructions`, a
+ * retract naming no line of `facts`, and a fact with no text are dropped and
+ * counted as rejected. Evidence is only read here; the caller checks it.
  */
-export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number, instructions: readonly string[] = []):
-  { notes: string; ops: Payload[]; withdrawn: string[]; rejected: number } | string {
+export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number, instructions: readonly string[] = [], facts: readonly string[] = []): Merge | string {
   const m = /<ops>([\s\S]*?)<\/ops>/.exec(reply)
   if (!m) return 'reply has no <ops>…</ops> block'
   const notes = normalizeLedger(reply.slice(0, m.index))
@@ -237,8 +274,52 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
   const current = new Set(instructions.map(instructionKey))
   const withdraws = rawOps.filter(isWithdraw)
   const withdrawn = withdraws.map(o => o.instruction).filter(t => current.has(instructionKey(t)))
-  const ops = parseOps(JSON.stringify(rawOps.filter(o => !isWithdraw(o))), known)
-  return typeof ops === 'string' ? ops : { notes, ops: ops.ops, withdrawn, rejected: ops.rejected + withdraws.length - withdrawn.length }
+  const factOps = rawOps.filter(o => isOp(o, 'fact'))
+  const proposed = factOps.flatMap(o => (typeof o.text === 'string' && o.text.trim() ? [{ text: oneLine(o.text.trim()).slice(0, 300), evidence: readEvidence(o.evidence) }] : []))
+  const knownFacts = new Set(facts.map(instructionKey))
+  const retractOps = rawOps.filter(o => isOp(o, 'retract'))
+  const retracted = retractOps.flatMap(o => (typeof o.fact === 'string' && knownFacts.has(instructionKey(o.fact.replace(/^\s*-\s*/, ''))) ? [o.fact] : []))
+  const tracker = rawOps.filter(o => !isWithdraw(o) && !isOp(o, 'fact') && !isOp(o, 'retract'))
+  const ops = parseOps(JSON.stringify(tracker), known)
+  if (typeof ops === 'string') return ops
+  const rejected = ops.rejected + withdraws.length - withdrawn.length + factOps.length - proposed.length + retractOps.length - retracted.length
+  return { notes, ops: ops.ops, evidence: ops.evidence, facts: proposed, retracted, withdrawn, rejected }
 }
+
+// --- review -------------------------------------------------------------------
+
+// clm-prompt
+export const REVIEW_SYSTEM = [
+  'You audit a ledger update before it replaces the conversation turns it summarizes. Treat each claim as unproven until its cited quote proves it.',
+  'You receive <claims>, one JSON object per line with an id, the claim, and the evidence it cites (a ref and a quote); <instructions>, the user instructions already recorded; and <folded_range>, the turns, where a user message is headed `[user mN]`, a tool result `<- [id]`, and assistant rows carry no ref.',
+  'Judge each claim against the row its ref names in <folded_range>:',
+  '- A claim that a step is done stands only when a cited row shows the state-changing action executed: a tool result with its outcome, or the user saying it happened. A proposal, a recommendation, a plan, or a read-only look at the current state (a PR shown OPEN, a status printed) supports todo or question, so reject the done.',
+  '- Every id, number and date in the claim appears in the cited row for the same object; a date or number belonging to another PR, branch, ticket or file is a reject.',
+  '- A fact stands when the cited row states it. Any other claim stands when the turns show it.',
+  'Then list each user instruction in a `[user mN]` row of <folded_range> that <instructions> does not already carry: a request, preference, constraint or decision, quoted exactly from that row.',
+  'Reply with only this JSON object:',
+  '{"verdicts":[{"id":"<claim id>","accept":true,"reason":"<one line>"}],"missing_instructions":[{"ref":"<mN>","quote":"<text copied exactly from that row>"}]}',
+].join('\n')
+
+export type Verdict = { id: string; accept: boolean; reason: string }
+export type Review = { verdicts: Verdict[]; missing: Evidence[] }
+/** Reads the reviewer's JSON object strictly: any other shape is a reason string, and the caller keeps the mechanical result. */
+export function parseReview(reply: string): Review | string {
+  const body = normalizeLedger(reply)
+  const start = body.indexOf('{'), end = body.lastIndexOf('}')
+  if (start < 0 || end < start) return 'review reply holds no JSON object'
+  let v: unknown
+  try { v = JSON.parse(body.slice(start, end + 1)) } catch (err) { return `review is not JSON (${String(err).slice(0, 80)})` }
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return 'review is not a JSON object'
+  const o = v as Record<string, unknown>
+  if (!Array.isArray(o.verdicts) || !Array.isArray(o.missing_instructions)) return 'review lacks the verdicts or missing_instructions array'
+  const verdicts: Verdict[] = []
+  for (const x of o.verdicts) {
+    if (typeof x !== 'object' || x === null || typeof x.id !== 'string' || typeof x.accept !== 'boolean') return `review verdict ${JSON.stringify(x).slice(0, 80)} is not {id, accept, reason}`
+    verdicts.push({ id: x.id, accept: x.accept, reason: typeof x.reason === 'string' ? x.reason : '' })
+  }
+  return { verdicts, missing: readEvidence(o.missing_instructions) }
+}
+
 export const issueList = (issues: readonly Issue[]) =>
   issues.length ? issues.map(i => `${i.id} | ${i.status} | ${i.title}${i.notes.length ? ` — ${i.notes.at(-1)}` : ''}`).join('\n') : '(none)'

@@ -6,7 +6,7 @@ import { boardHtml } from './board'
 import { sessionIssues, STEP_SYSTEM, trackIssue } from './register'
 import type { Meta } from './register'
 
-import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions } from './ledger'
+import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM } from './ledger'
 import { parseLog, snapshot } from './tracker'
 
 const M = (role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) =>
@@ -24,10 +24,13 @@ const ROWS = [
   M('user', 'run tests'), use('tu_c', 'Bash'), res('tu_c', 'pass ' + BIG), M('assistant', 'tests pass'),
   M('user', 'commit it'), M('assistant', 'done'),
 ]
-// The merge model writes the two note sections and an <ops> array; clm keeps
-// 사용자 지시 itself and the tracker renders the other three.
-const NOTES = ['목표', '핵심 사실·경로']
-const ledger = (fact: string, ops = '[]') => `${NOTES.map(s => `## ${s}\n- ${s === '핵심 사실·경로' ? fact : '-'}`).join('\n\n')}\n\n<ops>${ops}</ops>`
+// The merge model writes 목표 and an <ops> array; facts arrive as fact ops,
+// clm keeps 사용자 지시 itself and the tracker renders the other three. Every
+// fact and done claim here cites the first tool result of ROWS ("log ..."),
+// which tests not about evidence rely on to pass the mechanical check.
+const CITE = [{ ref: 'tu_a', quote: 'log' }]
+const ledger = (fact: string, ops = '[]', cite = CITE) =>
+  `## 목표\n- -\n\n<ops>${JSON.stringify([{ op: 'fact', text: fact, evidence: cite }, ...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))])}</ops>`
 const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as any
 const OPTS = { options: { budget: 2000, tailTarget: 1200, reserve: 100 } }
 const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
@@ -37,10 +40,10 @@ const est = (m: any) => Math.ceil((m.text.length + m.toolUses.reduce((k: number,
 const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 
-type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[] }
+type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[] }
 function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], reviewPrompts: [] as string[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -67,6 +70,12 @@ function bottoms(on: any, s: State) {
       seen.stepPrompts.push(e.prompt)
       if (s.stepDelay) await clock.sleep(s.stepDelay)
       return { value: { isAnswered: true, text: s.stepReplies?.shift() ?? '<ops>[]</ops>', usage: {} } }
+    }
+    if (e.system === REVIEW_SYSTEM) {
+      seen.reviewPrompts.push(e.prompt)
+      const text = s.reviewReplies?.shift() ?? '{"verdicts":[],"missing_instructions":[]}'
+      if (text instanceof Error) throw text
+      return { value: { isAnswered: true, text, usage: {} } }
     }
     if (e.system !== MERGE_SYSTEM) {
       seen.turnPrompts.push(e.prompt)
@@ -136,7 +145,7 @@ test('the clm noun tracks only this session\'s issues', OPTS, async ($, on) => {
 
 // Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.
 test('fold issues project to the task panel', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('fact 2', '[{"op":"status","issue":"s1-1","status":"done"}]')] }
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('fact 2', '[{"op":"status","issue":"s1-1","status":"done"}]', [{ ref: 'm1', quote: 'run tests' }])] }
   const seen = bottoms(on, s)
   let created = 0
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
@@ -340,7 +349,7 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
 
 // Regression caught: a second fold loses the first ledger (not fed back from the file) or stacks a second ledger row beside the first.
 test('the ledger round-trips through its file and survives a second fold', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('FIRST-FACT'), ledger('FIRST-FACT; SECOND-FACT')] }
+  const s: State = { rows: ROWS, replies: [ledger('FIRST-FACT'), ledger('SECOND-FACT', '[]', [{ ref: 'm1', quote: 'run tests' }])] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const after1 = seen.results[0].messages
@@ -356,13 +365,13 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
 })
 
 // Regression caught: a merged ledger missing a section replaces the memory anyway and silently drops that section.
-test('a merged ledger without both note headers skips the fold', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: ['## 목표\n- only one section\n\n<ops>[]</ops>'] }
+test('a merged ledger without its 목표 header skips the fold', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: ['## 핵심 사실·경로\n- a heading the merge no longer writes\n\n<ops>[]</ops>'] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   expect(seen.store['pending:s1']).toBeUndefined()
   expect(seen.files[LEDGER_FILE]).toBeUndefined()
-  expect((seen.store['ledger:s1'] as any).lastSkip).toContain('expected the 2 note sections')
+  expect((seen.store['ledger:s1'] as any).lastSkip).toContain('expected the 1 note sections')
   expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid'])
 })
 
@@ -446,8 +455,10 @@ test('an oversized result in an older kept turn is cut while the newest turn sta
 test('only the last five oversize notes stay in the ledger', OPTS, async ($, on) => {
   const old = ['a', 'b', 'c', 'd', 'e'].map(c => `- 출력 과다: Bash old-${c}`).join('\n')
   const rows = [...ROWS, M('user', 'dump logs'), use('tu_e', 'Bash'), res('tu_e', 'z'.repeat(16000)), M('assistant', 'dumped'), M('user', 'ok'), M('assistant', 'ok')]
-  const s: State = { rows, replies: [ledger(`kept fact\n${old}`)] }
+  const s: State = { rows, replies: [ledger('new fact')] }
   const seen = bottoms(on, s)
+  // Oversize notes are harness lines: an earlier fold left five in the stored ledger.
+  seen.files[LEDGER_FILE] = `## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- kept fact — quote: "log"\n${old}`
   await turnEnds($, s, seen)
   const notes = seen.results[0].messages[1].text.split('\n').filter((l: string) => l.includes('출력 과다:'))
   expect(notes.length).toBe(5)
@@ -489,13 +500,27 @@ test('after three failed merges in a row the fold uses a mechanical ledger', OPT
 
 // Regression caught: the first fold took observed / (0 overhead + estimate) as the ratio and saturated it at 4.
 test('the first usage reading folds but sets no ratio', OPTS, async ($, on) => {
-  const rows = ROWS.slice(4)
+  const rows = ROWS
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
   const s: State = { rows, replies: [ledger('x')], usage: usage(6000) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   expect((seen.store['ledger:s1'] as { ratio?: number }).ratio).toBeUndefined()
   expect(seen.store['pending:s1']).toBeDefined()
+})
+
+// Regression caught (d): the trigger counted the whole usage reading, so ~35k of system prompt and tool schemas against a 32k budget folded every few calls.
+test('the fold trigger ignores system-prompt tokens in the usage reading', OPTS, async ($, on) => {
+  // ~1260 estimated message tokens under a 1900 trigger; the 6000-token reading is mostly system prompt.
+  const s: State = { rows: ROWS.slice(4), replies: [ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  expect(seen.prompts.length).toBe(0)
+  expect(seen.store['pending:s1']).toBeUndefined()
+  // Once a fold has set the baseline, the same overhead is subtracted from later readings.
+  seen.store['ledger:s1'] = { seq: 1, fails: 0, overhead: 4800, ratio: 1 }
+  await $.turn.complete(TURN)
+  expect(seen.prompts.length).toBe(0)
 })
 
 // Regression caught: the usage reading from before a fold was read as current after it, so every later turn folded again.
@@ -567,7 +592,7 @@ test('a non-shrinking auto fold calls next after the escape attempt', { options:
   expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
 })
 
-const NOTE_REPLY = '## 목표\n- g\n\n## 핵심 사실·경로\n- f\n\n'
+const NOTE_REPLY = '## 목표\n- g\n\n'
 
 // Regression caught: a merge withdrawing an instruction the user never gave was counted as valid, or a reply without 사용자 지시 was refused.
 test('a withdraw naming no current instruction is rejected and a reply without instructions is accepted', async () => {
@@ -661,7 +686,7 @@ test('legacy free-form instruction lines survive preserveInstructions verbatim',
 
 // Escape-path rows: the oldest turn's tool result is the only thing that can be withheld.
 const ESCAPE_ROWS = [
-  M('user', 'start'), M('user', 'a'), use('tu_a', 'Bash'), res('tu_a', 'r'.repeat(4000)), M('assistant', 'A'),
+  M('user', 'start'), M('user', 'a'), use('tu_a', 'Bash'), res('tu_a', 'r'.repeat(4000)), M('assistant', 'A'.repeat(2000)),
   M('user', 'b'), M('assistant', 'B'.repeat(2200)), M('user', 'go'), M('assistant', 'w'.repeat(2200)),
 ]
 const WITHHELD_FILE = '/home/t/.claude-work/plans/clm-s1.withheld-0-tu_a.txt'
@@ -792,13 +817,13 @@ test('fold row renders /clear or ledger text instead of the compacted line', OPT
 // A main-loop tool call, answered by the test's Bash bottom; returns how long clm's hook held the call.
 async function bashCall($: any, on: any, command: string): Promise<number> {
   const started = performance.now()
-  await $.tool.call({ tool: 'Bash', command })
+  await $.tool.call({ tool: 'Bash', command, tool_use_id: 'tu_make' })
   return performance.now() - started
 }
 
 // Regression caught: steps reached the tracker, its notices and the task panel only when a fold landed, so the panel sat still for a whole turn.
 test('panel does not update until fold', OPTS, async ($, on) => {
-  const s: State = { rows: [...ROWS.slice(0, 2)], replies: [], stepDelay: 10_000, stepReplies: ['<ops>[{"op":"create","title":"빌드 로그 확인","status":"done","note":"make: a.ts:12"}]</ops>'] }
+  const s: State = { rows: [...ROWS.slice(0, 2)], replies: [], stepDelay: 10_000, stepReplies: ['<ops>[{"op":"create","title":"빌드 로그 확인","status":"done","note":"make: a.ts:12","evidence":[{"ref":"tu_make","quote":"make fails at a.ts:12"}]}]</ops>'] }
   const seen = bottoms(on, s)
   panelHandlers(on, seen)
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'make fails at a.ts:12', stderr: '', interrupted: false } }))
@@ -854,4 +879,79 @@ test('a fold over an older fold drops the /clear row and the stale ledger', OPTS
   expect(out.some((m: any) => m.text.includes('<command-name>/clear'))).toBe(false)
   expect(out.filter((m: any) => m.text.startsWith('[clm ledger')).map((m: any) => m.text.slice(0, 14))).toEqual(['[clm ledger #1'])
   expect(out[0].text.startsWith('[clm ledger #1')).toBe(true)
+})
+
+// --- evidence gate and review ------------------------------------------------
+
+const section = (ledgerText: string, name: string) => new RegExp(`## ${name}\n([\\s\\S]*?)(\n\n|$)`).exec(ledgerText)?.[1] ?? ''
+// The PR #<pr> incident: the assistant recommended closing the PR, the only tool result showed it OPEN, and the ledger recorded it closed.
+const PR_ROWS = [
+  M('user', 'check PR #<pr> and close it if it is stale'), use('tu_pr', 'Bash'), res('tu_pr', 'state: OPEN ' + BIG), M('assistant', 'I recommend closing PR #<pr>; closed it.'),
+  ...ROWS.slice(4),
+]
+
+// Regression caught (a): a done step resting on the assistant's own recommendation, or on a tool result that shows the opposite, reached 한 일.
+test('a close the assistant only recommended, with the PR still OPEN, ends not done', OPTS, async ($, on) => {
+  const ops = [
+    // Cites a real quote that the reviewer must see does not prove the close.
+    { op: 'create', title: 'PR #<pr> 닫기', status: 'done', evidence: [{ ref: 'tu_pr', quote: 'state: OPEN' }] },
+    // Cites the assistant's prose, which is no citable row.
+    { op: 'create', title: 'PR #<pr> 정리', status: 'done', evidence: [{ ref: 'tu_pr', quote: 'closed it' }] },
+  ]
+  const s: State = {
+    rows: PR_ROWS, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`],
+    reviewReplies: ['{"verdicts":[{"id":"op1","accept":false,"reason":"tu_pr shows the PR OPEN; closing was only recommended"},{"id":"op2","accept":true,"reason":"ok"}],"missing_instructions":[]}'],
+  }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const row = seen.results[0].messages[1].text
+  expect(section(row, '한 일')).not.toContain('PR #<pr>')
+  expect(row).toContain('PR #<pr> 닫기')
+  expect(row).toContain('PR #<pr> 정리')
+  expect(seen.reviewPrompts[0]).toContain('"quote":"state: OPEN"')
+  expect(seen.reviewPrompts[0]).toContain('[assistant] I recommend closing PR #<pr>; closed it.')
+  const events = logEvents(seen)
+  expect(events.find(e => e.event === 'evidence-rejected')?.reason).toContain('PR #<pr> 정리')
+  expect(events.find(e => e.event === 'review-rejected')?.reason).toContain('done downgraded to doing')
+})
+
+// Regression caught (b): a fact or an instruction whose quote appears nowhere in the folded rows was kept as if the user or a tool had said it.
+test('a fabricated quote is rejected for a fact and for a missing instruction', OPTS, async ($, on) => {
+  const ops = [
+    { op: 'fact', text: 'the build passes', evidence: [{ ref: 'tu_a', quote: 'build passed' }] },
+    { op: 'fact', text: 'the build log is long', evidence: [{ ref: 'tu_a', quote: 'log xxxx' }] },
+  ]
+  const s: State = {
+    rows: ROWS, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`],
+    reviewReplies: ['{"verdicts":[],"missing_instructions":[{"ref":"m4","quote":"also deploy to prod"}]}'],
+  }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const row = seen.results[0].messages[1].text
+  expect(section(row, '핵심 사실·경로')).toContain('the build log is long')
+  expect(row).not.toContain('the build passes')
+  expect(row).not.toContain('deploy to prod')
+  const reasons = logEvents(seen).filter(e => e.event === 'evidence-rejected').map(e => e.reason).join(' | ')
+  expect(reasons).toContain('"build passed" is not in tu_a')
+  expect(reasons).toContain('missing instruction refused')
+})
+
+// Regression caught (e): a reviewer that throws or answers malformed JSON blocked the fold or threw away the mechanically verified claims.
+test('a reviewer failure keeps the mechanically checked claims and still folds', OPTS, async ($, on) => {
+  const done = '[{"op":"create","title":"빌드 로그 확인","status":"done"}]'
+  const s: State = { rows: ROWS, replies: [ledger('fact', done)], reviewReplies: [new Error('review down')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const row = seen.results[0].messages[1].text
+  expect(row).toMatch(/^\[clm ledger #1 · /)
+  expect(section(row, '한 일')).toContain('빌드 로그 확인')
+  expect(section(row, '핵심 사실·경로')).toContain('fact')
+  expect(logEvents(seen).find(e => e.event === 'review-failed')?.reason).toContain('review call failed')
+  // A malformed reply takes the same path.
+  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
+  s.replies.push(ledger('fact 2', '[]', [{ ref: 'm1', quote: 'run tests' }]))
+  s.reviewReplies = ['{"verdicts":"all fine"}']
+  await turnEnds($, s, seen)
+  expect(seen.results[1].messages[1].text).toContain('fact 2')
+  expect(logEvents(seen).filter(e => e.event === 'review-failed').length).toBe(2)
 })

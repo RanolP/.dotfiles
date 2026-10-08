@@ -1,6 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 
-const LEDGER_ROW = /^\[clm ledger #(\d+) · [^\]]+\] Earlier turns of this session were folded into these notes by the harness/
+// Matches the header of rows written before the Haiku-summary wording too.
+const LEDGER_ROW = /^\[clm ledger #(\d+) · [^\]]+\] Earlier turns of this session were folded into these notes by /
 const RESULT_FLOOR = 1024 // tokens each older kept tool result may shrink to, at least
 
 // --- rows ----------------------------------------------------------------
@@ -137,5 +138,9 @@ export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, le
   return [...plan.head.filter(m => !isLedgerRow(m)), ledgerRow, ...plan.tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => strip(applyCuts(m, plan.cuts)))
 }
 
+// clm-prompt
 export const ledgerRowText = (seq: number, at: string, path: string, ledger: string) =>
-  `[clm ledger #${seq} · ${at}] Earlier turns of this session were folded into these notes by the harness (file: ${path}). They are your memory of that work.\n\n${ledger}`
+  `[clm ledger #${seq} · ${at}] Earlier turns of this session were folded into these notes by a Haiku summary (file: ${path}). `
+  + 'Each done step and key fact cites a quote from the user or a tool result; the user instructions are the user\'s own words. '
+  + 'PR, branch, deploy and ticket states may have moved since: re-query one before acting on it or telling the user about it.\n\n'
+  + ledger

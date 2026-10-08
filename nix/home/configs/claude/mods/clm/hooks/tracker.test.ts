@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 
-import { describe, injected, parseLog, sectionLines, snapshot, staleOpenCount, type Issue, type TrackerEvent } from './tracker'
+import { describe, injected, parseLog, snapshot, type Issue, type TrackerEvent } from './tracker'
 
 const at = (session: string, repo: string) => ({ session, repo, cwd: '/w' })
 const line = (e: TrackerEvent) => JSON.stringify(e)
@@ -52,20 +52,17 @@ test('merging two session logs, the later status of one issue wins', async () =>
   expect(issue!.status).toBe('done')
 })
 
-// Regression caught: an issue from another repository leaks into every session's ledger (or into its stale count), or a linked one is left out.
-test('an unlinked issue from another repo is not injected', async () => {
-  const other = at('cccccc33', 'github.com/o/other')
+// Regression caught (c): every session's ledger listed the open issues of other sessions in the same repo, so one session's steps showed up as another's to-do list.
+test('another session\'s tracker item does not appear in this session\'s ledger', async () => {
+  const repo = 'github.com/o/repo'
   const events: TrackerEvent[] = [
-    { ts: '2026-10-06T01:00:00Z', seq: 1, issue: 'cccccc-1', origin: other, op: 'create', title: 'unlinked', status: 'todo' },
-    { ts: '2026-10-06T01:00:01Z', seq: 2, issue: 'cccccc-2', origin: other, op: 'create', title: 'linked', status: 'todo' },
-    { ts: '2026-10-06T01:00:02Z', seq: 1, issue: 'cccccc-2', origin: at('s1', 'github.com/o/repo'), op: 'link' },
-    // Same repo, another session, untouched for over a week: counted, not listed.
-    { ts: '2026-09-01T01:00:00Z', seq: 1, issue: 'dddddddd-1', origin: at('dddddddd', 'github.com/o/repo'), op: 'create', title: 'old same-repo', status: 'todo' },
+    { ts: '2026-10-06T01:00:00Z', seq: 1, issue: 's1-1', origin: at('s1', repo), op: 'create', title: 'own', status: 'todo' },
+    // Same repo, another session, updated a minute ago.
+    { ts: '2026-10-06T01:00:01Z', seq: 1, issue: 's2-1', origin: at('s2', repo), op: 'create', title: 'other session', status: 'doing' },
+    { ts: '2026-10-06T01:00:02Z', seq: 2, issue: 's2-2', origin: at('s2', repo), op: 'create', title: 'linked', status: 'todo' },
+    { ts: '2026-10-06T01:00:03Z', seq: 2, issue: 's2-2', origin: at('s1', repo), op: 'link' },
   ]
-  const shown = injected(snapshot(events), { session: 's1', repo: 'github.com/o/repo' }, Date.parse('2026-10-06T00:00:00Z'))
-  expect(shown.map(i => i.title)).toEqual(['linked'])
-  const stale = staleOpenCount(snapshot(events), { session: 's1', repo: 'github.com/o/repo' }, Date.parse('2026-10-06T00:00:00Z'))
-  expect(sectionLines(snapshot(events), '할 일', stale)).toContain('- 1 older open issue(s) are summarized; see /clm board')
+  expect(injected(snapshot(events), { session: 's1' }).map(i => i.title)).toEqual(['own', 'linked'])
 })
 
 // --- a fold through the plugin ------------------------------------------------
@@ -76,13 +73,13 @@ const ROWS = [
   M('user', 'start'), M('assistant', BIG), M('user', 'next'), M('assistant', BIG),
   M('user', 'more'), M('assistant', 'ok'), M('user', 'last'), M('assistant', 'done'),
 ]
-const NOTES = '## 목표\n- g\n\n## 핵심 사실·경로\n- f'
-const LOG = '/home/t/.claude-work/tracker/events/old-session.jsonl'
+const NOTES = '## 목표\n- g'
+const LOG = '/home/t/.claude-work/tracker/events/s1.jsonl'
 
 // Regression caught: the merge model omits an issue it was shown and the ledger silently loses it (the old whole-ledger rewrite did exactly this).
 test('a fold with no op for an existing issue keeps it in the ledger', { options: { budget: 2000, tailTarget: 1200, reserve: 100 } }, async ($, on) => {
   const files: Record<string, string> = {
-    [LOG]: line({ ts: '2026-10-05T00:00:00Z', seq: 1, issue: 'old-se-1', origin: at('old-session', 'github.com/o/repo'), op: 'create', title: 'migrate the db', status: 'todo' }),
+    [LOG]: line({ ts: '2026-10-05T00:00:00Z', seq: 1, issue: 's1-1', origin: at('s1', 'github.com/o/repo'), op: 'create', title: 'migrate the db', status: 'todo' }),
   }
   const store: Record<string, unknown> = {}
   const prompts: string[] = []
@@ -108,8 +105,8 @@ test('a fold with no op for an existing issue keeps it in the ledger', { options
   on('session.compact', () => ({ messages: [M('user', 'ENGINE SUMMARY')] }))
 
   const r: any = await $.session.compact({ trigger: 'auto', messages: ROWS } as any)
-  expect(prompts[0]).toContain('old-se-1 | todo | migrate the db')
+  expect(prompts[0]).toContain('s1-1 | todo | migrate the db')
   const row = r.messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
-  expect(row).toMatch(/## 할 일\n- migrate the db \[old-se-1\]/)
+  expect(row).toMatch(/## 할 일\n- migrate the db \[s1-1\]/)
 })

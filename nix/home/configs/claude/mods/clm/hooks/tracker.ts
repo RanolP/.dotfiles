@@ -6,6 +6,8 @@
 // "append". Log contents are cached by the metadata returned from `$.fs.list`,
 // so an unchanged session file is parsed once.
 
+import { readEvidence, type Evidence } from './evidence'
+
 export const STATUSES = ['todo', 'doing', 'done', 'question', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
 export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' && (STATUSES as readonly string[]).includes(v)
@@ -127,25 +129,17 @@ export function archivedDone(issues: readonly Issue[], session: string): Set<str
   return new Set(done.slice(DONE_SHOWN).map(i => i.id))
 }
 
-const RECENT_MS = 7 * 24 * 60 * 60 * 1000
-const isRecent = (i: Issue, now: number) => now - Date.parse(i.updated) <= RECENT_MS
-
 /**
- * What one session's ledger carries: open issues from its repository (another
- * session's only while touched in the last week), every issue linked to it,
- * and the newest DONE_SHOWN issues it finished itself (its 한 일).
+ * What one session's ledger carries: its own open issues, every issue linked
+ * to it, and the newest DONE_SHOWN issues it finished. Another session's
+ * issue reaches it only through an explicit link, since a summary that mixes
+ * sessions reports their work as this one's.
  */
-export function injected(issues: readonly Issue[], here: { session: string; repo: string }, now = Date.now()): Issue[] {
+export function injected(issues: readonly Issue[], here: { session: string }): Issue[] {
   const archived = archivedDone(issues, here.session)
   return issues.filter(i => !archived.has(i.id) && (
     i.linked.includes(here.session) ||
-    (isOpen(i) && i.origin.repo === here.repo && (i.origin.session === here.session || isRecent(i, now))) ||
-    (i.status === 'done' && i.origin.session === here.session)))
-}
-
-/** Open issues of this repository that `injected` leaves out for age; the ledger shows only their count. */
-export function staleOpenCount(issues: readonly Issue[], here: { session: string; repo: string }, now = Date.now()): number {
-  return issues.filter(i => isOpen(i) && i.origin.repo === here.repo && i.origin.session !== here.session && !i.linked.includes(here.session) && !isRecent(i, now)).length
+    (i.origin.session === here.session && (isOpen(i) || i.status === 'done'))))
 }
 
 /** Same repository whatever the transport: `git@host:o/r.git` and `https://host/o/r` match. */
@@ -170,12 +164,11 @@ const flat = (s: string) => s.replace(/\s*\n\s*/g, ' ').trim()
 export const issueLine = (i: Issue) =>
   `- ${i.status === 'doing' ? '(doing) ' : ''}${i.title}${i.progress ? ` (${i.progress.done}/${i.progress.total})` : ''}${i.notes.length ? ` — ${i.notes[i.notes.length - 1]}` : ''} [${i.id}]`
 
-export function sectionLines(issues: readonly Issue[], section: string, stale = 0): string[] {
+export function sectionLines(issues: readonly Issue[], section: string): string[] {
   const want = TRACKER_SECTIONS[section] ?? []
   const lines = issues.filter(i => want.includes(i.status))
     .sort((a, b) => want.indexOf(a.status) - want.indexOf(b.status) || (a.updated < b.updated ? -1 : a.updated > b.updated ? 1 : 0))
     .map(issueLine)
-  if (section === '할 일' && stale > 0) lines.push('- ' + stale + ' older open issue(s) are summarized; see /clm board')
   return lines.length ? lines : ['- (none yet)']
 }
 
@@ -184,7 +177,7 @@ export function sectionLines(issues: readonly Issue[], section: string, stale = 
  * naming an issue the model was not shown, or a status outside the set, is
  * dropped and counted; the rest still land.
  */
-export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payload[]; rejected: number } | string {
+export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payload[]; evidence: Evidence[][]; rejected: number } | string {
   let list: unknown
   try {
     list = JSON.parse(raw)
@@ -195,8 +188,11 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
   const text = (v: unknown, n: number) => (typeof v === 'string' && v.trim() ? clip(flat(v), n) : undefined)
   const integer = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v)
   const ops: Payload[] = []
+  // Aligned with `ops` by index; the evidence never reaches the event log.
+  const evidence: Evidence[][] = []
   let rejected = 0
   for (const o of list as Record<string, unknown>[]) {
+    const before = ops.length
     const title = text(o?.title, 200), note = text(o?.note ?? o?.text, 300)
     if (o?.op === 'create' && title && isStatus(o.status) && o.status !== 'dropped')
       ops.push({ op: 'create', title, status: o.status, ...(note ? { note } : {}) })
@@ -209,8 +205,9 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
     else if (o?.op === 'note' && typeof o.issue === 'string' && known.has(o.issue) && note)
       ops.push({ op: 'note', issue: o.issue, text: note })
     else rejected++
+    if (ops.length > before) evidence.push(readEvidence(o?.evidence))
   }
-  return { ops, rejected }
+  return { ops, evidence, rejected }
 }
 
 const statusText: Record<IssueStatus, string> = {

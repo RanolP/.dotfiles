@@ -1,6 +1,6 @@
 import { test, expect, mock, type Engine, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnInput, McpToolName, RenderPropsOf, ToolCallResult, TurnCompleteInput } from 'claude-code'
-import { GRACE_MS, TOOL } from './budget'
+import { GRACE_MS, MAX_RESUMES, TOOL } from './budget'
 
 const MIN = 60_000
 const T0 = 1_000_000_000
@@ -36,6 +36,7 @@ function world(on: any) {
   })
   on('ui.status', (_$: any, e: any) => { seen.status.push(e.text); return { value: undefined } })
   on('ui.log', () => ({ value: undefined }))
+  on('command.register', (_$: any, e: any) => ({ value: { command: e.name } }))
   on('tool.register', (_$: any, e: any) => ({ value: { tool: `mcp__time-budget__${e.name}` } }))
   on('turn.abort', (_$: any, e: any) => { seen.aborted.push(e.turnId); return { value: undefined } })
   on('session.start', () => ({ cwd: '/work' }))
@@ -517,4 +518,83 @@ test('a main answer carries the budget line only when a report is due', async ($
   const r = await complete($, 't2', 'done')
   expect(r.text).toContain('estimate 30m')
   expect(r.text).toContain('report due')
+})
+
+const unlimited = ($: Engine, arg: 'on' | 'off') => $.command.run({ command: 'budget-unlimited', args: arg } as any)
+const resumes = (seen: ReturnType<typeof world>['seen']) => seen.prompts.filter(p => p.startsWith('Unlimited mode, auto-resume'))
+
+// Regression: unlimited mode still stopped every tool once the budget ran out, ending the unattended run.
+test('unlimited mode suppresses the budget halt', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await unlimited($, 'on')
+  await prompt($, 'go')
+  await estimate($, 15)
+  await clock.advance(15 * MIN + 1)
+  await report($, 1, 0)
+  expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
+})
+
+// Regression: turning unlimited on over a halted task left the grace abort armed, which killed the running turn anyway.
+test('unlimited mode lifts an existing halt and never arms the main abort', async ($, on) => {
+  const { seen, clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await $.turn.start({ text: 'go', turnId: 'turn-1' })
+  await estimate($, 15)
+  await clock.advance(15 * MIN + 1)
+  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 15 min is spent')
+  await unlimited($, 'on')
+  await clock.advance(GRACE_MS * 3)
+  expect(seen.aborted).toEqual([])
+  expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
+  // The plugin draws no extension band, so the render falls through to the (absent) engine drawing.
+  const drawn = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
+    .then(() => 'drawn', (err: unknown) => String(err))
+  expect(drawn).toContain('no implementation for ui.render')
+})
+
+// Regression: the loop resubmitted with nothing open (an endless idle loop), or never resumed open work.
+test('auto-resume fires only in unlimited mode and only with open clm work', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 30)
+  await complete($, 'turn-1', 'a')
+  expect(resumes(seen)).toEqual([])
+  await unlimited($, 'on')
+  await complete($, 'turn-2', 'b')
+  expect(resumes(seen).length).toBe(1)
+  expect(resumes(seen)[0]).toContain('task-1')
+  onlyIssue(seen).status = 'done'
+  await complete($, 'turn-3', 'c')
+  expect(resumes(seen).length).toBe(1)
+})
+
+// Regression: a task the model can never close drove the unattended loop forever.
+test(`auto-resume stops after ${MAX_RESUMES} in a row`, async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await unlimited($, 'on')
+  await prompt($, 'go')
+  await estimate($, 30)
+  for (let i = 0; i < MAX_RESUMES + 5; i++) await complete($, `turn-${i}`, 'a')
+  expect(resumes(seen).length).toBe(MAX_RESUMES)
+  expect(resumes(seen).at(-1)).toContain(`${MAX_RESUMES}/${MAX_RESUMES}`)
+})
+
+// Regression: once the cap was hit, the user's own prompt could never restart the loop.
+test("the user's own prompt resets the auto-resume counter; the plugin's prompt does not", async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await unlimited($, 'on')
+  await prompt($, 'go')
+  await estimate($, 30)
+  for (let i = 0; i < MAX_RESUMES; i++) await complete($, `turn-${i}`, 'a')
+  await complete($, 'turn-capped', 'a')
+  expect(resumes(seen).length).toBe(MAX_RESUMES)
+  await prompt($, 'keep going')
+  await complete($, 'turn-after', 'a')
+  expect(resumes(seen).length).toBe(MAX_RESUMES + 1)
+  expect(resumes(seen).at(-1)).toContain(`1/${MAX_RESUMES}`)
 })

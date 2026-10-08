@@ -37,6 +37,7 @@ export type Unit = {
 declare module 'claude-code' {
   interface PluginState {
     /** `parked`: closed main units whose clm task can still be resumed, keyed by issue id. */
-    'time-budget': { units: Record<string, Unit>; parked: Record<string, Unit> }
+    /** `unlimited`: `/budget-unlimited on`; `resumes`: auto-resume prompts since the user's last own prompt. */
+    'time-budget': { units: Record<string, Unit>; parked: Record<string, Unit>; unlimited: boolean; resumes: number }
   }
 }

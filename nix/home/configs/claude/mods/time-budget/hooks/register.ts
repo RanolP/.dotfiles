@@ -1,7 +1,7 @@
 import type { EngineInterface, Register, Timer, TurnStepChunk, TurnStepResult } from 'claude-code'
 import type { Report, Unit } from '../types'
 import {
-  CHECKPOINTS, GRACE_MS, LAST, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt, gate, haltReason,
+  CHECKPOINTS, GRACE_MS, LAST, MAX_RESUMES, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt, gate, haltReason,
   isReport, mins, parsePairs, projectedMin, reportText, statusText, type Pair,
 } from './budget'
 
@@ -22,6 +22,15 @@ const PARKED = { plugin: 'time-budget', key: 'parked' } as const
 const CODEX = 'codex-subagent:'
 const MAIN_ABORT = 'main-abort'
 const STATUS_REFRESH_MS = 60_000
+
+// Unlimited mode is the user's unattended run ("맥북 꺼두고 자동사냥하고 싶음"):
+// no budget stops the work, and a turn that ends with clm tasks still open is
+// resumed by a plugin prompt, up to MAX_RESUMES in a row without the user.
+const UNLIMITED = { plugin: 'time-budget', key: 'unlimited' } as const
+const RESUMES = { plugin: 'time-budget', key: 'resumes' } as const
+const UNLIMITED_ENV = 'CLAUDE_TIME_BUDGET_UNLIMITED'
+const UNLIMITED_COMMAND = 'budget-unlimited'
+const OPEN_STATUSES = new Set(['todo', 'doing'])
 
 const minutes = { type: 'number', exclusiveMinimum: 0 }
 const TOOLS = [
@@ -74,7 +83,12 @@ type S = {
   pairs?: Pair[]
   calibrationWrite?: Promise<void>
   refresh?: Timer
+  unlimited: boolean
+  envUnlimited: boolean
+  resumes: number
 }
+
+const isUnlimited = (s: S) => s.unlimited || s.envUnlimited
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -170,9 +184,10 @@ function resume(s: S, key: string, u: Unit) {
 // A main turn still running GRACE_MS after the stop has had its chance to report.
 function armAbort($: Ctx, s: S, key: string) {
   disarm(s, MAIN_ABORT)
+  if (isUnlimited(s)) return
   s.timers.set(MAIN_ABORT, $.clock.after(GRACE_MS, () => {
     const turnId = s.runningTurn
-    if (!s.units[key]?.halted || !turnId) return
+    if (isUnlimited(s) || !s.units[key]?.halted || !turnId) return
     $.turn.abort({ turnId }).catch(err => log($, `turn.abort(${turnId}) failed: ${errText(err)}`))
   }))
 }
@@ -188,7 +203,7 @@ async function advance($: Ctx, s: S, key: string, now: number) {
     if (c < LAST) u.reportDue = CHECKPOINTS[c - 1]!.label
     changed = true
   }
-  const reason = haltReason(u, now)
+  const reason = haltReason(u, now, isUnlimited(s))
   if (reason) {
     u.halted = reason
     u.haltedAt = now
@@ -294,8 +309,50 @@ function unreadReports(s: S, now: number): string[] {
   return out
 }
 
+async function saveLoop($: Ctx, s: S) {
+  try {
+    await $.state.set(UNLIMITED, s.unlimited)
+    await $.state.set(RESUMES, s.resumes)
+  } catch (err) {
+    log($, `state.set (unlimited) failed: ${errText(err)}`)
+  }
+}
+
+// Turning unlimited on lifts every stop already in force, and the abort waiting on it.
+async function liftHalts($: Ctx, s: S) {
+  const now = await $.clock.now()
+  for (const [key, u] of Object.entries(s.units)) {
+    if (!u.halted || u.budgetMin === undefined) continue
+    resume(s, key, u)
+    u.fired = crossed(now - u.start, u.budgetMin)
+    await arm($, s, key)
+  }
+  disarm(s, MAIN_ABORT)
+  await save($, s)
+  await showStatus($, s)
+}
+
+// At a main turn's end in unlimited mode: queue a resume prompt while clm work is open.
+async function autoResume($: Ctx, s: S) {
+  if (!isUnlimited(s) || s.resumes >= MAX_RESUMES) return
+  let open
+  try {
+    open = (await $.clm.issues()).filter(i => OPEN_STATUSES.has(i.status))
+  } catch (err) {
+    log($, `clm.issues failed, no auto-resume: ${errText(err)}`)
+    return
+  }
+  if (!open.length) return
+  s.resumes++
+  await saveLoop($, s)
+  const list = open.map(i => `- ${i.id} [${i.status}] ${i.title}`).join('\n')
+  const text = `Unlimited mode, auto-resume ${s.resumes}/${MAX_RESUMES}: the user is away and these clm tasks are still open. Continue them now, verify each before marking it done, and mark a task dropped if it cannot be finished without the user.\n${list}`
+  // The prompt starts its own turn once the session is idle, so awaiting it here would hold this turn's end.
+  void $.prompt.submit({ text }).catch(err => log($, `auto-resume submit failed: ${errText(err)}`))
+}
+
 export const register: Register = (on) => {
-  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set() }
+  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set(), unlimited: false, envUnlimited: false, resumes: 0 }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -304,8 +361,20 @@ export const register: Register = (on) => {
       s.units = read.value ? { ...read.value } : {}
       const parked = await $.state.get(PARKED)
       s.parked = parked.value ? { ...parked.value } : {}
+      s.unlimited = (await $.state.get(UNLIMITED)).value === true
+      s.resumes = (await $.state.get(RESUMES)).value ?? 0
     } catch (err) {
       log($, `state.get failed: ${errText(err)}`)
+    }
+    s.envUnlimited = /^(1|true|on|yes)$/i.test((await $.env.get('CLAUDE_TIME_BUDGET_UNLIMITED')) ?? '')
+    try {
+      await $.command.register({
+        name: UNLIMITED_COMMAND,
+        description: `on|off: unattended mode. No time budget stops the work, and a turn that ends with clm tasks open is resumed automatically, up to ${MAX_RESUMES} times in a row until you type a prompt. ${UNLIMITED_ENV}=1 in the environment turns it on too.`,
+        immediate: true,
+      })
+    } catch (err) {
+      log($, `command.register(${UNLIMITED_COMMAND}) failed: ${errText(err)}`)
     }
     // The old prompt-scoped state used the literal key `main`; it cannot be tied to a clm issue.
     if (s.units.main?.kind === 'main') {
@@ -322,6 +391,7 @@ export const register: Register = (on) => {
       }
     }
     for (const key of Object.keys(s.units)) await arm($, s, key)
+    if (isUnlimited(s)) await liftHalts($, s)
     s.refresh?.cancel()
     s.refresh = $.clock.every(STATUS_REFRESH_MS, () => { void showStatus($, s) })
     await showStatus($, s)
@@ -339,10 +409,35 @@ export const register: Register = (on) => {
     return next(e)
   })
 
+  on('command.run', { command: UNLIMITED_COMMAND }, async ($, e) => {
+    const arg = (e.args ?? '').trim().toLowerCase()
+    if (arg === 'on' || arg === 'off') {
+      s.unlimited = arg === 'on'
+      s.resumes = 0
+      await saveLoop($, s)
+      if (isUnlimited(s)) await liftHalts($, s)
+    } else if (arg) {
+      return { text: `Usage: /${UNLIMITED_COMMAND} on|off (or ${UNLIMITED_ENV}=1 in the environment)` }
+    }
+    const env = s.envUnlimited ? ` ${UNLIMITED_ENV} is set, so it stays on until that is unset.` : ''
+    return { text: isUnlimited(s)
+      ? `Unlimited mode is on: no time budget stops the work, and a turn ending with clm tasks open is resumed automatically (${s.resumes}/${MAX_RESUMES} in a row so far).${env}`
+      : 'Unlimited mode is off: the time budget stops the work as usual.' }
+  })
+
+  // The user's own prompt ends a run of auto-resumes; a plugin's (ours included) does not.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind !== 'plugin' && e.origin.kind !== 'unclassified' && s.resumes !== 0) {
+      s.resumes = 0
+      await saveLoop($, s)
+    }
+    return next(e)
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const entry = mainEntry(s)
     const u = entry?.[1]
-    if (!u?.halted || e.props.hasSurvey) return next(e)
+    if (!u?.halted || isUnlimited(s) || e.props.hasSurvey) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const buttons = extensionMinutes(u).map(extra => Button({
       key: `time-budget:+${extra}m`,
@@ -375,6 +470,8 @@ export const register: Register = (on) => {
     }
     if (s.runningTurn === e.turnId) s.runningTurn = undefined
     await syncMainTask($, s, now)
+    // An aborted turn is the user's Esc, which the loop leaves alone.
+    if (!e.isAborted) await autoResume($, s)
     const u = mainEntry(s)?.[1]
     if (!u) return r
     u.lastEnd = now

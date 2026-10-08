@@ -124,7 +124,7 @@ async function readText($: EngineInterface, p: string): Promise<string | undefin
 }
 
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
-  | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'escape-instructions-lost'
+  | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost'
 type LogFields = { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; reason?: string }
 const LOG_KEEP = 200
 async function logEvent($: EngineInterface, event: LogEvent, f: LogFields) {
@@ -500,11 +500,21 @@ async function readHeld($: EngineInterface): Promise<Held[]> {
   const v = await $.store.get(await heldKey($))
   return Array.isArray(v) ? v.filter(isHeld) : []
 }
-/** Drops the `settled` (key, nonce) entries, then adds `added`, each replacing any entry with its key. */
+// A held fact's stored evidence always holds, so only a verdict settles it;
+// with the reviewer down every fold would add its facts for good and resend
+// them all. Past this many the oldest are settled unreviewed.
+const HELD_FACTS_MAX = 20
+/** Drops the `settled` (key, nonce) entries, then adds `added`, each replacing any entry with its key, and settles the oldest facts past HELD_FACTS_MAX. */
 async function updateHeld($: EngineInterface, settled: readonly string[], added: readonly Held[]): Promise<void> {
   if (!settled.length && !added.length) return
   const gone = new Set(settled), keys = new Set(added.map(h => h.key))
-  const list = [...(await readHeld($)).filter(h => !gone.has(token(h)) && !keys.has(h.key)), ...added]
+  let list = [...(await readHeld($)).filter(h => !gone.has(token(h)) && !keys.has(h.key)), ...added]
+  const facts = list.filter(h => h.kind === 'fact')
+  if (facts.length > HELD_FACTS_MAX) {
+    const dropped = new Set(facts.slice(0, facts.length - HELD_FACTS_MAX))
+    list = list.filter(h => !dropped.has(h))
+    await logEvent($, 'review-dropped', { reason: `${dropped.size} held fact(s) settled unreviewed past the cap of ${HELD_FACTS_MAX}: ${[...dropped].map(h => h.text).join(' | ')}`.slice(0, 2000) })
+  }
   if (list.length) await $.store.set(await heldKey($), list)
   else await $.store.delete(await heldKey($))
 }
@@ -530,15 +540,25 @@ type ReviewInput = {
   ops: readonly Payload[]; evidence: readonly Evidence[][]; facts: readonly Fact[]; issues: readonly Issue[]
   steps: readonly HeldClaim[]; heldFacts: readonly HeldClaim[]; range: { text: string; sources: ReadonlyMap<string, Source> }; ratio: number
 }
-type Reviewed = { ops: Payload[]; facts: Fact[]; promoted: Payload[]; hold: Held[]; settled: string[] }
+type Reviewed = { ops: Payload[]; facts: Fact[]; promoted: Payload[]; hold: Held[]; settled: string[]; failed: boolean }
+// Room for one verdict line per claim, so a large held set cannot truncate the reply into a parse failure.
+const reviewMaxTokens = (claims: number) => Math.min(16_384, Math.max(2048, 512 + 100 * claims))
+// What a failed review still lets land: ops that add a step or move it forward.
+// A note, a retitle, or a move to dropped or question rewrites what the tracker
+// already shows, and nothing has audited it; these carry no evidence for a
+// held entry to keep, so they are dropped and the next fold re-reads any that
+// still hold from the kept turns.
+const landsUnreviewed = (o: Payload) =>
+  o.op === 'create' || o.op === 'progress' || o.op === 'task' || o.op === 'link' || (o.op === 'status' && o.status !== 'dropped' && o.status !== 'question')
 
 /**
  * A second model call audits the gated ops, the facts and the held claims
  * against the folded range. A done reaches 한 일 and a fact 핵심 사실·경로 only
  * on an accept. A rejected or unverdicted done is downgraded; a rejected
  * non-done op or fact is dropped, and so is an unverdicted fact. A failed or
- * malformed review downgrades every done and holds every fact for the next
- * fold. A held claim lands on accept, is settled on reject, and stays held
+ * malformed review downgrades every done, drops the ops `landsUnreviewed`
+ * refuses, holds every fact for the next fold, and reports `failed` so the
+ * caller drops the merge's retracts. A held claim lands on accept, is settled on reject, and stays held
  * otherwise. The review never blocks the fold.
  */
 async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): Promise<Reviewed> {
@@ -559,7 +579,7 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
         `<claims>\n${claims.map(c => JSON.stringify(c)).join('\n') || '(none)'}\n</claims>`,
         `<folded_range>\n${input.range.text}\n</folded_range>`,
       ].join('\n\n'),
-      maxTokens: 2048,
+      maxTokens: reviewMaxTokens(claims.length),
       timeoutMs: 60_000,
     })
     review = r.isAnswered ? parseReview(r.text) : `review model gave no text (${r.reason})`
@@ -568,10 +588,11 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
   }
   if (typeof review === 'string') {
     const dones = input.ops.filter(isDoneClaim).length
+    const refused = input.ops.filter(o => !landsUnreviewed(o))
     const hold: Held[] = []
     for (const f of input.facts) hold.push({ key: `fact:${instructionKey(f.text)}`, nonce: await newNonce($), kind: 'fact', text: f.text, evidence: f.evidence, sources: citedSources(f.evidence, input.range.sources) })
-    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) downgraded to doing, ${input.facts.length} fact(s) and ${input.steps.length + input.heldFacts.length} held claim(s) held for the next fold` })
-    return { ops: input.ops.map(o => (isDoneClaim(o) ? downgrade(o) : o)), facts: [], promoted: [], hold, settled: [] }
+    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) downgraded to doing, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(o => describeOp(o)).join('; ')})` : ''}, retracts dropped, ${input.facts.length} fact(s) and ${input.steps.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
+    return { ops: input.ops.filter(landsUnreviewed).map(o => (isDoneClaim(o) ? downgrade(o) : o)), facts: [], promoted: [], hold, settled: [], failed: true }
   }
   const verdict = new Map(review.map(v => [v.id, v]))
   const lines: string[] = []
@@ -599,7 +620,7 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
   input.steps.forEach((c, i) => judge(`step${i + 1}`, c, () => promoted.push({ op: 'status', issue: c.issue!.id, status: 'done' })))
   input.heldFacts.forEach((c, i) => judge(`held${i + 1}`, c, () => facts.push({ text: c.held.text!, evidence: c.evidence })))
   if (lines.length) await logEvent($, 'review-rejected', { ratio: input.ratio, reason: lines.join(' | ').slice(0, 2000) })
-  return { ops, facts, promoted, hold: [], settled }
+  return { ops, facts, promoted, hold: [], settled, failed: false }
 }
 
 /**
@@ -690,6 +711,8 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
       ops: fallback ? [] : ops, evidence: fallback ? [] : evidence, facts, issues: view.issues, steps: held.steps, heldFacts: held.facts, range, ratio,
     })
     if (!fallback) ops = reviewed.ops
+    // A retract deletes a fact a reviewer once accepted; with no verdict on it, the fact stays.
+    if (reviewed.failed) retracted = []
     facts = reviewed.facts
     promoted = reviewed.promoted
     hold = reviewed.hold

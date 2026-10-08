@@ -43,7 +43,7 @@ const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[] }
 function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], reviewPrompts: [] as string[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -73,6 +73,7 @@ function bottoms(on: any, s: State) {
     }
     if (e.system === REVIEW_SYSTEM) {
       seen.reviewPrompts.push(e.prompt)
+      seen.reviewMaxTokens.push(e.maxTokens)
       // Unscripted, the reviewer accepts every claim the prompt lists.
       const text = s.reviewReplies?.shift() ?? JSON.stringify({ verdicts: [...e.prompt.matchAll(/"id":"((?:op|fact|step|held)\d+)"/g)].map(m => ({ id: m[1], accept: true, reason: 'ok' })) })
       if (text instanceof Error) throw text
@@ -814,11 +815,9 @@ test('fold row renders /clear or ledger text instead of the compacted line', OPT
   expect((await drawn.drawn()).children[0]).toMatch(/^\* clm compacted/)
 })
 
-// A main-loop tool call, answered by the test's Bash bottom; returns how long clm's hook held the call.
-async function bashCall($: any, on: any, command: string): Promise<number> {
-  const started = performance.now()
+// A main-loop tool call, answered by the test's Bash bottom.
+async function bashCall($: any, on: any, command: string): Promise<void> {
   await $.tool.call({ tool: 'Bash', command, tool_use_id: 'tu_make' })
-  return performance.now() - started
 }
 
 // Regression caught: steps reached the tracker, its notices and the task panel only when a fold landed, so the panel sat still for a whole turn.
@@ -828,13 +827,14 @@ test('a step updates the panel before any fold, with its done held as in progres
   const seen = bottoms(on, s)
   panelHandlers(on, seen)
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'make fails at a.ts:12', stderr: '', interrupted: false } }))
-  const heldMs = await bashCall($, on, 'make')
-  // The step model is still asleep on the mocked clock: the call did not wait for it.
+  // Only clock.advance below wakes the step model, so a hook that awaited it would never let this call resolve.
+  await bashCall($, on, 'make')
+  await seen.clock.settle()
+  // The step model was called and is still asleep on the mocked clock: the call returned without waiting for it.
+  expect(seen.stepPrompts.length).toBe(1)
   expect(seen.taskCalls.length).toBe(0)
   await seen.clock.advance(10_000)
   await seen.clock.settle()
-  console.log(`per-tool hook held the call ${heldMs.toFixed(2)} ms`)
-  expect(heldMs).toBeLessThan(50)
   expect(seen.stepPrompts[0]).toContain('-> Bash {"command":"make"}')
   expect(seen.taskCalls.map(c => c.tool === 'TaskCreate' ? c.subject : c.status)).toEqual(['빌드 로그 확인', 'in_progress'])
   expect(seen.prompts.length).toBe(0)
@@ -977,6 +977,46 @@ test('a reviewer failure records no done, holds the facts out of the ledger, and
   expect(section(third, '핵심 사실·경로')).toContain('HELD-FACT-ONE')
   expect(section(third, '핵심 사실·경로')).toContain('HELD-FACT-TWO')
   expect(seen.store['held:s1']).toBeUndefined()
+})
+
+// Regression caught: nothing evicted a held fact, so with the reviewer down each fold added its facts for good, the resent set outgrew the 2048-token verdict reply, and the truncated JSON failed the review again.
+test('a failing reviewer cannot grow the held facts past the cap or truncate the verdict reply', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('NEWEST-FACT')], reviewReplies: [new Error('review down')] }
+  const seen = bottoms(on, s)
+  const src = { kind: 'tool_result', text: 'log: make fails at a.ts:12', tool: 'Bash', isError: false }
+  seen.store['held:s1'] = Array.from({ length: 30 }, (_, i) => ({
+    key: `fact:old-${i}`, nonce: `n${i}`, kind: 'fact', text: `OLD-FACT-${i}`, evidence: [{ ref: 'tu_old', quote: 'log: make fails at' }], sources: { tu_old: src },
+  }))
+  await turnEnds($, s, seen)
+  expect(seen.reviewPrompts[0]).toContain('"id":"held30"')
+  expect(seen.reviewMaxTokens[0]).toBeGreaterThan(2048)
+  const held = (seen.store['held:s1'] as any[]).map(h => h.text)
+  expect(held.length).toBe(20)
+  expect(held.at(-1)).toBe('NEWEST-FACT')
+  expect(held).not.toContain('OLD-FACT-10')
+  expect(held).toContain('OLD-FACT-11')
+  expect(logEvents(seen).find(e => e.event === 'review-dropped')?.reason).toContain('11 held fact(s) settled unreviewed')
+})
+
+// Regression caught: a failed review still applied the merge's retracts and notes, so an accepted fact vanished and a to-do line got "PR #<pr> closed" with no verdict on either.
+test('a failed review drops the merge\'s retracts and note ops instead of applying them unreviewed', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('ACCEPTED-FACT', '[{"op":"create","title":"PR 정리","status":"todo"}]')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const tracker = () => snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
+  const issue = tracker().find(i => i.title === 'PR 정리')!
+  expect(section(seen.results[0].messages[1].text, '핵심 사실·경로')).toContain('ACCEPTED-FACT')
+  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
+  const factLine = section(seen.results[0].messages[1].text, '핵심 사실·경로').split('\n').find(l => l.includes('ACCEPTED-FACT'))!.replace(/^- /, '')
+  const ops = [{ op: 'retract', fact: factLine }, { op: 'note', issue: issue.id, text: 'PR #<pr> closed' }, { op: 'retitle', issue: issue.id, title: 'PR #<pr> 닫힘' }]
+  s.replies.push(`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`)
+  s.reviewReplies = [new Error('review down')]
+  await turnEnds($, s, seen)
+  expect(section(seen.results[1].messages[1].text, '핵심 사실·경로')).toContain('ACCEPTED-FACT')
+  const after = tracker().find(i => i.id === issue.id)!
+  expect(after.title).toBe('PR 정리')
+  expect(after.notes).not.toContain('PR #<pr> closed')
+  expect(logEvents(seen).find(e => e.event === 'review-failed')?.reason).toContain('2 unreviewed op(s) dropped')
 })
 
 // Regression caught (4): a reviewer reply with no verdict for a claim accepted it, so an empty verdict list let every done and fact through.

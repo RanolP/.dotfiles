@@ -4,6 +4,7 @@ import {
   CHECKPOINTS, GRACE_MS, LAST, MAX_RESUMES, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt, gate, haltReason,
   isReport, mins, parsePairs, projectedMin, reportText, statusText, type Pair,
 } from './budget'
+import { AWAKE_DEF, register as registerAwake } from './awake'
 
 // time-budget: the user's rule, enforced rather than requested --
 // "작업을 시작하기 전에 시간을 추정하고, 보고하라. 추정 시간 기준 1/3, 1/2, 2/3,
@@ -352,6 +353,7 @@ async function autoResume($: Ctx, s: S) {
 }
 
 export const register: Register = (on) => {
+  registerAwake(on)
   const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set(), unlimited: false, envUnlimited: false, resumes: 0 }
 
   on('session.start', async ($, e, next) => {
@@ -383,7 +385,7 @@ export const register: Register = (on) => {
       delete s.units.main
       await save($, s)
     }
-    for (const t of TOOLS) {
+    for (const t of [...TOOLS, AWAKE_DEF]) {
       try {
         await $.tool.register({ ...t, inputSchema: t.inputSchema as unknown as Record<string, unknown> })
       } catch (err) {

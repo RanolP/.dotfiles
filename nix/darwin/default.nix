@@ -172,6 +172,21 @@ in
     shell = "/bin/sh";
   };
 
+  # Lid-closed stay-awake that Claude extends: time-budget's stay_awake tool
+  # writes an epoch deadline to ~/.local/state/claude-awake/until, and this root
+  # daemon flips `pmset disablesleep` to match once a minute (battery >= 20% or AC).
+  launchd.daemons.claude-awake.serviceConfig = {
+    Label = "org.ranolp.claude-awake";
+    ProgramArguments = [
+      "/bin/sh"
+      "${./claude-awake.sh}"
+    ];
+    StartInterval = 60;
+    RunAtLoad = true;
+    StandardOutPath = "/var/log/claude-awake.log";
+    StandardErrorPath = "/var/log/claude-awake.log";
+  };
+
   # Allow unfree packages
   nixpkgs.config.allowUnfree = true;
 

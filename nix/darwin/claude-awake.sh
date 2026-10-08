@@ -10,11 +10,17 @@ MAX_AHEAD=$((12 * 3600))
 MIN_BATTERY=20
 
 until_ts=$(/usr/bin/head -c 32 "$UNTIL_FILE" 2>/dev/null | /usr/bin/tr -d '[:space:]')
+invalid=
 case "$until_ts" in
   '' | *[!0-9]*) until_ts=0 ;;
 esac
-# A deadline far ahead is a bug or a stale clock; never trust more than 12 h.
-[ "$until_ts" -gt $((NOW + MAX_AHEAD)) ] && until_ts=$((NOW + MAX_AHEAD))
+# A deadline more than 12 h ahead is a bug or a stale clock, so treat it as
+# invalid (sleep allowed). Clamping instead would recompute every tick and
+# keep the Mac awake forever.
+if [ "$until_ts" -gt $((NOW + MAX_AHEAD)) ]; then
+  invalid="deadline $until_ts is more than $((MAX_AHEAD / 3600)) h ahead of now $NOW, ignored"
+  until_ts=0
+fi
 
 batt=$("$PMSET" -g batt)
 on_ac=0
@@ -24,6 +30,7 @@ pct=$(printf '%s\n' "$batt" | /usr/bin/sed -n 's/.*[^0-9]\([0-9][0-9]*\)%.*/\1/p
 
 want=0
 reason="deadline $until_ts passed (now $NOW)"
+[ -z "$invalid" ] || reason=$invalid
 if [ "$NOW" -lt "$until_ts" ]; then
   if [ "$on_ac" = 1 ] || [ "$pct" -ge "$MIN_BATTERY" ]; then
     want=1

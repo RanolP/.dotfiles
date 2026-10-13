@@ -168,6 +168,7 @@ let
     jira-master = localSkill "jira-master";
     jira-qa-batch = localSkill "jira-qa-batch";
     component-pixel-review = localSkill "component-pixel-review";
+    design-review = localSkill "design-review";
     slack-messaging = localSkill "slack-messaging";
     worktree-cleanup = localSkill "worktree-cleanup";
     want-exit = localSkill "want-exit";

@@ -14,11 +14,19 @@ import type { Payload } from './tracker'
 
 export type Evidence = { ref: string; quote: string }
 export type SourceKind = 'user' | 'tool_result'
-export type Source = { kind: SourceKind; text: string; tool?: string; isError?: boolean }
+// `full` is the row's text before display clipping, kept so a quote taken from
+// past the clip still matches; it is itself capped so a held source stays small.
+export type Source = { kind: SourceKind; text: string; full?: string; tool?: string; isError?: boolean }
 export type Sources = ReadonlyMap<string, Source>
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
 const TEXT_CLIP = 4000, RESULT_CLIP = 1500, INPUT_CLIP = 600
+export const FULL_CLIP = 20_000
+/** The source fields for a row shown clipped to `n`: `full` only when the clip cut something. */
+export const clippedSource = (raw: string, n: number) => {
+  const text = clip(raw, n)
+  return text === raw ? { text } : { text, full: raw.slice(0, FULL_CLIP) }
+}
 // A quote proves something only when it is long enough to be specific: four
 // words, or, for CJK text whose words run long or unspaced, eight characters.
 const MIN_WORDS = 4, MIN_CJK_CHARS = 8
@@ -43,19 +51,19 @@ export function renderRange(rows: readonly SessionMessage[], cap = 120_000): { t
     let head = `[${m.role}]`
     const shown = m.role === 'user' ? stripReminders(m.text) : m.text
     if (shown) {
-      const text = clip(shown, TEXT_CLIP)
+      const { text, full } = clippedSource(shown, TEXT_CLIP)
       if (m.role === 'assistant') head = `[assistant] ${text}`
       else if (isUserTyped(m)) {
         head = `[user ${rowRef(i)}] ${text}`
-        sources.push([rowRef(i), { kind: 'user', text }])
+        sources.push([rowRef(i), { kind: 'user', text, ...(full ? { full } : {}) }])
       } else head = `[harness] ${text}`
     }
     const parts = [head]
     for (const u of m.toolUses) parts.push(`  -> ${u.tool} ${clip(JSON.stringify(u.input ?? {}), INPUT_CLIP)}`)
     for (const r of m.toolResults ?? []) {
-      const text = clip(r.text, RESULT_CLIP)
+      const { text, full } = clippedSource(r.text, RESULT_CLIP)
       parts.push(`  <- [${r.tool_use_id}] ${r.isError ? 'error ' : ''}${text}`)
-      sources.push([r.tool_use_id, { kind: 'tool_result', text, tool: toolOf.get(r.tool_use_id), isError: r.isError }])
+      sources.push([r.tool_use_id, { kind: 'tool_result', text, ...(full ? { full } : {}), tool: toolOf.get(r.tool_use_id), isError: r.isError }])
     }
     return { text: parts.join('\n'), sources }
   })
@@ -78,6 +86,21 @@ export function readEvidence(v: unknown): Evidence[] {
 }
 
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
+// A model copying a clipped row copies the clip's `…` too, or marks a skipped
+// middle with one; each `…`-separated piece must then appear, in order, in the
+// row, and each must be specific on its own: short pieces scattered across a
+// row ("push…to…origin…main") prove nothing their join seems to say.
+const quoteParts = (quote: string) => quote.split('…').map(squash).filter(Boolean)
+function quoteIn(quote: string, source: Source): boolean {
+  const row = squash((source.full ?? source.text).replace(/…/g, ' '))
+  let at = 0
+  for (const part of quoteParts(quote)) {
+    const i = row.indexOf(part, at)
+    if (i < 0) return false
+    at = i + part.length
+  }
+  return true
+}
 
 /**
  * Why `e` fails as evidence from `admissible` rows of `sources`, or undefined
@@ -90,9 +113,9 @@ export function evidenceProblem(e: Evidence, sources: Sources, admissible: reado
   if (!admissible.includes(source.kind)) return `ref ${e.ref} is a ${source.kind}, not ${admissible.join(' or ')}`
   if (forDone && source.isError) return `ref ${e.ref} is a failed tool result, which proves no done`
   if (forDone && source.tool && RELAY_TOOLS.has(source.tool)) return `ref ${e.ref} is a ${source.tool} report, which proves no done`
-  const quote = squash(e.quote)
-  if (tooShort(quote)) return `quote ${JSON.stringify(e.quote)} is too short to cite (under ${MIN_WORDS} words)`
-  if (!squash(source.text).includes(quote)) return `quote ${JSON.stringify(clip(e.quote, 80))} is not in ${e.ref}`
+  const parts = quoteParts(e.quote)
+  if (!parts.length || parts.some(tooShort)) return `quote ${JSON.stringify(e.quote)} is too short to cite (under ${MIN_WORDS} words)`
+  if (!quoteIn(e.quote, source)) return `quote ${JSON.stringify(clip(e.quote, 80))} is not in ${e.ref}`
   return undefined
 }
 
@@ -120,14 +143,32 @@ export function citeNote(o: Payload, held: readonly Evidence[]): Payload {
   return { ...o, note: o.note ? `${o.note} (${cite})` : cite }
 }
 
+export const isDropClaim = (o: Payload) => o.op === 'status' && o.status === 'dropped'
+
 /**
  * Applies the mechanical check to tracker ops: a done claim with no held
- * evidence is downgraded. Returns the ops (aligned with `evidence` by index,
+ * evidence is downgraded, and a drop with no held quote from the user is
+ * discarded, since only the user can abandon a direction. Returns the ops (aligned with `evidence` by index,
  * now holding only the held items) and one line per rejection.
  */
-export function gateOps(ops: readonly Payload[], evidence: readonly Evidence[][], sources: Sources): { ops: Payload[]; evidence: Evidence[][]; rejections: string[] } {
+/** A move of an issue in `dropped` (the ids now dropped) to any other status: only the user resuming that direction re-opens it. */
+export const isReopenClaim = (o: Payload, dropped: ReadonlySet<string>) => o.op === 'status' && o.status !== 'dropped' && dropped.has(o.issue)
+
+// A drop or a re-open turns on the user's direction, so each needs a quote of
+// a user row and is discarded without one; a stale tool row from before the
+// pivot proves neither.
+export function gateOps(ops: readonly Payload[], evidence: readonly Evidence[][], sources: Sources, dropped: ReadonlySet<string> = new Set()): { ops: Payload[]; evidence: Evidence[][]; rejections: string[] } {
   const out: Payload[] = [], kept: Evidence[][] = [], rejections: string[] = []
   ops.forEach((o, i) => {
+    const reopen = isReopenClaim(o, dropped)
+    if (reopen || isDropClaim(o)) {
+      const { held, problems } = checkEvidence(evidence[i] ?? [], sources, ['user'])
+      if (held.length) {
+        out.push(o)
+        kept.push(held)
+      } else rejections.push(`${describeOp(o)}: ${reopen ? 're-open' : 'drop'} discarded (${problems.join('; ') || 'no evidence'})`)
+      return
+    }
     if (!isDoneClaim(o)) {
       out.push(o)
       kept.push([])

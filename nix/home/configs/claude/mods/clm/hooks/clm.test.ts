@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { SessionCompactResult, SessionMessage, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { sessionIssues, STEP_SYSTEM, trackIssue } from './register'
+import { isHeld, sessionIssues, STEP_SYSTEM, trackIssue } from './register'
 import type { Meta } from './register'
 
 import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM } from './ledger'
@@ -1230,3 +1230,211 @@ test('an entry a step re-holds after the fold read the held list survives the fo
   expect(seen.engineCompactions).toBe(0)
   expect((seen.store['held:s1'] as any[]).map(h => h.nonce)).toEqual([again.nonce])
 })
+
+// --- quote matching, drops, directive noise, KST ------------------------------
+
+const heldIn = (seen: { store: Record<string, unknown> }) => {
+  const v = seen.store['held:s1']
+  return Array.isArray(v) ? v.filter(isHeld) : []
+}
+const issueAt = (issues: readonly { id: string }[], n: number): string => {
+  const issue = issues[n]
+  if (!issue) throw new Error(`no issue at ${n}; the tracker holds ${issues.length}`)
+  return issue.id
+}
+
+// Regression caught: a quote copied from a clipped tool result kept the clip's `…`, or came from text past the clip, and was rejected, so 핵심 사실·경로 stayed empty.
+test('a quote ending in the clip ellipsis or taken from past the clip still holds', OPTS, async ($, on) => {
+  const rows = [...ROWS]
+  rows[2] = res('tu_a', 'log: make fails at a.ts:12 ' + BIG + ' linker exit code 2 at stage three')
+  const ops = [
+    { op: 'fact', text: 'FACT-PAST-CLIP', evidence: [{ ref: 'tu_a', quote: 'linker exit code 2 at stage three' }] },
+    { op: 'fact', text: 'FACT-ELLIPSIS', evidence: [{ ref: 'tu_a', quote: 'make fails at a.ts:12 xxxx…' }] },
+  ]
+  const s: State = { rows, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const facts = section(seen.results[0].messages[1].text, '핵심 사실·경로')
+  expect(facts).toContain('FACT-PAST-CLIP')
+  expect(facts).toContain('FACT-ELLIPSIS')
+})
+
+// Regression caught: a drop with no quote of the user abandoning that direction reached the tracker, or a failed review landed a user-quoted drop no reviewer had matched to its issue, or lost it instead of holding it.
+test('a drop lands only on a user quote, and a failed review holds it for the next review', OPTS, async ($, on) => {
+  const rows = [...ROWS]
+  rows[4] = M('user', 'stop the build work and switch to the login bug instead')
+  const s: State = { rows, replies: [], reviewReplies: [new Error('review down')] }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'login work', description: 'l' })
+  await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  const login = issueAt(tracker(), 0), build = issueAt(tracker(), 1)
+  const ops = [
+    { op: 'status', issue: build, status: 'dropped', evidence: [{ ref: 'm4', quote: 'stop the build work and switch' }] },
+    { op: 'status', issue: login, status: 'dropped', evidence: [{ ref: 'tu_a', quote: 'log: make fails at' }] },
+  ]
+  s.replies.push(`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`)
+  await turnEnds($, s, seen)
+  expect(tracker().map(i => [i.title, i.status])).toEqual([['login work', 'todo'], ['build work', 'todo']])
+  expect(heldIn(seen).map(h => [h.kind, h.issue])).toEqual([['drop', build]])
+  expect(logEvents(seen).find(e => e.event === 'evidence-rejected')?.reason).toContain('drop discarded')
+  // The next fold's reviewer accepts the held drop, and only then does it land.
+  s.rows = [...seen.results[0].messages, ...rows.slice(4)]
+  s.replies.push(ledger('fact'))
+  await turnEnds($, s, seen)
+  expect(seen.reviewPrompts.at(-1)).toContain('"id":"step1"')
+  expect(tracker().map(i => [i.title, i.status])).toEqual([['login work', 'todo'], ['build work', 'dropped']])
+  expect(seen.store['held:s1']).toBeUndefined()
+})
+
+const runClm = ($: { command: { run(e: { command: string; args: string }): Promise<unknown> } }, args: string) => $.command.run({ command: 'clm', args })
+
+// Regression caught: tasks of an abandoned direction stayed open with no way for the user to clear them, or `/clm drop` left their panel tasks behind.
+test('/clm drop drops one named issue, then every open issue of the session', OPTS, async ($, on) => {
+  const s: State = { rows: [], replies: [] }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  for (const t of ['a', 'b', 'c']) await $.tool.call({ tool: 'TaskCreate', subject: `task ${t}`, description: t })
+  const issues = () => snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
+  const tracker = () => issues().map(i => i.status)
+  await runClm($, `drop ${issueAt(issues(), 1)}`)
+  expect(tracker()).toEqual(['todo', 'dropped', 'todo'])
+  await runClm($, 'drop all')
+  expect(tracker()).toEqual(['dropped', 'dropped', 'dropped'])
+  expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate' && c.status === 'deleted').length).toBe(3)
+})
+
+// Regression caught: `!` shell echoes, slash-command wrappers and bare go-aheads ("ㄱㄱ", "지금?") filled 30-40% of 사용자 지시.
+test('wrapper rows and short acknowledgements stay out of 사용자 지시', async () => {
+  const prev = '## 목표\n- g\n\n## 사용자 지시\n- "ㄱ"\n\n## 핵심 사실·경로\n- f'
+  const dropped = ['<bash-input>adb uninstall com.x</bash-input>', '<bash-stdout>Success</bash-stdout>', '<local-command-stdout>ok</local-command-stdout>', 'ㄱㄱ', '지금?', '빨리 하쇼', 'OK', 'keep the API stable'].map(t => M('user', t))
+  const out = preserveInstructions(prev, instructionValues(prev), dropped, '/ledger.md')
+  expect(section(out.fullNotes, '사용자 지시')).toBe('- "keep the API stable"')
+})
+
+// Regression caught: the ledger header went back to a UTC ISO time the user cannot read at a glance, or a KST header stopped being recognized as a ledger row.
+test('the ledger header carries a KST time and is still read as a ledger row', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact'), ledger('fact')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const row = seen.results[0].messages[1].text
+  expect(row).toMatch(/^\[clm ledger #1 · \d{4}-\d\d-\d\d \d\d:\d\d KST\] /)
+  s.rows = [...seen.results[0].messages, ...ROWS.slice(4)]
+  await turnEnds($, s, seen)
+  expect(seen.results[1].messages.filter((m: any) => m.text.startsWith('[clm ledger')).length).toBe(1)
+})
+
+// Regression caught: short pieces scattered across a row ("push…to…origin…main") each matched somewhere, so a quote the row never says held as evidence.
+test('a quote of short pieces scattered across a row is refused, a long piece ending in the clip ellipsis holds', OPTS, async ($, on) => {
+  const rows = [...ROWS]
+  rows[2] = res('tu_a', 'error: failed to push some refs to origin; branch main is behind its remote counterpart')
+  const ops = [
+    { op: 'fact', text: 'FACT-SCATTERED', evidence: [{ ref: 'tu_a', quote: 'push…to…origin…main' }] },
+    { op: 'fact', text: 'FACT-ONE-PIECE', evidence: [{ ref: 'tu_a', quote: 'failed to push some refs to origin…' }] },
+  ]
+  const s: State = { rows, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const facts = section(seen.results[0].messages[1].text, '핵심 사실·경로')
+  expect(facts).not.toContain('FACT-SCATTERED')
+  expect(facts).toContain('FACT-ONE-PIECE')
+})
+
+// Regression caught: a length cutoff filed short directives (하지마, push, 멈춰) as noise, and since stored lines pass the same filter the next fold deleted them for good.
+test('short directives stay in 사용자 지시 and survive the next fold reading them back', async () => {
+  const prev = '## 목표\n- g\n\n## 사용자 지시\n- "ㄱ"\n\n## 핵심 사실·경로\n- f'
+  const rows = ['하지마', 'push', '멈춰', 'ㅇㅋ', '넵', 'y'].map(t => M('user', t))
+  const want = '- "하지마"\n- "push"\n- "멈춰"'
+  const first = preserveInstructions(prev, instructionValues(prev), rows, '/ledger.md')
+  expect(section(first.fullNotes, '사용자 지시')).toBe(want)
+  const again = preserveInstructions(first.fullNotes, instructionValues(first.fullNotes), [], '/ledger.md')
+  expect(section(again.fullNotes, '사용자 지시')).toBe(want)
+})
+
+// Regression caught: a dropped issue is hidden from <issues>, so the next fold re-created its title as a fresh open issue and the abandoned work came back.
+test('a fold cannot re-create the title of an issue dropped in this session', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"build work","status":"todo"}]')] }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  await runClm($, `drop ${issueAt(tracker(), 0)}`)
+  await turnEnds($, s, seen)
+  expect(tracker().map(i => [i.title, i.status])).toEqual([['build work', 'dropped']])
+})
+
+// Regression caught: a step-path drop waited for a fold's reviewer, so a session that never folds kept the abandoned direction's tasks open for good.
+test('a step drop with a user quote lands with no fold', OPTS, async ($, on) => {
+  const steps: string[] = []
+  const s: State = { rows: [M('user', 'please investigate the build'), M('user', 'stop the build work and switch to the login bug instead')], replies: [], stepReplies: steps }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
+  await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  const build = issueAt(tracker(), 0)
+  steps.push(`<ops>[{"op":"status","issue":"${build}","status":"dropped","evidence":[{"ref":"m2","quote":"stop the build work and switch"}]}]</ops>`)
+  await bashCall($, on, 'git status')
+  await seen.clock.settle()
+  expect(tracker().map(i => [i.title, i.status])).toEqual([['build work', 'dropped']])
+  expect(heldIn(seen)).toEqual([])
+})
+
+// Regression caught: a dropped issue was hidden from <issues>, so a status op on its id was rejected and resuming that direction could never re-open it.
+test('a step re-opens a dropped issue by its id when the user resumes it', OPTS, async ($, on) => {
+  const steps: string[] = []
+  const s: State = { rows: [M('user', 'actually resume the build work')], replies: [], stepReplies: steps }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } }))
+  await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  const build = issueAt(tracker(), 0)
+  await runClm($, `drop ${build}`)
+  steps.push(`<ops>[{"op":"status","issue":"${build}","status":"doing","evidence":[{"ref":"m1","quote":"actually resume the build work"}]}]</ops>`)
+  await bashCall($, on, 'make')
+  await seen.clock.settle()
+  expect(seen.stepPrompts.at(-1)).toContain(`${build} | dropped | build work`)
+  expect(tracker().map(i => [i.id, i.status])).toEqual([[build, 'doing']])
+})
+
+// Regression caught: once dropped issues were listed to the models, a done or doing citing a stale pre-pivot tool row re-opened an issue the user had abandoned.
+test('a step done on a dropped issue citing only a tool result leaves it dropped', OPTS, async ($, on) => {
+  const steps: string[] = []
+  const s: State = { rows: [M('user', 'please investigate the build')], replies: [], stepReplies: steps }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: 'make fails at a.ts:12', stderr: '', interrupted: false } }))
+  await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  const build = issueAt(tracker(), 0)
+  await runClm($, `drop ${build}`)
+  steps.push(`<ops>[{"op":"status","issue":"${build}","status":"done","evidence":[{"ref":"tu_make","quote":"make fails at a.ts:12"}]}]</ops>`)
+  await bashCall($, on, 'make')
+  await seen.clock.settle()
+  expect(tracker().map(i => [i.id, i.status])).toEqual([[build, 'dropped']])
+  expect(heldIn(seen)).toEqual([])
+  expect(logEvents(seen).find(e => e.event === 'evidence-rejected')?.reason).toContain('re-open discarded')
+})
+
+// Regression caught: a fold re-opened a dropped issue on a tool-row quote, or a failed review landed a user-quoted re-open no reviewer had matched to that issue.
+for (const [name, status, cite, review] of [
+  ['citing only a tool result', 'done', [{ ref: 'tu_a', quote: 'log: make fails at' }], undefined],
+  ['on a failed review, even citing the user', 'doing', [{ ref: 'm4', quote: 'resume the build work please' }], new Error('review down')],
+] as const) {
+  test(`a fold move out of dropped ${name} leaves the issue dropped`, OPTS, async ($, on) => {
+    const rows = [...ROWS]
+    rows[4] = M('user', 'resume the build work please')
+    const s: State = { rows, replies: [], ...(review ? { reviewReplies: [review] } : {}) }
+    const seen = bottoms(on, s)
+    panelHandlers(on, seen)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
+    const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+    const build = issueAt(tracker(), 0)
+    await runClm($, `drop ${build}`)
+    s.replies.push(`## 목표\n- -\n\n<ops>${JSON.stringify([{ op: 'status', issue: build, status, evidence: cite }])}</ops>`)
+    await turnEnds($, s, seen)
+    expect(tracker().map(i => [i.id, i.status])).toEqual([[build, 'dropped']])
+  })
+}

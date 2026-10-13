@@ -142,6 +142,17 @@ export function rememberFacts(notes: string, added: readonly Fact[], retracted: 
   return withSection(notes, FACTS, lines.length ? lines.join('\n') : '- (none yet)')
 }
 
+// A prompt that carries no instruction: the harness's echo of a `!` shell
+// command or a slash command, and a bare go-ahead. It stays in the transcript
+// and stays citable; it just has nothing to keep under 사용자 지시. Length is no
+// test: 하지마, 멈춰 and push are whole instructions.
+const WRAPPER_ROW = /^\s*<(?:bash-(?:input|stdout|stderr)|local-command-[\w-]+|command-[\w-]+)>/
+const ACKS = new Set(['ㄱ', 'ㄱㄱ', 'ㄱㄱㄱ', 'ㅇㅇ', 'ㅇㅋ', '응', '네', '넵', 'ok', 'go', 'yes', 'y', '지금?', '현황?', '빨리 하쇼'])
+export const isDirective = (text: string) => {
+  const t = text.trim()
+  return t !== '' && !ACKS.has(t.toLowerCase()) && !WRAPPER_ROW.test(t)
+}
+
 export const INSTRUCTION_CLIP = 2000
 export type PreservedInstructions = { notes: string; fullNotes: string }
 /**
@@ -161,7 +172,8 @@ export function preserveInstructions(
     const alreadyWithdrawn = raw.startsWith(WITHDRAWN_PREFIX)
     const text = alreadyWithdrawn ? storedInstructionValue(raw.slice(WITHDRAWN_PREFIX.length)) : raw
     const key = instructionKey(text)
-    if (!key) continue
+    // Applied to the stored lines too, so noise an older fold kept leaves.
+    if (!key || !isDirective(text)) continue
     const previous = seen.get(key)
     if (previous) {
       seen.delete(key)
@@ -223,10 +235,13 @@ export const MERGE_SYSTEM = [
   'Every id, number and date in one claim comes from the same row and names the same object as that row.',
   'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
-  'Move an existing issue with a status op once the turns show it changed; never re-create it. Issues you do not mention stay as they are. Items listed under <legacy> have no issue yet: create one for each that still holds.',
+  'Move an existing issue with a status op once the turns show it changed; never re-create it. An issue the turns leave untouched needs no op. Items listed under <legacy> have no issue yet: create one for each that still holds.',
+  'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
+  'When the user resumes a dropped direction, move that dropped issue back to todo or doing by its id; it keeps its id and history that way.',
   'Steps listed under <finished_earlier> are already recorded; leave them as they are.',
   'Write `<ops>[]</ops>` when nothing changed.',
   'Drop small talk and anything later turns replaced. Keep the notes under 300 words.',
+  'Write the 목표 notes, every title, note and fact text in Korean, keeping code identifiers, paths and commands verbatim.',
 ].join('\n')
 
 export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): string {
@@ -291,6 +306,8 @@ export const REVIEW_SYSTEM = [
   'Judge each claim against the row its ref names, in <folded_range> or in its `source`:',
   '- A claim that a step is done stands only when a cited row shows the state-changing action executed: a tool result with its outcome, or the user saying it happened. A proposal, a recommendation, a plan, or a read-only look at the current state (a PR shown OPEN, a status printed) supports todo or question, so reject the done.',
   '- Every id, number and date in the claim appears in the cited row for the same object; a date or number belonging to another PR, branch, ticket or file is a reject.',
+  '- A move to dropped stands when the cited user message abandons, suspends or redirects away from that issue\'s direction.',
+  '- A move out of dropped stands only when the cited user message resumes that issue\'s direction.',
   '- A fact stands when the cited row states it. Any other claim stands when the turns show it.',
   'Give every claim id exactly one verdict. Reply with only this JSON object:',
   '{"verdicts":[{"id":"<claim id>","accept":true,"reason":"<one line>"}]}',

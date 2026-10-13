@@ -1,5 +1,7 @@
 import type { ClmBoardIssue } from '../types'
 
+import { kst } from './fold'
+
 // `/clm board` writes this page and opens it in the browser. Everything is
 // embedded, so the page works from a file:// URL with no network.
 
@@ -51,7 +53,7 @@ apply('repo');
 function card(i: ClmBoardIssue): string {
   const where = [esc(shortRepo(i.repo)), ...(i.branch ? [esc(i.branch)] : [])].join(' · ')
   return `<div class="card" data-repo="${esc(i.repo)}"><div>${esc(i.title)}</div>`
-    + `<div class="sub">${esc(i.id)} · ${where}</div><div class="sub">updated <time>${esc(i.updated)}</time></div></div>`
+    + `<div class="sub">${esc(i.id)} · ${where}</div><div class="sub">updated <time datetime="${esc(i.updated)}">${esc(kst(i.updated))}</time></div></div>`
 }
 
 export function boardHtml(issues: ClmBoardIssue[], repo: string, generatedAt: string): string {

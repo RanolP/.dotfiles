@@ -1,6 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 
-// Matches the header of rows written before the Haiku-summary wording too.
+// Matches the header of rows written before the Haiku-summary wording too, and
+// both header times: the KST stamp below and the UTC ISO time older rows carry.
 const LEDGER_ROW = /^\[clm ledger #(\d+) · [^\]]+\] Earlier turns of this session were folded into these notes by /
 const RESULT_FLOOR = 1024 // tokens each older kept tool result may shrink to, at least
 
@@ -34,6 +35,11 @@ export const isSystemRow = (m: SessionMessage): boolean => {
   if (!isBare(m)) return false
   if (m.role === 'assistant') return isEmptyRow(m)
   return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text) || isLocalCommand(m)
+}
+/** A user-facing time on the Asia/Seoul clock, `2026-10-13 18:04 KST`; Korea keeps no DST, so +9h is exact. */
+export const kst = (t: number | string | Date = new Date()): string => {
+  const ms = new Date(t).getTime()
+  return Number.isNaN(ms) ? String(t) : `${new Date(ms + 9 * 3_600_000).toISOString().slice(0, 16).replace('T', ' ')} KST`
 }
 export const ledgerRowSeq = (text: string): string | undefined => LEDGER_ROW.exec(text)?.[1]
 export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && ledgerRowSeq(m.text) !== undefined

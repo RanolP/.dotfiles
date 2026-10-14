@@ -41,5 +41,6 @@ in
   };
 
   xdg.configFile."starship-winfs.toml".source =
-    (pkgs.formats.toml { }).generate "starship-winfs.toml" winfsSettings;
+    (pkgs.formats.toml { }).generate "starship-winfs.toml"
+      winfsSettings;
 }

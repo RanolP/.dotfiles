@@ -1,6 +1,6 @@
 ---
 name: design-review
-description: Review an implementation against a Figma URL by fixing the right value of every property from the design's outline and tokens, capturing the base branch (as-is) and the working tree (to-be) on every platform, and publishing a gallery of Figma | as-is | to-be | onion skin with one numbered box per mismatch, each fixed in batches and committed per box once the user resolves it.
+description: Review an implementation against a Figma URL by locking the right value (the answer) of every property from the design's outline and tokens, capturing the base branch (as-is) and the working tree (to-be) on every platform, and publishing a gallery of Figma | as-is | to-be | onion skin with one numbered box per mismatch, each fixed in batches and committed per box once the user resolves it.
 when_to_use: The user hands over a Figma URL and asks to review, compare, or QA the implementation against it -- "디자인 리뷰", "design QA", "does this match Figma", "check the screen against the design".
 ---
 
@@ -18,14 +18,14 @@ Node.js ≥ 20 (built-ins only; agent-browser already requires Node), git, `agen
 ## The seven steps
 
 1. **Outline the design** (`get_metadata` only).
-2. **Fix the answers** (`get_design_context` + `get_variable_defs`).
+2. **Lock answers** (`get_design_context` + `get_variable_defs`).
 3. **Prepare** the base branch, the platforms, and each state's preconditions.
 4. **Capture as-is** and turn every mismatch into a fix box.
 5. **Fix in batches**, capturing to-be once per batch.
 6. **Publish** the gallery, again after every batch and every resolve.
 7. **Resolve** box by box into commits.
 
-Phases 1-2 work from the outline and the tokens alone. The column-1 Figma screenshots (`get_screenshot`) and every screen capture start in phase 4, once the answers are fixed.
+Phases 1-2 work from the outline and the tokens alone. The column-1 Figma screenshots (`get_screenshot`) and every screen capture start in phase 4, once the answers are locked.
 
 ## 1. Outline
 
@@ -47,7 +47,7 @@ Score what Figma can express and what the code owns:
 - **Left unscored:** elements whose presence operations or content config decides (a banner the ops team toggles, whether a server-driven list appears), and motion Figma cannot express (marquee, auto-scroll, animation). Before editing code around such a behaviour, read the commit that introduced it (`git log -S '<symbol>'` or `git log -L <start>,<end>:<file>`) so the fix keeps it.
 - **A screen with no web design:** the app design is the answer for web.
 
-For each state, build the layout tree with `get_design_context` and read the bound tokens with `get_variable_defs`. For every relevant node, fix the **answer** for every property -- font-size, font-family, font-weight, line-height, padding, margin/gap, color, background, border, radius, size, and any other the node sets. Record both the token name and its value, and treat the token name as the answer whenever one exists (`spacing/16 (16)`).
+For each state, build the layout tree with `get_design_context` and read the bound tokens with `get_variable_defs`. For every relevant node, lock the **answer** for every property -- font-size, font-family, font-weight, line-height, padding, margin/gap, color, background, border, radius, size, and any other the node sets. Record both the token name and its value, and treat the token name as the answer whenever one exists (`spacing/16 (16)`).
 
 A value is **suspicious** when:
 

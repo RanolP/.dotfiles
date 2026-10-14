@@ -60,6 +60,14 @@
 - DO: commit the scenario beside the code it exercises, because a file in a scratchpad directory is gone next session
 - SKILL: `record-replay`, for the `agent-device` arm-and-publish shape, the `agent-browser` JSON scenario, and the divergence-resume loop
 
+## The user's screen belongs to the user
+- WHEN: a runtime check, a self-review, or any automation drives a browser, a simulator, an emulator, or a desktop app on a machine the user is working at
+- DO: launch every automated surface behind the user's windows and keep it there -- headless `agent-browser` first; a real Chrome only when the check needs it (DRM, a logged-in profile), started with `open -gna "Google Chrome" --args --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling ...` so it neither takes the foreground nor stalls while hidden
+- DO: treat a throttled or `document.hidden` page as a launch-flag problem and relaunch with those flags, then drive the window's own active tab with `Page.navigate` -- a tab opened by `Target.createTarget {background: true}` or `/json/new` is inactive and reads `hidden` whatever the flags
+- DO: raise a window as one call at the step that needs it, then leave the front to the user -- keep `Page.bringToFront`, `Target.activateTarget`, `/json/activate`, `osascript ... activate` and `open` without `-g` out of every loop, timer, watcher and retry, because each re-raise takes the user's input away again; when a page has to stay in front, fix it with the flags and the active tab above, or stop and ask
+- DO (brief): copy this rule into every runtime-check worker's brief, because a worker told "finish fast" reads the urgency as license to take the screen -- [[focus-steal-activate-loop]]
+- DO: stop every loop and background process the check started before reporting, and name any that must keep running
+
 ## Plan after research, then act
 - WHEN: any task; "ready" = research done, not context that happened to exist up front
 - DO (non-trivial: 2+ files, multi-step, or ambiguous scope): research the relevant context, then present the plan concisely when the user asked for one or when planning is needed to make scope clear

@@ -1,0 +1,6 @@
+{
+  "name": "tool-compose",
+  "version": "0.1.0",
+  "description": "Compose Claude Code tool calls in a permission-limited JavaScript script.",
+  "author": { "name": "RanolP" }
+}

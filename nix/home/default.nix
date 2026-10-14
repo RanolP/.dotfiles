@@ -412,6 +412,9 @@ in
       ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
       # dash: /dash opens one pane with Usage, Context and Fleet tabs.
       ".claude/mods/dash".source = ./configs/claude/mods/dash;
+      # tool-compose: the exec tool runs a script whose tools.* calls relay to
+      # $.tool.call; the child runs under sandbox-exec + node --permission.
+      ".claude/mods/tool-compose".source = ./configs/claude/mods/tool-compose;
       # On "command not found", point at mise/project shims before installs.
       ".claude/hooks/missing-tool-hint.py" = {
         source = ./configs/claude/hooks/missing-tool-hint.py;

@@ -200,7 +200,7 @@ The Claude session's context for this agent follows.`
 // with codex's answer; codex itself never sees the tool. `handback` holds the
 // report until the call's result shows whether it was delivered.
 const HANDBACK = 'SubagentHandback'
-type Agent = { type: TypeName; cwd: string; threadId?: string; waiting?: { toolUseId: string; callId: string }; relay?: Relay; handback?: { toolUseId: string; text: string } }
+type Agent = { type: TypeName; cwd: string; writableRoots: string[]; threadId?: string; waiting?: { toolUseId: string; callId: string }; relay?: Relay; handback?: { toolUseId: string; text: string } }
 export type StepMeta = { threadId: string; model?: string; resumed: boolean; bridgePid: number; codexPid: number }
 type StepResult = StepMeta & ({ toolCall: { callId: string; tool: string; arguments: unknown } } | { final: { text: string; status?: string; errors: string[] } })
 type StepEvent = StepResult | (StepMeta & { error: string })
@@ -487,18 +487,36 @@ export const register: Register = (on) => {
     void ensureRegistered(st, $)
     const type = typeOf(e.subagentType)
     if (!type) return next(e)
-    // A background agent's loop starts before next(e) resolves, so its first
-    // step may already be running: the cwd is resolved first and the agent
-    // registered the moment its id exists. turn.step waits on `spawning`.
+    // The first step can race both writable-root checks and next(e), so track the whole spawn.
     let done!: () => void
     const spawned = new Promise<void>(resolve => { done = resolve })
     spawning.add(spawned)
     let r: Awaited<ReturnType<typeof next>>
     let cwd: string
+    let writableRoots: string[] = []
     try {
-      cwd = await workspaceRoot((argv, init) => $.process.run(argv, init), e.cwd ?? (await $.session.cwd()))
+      const writableLine = /^writable:[ \t]*(.+)$/m.exec(e.prompt)?.[1]
+      const fix = 'add a line `writable: /abs/repo, /abs/other-worktree` to the brief naming every directory the worker must write'
+      if (writableLine === undefined)
+        return { deny: `Codex subagent spawn denied: prompt is missing the required writable: line; ${fix}.` }
+      writableRoots = writableLine.split(',').map(root => root.trim())
+      const nonAbsolute = writableRoots.filter(root => !root.startsWith('/'))
+      if (nonAbsolute.length)
+        return { deny: `Codex subagent spawn denied: writable paths must be absolute; offending path(s): ${nonAbsolute.map(root => `\`${root || '<empty>'}\``).join(', ')}; ${fix}.` }
+      const spawnCwd = e.cwd ?? await $.session.cwd()
+      const nonDirectories = (await Promise.all(writableRoots.map(async root => {
+        try {
+          const result = await $.process.run(['test', '-d', root], { cwd: spawnCwd })
+          return result.exitCode === 0 ? undefined : root
+        } catch {
+          return root
+        }
+      }))).filter((root): root is string => root !== undefined)
+      if (nonDirectories.length)
+        return { deny: `Codex subagent spawn denied: writable path(s) must be existing directories; offending path(s): ${nonDirectories.map(root => `\`${root}\``).join(', ')}; ${fix}.` }
+      cwd = writableRoots[0]
       r = await next(e)
-      if (r.agentId) { agents.set(r.agentId, { type, cwd }); st.subagentTypes.set(r.agentId, e.subagentType) }
+      if (r.agentId) { agents.set(r.agentId, { type, cwd, writableRoots }); st.subagentTypes.set(r.agentId, e.subagentType) }
     } finally {
       spawning.delete(spawned)
       done()
@@ -511,7 +529,7 @@ export const register: Register = (on) => {
         await abortable(ready, next.signal)
         const res = await $.http.fetch('http://codex-bridge/remember', {
           method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ key: r.agentId, type, cwd }),
+          body: JSON.stringify({ key: r.agentId, type, cwd, writableRoots }),
         })
         if (!res.ok) throw new Error(`bridge POST /remember ${res.status}: ${res.text.slice(0, 2000)}`)
       } catch (err) {
@@ -566,10 +584,12 @@ export const register: Register = (on) => {
         await bridgeUp(ready)
         const res = await abortable(post('/recover', { key: agentId }), next.signal)
         if (!res.ok) throw new Error(`bridge POST /recover ${res.status}: ${res.text.slice(0, 2000)}`)
-        const recovered = JSON.parse(res.text) as { found?: boolean; type?: TypeName; cwd?: string; threadId?: string }
+        const recovered = JSON.parse(res.text) as { found?: boolean; type?: TypeName; cwd?: string; writableRoots?: string[]; threadId?: string }
         found = recovered.found === true
-        if (found && recovered.type && recovered.cwd)
-          agent = { type: recovered.type, cwd: recovered.cwd, threadId: recovered.threadId }
+        if (found && recovered.type && recovered.cwd) {
+          const writableRoots = recovered.writableRoots?.length ? recovered.writableRoots : [recovered.cwd]
+          agent = { type: recovered.type, cwd: writableRoots[0], writableRoots, threadId: recovered.threadId }
+        }
       } catch (err) {
         diag(st, $, `recovery lookup failed for ${agentId} (${cause}): ${String(err)}`)
         if (claim.ours) return yield* finish(`[codex-subagent error] cannot reach the bridge to recover ${agentId}: ${err instanceof Error ? err.message : String(err)}; send the message again`)
@@ -583,7 +603,8 @@ export const register: Register = (on) => {
           return yield* finish(`[codex-subagent error] cannot serve ${agentId} on codex: neither its agent type nor its model names a codex-subagent type (${cause}); this step was not sent to Claude`)
         }
         try {
-          agent = { type: claim.type, cwd: await workspaceRoot((argv, init) => $.process.run(argv, init), await $.session.cwd()) }
+          const cwd = await workspaceRoot((argv, init) => $.process.run(argv, init), await $.session.cwd())
+          agent = { type: claim.type, cwd, writableRoots: [cwd] }
           rebuilt = true
           diag(st, $, `${agentId} unknown to spawn and bridge; serving it as ${claim.type} in ${agent.cwd} (${cause})`)
         } catch (err) {
@@ -712,7 +733,7 @@ export const register: Register = (on) => {
         if (call?.id) agent.waiting = { toolUseId: call.id, callId: call.id.slice('toolu_codex_'.length) }
       }
       const type = TYPES[agent.type]
-      const body: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox, mcpTools: agent.relay.mcp }
+      const body: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, writableRoots: agent.writableRoots, model: type.model, effort: type.effort, sandbox: type.sandbox, mcpTools: agent.relay.mcp }
       const delivered = inbox.get(agentId) ?? []
       const answered = agent.waiting && toolResultFor(api, agent.waiting.toolUseId, delivered)
       if (agent.waiting && answered) {
@@ -745,7 +766,7 @@ export const register: Register = (on) => {
         const { callId, tool, arguments: input } = reply.toolCall
         const name = agent.relay?.claudeName.get(tool)
         if (!name) {
-          const failed: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, model: type.model, effort: type.effort, sandbox: type.sandbox, toolResult: { callId, contentItems: [{ type: 'inputText', text: `tool not relayed: ${tool}` }], success: false } }
+          const failed: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, writableRoots: agent.writableRoots, model: type.model, effort: type.effort, sandbox: type.sandbox, toolResult: { callId, contentItems: [{ type: 'inputText', text: `tool not relayed: ${tool}` }], success: false } }
           reply = yield* keepalive(step(failed), next.signal, () => { block = 1; used(0) }, (ms, fn) => $.clock.after(ms, fn))
           agent.threadId = reply.threadId
           continue

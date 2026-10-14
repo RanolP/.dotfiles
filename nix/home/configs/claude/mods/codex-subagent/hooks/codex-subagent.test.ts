@@ -104,11 +104,13 @@ test('a failed Codex recovery ends the turn and asks the coordinator to resend',
   expect(r.value.answer).toBe('[codex-subagent error] cannot reach the bridge to recover a-recover-throw: codex-subagent: $.http.fetch: bridge unavailable; send the message again')
 })
 
+// Regression: the main-session cwd overrides the first writable root named in the brief.
 test('a spawned codex agent is remembered by the bridge so a restart can recover it', async ($, on) => {
   const remembered: Record<string, unknown>[] = []
   mock.env(on, { HOME: '/home/test' })
   on('session.id', async () => ({ value: 'test-session' }))
   on('ui.log', async () => ({ value: undefined }))
+  on('process.run', async (_$, e) => ({ value: { exitCode: e.argv[0] === 'test' ? 0 : 128, stdout: '', stderr: '' } }))
   on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-6-luna' }))
   on('process.spawn', async function* () {
     yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
@@ -123,8 +125,36 @@ test('a spawned codex agent is remembered by the bridge so a restart can recover
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
   })
 
-  await $.agent.spawn({ subagentType: 'codex-subagent:luna', cwd: '/repo' } as any)
-  expect(remembered).toEqual([{ key: 'spawned-codex', type: 'luna', cwd: '/repo' }])
+  await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repoB, /other-worktree\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repoA' } satisfies AgentSpawnArgs)
+  expect(remembered).toEqual([{ key: 'spawned-codex', type: 'luna', cwd: '/repoB', writableRoots: ['/repoB', '/other-worktree'] }])
+})
+
+// Regression: a Codex worker starts without a brief-declared writable directory and inherits the wrong session root.
+test('a codex spawn without a writable line is denied with the brief fix', async ($, on) => {
+  let spawnCalls = 0
+  on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-6-luna' } })
+
+  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repo' } satisfies AgentSpawnArgs)
+
+  expect(result.deny).toContain('missing the required writable: line')
+  expect(result.deny).toContain('add a line `writable: /abs/repo, /abs/other-worktree` to the brief naming every directory the worker must write')
+  expect(spawnCalls).toBe(0)
+})
+
+// Regression: relative and missing directory paths silently pass the writable-root gate.
+test('a codex spawn rejects relative and nonexistent writable paths by name', async ($, on) => {
+  let spawnCalls = 0
+  on('process.run', async (_$, e) => ({ value: { exitCode: e.argv[0] === 'test' ? 1 : 128, stdout: '', stderr: '' } }))
+  on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-6-luna' } })
+
+  const relative = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: relative/repo\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repo' } satisfies AgentSpawnArgs)
+  const missing = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /missing/worktree\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repo' } satisfies AgentSpawnArgs)
+
+  expect(relative.deny).toContain('relative/repo')
+  expect(relative.deny).toContain('must be absolute')
+  expect(missing.deny).toContain('/missing/worktree')
+  expect(missing.deny).toContain('existing directories')
+  expect(spawnCalls).toBe(0)
 })
 
 // Regression: sol and luna resolve to each other's model id, or a step for a
@@ -651,7 +681,7 @@ test('a step for a codex model is never sent to Claude, even for an agent spawn 
 // beneath it, which is the Claude request; the hook's .catch must end it.
 type HttpFetchResult = { value: HttpResponse }
 type On = Parameters<Extract<Parameters<typeof test>[1], (...a: never[]) => unknown>>[1]
-const codexStepHarness = (on: On, fetch: (route: string) => HttpFetchResult | Promise<HttpFetchResult>, startDelay?: () => Promise<void>) => {
+const codexStepHarness = (on: On, fetch: (route: string, body: string) => HttpFetchResult | Promise<HttpFetchResult>, startDelay?: () => Promise<void>) => {
   const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
   const rows: SessionMessage[] = [row('user', 'implement it')]
   const claude = { steps: 0 }
@@ -667,7 +697,7 @@ const codexStepHarness = (on: On, fetch: (route: string) => HttpFetchResult | Pr
     yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
     return { value: { code: 0, signal: null } }
   })
-  on('http.fetch', async (_$, e) => await fetch(new URL(e.url).pathname))
+  on('http.fetch', async (_$, e) => await fetch(new URL(e.url).pathname, e.init?.body ?? '{}'))
   on('turn.step', async function* (_$, e) {
     claude.steps++
     yield { kind: 'stop' as const, stopReason: 'end_turn' as const, usage: null }
@@ -682,6 +712,42 @@ const drainStep = async (stream: AsyncGenerator<unknown, { answer: string }>) =>
   while (!r.done) { chunks.push(r.value); r = await stream.next() }
   return { chunks, result: r.value }
 }
+
+// Regression: old persisted agent records without writableRoots lose their cwd root on recovery.
+test('a recovered codex agent without roots falls back to its cwd', async ($, on) => {
+  const steps: Record<string, unknown>[] = []
+  const { api, claude } = codexStepHarness(on, (route, body) => {
+    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') {
+      steps.push(JSON.parse(body) as Record<string, unknown>)
+      return reply({ threadId: 'thread-legacy', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
+    }
+    return reply({ error: `no route ${route}` }, 404)
+  })
+
+  await drainStep($.turn.step({ turnId: 'turn-legacy-recovery', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-legacy' }))
+
+  expect(steps[0]).toMatchObject({ cwd: '/repo', writableRoots: ['/repo'] })
+  expect(claude.steps).toBe(0)
+})
+
+// Regression: a recovered thread resumes in the first writable root from its persisted brief.
+test('a recovered codex agent uses its first writable root as cwd', async ($, on) => {
+  const steps: Record<string, unknown>[] = []
+  const { api, claude } = codexStepHarness(on, (route, body) => {
+    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repoA', writableRoots: ['/repoB', '/repoC'] })
+    if (route === '/step') {
+      steps.push(JSON.parse(body) as Record<string, unknown>)
+      return reply({ threadId: 'thread-roots', resumed: true, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
+    }
+    return reply({ error: `no route ${route}` }, 404)
+  })
+
+  await drainStep($.turn.step({ turnId: 'turn-roots-recovery', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-roots' }))
+
+  expect(steps[0]).toMatchObject({ cwd: '/repoB', writableRoots: ['/repoB', '/repoC'] })
+  expect(claude.steps).toBe(0)
+})
 
 test('a codex step whose hook throws ends with an error turn and never reaches Claude', async ($, on) => {
   mock.clock(on)
@@ -729,7 +795,7 @@ test('a codex step that fails after a keepalive beat writes its error past the t
 test('a codex step whose hook overruns its budget ends with an error turn and never reaches Claude', { timeoutMs: 30_000 }, async ($, on) => {
   mock.clock(on)
   on('agent.spawn', () => new Promise(() => {}))
-  const spawnArgs: AgentSpawnArgs = { prompt: 'implement it', subagentType: 'codex-subagent:luna', cwd: '/repo' }
+  const spawnArgs: AgentSpawnArgs = { prompt: 'Budget: 10 min\nwritable: /repo\nimplement it', subagentType: 'codex-subagent:luna', cwd: '/repo' }
   const { api, claude } = codexStepHarness(on, route => reply({ error: `no route ${route}` }, 404))
   void $.agent.spawn(spawnArgs).catch(() => {})
 

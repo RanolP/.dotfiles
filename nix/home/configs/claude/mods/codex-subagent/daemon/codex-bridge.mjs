@@ -22,6 +22,33 @@ import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import assert from 'node:assert/strict'
+
+const textInput = text => [{ type: 'text', text, text_elements: [] }]
+
+export function turnStartParams(s, prompt) {
+  return {
+    threadId: s.threadId,
+    effort: s.effort ?? null,
+    input: textInput(prompt),
+    ...(s.sandbox === 'workspace-write' ? { sandboxPolicy: { type: 'workspaceWrite', writableRoots: s.writableRoots, networkAccess: true } } : {}),
+  }
+}
+
+if (process.argv[2] === '--selftest') {
+  const writableRoots = ['/repo', '/shared']
+  assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: 'medium', sandbox: 'workspace-write', writableRoots }, 'work'), {
+    threadId: 'thread-1',
+    effort: 'medium',
+    input: textInput('work'),
+    sandboxPolicy: { type: 'workspaceWrite', writableRoots, networkAccess: true },
+  })
+  assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: null, sandbox: 'read-only', writableRoots }, 'work'), {
+    threadId: 'thread-1', effort: null, input: textInput('work'),
+  })
+  process.stdout.write('turnStartParams self-check passed\n')
+  process.exit(0)
+}
 
 const sock = process.argv[2]
 // The mod's hash of this file at spawn; /health reports it so a reloaded mod can spot a bridge running older code.
@@ -546,20 +573,18 @@ async function open(b) {
     }
   }
   const interruptRequested = pendingInterrupts.delete(b.key)
-  s = { key: b.key, agentType: b.agentType, cwd: b.cwd, threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, interruptRequested, interrupting: interruptRequested, held: new Map(), messages: [], errors: [] }
+  s = { key: b.key, agentType: b.agentType, cwd: b.cwd, writableRoots: b.writableRoots?.length ? b.writableRoots : [b.cwd], sandbox: b.sandbox ?? 'read-only', threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, interruptRequested, interrupting: interruptRequested, held: new Map(), messages: [], errors: [] }
   sessions.set(b.key, s); byThread.set(s.threadId, s)
-  persisted.agents[b.key] = { type: s.agentType, cwd: s.cwd, threadId: s.threadId }
+  persisted.agents[b.key] = { type: s.agentType, cwd: s.cwd, writableRoots: s.writableRoots, threadId: s.threadId }
   saveState()
   console.error('[bridge] thread', b.threadId ? 'resumed' : 'started', s.threadId, 'tools', (b.dynamicTools ?? []).map(t => t.name).join(','))
   return s
 }
 
-const textInput = text => [{ type: 'text', text, text_elements: [] }]
-
 async function startTurn(s, prompt) {
   s.active = true
   try {
-    await rpc('turn/start', { threadId: s.threadId, effort: s.effort ?? null, input: textInput(prompt) })
+    await rpc('turn/start', turnStartParams(s, prompt))
   } catch (err) {
     s.active = false
     s.turnId = null
@@ -651,13 +676,13 @@ async function interrupt({ key }) {
 
 function recover({ key }) {
   const s = sessions.get(key)
-  const agent = s ? { type: s.agentType, cwd: s.cwd, threadId: s.threadId } : persisted.agents[key]
+  const agent = s ? { type: s.agentType, cwd: s.cwd, writableRoots: s.writableRoots, threadId: s.threadId } : persisted.agents[key]
   return agent?.type && agent.cwd ? { found: true, ...agent } : { found: false }
 }
 
-function remember({ key, type, cwd }) {
+function remember({ key, type, cwd, writableRoots }) {
   if (!key || !type || !cwd) throw new Error('remember needs key, type, and cwd')
-  persisted.agents[key] = { type, cwd, ...(persisted.agents[key]?.threadId ? { threadId: persisted.agents[key].threadId } : {}) }
+  persisted.agents[key] = { type, cwd, writableRoots: writableRoots?.length ? writableRoots : [cwd], ...(persisted.agents[key]?.threadId ? { threadId: persisted.agents[key].threadId } : {}) }
   saveState()
   return { remembered: true }
 }

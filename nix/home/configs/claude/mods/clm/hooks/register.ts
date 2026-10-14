@@ -18,7 +18,7 @@ import {
   archivedDone, describe, injected, isOpen, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
   type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
-import type { ClmWorkflow } from '../types'
+import type { ClmStatus, ClmWorkflow } from '../types'
 
 // clm replaces the engine's compaction for the main conversation. When the
 // rows outgrow a token budget, a cheap model folds the turns about to go into a
@@ -40,6 +40,21 @@ const FAILS_BEFORE_FALLBACK = 3
 const HYSTERESIS_FLOOR = 0.9
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 
+type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value: unknown }> } }
+type SessionReader = { session: { id: () => Promise<string> } }
+type StoreReader = SessionReader & { store: { get: (key: string) => Promise<unknown> } }
+type HomeReader = SessionReader & { env: { get: (name: string) => Promise<string | undefined> } }
+type TrackerReader = {
+  env: { get: (name: string) => Promise<string | undefined> }
+  fs: {
+    exists: (path: string) => Promise<boolean>
+    list: (path: string) => Promise<{ name: string; kind: string; size: number; mtimeMs: number; isLink: boolean }[]>
+    read: (path: string) => Promise<string>
+  }
+  ui: { log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void }
+}
+type StatusReader = WorkflowReader & StoreReader & TrackerReader
+
 const emptyWorkflow = (): ClmWorkflow => ({ later: [], resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null })
 function isWorkflow(v: unknown): v is ClmWorkflow {
   return isRecord(v) && Array.isArray(v.later) && v.later.every(x => typeof x === 'string')
@@ -48,7 +63,7 @@ function isWorkflow(v: unknown): v is ClmWorkflow {
     && (typeof v.activeTurnId === 'string' || v.activeTurnId === null)
 }
 
-async function readWorkflow($: EngineInterface): Promise<ClmWorkflow> {
+async function readWorkflow($: WorkflowReader): Promise<ClmWorkflow> {
   const value: unknown = (await $.state.get(WORKFLOW)).value
   return isWorkflow(value) ? value : emptyWorkflow()
 }
@@ -120,8 +135,8 @@ type Pending = {
 // engine keeps reporting it until the next API response, so an equal reading
 // describes the transcript before that fold and is ignored.
 export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number }
-const sid = ($: EngineInterface) => $.session.id()
-const metaKey = async ($: EngineInterface) => `ledger:${await sid($)}`
+const sid = ($: SessionReader) => $.session.id()
+const metaKey = async ($: SessionReader) => `ledger:${await sid($)}`
 const pendingKey = async ($: EngineInterface) => `pending:${await sid($)}`
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) && Object.values(v).every(n => typeof n === 'number')
@@ -135,17 +150,17 @@ const isPending = (v: unknown): v is Pending =>
   && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean' && optional(v.foldMs, 'number')
   && (v.promoted === undefined || Array.isArray(v.promoted)) && (v.hold === undefined || (Array.isArray(v.hold) && v.hold.every(isHeld)))
   && (v.settled === undefined || (Array.isArray(v.settled) && v.settled.every(k => typeof k === 'string')))
-async function readMeta($: EngineInterface): Promise<Meta> {
+async function readMeta($: StoreReader): Promise<Meta> {
   const stored = await $.store.get(await metaKey($))
   return { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
 }
 const writeMeta = async ($: EngineInterface, m: Meta) => $.store.set(await metaKey($), m)
 
-async function basePath($: EngineInterface): Promise<string> {
+async function basePath($: HomeReader): Promise<string> {
   const home = await $.env.get('HOME')
   return `${home ?? '.'}/.claude-work/plans/clm-${await sid($)}`
 }
-const ledgerPath = async ($: EngineInterface) => `${await basePath($)}.md`
+const ledgerPath = async ($: HomeReader) => `${await basePath($)}.md`
 const logPath = async ($: EngineInterface) => `${await basePath($)}.log.jsonl`
 async function readText($: EngineInterface, p: string): Promise<string | undefined> {
   return (await $.fs.exists(p)) ? await $.fs.read(p) : undefined
@@ -203,7 +218,7 @@ async function skip($: EngineInterface, why: string) {
 
 // --- tracker I/O -----------------------------------------------------------
 
-async function trackerDir($: EngineInterface): Promise<string> {
+async function trackerDir($: Pick<TrackerReader, 'env'>): Promise<string> {
   return `${(await $.env.get('HOME')) ?? '.'}/.claude-work/tracker/events`
 }
 const logFile = async ($: EngineInterface, session: string) => `${await trackerDir($)}/${session}.jsonl`
@@ -229,7 +244,7 @@ async function captureOrigin($: EngineInterface): Promise<Origin> {
 
 type CachedLog = { size: number; mtimeMs: number; events: TrackerEvent[] }
 const trackerCache = new Map<string, CachedLog>()
-async function readAll($: EngineInterface): Promise<TrackerEvent[]> {
+async function readAll($: TrackerReader): Promise<TrackerEvent[]> {
   const dir = await trackerDir($)
   if (!(await $.fs.exists(dir))) return []
   const out: TrackerEvent[] = []
@@ -301,6 +316,20 @@ export async function sessionIssues($: EngineInterface, query: { issue?: string;
   return snapshot(await readAll($)).filter(i => i.origin.session === session
     && (query.issue === undefined || i.id === query.issue)
     && (query.status === undefined || i.status === query.status))
+}
+
+export async function clmStatus($: StatusReader): Promise<ClmStatus> {
+  const [workflow, meta, events, session, path] = await Promise.all([
+    readWorkflow($), readMeta($), readAll($), $.session.id(), ledgerPath($),
+  ])
+  const issues = snapshot(events).filter(issue => issue.origin.session === session)
+  return {
+    later: [...workflow.later],
+    resumeRequest: workflow.resumeRequest ? { ...workflow.resumeRequest } : null,
+    lastFoldAt: meta.lastFoldAt ?? null,
+    ledgerPath: path,
+    openIssues: issues.filter(isOpen).length,
+  }
 }
 
 export async function trackIssue($: EngineInterface, input: { title: string; status: Issue['status']; issue?: string }): Promise<Issue> {
@@ -1156,12 +1185,14 @@ export const register: Register = (on, options) => {
         track: () => { throw new Error('clm.track is handled by the clm plugin') },
         issues: () => { throw new Error('clm.issues is handled by the clm plugin') },
         resume: () => { throw new Error('clm.resume is handled by the clm plugin') },
+        status: () => { throw new Error('clm.status is handled by the clm plugin') },
       },
     }
   })
 
   on('clm.track', async ($, e) => ({ value: await trackIssue($, e) }))
   on('clm.issues', async ($, e) => ({ value: await sessionIssues($, e ?? {}) }))
+  on('clm.status', async $ => ({ value: await clmStatus($) }))
   on('clm.resume', async ($, e) => {
     const text = e.text.trim()
     if (!text) throw new Error('clm.resume text must not be empty')

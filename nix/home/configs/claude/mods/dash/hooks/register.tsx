@@ -1,18 +1,19 @@
 import { atom, read, update } from 'claude-code'
 import type {
-  EngineInterface, Register, SessionUsage, Timer,
+  DashDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
-import type { ContextCategory, DashboardState, DashTab, TrackedAgent, UsageSnapshot } from '../types'
+import type { ContextCategory, DashTab, TrackedAgent, UsageSnapshot } from '../types'
 import { reconcileAgents, recordCompletion, recordMessage, recordSpawn } from './fleet'
 
 type Elements = ReturnType<EngineInterface['ui']['resolve']>
+type ClmStatus = Awaited<ReturnType<EngineInterface['clm']['status']>>
 
 const PANE = 'dash'
 const TITLE = 'Dash'
 const REFRESH_MS = 15_000
 const dashboard = atom({ plugin: 'dash', key: 'dashboard' } as const, {
-  tab: 'usage', now: 0, usage: null, categories: null, agents: [],
-} satisfies DashboardState)
+  tab: 'usage', now: 0, usage: null, categories: null, agents: [], clm: null,
+} satisfies DashDashboardState)
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -44,7 +45,7 @@ async function pass<T>($: EngineInterface, operation: string, run: () => Promise
   }
 }
 
-async function change($: EngineInterface, operation: string, fn: (state: DashboardState) => DashboardState): Promise<void> {
+async function change($: EngineInterface, operation: string, fn: (state: DashDashboardState) => DashDashboardState): Promise<void> {
   try {
     await update($, dashboard, fn)
   } catch (error) {
@@ -101,11 +102,24 @@ async function refreshContext($: EngineInterface): Promise<void> {
   }
 }
 
-function select($: EngineInterface, tab: DashTab): void {
-  void (async () => {
+async function refreshClm($: EngineInterface): Promise<void> {
+  try {
+    const status = await $.clm.status()
+    await change($, 'clm status state update', state => ({ ...state, clm: { status } }))
+  } catch (error) {
+    await log($, 'clm.status', error)
+    await change($, 'clm status error state update', state => ({ ...state, clm: { error: errorText(error) } }))
+  }
+}
+
+async function select($: EngineInterface, tab: DashTab): Promise<void> {
+  try {
     await change($, `select ${tab} tab`, state => ({ ...state, tab }))
     if (tab === 'context') await refreshContext($)
-  })().catch(error => log($, `select ${tab} tab`, error))
+    if (tab === 'clm') await refreshClm($)
+  } catch (error) {
+    await log($, `select ${tab} tab`, error)
+  }
 }
 
 function startTicker($: EngineInterface, timer?: Timer): Timer | undefined {
@@ -114,7 +128,11 @@ function startTicker($: EngineInterface, timer?: Timer): Timer | undefined {
     return $.clock.every(REFRESH_MS, () => {
       void (async () => {
         const current = await now($, 'clock.now for elapsed refresh')
-        if (current !== undefined) await change($, 'elapsed refresh state update', state => ({ ...state, now: current }))
+        if (current !== undefined) {
+          const state = await read($, dashboard)
+          await change($, 'elapsed refresh state update', state => ({ ...state, now: current }))
+          if (state.tab === 'clm') await refreshClm($)
+        }
       })().catch(error => log($, 'elapsed refresh', error))
     })
   } catch (error) {
@@ -165,11 +183,15 @@ function timeLabel(value: number, estimated: boolean): string {
 
 function elapsedLabel(agent: TrackedAgent, current: number): string {
   const elapsed = Math.max(0, (agent.finishedAt ?? current) - agent.startedAt)
+  return durationLabel(elapsed)
+}
+
+function durationLabel(elapsed: number): string {
   const totalMinutes = Math.floor(elapsed / 60_000)
   return totalMinutes < 60 ? `${totalMinutes}m` : `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`
 }
 
-function usageRows({ Box, Text }: Elements, state: DashboardState, width: number) {
+function usageRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   const usage = state.usage
   if (!usage) return <Text dimColor>Usage figures unavailable.</Text>
   const context = usage.context
@@ -185,7 +207,7 @@ function usageRows({ Box, Text }: Elements, state: DashboardState, width: number
   )
 }
 
-function contextRows({ Box, Text }: Elements, state: DashboardState, width: number) {
+function contextRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   if (state.categories === null) return <Text dimColor>Breakdown unavailable. Tap Ctx to refresh.</Text>
   if (state.categories.length === 0) return <Text dimColor>No context categories.</Text>
   return (
@@ -195,7 +217,7 @@ function contextRows({ Box, Text }: Elements, state: DashboardState, width: numb
   )
 }
 
-function fleetRows({ Box, Text }: Elements, state: DashboardState, width: number) {
+function fleetRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   if (state.agents.length === 0) return <Text dimColor>No subagents yet.</Text>
   return (
     <Box flexDirection="column">
@@ -210,12 +232,34 @@ function fleetRows({ Box, Text }: Elements, state: DashboardState, width: number
   )
 }
 
+function clmStatusRows({ Box, Text }: Elements, status: ClmStatus, current: number) {
+  return (
+    <Box flexDirection="column">
+      <Text>Later queue:</Text>
+      {status.later.length === 0
+        ? <Text dimColor>none</Text>
+        : status.later.map((item, index) => <Text key={`later-${index}`}>{`${index + 1}. ${item}`}</Text>)}
+      <Text>{`Pending resume: ${status.resumeRequest?.text ?? 'none'}`}</Text>
+      <Text>{`Last fold: ${status.lastFoldAt === null ? 'never' : `${durationLabel(Math.max(0, current - status.lastFoldAt))} ago`}`}</Text>
+      <Text>{`Open issues: ${status.openIssues}`}</Text>
+      <Text>{`Ledger: ${status.ledgerPath}`}</Text>
+    </Box>
+  )
+}
+
+function clmRows(elements: Elements, state: DashDashboardState) {
+  const { Text } = elements
+  if (state.clm === null) return <Text dimColor>Loading clm status…</Text>
+  if ('error' in state.clm) return <Text>{`clm is unavailable: ${state.clm.error.replace(/\s+/g, ' ')}`}</Text>
+  return clmStatusRows(elements, state.clm.status, state.now)
+}
+
 export const register: Register = on => {
   let ticker: Timer | undefined
 
   on('session.start', async ($, e, next) => {
     try {
-      await $.command.register({ name: 'dash', description: 'Open the usage, context, and subagent dashboard' })
+      await $.command.register({ name: 'dash', description: 'Open the usage, context, subagent, and clm dashboard' })
     } catch (error) {
       await log($, 'command.register dash', error)
     }
@@ -313,6 +357,7 @@ export const register: Register = on => {
       (error: unknown) => log($, 'read dashboard for ui.render', error).then(() => undefined),
     )
     if (state === undefined) return <Text dimColor>Dash state unavailable. See debug log.</Text>
+    const clmContent = state.tab === 'clm' ? clmRows(elements, state) : null
 
     return (
       <Box flexDirection="column">
@@ -320,10 +365,12 @@ export const register: Register = on => {
           <Button key="usage" label="Use" hotkey="1" variant={state.tab === 'usage' ? 'primary' : 'secondary'} onPress={() => select($, 'usage')} />
           <Button key="context" label="Ctx" hotkey="2" variant={state.tab === 'context' ? 'primary' : 'secondary'} onPress={() => select($, 'context')} />
           <Button key="fleet" label="Fleet" hotkey="3" variant={state.tab === 'fleet' ? 'primary' : 'secondary'} onPress={() => select($, 'fleet')} />
+          <Button key="clm" label="Clm" hotkey="4" variant={state.tab === 'clm' ? 'primary' : 'secondary'} onPress={() => select($, 'clm')} />
         </Box>
         {state.tab === 'usage' ? usageRows(elements, state, width) : null}
         {state.tab === 'context' ? contextRows(elements, state, width) : null}
         {state.tab === 'fleet' ? fleetRows(elements, state, width) : null}
+        {clmContent}
       </Box>
     )
   })

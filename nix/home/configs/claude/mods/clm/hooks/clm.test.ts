@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { RenderPropsOf, SessionCompactResult, SessionMessage, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, STEP_SYSTEM, submitWithRecovery, trackIssue } from './register'
+import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, STEP_SYSTEM, submitWithRecovery, trackIssue } from './register'
 import type { Meta } from './register'
 import type { ClmWorkflow } from '../types'
 
@@ -153,6 +153,48 @@ test('the clm noun tracks only this session\'s issues', OPTS, async ($, on) => {
   }
   expect(created.id).toBe('noun-tes-1')
   expect(error instanceof Error ? error.message : String(error)).toContain('does not belong')
+})
+
+// Regression: clm status omitted the queued follow-up or pending resume, or changed state while reading it.
+test('the clm status noun reports its read-only session view', async () => {
+  const workflow: ClmWorkflow = {
+    later: ['review the release'], resumeRequest: { text: 'continue the audit' },
+    lastSubmittedTurn: null, activeTurnId: 'turn-1',
+  }
+  const eventFile = '/home/t/.claude-work/tracker/events/status-session.jsonl'
+  const events = [
+    { ts: '2026-10-06T00:00:00.000Z', seq: 1, issue: 'status-s-1', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'todo item', status: 'todo' },
+    { ts: '2026-10-06T00:00:01.000Z', seq: 2, issue: 'status-s-2', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'doing item', status: 'doing' },
+    { ts: '2026-10-06T00:00:02.000Z', seq: 3, issue: 'status-s-3', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'question item', status: 'question' },
+    { ts: '2026-10-06T00:00:03.000Z', seq: 4, issue: 'status-s-4', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'dropped item', status: 'dropped' },
+    { ts: '2026-10-06T00:00:04.000Z', seq: 5, issue: 'status-s-5', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'finished item', status: 'done' },
+  ].map(event => JSON.stringify(event)).join('\n') + '\n'
+  const engine = {
+    state: {
+      get: async (ref: { plugin: string; key: string }) => ({ value: ref.plugin === 'clm' && ref.key === 'workflow' ? workflow : undefined }),
+    },
+    store: {
+      get: async (key: string) => key === 'ledger:status-session' ? { seq: 2, fails: 0, lastFoldAt: 1_791_926_400_000 } : undefined,
+    },
+    session: { id: async () => 'status-session' },
+    env: { get: async () => '/home/t' },
+    fs: {
+      exists: async (path: string) => path === '/home/t/.claude-work/tracker/events' || path === eventFile,
+      list: async (path: string) => path === '/home/t/.claude-work/tracker/events'
+        ? [{ name: 'status-session.jsonl', kind: 'file' as const, size: events.length, mtimeMs: 1, isLink: false }]
+        : [],
+      read: async (path: string) => path === eventFile ? events : '',
+    },
+    ui: { log: () => undefined },
+  } satisfies Parameters<typeof clmStatus>[0]
+
+  expect(await clmStatus(engine)).toEqual({
+    later: ['review the release'],
+    resumeRequest: { text: 'continue the audit' },
+    lastFoldAt: 1_791_926_400_000,
+    ledgerPath: '/home/t/.claude-work/plans/clm-status-session.md',
+    openIssues: 3,
+  })
 })
 
 // Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.

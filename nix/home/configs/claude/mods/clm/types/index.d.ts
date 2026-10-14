@@ -34,6 +34,14 @@ export type ClmWorkflow = {
   activeTurnId: string | null
 }
 
+export type ClmStatus = {
+  later: string[]
+  resumeRequest: { text: string } | null
+  lastFoldAt: number | null
+  ledgerPath: string
+  openIssues: number
+}
+
 export type Clm = {
   /** Create an issue in this session, or set an existing issue's status. */
   track(input: ClmTrackInput): Promise<ClmIssue>
@@ -41,6 +49,8 @@ export type Clm = {
   issues(query?: ClmIssueQuery): Promise<ClmIssue[]>
   /** Queue a continuation prompt for clm's turn-end arbiter. */
   resume(input: { text: string }): Promise<'submitted' | 'queued'>
+  /** Read the queue, pending resume request, last fold, ledger path, and open issue count. */
+  status(): Promise<ClmStatus>
 }
 
 declare module 'claude-code' {

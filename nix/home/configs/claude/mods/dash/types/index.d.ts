@@ -1,4 +1,4 @@
-export type DashTab = 'usage' | 'context' | 'fleet'
+export type DashTab = 'usage' | 'context' | 'fleet' | 'clm'
 
 export type UsageSnapshot = {
   context: { tokens?: number; window: number; percent?: number }
@@ -6,7 +6,8 @@ export type UsageSnapshot = {
   costUsd?: number
 }
 
-export type ContextCategory = { name: string; tokens: number; kind: string }
+export type DashContextCategory = { name: string; tokens: number; kind: string }
+export type ContextCategory = DashContextCategory
 
 export type TrackedAgent = {
   id: string
@@ -18,16 +19,17 @@ export type TrackedAgent = {
   lastMessage: string
 }
 
-export type DashboardState = {
-  tab: DashTab
-  now: number
-  usage: UsageSnapshot | null
-  categories: ContextCategory[] | null
-  agents: TrackedAgent[]
-}
-
 declare module 'claude-code' {
+  export type DashDashboardState = {
+    tab: DashTab
+    now: number
+    usage: UsageSnapshot | null
+    categories: DashContextCategory[] | null
+    agents: TrackedAgent[]
+    clm: { status: Awaited<ReturnType<EngineInterface['clm']['status']>> } | { error: string } | null
+  }
+
   interface PluginState {
-    dash: { dashboard: DashboardState }
+    dash: { dashboard: DashDashboardState }
   }
 }

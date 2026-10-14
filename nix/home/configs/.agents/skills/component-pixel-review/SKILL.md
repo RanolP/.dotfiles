@@ -6,7 +6,7 @@ when_to_use: A Jira card says something is off by a few pixels -- vertical centr
 
 The evidence is the component itself, rendered twice in one screen: the shipped code in the left column, the edited code in the right, each fed the same case props. One screenshot then holds every state for both versions, and the measurement is a pixel count against a guide the playground drew itself, so the number is independent of anyone's eye.
 
-`jira-qa-batch` is the sibling for whole-flow QA (two builds, two recordings, one video). This skill is for the component-level version: no data source, no navigation, one screen.
+`jira-qa-batch` is the sibling for whole-flow QA (two builds, two recordings, one video). This skill is for the component-level version: no data source, no navigation, one screen. `design-review` is the caller that hands it a single mismatch box whose verdict needs a pixel count; carry that box's id into the gallery title and the report so the offsets map back to the box.
 
 ## The seven steps
 

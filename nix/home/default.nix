@@ -410,6 +410,8 @@ in
       # time-budget gates every tool on an estimate and stops the work at the
       # budget: checkpoint reports at 1/3, 1/2, 2/3, 5/6, then abort past 6/6.
       ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
+      # dash: /dash opens one pane with Usage, Context and Fleet tabs.
+      ".claude/mods/dash".source = ./configs/claude/mods/dash;
       # On "command not found", point at mise/project shims before installs.
       ".claude/hooks/missing-tool-hint.py" = {
         source = ./configs/claude/hooks/missing-tool-hint.py;

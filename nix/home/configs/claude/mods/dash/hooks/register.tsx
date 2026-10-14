@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type {
   DashDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
-import type { ContextCategory, DashTab, TrackedAgent, UsageSnapshot } from '../types'
+import type { TrackedAgent, UsageSnapshot } from '../types'
 import { reconcileAgents, recordCompletion, recordMessage, recordSpawn } from './fleet'
 
 type Elements = ReturnType<EngineInterface['ui']['resolve']>
@@ -12,7 +12,7 @@ const PANE = 'dash'
 const TITLE = 'Dash'
 const REFRESH_MS = 15_000
 const dashboard = atom({ plugin: 'dash', key: 'dashboard' } as const, {
-  tab: 'usage', now: 0, usage: null, categories: null, agents: [], clm: null,
+  now: 0, usage: null, agents: [], clm: null,
 } satisfies DashDashboardState)
 
 function errorText(error: unknown): string {
@@ -53,13 +53,8 @@ async function change($: EngineInterface, operation: string, fn: (state: DashDas
   }
 }
 
-function snapshot(usage: Pick<SessionUsage, 'context' | 'rateLimits' | 'cost'>): UsageSnapshot {
+function snapshot(usage: Pick<SessionUsage, 'rateLimits' | 'cost'>): UsageSnapshot {
   return {
-    context: {
-      window: usage.context.window,
-      ...(usage.context.tokens === undefined ? {} : { tokens: usage.context.tokens }),
-      ...(usage.context.percent === undefined ? {} : { percent: usage.context.percent }),
-    },
     rateLimits: usage.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ kind, percentUsed, ...(resetsAt ? { resetsAt } : {}) })),
     ...(usage.cost ? { costUsd: usage.cost.usd } : {}),
   }
@@ -86,22 +81,6 @@ async function initialize($: EngineInterface): Promise<void> {
   }))
 }
 
-async function refreshContext($: EngineInterface): Promise<void> {
-  try {
-    const usage: SessionUsage = await $.session.usage({ breakdown: 'summary' })
-    const categories: ContextCategory[] = usage.context.breakdown?.categories.map(({ name, tokens, kind }) => ({ name, tokens, kind })) ?? []
-    const measuredAt = await now($, 'clock.now for context breakdown')
-    await change($, 'context breakdown state update', state => ({
-      ...state,
-      usage: snapshot(usage),
-      categories,
-      ...(measuredAt === undefined ? {} : { now: measuredAt }),
-    }))
-  } catch (error) {
-    await log($, 'session.usage({ breakdown: summary })', error)
-  }
-}
-
 async function refreshClm($: EngineInterface): Promise<void> {
   try {
     const status = await $.clm.status()
@@ -112,16 +91,6 @@ async function refreshClm($: EngineInterface): Promise<void> {
   }
 }
 
-async function select($: EngineInterface, tab: DashTab): Promise<void> {
-  try {
-    await change($, `select ${tab} tab`, state => ({ ...state, tab }))
-    if (tab === 'context') await refreshContext($)
-    if (tab === 'clm') await refreshClm($)
-  } catch (error) {
-    await log($, `select ${tab} tab`, error)
-  }
-}
-
 function startTicker($: EngineInterface, timer?: Timer): Timer | undefined {
   try {
     timer?.cancel()
@@ -129,10 +98,9 @@ function startTicker($: EngineInterface, timer?: Timer): Timer | undefined {
       void (async () => {
         const current = await now($, 'clock.now for elapsed refresh')
         if (current !== undefined) {
-          const state = await read($, dashboard)
           await change($, 'elapsed refresh state update', state => ({ ...state, now: current }))
-          if (state.tab === 'clm') await refreshClm($)
         }
+        await refreshClm($)
       })().catch(error => log($, 'elapsed refresh', error))
     })
   } catch (error) {
@@ -144,14 +112,6 @@ function startTicker($: EngineInterface, timer?: Timer): Timer | undefined {
 function number(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return '—'
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
-}
-
-function tokens(value: number | undefined): string {
-  if (value === undefined || !Number.isFinite(value)) return '—'
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`
-  if (value >= 10_000) return `${Math.round(value / 1_000)}k`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`
-  return String(value)
 }
 
 function clip(text: string, columns: number): string {
@@ -194,25 +154,12 @@ function durationLabel(elapsed: number): string {
 function usageRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   const usage = state.usage
   if (!usage) return <Text dimColor>Usage figures unavailable.</Text>
-  const context = usage.context
-  const contextLine = `Context ${number(context.percent)}% · ${tokens(context.tokens)} / ${tokens(context.window)}`
   return (
     <Box flexDirection="column">
-      <Text>{clip(contextLine, width)}</Text>
       {usage.rateLimits.length === 0
         ? <Text dimColor>No rate limits</Text>
         : usage.rateLimits.map(limit => <Text key={limit.kind}>{clip(`${kindLabel(limit.kind)} ${number(limit.percentUsed)}%${resetTime(limit.resetsAt)}`, width)}</Text>)}
       {usage.costUsd === undefined ? null : <Text>{clip(`Cost $${usage.costUsd.toFixed(2)}`, width)}</Text>}
-    </Box>
-  )
-}
-
-function contextRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
-  if (state.categories === null) return <Text dimColor>Breakdown unavailable. Tap Ctx to refresh.</Text>
-  if (state.categories.length === 0) return <Text dimColor>No context categories.</Text>
-  return (
-    <Box flexDirection="column">
-      {state.categories.map(category => <Text key={category.name}>{clip(`${category.name} ${tokens(category.tokens)}${category.kind === 'deferred' ? ' deferred' : ''}`, width)}</Text>)}
     </Box>
   )
 }
@@ -259,12 +206,13 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     try {
-      await $.command.register({ name: 'dash', description: 'Open the usage, context, subagent, and clm dashboard' })
+      await $.command.register({ name: 'dash', description: 'Open the unified usage, subagent, and clm status dashboard' })
     } catch (error) {
       await log($, 'command.register dash', error)
     }
     const started = await pass($, 'session.start', () => next(e))
     await initialize($)
+    await refreshClm($)
     ticker = startTicker($, ticker)
     return started
   })
@@ -283,20 +231,11 @@ export const register: Register = on => {
     const result = await pass($, 'session.measure', () => next(e))
     const measuredAt = await now($, 'clock.now after session.measure')
     if (measuredAt !== undefined) {
-      const changedContext = e.changed.includes('context')
       await change($, 'session.measure state update', state => ({
         ...state,
         now: measuredAt,
-        usage: snapshot({ context: e.context, rateLimits: e.rateLimits, ...(e.cost === undefined ? {} : { cost: e.cost }) }),
-        ...(changedContext ? { categories: null } : {}),
+        usage: snapshot({ rateLimits: e.rateLimits, ...(e.cost === undefined ? {} : { cost: e.cost }) }),
       }))
-      if (changedContext) {
-        try {
-          if ((await read($, dashboard)).tab === 'context') await refreshContext($)
-        } catch (error) {
-          await log($, 'read dashboard tab after session.measure', error)
-        }
-      }
     }
     return result
   })
@@ -351,26 +290,21 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const elements = await pass($, 'ui.resolve for Pane', async () => $.ui.resolve(e))
-    const { Box, Button, Text } = elements
+    const { Box, Text } = elements
     const width = Math.max(8, e.props.bodyColumns - 1)
     const state = await read($, dashboard).catch(
       (error: unknown) => log($, 'read dashboard for ui.render', error).then(() => undefined),
     )
     if (state === undefined) return <Text dimColor>Dash state unavailable. See debug log.</Text>
-    const clmContent = state.tab === 'clm' ? clmRows(elements, state) : null
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row">
-          <Button key="usage" label="Use" hotkey="1" variant={state.tab === 'usage' ? 'primary' : 'secondary'} onPress={() => select($, 'usage')} />
-          <Button key="context" label="Ctx" hotkey="2" variant={state.tab === 'context' ? 'primary' : 'secondary'} onPress={() => select($, 'context')} />
-          <Button key="fleet" label="Fleet" hotkey="3" variant={state.tab === 'fleet' ? 'primary' : 'secondary'} onPress={() => select($, 'fleet')} />
-          <Button key="clm" label="Clm" hotkey="4" variant={state.tab === 'clm' ? 'primary' : 'secondary'} onPress={() => select($, 'clm')} />
-        </Box>
-        {state.tab === 'usage' ? usageRows(elements, state, width) : null}
-        {state.tab === 'context' ? contextRows(elements, state, width) : null}
-        {state.tab === 'fleet' ? fleetRows(elements, state, width) : null}
-        {clmContent}
+        <Text bold>Usage</Text>
+        {usageRows(elements, state, width)}
+        <Text bold>Fleet</Text>
+        {fleetRows(elements, state, width)}
+        <Text bold>Clm</Text>
+        {clmRows(elements, state)}
       </Box>
     )
   })

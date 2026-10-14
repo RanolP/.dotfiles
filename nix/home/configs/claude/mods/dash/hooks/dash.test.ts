@@ -1,54 +1,53 @@
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
-// Regression: tab render helpers must resolve their element tags from the mounted surface.
-test('the pane renders Text after each dashboard tab is selected', async ($, on) => {
-  mock.clock(on, { now: 1_000 })
-  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 100_000, tokens: 25_000, percent: 25 }, rateLimits: [] } }))
+const start = ($: Engine) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
 
-  const ui = await $.ui.mount({
-    plugin: 'dash',
-    surface: 'terminal',
-    component: 'Pane',
-    requestId: 'dash',
-    props: {
-      title: 'Dash',
-      isFocused: true,
-      bodyColumns: 32,
-      placement: 'inline',
-      scroll: { offset: 0, bodyRows: 20 },
-      view: {},
-    },
-  })
-
-  expect(await ui.find({ type: 'Text' })).toBeDefined()
-  for (const tab of ['context', 'fleet', 'clm', 'usage']) {
-    await ui.press({ key: tab })
-    expect(await ui.find({ type: 'Text' })).toBeDefined()
-  }
+const mountPane = ($: Engine) => $.ui.mount({
+  plugin: 'dash',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'dash',
+  props: {
+    title: 'Dash',
+    isFocused: true,
+    bodyColumns: 60,
+    placement: 'inline',
+    scroll: { offset: 0, bodyRows: 40 },
+    view: {},
+  },
 })
 
-// Regression: the Clm tab failed to render and log a useful error when clm was unavailable.
-test('the Clm tab renders a logged error when clm is unavailable', async ($, on) => {
+// Regression: the dashboard was split into tabs and showed context fill, which clm already owns.
+test('one pane stacks Usage, Fleet and Clm sections with no tabs and no context line', async ($, on) => {
   mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.usage', () => ({ value: {
+    startedAt: 0,
+    context: { window: 100_000, tokens: 25_000, percent: 25 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-14T12:00:00Z' }],
+    cost: { usd: 1.5 },
+  } }))
+  await start($)
+
+  const ui = await mountPane($)
+  for (const header of ['Usage', 'Fleet', 'Clm']) expect(await ui.find({ type: 'Text', text: header })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '5h 40% @12:00Z' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Cost $1.50' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Context/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Button' })).toBeUndefined()
+})
+
+// Regression: clm status was fetched only when a Clm tab was pressed, so the unified pane stayed on "Loading".
+test('session start fetches clm status, rendering a logged one-line error when clm is unavailable', async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
   const logs: string[] = []
   on('ui.log', (_$, e) => { logs.push(e.text); return { value: undefined } })
+  await start($)
 
-  const ui = await $.ui.mount({
-    plugin: 'dash',
-    surface: 'terminal',
-    component: 'Pane',
-    requestId: 'dash',
-    props: {
-      title: 'Dash',
-      isFocused: true,
-      bodyColumns: 60,
-      placement: 'inline',
-      scroll: { offset: 0, bodyRows: 20 },
-      view: {},
-    },
-  })
-
-  await ui.press({ key: 'clm' })
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /Loading clm status/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /clm is unavailable: .+/ })).toBeDefined()
   expect(logs.some(message => message.startsWith('[dash] clm.status:'))).toBe(true)
 })

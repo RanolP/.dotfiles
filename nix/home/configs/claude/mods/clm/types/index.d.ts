@@ -27,14 +27,27 @@ export type ClmIssueQuery = {
   status?: ClmIssueStatus
 }
 
+export type ClmWorkflow = {
+  later: string[]
+  resumeRequest: { text: string } | null
+  lastSubmittedTurn: string | null
+  activeTurnId: string | null
+}
+
 export type Clm = {
   /** Create an issue in this session, or set an existing issue's status. */
   track(input: ClmTrackInput): Promise<ClmIssue>
   /** Read this session's issues, optionally filtered by id and status. */
   issues(query?: ClmIssueQuery): Promise<ClmIssue[]>
+  /** Queue a continuation prompt for clm's turn-end arbiter. */
+  resume(input: { text: string }): Promise<'submitted' | 'queued'>
 }
 
 declare module 'claude-code' {
+  interface PluginState {
+    clm: { workflow: ClmWorkflow }
+  }
+
   interface EngineInterface {
     clm: Clm
   }

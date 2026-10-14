@@ -1,4 +1,4 @@
-import type { EngineInterface, Register, Timer, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { EngineInterface, PromptOrigin, Register, Timer, ToolSpec, TurnStepChunk, TurnStepResult } from 'claude-code'
 import type { Report, Unit } from '../types'
 import {
   CHECKPOINTS, GRACE_MS, LAST, MAX_RESUMES, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt, gate, haltReason,
@@ -29,6 +29,7 @@ const STATUS_REFRESH_MS = 60_000
 // resumed by a plugin prompt, up to MAX_RESUMES in a row without the user.
 const UNLIMITED = { plugin: 'time-budget', key: 'unlimited' } as const
 const RESUMES = { plugin: 'time-budget', key: 'resumes' } as const
+const RESUME_PENDING = { plugin: 'time-budget', key: 'resumePending' } as const
 const UNLIMITED_ENV = 'CLAUDE_TIME_BUDGET_UNLIMITED'
 const UNLIMITED_COMMAND = 'budget-unlimited'
 const OPEN_STATUSES = new Set(['todo', 'doing'])
@@ -71,7 +72,7 @@ const TOOLS = [
       required: ['agent_id', 'minutes'],
     },
   },
-] as const
+] satisfies ToolSpec[]
 
 type Ctx = EngineInterface
 type S = {
@@ -87,9 +88,11 @@ type S = {
   unlimited: boolean
   envUnlimited: boolean
   resumes: number
+  resumePending: string | null
 }
 
 const isUnlimited = (s: S) => s.unlimited || s.envUnlimited
+const isHumanOrigin = (origin: PromptOrigin) => origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk'
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -314,6 +317,7 @@ async function saveLoop($: Ctx, s: S) {
   try {
     await $.state.set(UNLIMITED, s.unlimited)
     await $.state.set(RESUMES, s.resumes)
+    await $.state.set(RESUME_PENDING, s.resumePending)
   } catch (err) {
     log($, `state.set (unlimited) failed: ${errText(err)}`)
   }
@@ -333,9 +337,9 @@ async function liftHalts($: Ctx, s: S) {
   await showStatus($, s)
 }
 
-// At a main turn's end in unlimited mode: queue a resume prompt while clm work is open.
+// At a main turn's end in unlimited mode: register a resume request while clm work is open.
 async function autoResume($: Ctx, s: S) {
-  if (!isUnlimited(s) || s.resumes >= MAX_RESUMES) return
+  if (!isUnlimited(s) || s.resumes >= MAX_RESUMES || s.resumePending !== null) return
   let open
   try {
     open = (await $.clm.issues()).filter(i => OPEN_STATUSES.has(i.status))
@@ -344,17 +348,21 @@ async function autoResume($: Ctx, s: S) {
     return
   }
   if (!open.length) return
-  s.resumes++
-  await saveLoop($, s)
   const list = open.map(i => `- ${i.id} [${i.status}] ${i.title}`).join('\n')
-  const text = `Unlimited mode, auto-resume ${s.resumes}/${MAX_RESUMES}: the user is away and these clm tasks are still open. Continue them now, verify each before marking it done, and mark a task dropped if it cannot be finished without the user.\n${list}`
-  // The prompt starts its own turn once the session is idle, so awaiting it here would hold this turn's end.
-  void $.prompt.submit({ text }).catch(err => log($, `auto-resume submit failed: ${errText(err)}`))
+  const text = `Unlimited mode, auto-resume ${s.resumes + 1}/${MAX_RESUMES}: the user is away and these clm tasks are still open. Continue them now, verify each before marking it done, and mark a task dropped if it cannot be finished without the user.\n${list}`
+  try {
+    const status = await $.clm.resume({ text })
+    if (status === 'submitted') s.resumes++
+    else s.resumePending = text
+    await saveLoop($, s)
+  } catch (err) {
+    log($, `auto-resume request failed: ${errText(err)}`)
+  }
 }
 
 export const register: Register = (on) => {
   registerAwake(on)
-  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set(), unlimited: false, envUnlimited: false, resumes: 0 }
+  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set(), unlimited: false, envUnlimited: false, resumes: 0, resumePending: null }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -365,6 +373,7 @@ export const register: Register = (on) => {
       s.parked = parked.value ? { ...parked.value } : {}
       s.unlimited = (await $.state.get(UNLIMITED)).value === true
       s.resumes = (await $.state.get(RESUMES)).value ?? 0
+      s.resumePending = (await $.state.get(RESUME_PENDING)).value ?? null
     } catch (err) {
       log($, `state.get failed: ${errText(err)}`)
     }
@@ -387,7 +396,7 @@ export const register: Register = (on) => {
     }
     for (const t of [...TOOLS, AWAKE_DEF]) {
       try {
-        await $.tool.register({ ...t, inputSchema: t.inputSchema as unknown as Record<string, unknown> })
+        await $.tool.register(t)
       } catch (err) {
         log($, `tool.register(${t.name}) failed: ${errText(err)}`)
       }
@@ -429,17 +438,30 @@ export const register: Register = (on) => {
 
   // The user's own prompt ends a run of auto-resumes; a plugin's (ours included) does not.
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind !== 'plugin' && e.origin.kind !== 'unclassified' && s.resumes !== 0) {
+    const result = await next(e)
+    if (isHumanOrigin(e.origin)) {
       s.resumes = 0
+      s.resumePending = null
+      await saveLoop($, s)
+    } else if (e.origin.kind === 'plugin' && e.origin.name === 'clm' && s.resumePending === e.text && result.drop === undefined) {
+      s.resumes++
+      s.resumePending = null
       await saveLoop($, s)
     }
-    return next(e)
+    return result
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const base = await next(e).catch(err => {
+      if (!String(err).includes('no implementation for ui.render')) throw err
+      return null
+    })
     const entry = mainEntry(s)
     const u = entry?.[1]
-    if (!u?.halted || isUnlimited(s) || e.props.hasSurvey) return next(e)
+    if (!u?.halted || isUnlimited(s) || e.props.hasSurvey) {
+      if (base) return base
+      throw new Error('no implementation for ui.render')
+    }
     const { Box, Text, Button } = $.ui.resolve(e)
     const buttons = extensionMinutes(u).map(extra => Button({
       key: `time-budget:+${extra}m`,
@@ -450,13 +472,15 @@ export const register: Register = (on) => {
         })().catch(err => log($, `extension +${extra}m failed: ${errText(err)}`))
       },
     }))
-    return Box({
+    const budget = Box({
       gap: 1,
       children: [Text({ children: `Time budget stopped: ${u.halted}` }), ...buttons],
     })
+    return Box({ gap: 1, children: base === null ? [budget] : [base, budget] })
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined && !e.isAborted) await autoResume($, s)
     const r = await next(e)
     const now = await $.clock.now()
     if (e.agentId) {
@@ -472,8 +496,6 @@ export const register: Register = (on) => {
     }
     if (s.runningTurn === e.turnId) s.runningTurn = undefined
     await syncMainTask($, s, now)
-    // An aborted turn is the user's Esc, which the loop leaves alone.
-    if (!e.isAborted) await autoResume($, s)
     const u = mainEntry(s)?.[1]
     if (!u) return r
     u.lastEnd = now

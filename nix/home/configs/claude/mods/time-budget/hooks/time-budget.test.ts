@@ -8,12 +8,16 @@ const T0 = 1_000_000_000
 function world(on: any) {
   const seen = {
     files: {} as Record<string, string>,
+    state: {} as Record<string, unknown>,
     status: [] as (string | undefined)[],
     aborted: [] as string[],
     steps: 0,
     ran: [] as string[],
     clm: {} as Record<string, { id: string; title: string; status: string; updated: string }>,
     prompts: [] as string[],
+    promptSubmissions: [] as { text: string; origin: any }[],
+    resumeRequests: [] as string[],
+    resumeStatus: 'submitted' as 'submitted' | 'queued',
   }
   const clock: MockClock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/home/t' })
@@ -22,11 +26,17 @@ function world(on: any) {
     clm: {
       track: () => { throw new Error('test clm.track base') },
       issues: () => { throw new Error('test clm.issues base') },
+      resume: () => { throw new Error('test clm.resume base') },
     },
   }))
   on('fs.exists', (_$: any, e: any) => ({ value: e.path in seen.files }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
+  on('state.set', async (_$: any, e: any, next: any) => {
+    const result = await next(e)
+    seen.state[e.key] = e.value
+    return result
+  })
   on('process.run', (_$: any, e: any) => {
     if (e.argv[0] === 'mv') {
       seen.files[e.argv[2]] = seen.files[e.argv[1]]
@@ -41,7 +51,11 @@ function world(on: any) {
   on('turn.abort', (_$: any, e: any) => { seen.aborted.push(e.turnId); return { value: undefined } })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.end', (_$: any, e: any) => ({ sessionId: e.sessionId }))
-  on('prompt.submit', (_$: any, e: any) => { seen.prompts.push(e.text); return { text: e.text, context: e.context } })
+  on('prompt.submit', (_$: any, e: any) => {
+    seen.prompts.push(e.text)
+    seen.promptSubmissions.push({ text: e.text, origin: e.origin })
+    return { text: e.text, context: e.context }
+  })
   on('clm.track', (_$: any, e: any) => {
     const id = e.issue ?? `task-${Object.keys(seen.clm).length + 1}`
     const issue = seen.clm[id] ?? { id, title: e.title, status: e.status, updated: 'now' }
@@ -52,6 +66,7 @@ function world(on: any) {
   on('clm.issues', (_$: any, e: any) => ({
     value: Object.values(seen.clm).filter(issue => (!e?.issue || issue.id === e.issue) && (!e?.status || issue.status === e.status)),
   }))
+  on('clm.resume', (_$: any, e: any) => { seen.resumeRequests.push(e.text); return { value: seen.resumeStatus } })
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
   on('agent.spawn', (_$: any, e: any) => ({ model: 'm', agentId: e.description }))
@@ -200,8 +215,8 @@ test('a follow-up prompt keeps the open task budget clock', async ($, on) => {
   expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 30 min is spent')
 })
 
-// Regression: pressing +20m on a halted unit re-arms its clock and resumes tool calls.
-test('the +20m button extends a halted unit and submits a continuation', async ($, on) => {
+// Regression: pressing +20m on a halted unit re-arms its clock and submits the user's continuation asUser.
+test('the +20m button extends a halted unit and submits asUser directly', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
@@ -211,7 +226,9 @@ test('the +20m button extends a halted unit and submits a continuation', async (
   const ui = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
   await ui.press({ key: 'time-budget:+20m' })
   expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
+  expect(seen.resumeRequests).toEqual([])
   expect(seen.prompts.at(-1)).toBe('Continue this task.')
+  expect(seen.promptSubmissions.at(-1)?.origin?.asUser).toBe(true)
 })
 
 // Regression: a main turn that keeps going past the stop is never cut off.
@@ -521,7 +538,7 @@ test('a main answer carries the budget line only when a report is due', async ($
 })
 
 const unlimited = ($: Engine, arg: 'on' | 'off') => $.command.run({ command: 'budget-unlimited', args: arg } as any)
-const resumes = (seen: ReturnType<typeof world>['seen']) => seen.prompts.filter(p => p.startsWith('Unlimited mode, auto-resume'))
+const resumes = (seen: ReturnType<typeof world>['seen']) => seen.resumeRequests.filter(p => p.startsWith('Unlimited mode, auto-resume'))
 
 // Regression: unlimited mode still stopped every tool once the budget ran out, ending the unattended run.
 test('unlimited mode suppresses the budget halt', async ($, on) => {
@@ -569,6 +586,38 @@ test('auto-resume fires only in unlimited mode and only with open clm work', asy
   onlyIssue(seen).status = 'done'
   await complete($, 'turn-3', 'c')
   expect(resumes(seen).length).toBe(1)
+})
+
+// Regression: time-budget submitted its own automatic prompt, bypassing clm's continuation priority and one-submit guard.
+test('auto-resume registers with clm without submitting directly', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await unlimited($, 'on')
+  await prompt($, 'go')
+  await estimate($, 30)
+  await complete($, 'turn-auto-resume', 'a')
+  expect(resumes(seen).length).toBe(1)
+  expect(seen.prompts.filter(p => p.startsWith('Unlimited mode, auto-resume'))).toEqual([])
+})
+
+// Regression caught: queued resumes counted toward MAX_RESUMES before submission, and notifications incorrectly reset that cap.
+test('queued auto-resumes count only when clm submits them and task notifications preserve the count', async ($, on) => {
+  const { seen } = world(on)
+  seen.resumeStatus = 'queued'
+  await start($)
+  await unlimited($, 'on')
+  await prompt($, 'go')
+  await estimate($, 30)
+  await complete($, 'turn-queued-resume', 'a')
+  const request = seen.resumeRequests.at(-1)
+  expect(request).toContain('auto-resume 1/50')
+  expect(seen.state.resumes).toBe(0)
+  await $.prompt.submit({ text: request, wait: false, origin: { kind: 'plugin', name: 'clm' } } as any)
+  expect(seen.state.resumes).toBe(1)
+  await $.prompt.submit({ text: 'background notification', wait: false, origin: { kind: 'task-notification' } } as any)
+  expect(seen.state.resumes).toBe(1)
+  await $.prompt.submit({ text: 'continue', wait: false, origin: { kind: 'composer' } } as any)
+  expect(seen.state.resumes).toBe(0)
 })
 
 // Regression: a task the model can never close drove the unattended loop forever.

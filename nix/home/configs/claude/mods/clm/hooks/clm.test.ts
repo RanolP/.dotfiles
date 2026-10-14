@@ -1,10 +1,11 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { SessionCompactResult, SessionMessage, ToolCallInput } from 'claude-code'
+import type { RenderPropsOf, SessionCompactResult, SessionMessage, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { isHeld, sessionIssues, STEP_SYSTEM, trackIssue } from './register'
+import { chooseContinuation, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, STEP_SYSTEM, submitWithRecovery, trackIssue } from './register'
 import type { Meta } from './register'
+import type { ClmWorkflow } from '../types'
 
 import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM } from './ledger'
 import { parseLog, snapshot, toEvents } from './tracker'
@@ -43,7 +44,7 @@ const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[] }
 function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -91,10 +92,19 @@ function bottoms(on: any, s: State) {
     return { value: text === null ? { isAnswered: false, reason: 'aborted' } : { isAnswered: true, text: text ?? '', usage: {} } }
   })
   on('ui.status', () => ({ value: undefined }))
-  on('ui.log', (_$: any, e: any) => { seen.logs.push(e.text); return { value: undefined } })
+  on('ui.log', (_$: any, e: any) => {
+    seen.logs.push(e.text)
+    return { value: undefined }
+  })
   on('command.register', (_$: any, e: any) => ({ value: { command: e.name } }))
+  on('prompt.submit', (_$: any, e: any) => {
+    seen.submissions.push({ text: e.text, ...(e.origin?.asUser ? { asUser: true as const } : {}) })
+    return { text: e.text, context: e.context }
+  })
   on('session.start', () => ({ cwd: '/tmp' }))
-  on('turn.complete', () => ({ text: '' }))
+  on('turn.complete', async ($: any) => {
+    return { text: '' }
+  })
   // Stands for the engine summarizer: any call reaching it is a compaction clm failed to replace.
   on('session.compact', (_$: any, e: any) => { seen.engineCompactions++; seen.engineInputs.push(e.messages); return { messages: [M('user', 'ENGINE SUMMARY')] } })
   return seen
@@ -1289,6 +1299,92 @@ test('a drop lands only on a user quote, and a failed review holds it for the ne
 })
 
 const runClm = ($: { command: { run(e: { command: string; args: string }): Promise<unknown> } }, args: string) => $.command.run({ command: 'clm', args })
+const runWorkflowCommand = ($: any, _command: 'later', args = '') => $.command.run({ command: 'later', args })
+
+const LATER_BAND_PROPS: RenderPropsOf['AbovePrompt'] = {
+  hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {},
+}
+
+// Regression caught: a queued follow-up lived in module memory and disappeared when session hooks rebound, or could not be dropped by its displayed position.
+test('the later queue stays in session state and supports list, positional drop, and all', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true })
+  await runWorkflowCommand($, 'later', 'Check the release notes')
+  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true })
+  await runWorkflowCommand($, 'later', 'Verify the changelog')
+  await runWorkflowCommand($, 'later')
+  expect(seen.logs.at(-1)).toContain('1. Check the release notes')
+  expect(seen.logs.at(-1)).toContain('2. Verify the changelog')
+  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
+  expect(JSON.stringify(await band.drawn())).toContain('Check the release notes')
+  expect(JSON.stringify(await band.drawn())).toContain('Verify the changelog')
+  await runWorkflowCommand($, 'later', 'drop 1')
+  await runWorkflowCommand($, 'later')
+  expect(seen.logs.at(-1)).toContain('1. Verify the changelog')
+  expect(seen.logs.at(-1)).not.toContain('Check the release notes')
+  await runWorkflowCommand($, 'later', 'drop all')
+  await runWorkflowCommand($, 'later')
+  expect(seen.logs.at(-1)).toBe('clm: later queue is empty')
+})
+
+// Regression caught: queue continuations lost asUser or repeated after duplicate completion events.
+test('the continuation arbiter submits the later queue once per turn', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  await runWorkflowCommand($, 'later', 'Run the focused verification')
+  const end = (turnId: string, extra: Record<string, unknown> = {}) => $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId, reason: 'answer', ...extra } as any)
+  await end('t1', { isAborted: true })
+  await end('t-agent', { agentId: 'agent-1' })
+  expect(seen.submissions).toEqual([])
+  await end('t1')
+  await end('t1')
+  expect(seen.submissions).toEqual([{ text: 'Run the focused verification', asUser: true }])
+  await end('t2')
+  await end('t2')
+  expect(seen.submissions).toEqual([{ text: 'Run the focused verification', asUser: true }])
+})
+
+// Regression caught: a failed continuation submission consumed the queue head and blocked retrying the same turn.
+test('a rejected continuation submission restores its queue head and clears its turn claim', async () => {
+  let workflow: ClmWorkflow = {
+    later: [], resumeRequest: null,
+    lastSubmittedTurn: 'retry-turn', activeTurnId: null,
+  }
+  const logs: string[] = []
+  const submitted = await submitWithRecovery(
+    async () => { throw new Error('settings hook refused prompt') },
+    async () => { workflow = restoreFailedContinuation(workflow, 'retry-turn', { text: 'next item', asUser: true, source: 'later' }) },
+    message => logs.push(message),
+  )
+  expect(submitted).toBe(false)
+  expect(workflow.later).toEqual(['next item'])
+  expect(workflow.lastSubmittedTurn).toBeNull()
+  expect(logs).toContain('clm: continuation submit failed (Error: settings hook refused prompt)')
+})
+
+// Regression caught: clm skipped a queued resume after consuming the higher-priority later queue.
+test('the continuation selector consumes a resume request after the later queue', async () => {
+  const start: ClmWorkflow = {
+    later: ['verify the release'],
+    resumeRequest: { text: 'time-budget resume' }, lastSubmittedTurn: null, activeTurnId: null,
+  }
+  const queue = chooseContinuation(start, 't1')
+  expect(queue.continuation).toEqual({ text: 'verify the release', asUser: true, source: 'later' })
+  const resumed = chooseContinuation(queue.workflow, 't2')
+  expect(resumed.continuation?.text).toBe('time-budget resume')
+  expect(chooseContinuation(resumed.workflow, 't3').continuation).toBeUndefined()
+})
+
+// Regression caught: task notifications cleared queued away-resume requests, or a human return left one stale.
+test('only human-origin prompts clear queued resumes', async () => {
+  const pending: ClmWorkflow = {
+    later: [], resumeRequest: { text: 'stale away reminder' },
+    lastSubmittedTurn: 'claimed-turn', activeTurnId: null,
+  }
+  expect(resetUserWorkflow(pending, { kind: 'task-notification' })).toBe(pending)
+  const returned = resetUserWorkflow(pending, { kind: 'composer' })
+  expect(returned.resumeRequest).toBeNull()
+  expect(returned.lastSubmittedTurn).toBeNull()
+})
 
 // Regression caught: tasks of an abandoned direction stayed open with no way for the user to clear them, or `/clm drop` left their panel tasks behind.
 test('/clm drop drops one named issue, then every open issue of the session', OPTS, async ($, on) => {

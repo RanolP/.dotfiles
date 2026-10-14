@@ -1,4 +1,4 @@
-import type { BuiltinToolInputs, EngineInterface, Register, SessionMessage } from 'claude-code'
+import { update, type BuiltinToolInputs, type EngineInterface, type PromptOrigin, type Register, type SessionMessage } from 'claude-code'
 
 import { boardHtml } from './board'
 import {
@@ -18,6 +18,7 @@ import {
   archivedDone, describe, injected, isOpen, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
   type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
+import type { ClmWorkflow } from '../types'
 
 // clm replaces the engine's compaction for the main conversation. When the
 // rows outgrow a token budget, a cheap model folds the turns about to go into a
@@ -37,6 +38,33 @@ import {
 
 const FAILS_BEFORE_FALLBACK = 3
 const HYSTERESIS_FLOOR = 0.9
+const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
+
+const emptyWorkflow = (): ClmWorkflow => ({ later: [], resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null })
+function isWorkflow(v: unknown): v is ClmWorkflow {
+  return isRecord(v) && Array.isArray(v.later) && v.later.every(x => typeof x === 'string')
+    && (v.resumeRequest === null || (isRecord(v.resumeRequest) && typeof v.resumeRequest.text === 'string'))
+    && (typeof v.lastSubmittedTurn === 'string' || v.lastSubmittedTurn === null)
+    && (typeof v.activeTurnId === 'string' || v.activeTurnId === null)
+}
+
+async function readWorkflow($: EngineInterface): Promise<ClmWorkflow> {
+  const value: unknown = (await $.state.get(WORKFLOW)).value
+  return isWorkflow(value) ? value : emptyWorkflow()
+}
+
+/** Writes one workflow version at a time so concurrent queue and arbiter updates cannot overwrite each other. */
+async function changeWorkflow<T>($: EngineInterface, change: (current: ClmWorkflow) => { next: ClmWorkflow; result: T }): Promise<T> {
+  let result: { value: T } | undefined
+  await update($, WORKFLOW, value => {
+    const current = isWorkflow(value) ? value : emptyWorkflow()
+    const changed = change(current)
+    result = { value: changed.result }
+    return changed.next
+  })
+  if (!result) throw new Error('clm workflow update did not run')
+  return result.value
+}
 
 // --- options -------------------------------------------------------------
 
@@ -1025,6 +1053,90 @@ export function report(ledger: string | undefined, rows: readonly SessionMessage
   ].join('\n')
 }
 
+const isHumanOrigin = (origin: PromptOrigin) => origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk'
+export function resetUserWorkflow(current: ClmWorkflow, origin: PromptOrigin): ClmWorkflow {
+  if (!isHumanOrigin(origin) || (!current.resumeRequest && current.lastSubmittedTurn === null)) return current
+  return { ...current, resumeRequest: null, lastSubmittedTurn: null }
+}
+
+export type Continuation = { text: string; asUser?: true; source: 'later' | 'resume' }
+export function chooseContinuation(current: ClmWorkflow, turnId: string): { workflow: ClmWorkflow; continuation?: Continuation } {
+  if (current.lastSubmittedTurn === turnId) return { workflow: current }
+  const [laterHead, ...laterRest] = current.later
+  if (laterHead !== undefined) {
+    return {
+      workflow: { ...current, later: laterRest, lastSubmittedTurn: turnId },
+      continuation: { text: laterHead, asUser: true, source: 'later' },
+    }
+  }
+  if (current.resumeRequest) {
+    return {
+      workflow: { ...current, resumeRequest: null, lastSubmittedTurn: turnId },
+      continuation: { text: current.resumeRequest.text, source: 'resume' },
+    }
+  }
+  return { workflow: current }
+}
+
+async function claimContinuation($: EngineInterface, turnId: string): Promise<Continuation | undefined> {
+  return changeWorkflow($, current => {
+    const selected = chooseContinuation(current, turnId)
+    return { next: selected.workflow, result: selected.continuation }
+  })
+}
+
+export function restoreFailedContinuation(current: ClmWorkflow, turnId: string, continuation: Continuation): ClmWorkflow {
+  if (current.lastSubmittedTurn !== turnId) return current
+  if (continuation.source === 'later')
+    return { ...current, later: [continuation.text, ...current.later], lastSubmittedTurn: null }
+  return { ...current, resumeRequest: current.resumeRequest ?? { text: continuation.text }, lastSubmittedTurn: null }
+}
+
+async function restoreContinuation($: EngineInterface, turnId: string, continuation: Continuation): Promise<void> {
+  await changeWorkflow($, current => ({ next: restoreFailedContinuation(current, turnId, continuation), result: undefined }))
+}
+
+export async function submitWithRecovery(
+  submit: () => Promise<void>,
+  restore: () => Promise<void>,
+  log: (message: string) => void,
+): Promise<boolean> {
+  try {
+    await submit()
+    return true
+  } catch (err) {
+    try {
+      await restore()
+    } catch (restoreError) {
+      log(`clm: continuation restore failed (${String(restoreError).slice(0, 160)})`)
+    }
+    log(`clm: continuation submit failed (${String(err).slice(0, 160)})`)
+    return false
+  }
+}
+
+async function submitContinuation($: EngineInterface, turnId: string, continuation: Continuation): Promise<boolean> {
+  return submitWithRecovery(
+    async () => {
+      const submitted = await $.prompt.submit({ text: continuation.text, ...(continuation.asUser ? { asUser: true } : {}) })
+      if (submitted.drop !== undefined) throw new Error(submitted.drop)
+    },
+    () => restoreContinuation($, turnId, continuation),
+    message => $.ui.log(message),
+  )
+}
+
+async function arbitrateContinuation($: EngineInterface, turnId: string): Promise<'submitted' | 'queued'> {
+  const continuation = await claimContinuation($, turnId)
+  if (!continuation) return 'queued'
+  if ((await readWorkflow($)).activeTurnId !== null) {
+    void submitContinuation($, turnId, continuation)
+    return 'queued'
+  }
+  const submitted = await submitContinuation($, turnId, continuation)
+  return submitted && continuation.source === 'resume' ? 'submitted' : 'queued'
+}
+
 // clm-prompt
 const GUIDE = [
   'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
@@ -1043,12 +1155,24 @@ export const register: Register = (on, options) => {
       clm: {
         track: () => { throw new Error('clm.track is handled by the clm plugin') },
         issues: () => { throw new Error('clm.issues is handled by the clm plugin') },
+        resume: () => { throw new Error('clm.resume is handled by the clm plugin') },
       },
     }
   })
 
   on('clm.track', async ($, e) => ({ value: await trackIssue($, e) }))
   on('clm.issues', async ($, e) => ({ value: await sessionIssues($, e ?? {}) }))
+  on('clm.resume', async ($, e) => {
+    const text = e.text.trim()
+    if (!text) throw new Error('clm.resume text must not be empty')
+    const activeTurn = (await readWorkflow($)).activeTurnId
+    await changeWorkflow($, current => ({ next: { ...current, resumeRequest: { text } }, result: undefined }))
+    if (activeTurn === null) {
+      const requestTurn = `resume:${await $.clock.now()}:${Math.random().toString(36).slice(2, 10)}`
+      return { value: await arbitrateContinuation($, requestTurn) }
+    }
+    return { value: 'queued' as const }
+  })
 
   on('session.start', async ($, e, next) => {
     for (const p of problems) $.ui.log(`clm: option ${p}`)
@@ -1057,7 +1181,37 @@ export const register: Register = (on, options) => {
       description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session (shown to you only).',
       immediate: true,
     })
+    await $.command.register({ name: 'later', description: 'Queue a follow-up for the next turn, list queued follow-ups, or drop one.', immediate: true })
     return next(e)
+  })
+
+  on('command.run', { command: 'later' }, async ($, e) => {
+    const text = (e.args ?? '').trim()
+    try {
+      if (!text) {
+        const queue = (await readWorkflow($)).later
+        $.ui.log(queue.length ? `clm later queue:\n${queue.map((item, i) => `${i + 1}. ${item}`).join('\n')}` : 'clm: later queue is empty')
+      } else if (text === 'drop' || text.startsWith('drop ')) {
+        const target = text.slice(4).trim()
+        if (!target || (target !== 'all' && !/^\d+$/.test(target))) {
+          $.ui.log('clm: usage /later drop <n|all>')
+        } else {
+          const dropped = await changeWorkflow($, current => {
+            if (target === 'all') return { next: { ...current, later: [] }, result: current.later.length }
+            const index = Number(target)
+            if (index < 1 || index > current.later.length) return { next: current, result: 0 }
+            return { next: { ...current, later: current.later.filter((_, i) => i !== index - 1) }, result: 1 }
+          })
+          $.ui.log(dropped ? `clm: dropped ${dropped} later item${dropped === 1 ? '' : 's'}` : 'clm: no such later item')
+        }
+      } else {
+        const count = await changeWorkflow($, current => ({ next: { ...current, later: [...current.later, text] }, result: current.later.length + 1 }))
+        $.ui.log(`clm: queued later item ${count}`)
+      }
+    } catch (err) {
+      $.ui.log(`clm: later command failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return {}
   })
 
   // Printed through ui.log, which the engine draws as a notice and never sends
@@ -1101,7 +1255,23 @@ export const register: Register = (on, options) => {
     return {}
   })
 
+  on('turn.start', async ($, e, next) => {
+    try {
+      await changeWorkflow($, current => ({ next: { ...current, activeTurnId: e.turnId }, result: undefined }))
+    } catch (err) {
+      $.ui.log(`clm: active turn state failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      try {
+        await changeWorkflow($, current => ({ next: { ...current, activeTurnId: e.turnId }, result: undefined }))
+      } catch (err) {
+        $.ui.log(`clm: active turn state failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      }
+    }
     const res = await next(e)
     if (e.agentId !== undefined) return res
     try {
@@ -1109,6 +1279,21 @@ export const register: Register = (on, options) => {
       await maybeClear($, opts)
     } catch (err) {
       $.ui.log(`clm: fold failed, ${String(err).slice(0, 200)}`, { to: 'debug' })
+    }
+    if (!e.isAborted) {
+      try {
+        await arbitrateContinuation($, e.turnId)
+      } catch (err) {
+        $.ui.log(`clm: continuation arbitration failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      }
+    }
+    try {
+      await changeWorkflow($, current => ({
+        next: current.activeTurnId === e.turnId ? { ...current, activeTurnId: null } : current,
+        result: undefined,
+      }))
+    } catch (err) {
+      $.ui.log(`clm: active turn clear failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }
     return res
   })
@@ -1231,9 +1416,42 @@ export const register: Register = (on, options) => {
     return Text({ children: [text] })
   })
 
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const base = await next(e).catch(err => {
+      if (!String(err).includes('no implementation for ui.render')) throw err
+      return null
+    })
+    try {
+      const later = (await readWorkflow($)).later
+      if (!later.length || e.props.hasSurvey) {
+        if (base) return base
+        throw new Error('no implementation for ui.render')
+      }
+      const { Box, Text } = $.ui.resolve(e)
+      const queue = Text({ dimColor: true, children: `Later queue:\n${later.map((item, i) => `${i + 1}. ${item}`).join('\n')}` })
+      return Box({ gap: 1, children: base === null ? [queue] : [base, queue] })
+    } catch (err) {
+      if (String(err).includes('no implementation for ui.render')) throw err
+      $.ui.log(`clm: later band failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      if (base) return base
+      throw err
+    }
+  })
+
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)
     if (e.traits.includes('bare')) return r
     return { ...r, sections: [...r.sections, { id: 'clm:guide', text: GUIDE, scope: 'session' as const }] }
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (isHumanOrigin(e.origin)) {
+      try {
+        await changeWorkflow($, current => ({ next: resetUserWorkflow(current, e.origin), result: undefined }))
+      } catch (err) {
+        $.ui.log(`clm: resume reset failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      }
+    }
+    return next(e)
   })
 }

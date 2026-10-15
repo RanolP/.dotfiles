@@ -91,7 +91,15 @@ async function refreshClm($: EngineInterface): Promise<void> {
   }
 }
 
-function startTicker($: EngineInterface, timer?: Timer): Timer | undefined {
+async function openDash($: EngineInterface, operation: string): Promise<void> {
+  try {
+    await $.ui.open({ id: PANE, title: TITLE })
+  } catch (error) {
+    await log($, operation, error)
+  }
+}
+
+function startTicker($: EngineInterface, isMainSession: boolean, timer?: Timer): Timer | undefined {
   try {
     timer?.cancel()
     return $.clock.every(REFRESH_MS, () => {
@@ -101,6 +109,7 @@ function startTicker($: EngineInterface, timer?: Timer): Timer | undefined {
           await change($, 'elapsed refresh state update', state => ({ ...state, now: current }))
         }
         await refreshClm($)
+        if (isMainSession) await openDash($, 'ui.open dash during refresh')
       })().catch(error => log($, 'elapsed refresh', error))
     })
   } catch (error) {
@@ -203,20 +212,21 @@ function clmRows(elements: Elements, state: DashDashboardState) {
 
 export const register: Register = on => {
   let ticker: Timer | undefined
+  let isMainSession = false
 
   on('session.start', async ($, e, next) => {
     const started = await pass($, 'session.start', () => next(e))
     await initialize($)
     await refreshClm($)
-    ticker = startTicker($, ticker)
-    if (!('agentId' in e)) {
-      try {
-        await $.ui.open({ id: PANE, title: TITLE })
-      } catch (error) {
-        await log($, 'ui.open dash at session start', error)
-      }
-    }
+    isMainSession = !('agentId' in e)
+    ticker = startTicker($, isMainSession, ticker)
+    if (isMainSession) await openDash($, 'ui.open dash at session start')
     return started
+  })
+
+  on('ui.close', { id: PANE }, async (_$, e, next) => {
+    if (e.origin.kind === 'unload') return next(e)
+    return { value: undefined }
   })
 
   on('session.measure', async ($, e, next) => {

@@ -35,6 +35,69 @@ test('a main session start opens the dash pane without focus; a subagent session
   expect(opens).toEqual([{ id: 'dash', title: 'Dash' }])
 })
 
+// Regression: closing dash removed its only view until the next session.
+test('a person closing the dash pane leaves it open', { plugins: [{
+  name: 'close-dash',
+  tier: 'prepend',
+  register(on) {
+    on('session.start', async ($, e, next) => {
+      const started = await next(e)
+      await $.ui.close({ id: 'dash' })
+      return started
+    })
+  },
+}] }, async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  let passedThrough = false
+  on('ui.close', () => { passedThrough = true; return { value: undefined } })
+
+  await start($)
+
+  expect(passedThrough).toBe(false)
+})
+
+// Regression: protecting dash accidentally swallowed close events for every pane.
+test("another pane's close still passes through", { plugins: [{
+  name: 'close-notes',
+  tier: 'prepend',
+  register(on) {
+    on('session.start', async ($, e, next) => {
+      const started = await next(e)
+      await $.ui.close({ id: 'notes' })
+      return started
+    })
+  },
+}] }, async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  const closes: string[] = []
+  on('ui.close', (_$, e) => { closes.push(e.id); return { value: undefined } })
+
+  await start($)
+
+  expect(closes).toEqual(['notes'])
+})
+
+// Regression: an unload removed dash permanently even though the main-session ticker kept running.
+test('the main session ticker reopens dash without focus after unload', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  const opens: Array<{ id: string, title?: string, focus?: true }> = []
+  on('ui.open', (_$, e) => {
+    opens.push(e)
+    return { value: { isPlaced: true } }
+  })
+
+  await start($)
+  await clock.advance(15_000)
+
+  expect(opens).toEqual([
+    { id: 'dash', title: 'Dash' },
+    { id: 'dash', title: 'Dash' },
+  ])
+})
+
 // Regression: the dashboard was split into tabs and showed context fill, which clm already owns.
 test('one pane stacks Usage, Fleet and Clm sections with no tabs and no context line', async ($, on) => {
   mock.clock(on, { now: 1_000 })

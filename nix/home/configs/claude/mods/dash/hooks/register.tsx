@@ -53,10 +53,8 @@ async function change($: EngineInterface, operation: string, fn: (state: DashDas
   }
 }
 
-function snapshot(usage: Pick<SessionUsage, 'rateLimits' | 'cost' | 'context'> & Partial<Pick<SessionUsage, 'startedAt'>>): UsageSnapshot {
-  const { window, tokens, percent } = usage.context
+function snapshot(usage: Pick<SessionUsage, 'rateLimits' | 'cost'> & Partial<Pick<SessionUsage, 'startedAt'>>): UsageSnapshot {
   return {
-    context: { window, ...(tokens === undefined ? {} : { tokens }), ...(percent === undefined ? {} : { percent }) },
     ...(usage.startedAt === undefined ? {} : { startedAt: usage.startedAt }),
     rateLimits: usage.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ kind, percentUsed, ...(resetsAt ? { resetsAt } : {}) })),
     ...(usage.cost ? { costUsd: usage.cost.usd } : {}),
@@ -246,19 +244,18 @@ function durationLabel(elapsed: number): string {
   return totalMinutes < 60 ? `${totalMinutes}m` : `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`
 }
 
-function contextLabel({ window, tokens, percent }: NonNullable<UsageSnapshot['context']>): string {
-  const k = (value: number) => `${Math.round(value / 1000)}k`
-  const filled = percent === undefined ? 0 : Math.min(10, Math.max(0, Math.round(percent / 10)))
-  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled)
-  return `Ctx ${bar} ${percent === undefined ? '—' : `${percent}%`}${tokens === undefined ? '' : ` ${k(tokens)}/${k(window)}`}`
-}
-
 function usageRows(elements: Elements, state: DashDashboardState, width: number) {
   const { Box, Text } = elements
   const usage = state.usage
   if (!usage) return <Text dimColor>Usage figures unavailable.</Text>
   const limitOf = (kind: string) => usage.rateLimits.find(limit => limit.kind === kind)
   const others = usage.rateLimits.filter(limit => limit.kind !== 'five_hour' && limit.kind !== 'seven_day')
+  const windows = ['five_hour', 'seven_day'].flatMap((kind, index): Span[] => {
+    const limit = limitOf(kind)
+    if (!limit) return []
+    return [...(index > 0 && limitOf('five_hour') ? [[' / ', 'label'] satisfies Span] : []), ...rateLimitSpans(kind, limit, state.now)]
+  })
+  const windowRow = windows.length === 0 ? null : spanRow(elements, 'windows', windows, width)
   const summary = [
     usage.costUsd === undefined ? undefined : `$${usage.costUsd.toFixed(2)}`,
     usage.startedAt === undefined ? undefined : durationLabel(Math.max(0, state.now - usage.startedAt)),
@@ -266,9 +263,8 @@ function usageRows(elements: Elements, state: DashDashboardState, width: number)
   ].filter(part => part !== undefined).join(' · ')
   return (
     <Box flexDirection="column">
-      {['five_hour', 'seven_day'].map(kind => spanRow(elements, kind, rateLimitSpans(kind, limitOf(kind), state.now), width))}
+      {windowRow}
       {others.map(limit => spanRow(elements, limit.kind, rateLimitSpans(limit.kind, limit, state.now), width))}
-      {usage.context === undefined ? null : <Text>{clip(contextLabel(usage.context), width)}</Text>}
       <Text>{clip(summary, width)}</Text>
     </Box>
   )
@@ -344,7 +340,6 @@ export const register: Register = on => {
         ...state,
         now: measuredAt,
         usage: snapshot({
-          context: e.context,
           rateLimits: e.rateLimits,
           ...(e.cost === undefined ? {} : { cost: e.cost }),
           ...(state.usage?.startedAt === undefined ? {} : { startedAt: state.usage.startedAt }),

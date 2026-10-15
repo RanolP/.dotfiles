@@ -1,7 +1,6 @@
 export type UsageSnapshot = {
   rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[]
   costUsd?: number
-  context?: { window: number; tokens?: number; percent?: number }
   startedAt?: number
 }
 

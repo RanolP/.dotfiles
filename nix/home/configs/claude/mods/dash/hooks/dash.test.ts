@@ -177,8 +177,8 @@ test('session start fetches clm status, rendering a logged one-line error when c
   expect(logs.some(message => message.startsWith('[dash] clm.status:'))).toBe(true)
 })
 
-// Regression: the statusline's second line moved here, so the pane must show context, session duration and edited lines.
-test('Usage shows context, session duration and lines tallied from Edit and Write results', async ($, on) => {
+// Regression: the statusline's second line moved here, so the pane must show session duration and edited lines.
+test('Usage shows session duration and lines tallied from Edit and Write results', async ($, on) => {
   mock.clock(on, { now: 601_000 })
   on('session.start', () => ({ cwd: '/work' }))
   on('session.usage', () => ({ value: {
@@ -196,12 +196,12 @@ test('Usage shows context, session duration and lines tallied from Edit and Writ
   await $.tool.call({ tool: 'Write', file_path: '/work/b', content: 'a\nb\n' } as never)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: 'Ctx ███░░░░░░░ 25% 50k/200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Ctx/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '$1.50 · 10m · +4 -1' })).toBeDefined()
 })
 
-// Regression: the compact layout drifted from the statusline's rate-limit rows, lost the context bar, or showed empty clm rows that waste pane height.
-test('compact Usage shows statusline-style rate limits and a context bar, and Clm hides empty rows', async ($, on) => {
+// Regression: the compact layout drifted from the statusline's rate-limit rows, split the two limits across rows, brought back the Ctx row, or showed empty clm rows that waste pane height.
+test('compact Usage joins both rate limits on one row with no Ctx row, and Clm hides empty rows', async ($, on) => {
   const now = Date.parse('2026-10-15T03:00:00Z')
   mock.clock(on, { now })
   on('session.start', () => ({ cwd: '/work' }))
@@ -233,13 +233,33 @@ test('compact Usage shows statusline-style rate limits and a context bar, and Cl
   const ui = await mountPane($)
   const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][weeklyReset.getDay()]
   const weekly = `weekly 31% \u{F0450} at ${weekday} ${weeklyReset.getHours()}:${String(weeklyReset.getMinutes()).padStart(2, '0')}`
-  expect(await ui.find({ type: 'Text', text: '5h 68% \u{F0450} in 45m' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: weekly })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: `5h 68% \u{F0450} in 45m / ${weekly}` })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^5h 68% [^/]*$/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^ \/ $/ }))?.props.color).toBe('gray')
   expect((await ui.find({ type: 'Text', text: /^weekly $/ }))?.props.color).toBe('gray')
   expect((await ui.find({ type: 'Text', text: /^31%$/ }))?.props.color).toBe('whiteBright')
-  expect(await ui.find({ type: 'Text', text: 'Ctx ████░░░░░░ 42% 84k/200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Ctx/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '$3.21 · 1h12m · +0 -0' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Focus  dash 디자인 (active)' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Later 2 · Issues 1 · fold 3m' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^(Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
+})
+
+// Regression: a lone limit must not render a dangling separator.
+test('Usage with only one rate limit shows that half alone, with no separator', async ($, on) => {
+  const now = Date.parse('2026-10-15T03:00:00Z')
+  mock.clock(on, { now })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.usage', () => ({ value: {
+    startedAt: now,
+    context: { window: 200_000, tokens: 84_000, percent: 42 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 68, resetsAt: new Date(now + 133 * 60_000).toISOString() }],
+    cost: { usd: 3.21 },
+  } }))
+  await start($)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: '5h 68% \u{F0450} in 2h13m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: / \/ / })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /weekly/ })).toBeUndefined()
 })

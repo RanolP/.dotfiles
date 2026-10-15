@@ -1,6 +1,6 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields } from './events'
-import { assignAgentTaskRoot, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignedTaskRoots, createAgentTaskRoot, removeAgentTaskRoot, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
@@ -34,15 +34,9 @@ export { residentLedgerText } from './resident'
 export { chooseContinuation, removeQueueSnapshotTargets, resetUserWorkflow, restoreFailedContinuation } from './workflow'
 export { messageTokens, type Meta, type Opts }
 
-// Each transcript has one compaction job. Turn-end work starts it in the
-// background; engine compactions join that job and apply its ready plan.
-//
-// 한 일, 할 일 and 미결 질문 are not merged text: they are rendered from the
-// tracker (tracker.ts), and the merge model only emits ops against it, so an
-// item it forgets to repeat stays where it was.
-//
-// The oldest tool results are withheld only inside a compaction job when its
-// summary fails, so a failed model call never delegates a competing summary.
+// Each transcript has one background compaction job; engine compactions join
+// it and apply its ready plan. The tracker renders task state, so merge ops
+// update persistent issues; withholding is used inside the job if summary fails.
 
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 const RECALL_TOOL = 'mcp__clm__clm_recall'
@@ -121,13 +115,9 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 
 // --- session state -------------------------------------------------------
 
-// A fold's `ops` wait here and reach the tracker only in session.compact, when
-// the fold is applied, so a planned fold that never lands (a headless session,
-// a re-fold) cannot leave issues behind for the next one to duplicate. The
-// tracker writes at call time mirror the model's TaskCreate and TaskUpdate calls.
-// `foldTokens` is the usage reading taken when the last fold landed: the
-// engine keeps reporting it until the next API response, so an equal reading
-// describes the transcript before that fold and is ignored.
+// Pending fold ops land only when session.compact applies the plan, so abandoned
+// plans cannot leave duplicate issues. `foldTokens` tracks the pre-fold usage
+// reading until the next API response, so equal readings are ignored.
 const sid = ($: SessionReader) => $.session.id()
 const metaKey = async ($: SessionReader) => `ledger:${await sid($)}`
 const pendingKey = async ($: SessionReader, key?: string) => {
@@ -196,7 +186,7 @@ const panelIo = ($: EngineInterface): PanelIo => ({
   logEvent: (event, fields) => logEvent($, event, fields),
   serialize: (session, run) => serialized(session, run),
   sessionId: () => $.session.id(),
-  sessionMessages: () => $.session.messages(),
+  sessionMessages: agentId => agentId === undefined ? $.session.messages() : $.session.messages({ agentId }),
   readWorkflow: () => readWorkflow($),
   readMeta: () => readMeta($),
   ledgerPath: () => ledgerPath($),
@@ -508,8 +498,14 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) await markActiveTurn({ ...workflowIo($), log: message => $.ui.log(message, { to: 'debug' }) }, e.turnId)
+    if (e.agentId !== undefined) {
+      try { return await next(e) }
+      finally {
+        try { await removeAgentTaskRoot(panelIo($), await sid($), e.agentId) }
+        catch (err) { $.ui.log(`clm: could not clear task root for agent ${e.agentId}: ${String(err).slice(0, 120)}`, { to: 'debug' }) }
+      }
+    }
     const res = await next(e)
-    if (e.agentId !== undefined) return res
     await completeMainTurn(mainTurnCompletionIo($, opts), e.turnId, e.isAborted, e.answer)
     return res
   })
@@ -524,12 +520,14 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => recallAddress(addressIo($), e.address))
 
   on('agent.spawn', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    const io = panelIo($)
     const origin = await captureOrigin($)
-    const parent = focusOf(await readAll($), origin.session).stack.at(-1)
+    const roots = await assignedTaskRoots(io, origin.session)
+    const parent = e.parentAgentId === undefined ? focusOf(await readAll($), origin.session).stack.at(-1) : roots[e.parentAgentId]
+    if (!parent) return { deny: `clm: ${e.parentAgentId ? `agent ${e.parentAgentId}` : 'the main agent'} needs an assigned task before spawning a child agent.` }
     const spawned = await next(e)
-    if (!spawned.agentId || !parent) return spawned
-    await assignAgentTaskRoot(panelIo($), origin.session, spawned.agentId, parent)
+    if (!spawned.agentId) return spawned
+    await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)
     return spawned
   })
   on('tool.call', { tool: TASK_TOOL }, async ($, e) => {

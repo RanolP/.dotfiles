@@ -34,7 +34,6 @@ export function isHeld(value: unknown): value is Held {
 const token = (held: Pick<Held, 'key' | 'nonce'>) => `${held.key}#${held.nonce}`
 const heldKey = (session: string) => `held:${session}`
 const factsMax = 20
-const heldStatus = () => 'dropped' as const
 export const droppedIds = (issues: readonly Issue[]) => new Set(issues.filter(issue => issue.status === 'dropped').map(issue => issue.id))
 const reviewMaxTokens = (claims: number) => Math.min(16_384, Math.max(2048, 512 + 100 * claims))
 const landsUnreviewed = (op: Payload, dropped: ReadonlySet<string>) =>
@@ -102,7 +101,7 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
   const claims = [
     ...input.ops.map((op, index) => ({ id: `op${index + 1}`, claim: describeOp(op, 'issue' in op ? title(op.issue) : undefined), evidence: input.evidence[index] ?? [] })),
     ...input.facts.map((fact, index) => ({ id: `fact${index + 1}`, claim: `fact (${fact.kind ?? 'learned'}): ${fact.text}`, kind: fact.kind ?? 'learned', evidence: fact.evidence })),
-    ...input.claims.map((claim, index) => ({ id: `drop${index + 1}`, claim: describeOp({ op: 'status', issue: claim.issue.id, status: heldStatus() }, claim.issue.title), evidence: claim.evidence, source: withSource(claim) })),
+    ...input.claims.map((claim, index) => ({ id: `drop${index + 1}`, claim: describeOp({ op: 'status', issue: claim.issue.id, status: 'dropped' }, claim.issue.title), evidence: claim.evidence, source: withSource(claim) })),
     ...input.heldFacts.map((claim, index) => ({ id: `held${index + 1}`, claim: `fact (${claim.held.factKind ?? 'learned'}): ${claim.held.text}`, kind: claim.held.factKind ?? 'learned', evidence: claim.evidence, source: withSource(claim) })),
   ]
   let review
@@ -155,7 +154,7 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
     if (item.accept) land()
     else lines.push(`${id} ${held.key}: settled unaccepted (${item.reason})`)
   }
-  input.claims.forEach((claim, index) => judge(`drop${index + 1}`, claim.held, () => promoted.push({ op: 'status', issue: claim.issue.id, status: heldStatus() })))
+  input.claims.forEach((claim, index) => judge(`drop${index + 1}`, claim.held, () => promoted.push({ op: 'status', issue: claim.issue.id, status: 'dropped' })))
   input.heldFacts.forEach((claim, index) => judge(`held${index + 1}`, claim.held, () => facts.push({ text: claim.held.text, evidence: claim.evidence, kind: claim.held.factKind })))
   if (lines.length) await io.logEvent('review-rejected', { ratio: input.ratio, reason: lines.join(' | ').slice(0, 2000) })
   return { ops, facts, promoted, hold: [], settled, failed: false }

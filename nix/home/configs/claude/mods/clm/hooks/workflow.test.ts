@@ -431,6 +431,111 @@ test('a subagent cannot update a main-owned task', OPTS, async ($, on) => {
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-root')?.status).toBe('doing')
 })
 
+// Regression caught: concurrent agent spawns overwrote task ownership or left an ended agent's root assigned.
+test('parallel spawns keep separate child tasks and clear each root when its agent ends', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Delegate two checks.')], replies: [] })
+  panelHandlers(on, seen)
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
+  ])
+  on('agent.spawn', (_$, e) => ({ model: 'haiku', agentId: e.description === 'first check' ? 'worker-a' : 'worker-b' }))
+  const [first, second] = await Promise.all([
+    $.agent.spawn({ prompt: 'Check one.', description: 'first check' }),
+    $.agent.spawn({ prompt: 'Check two.', description: 'second check' }),
+  ])
+  expect('deny' in first || 'deny' in second).toBe(false)
+  expect(seen.store['agent-task-roots:s1']).toEqual(expect.objectContaining({ 'worker-a': expect.any(String), 'worker-b': expect.any(String) }))
+  const children = snapshot(parseLog(seen.files[TRACKER] ?? '')).filter(issue => issue.parent === 's1-root')
+  expect(children.map(issue => issue.title).sort()).toEqual(['first check', 'second check'])
+  await $.turn.complete(turnInput('worker-a-done', { agentId: 'worker-a' }))
+  expect(seen.store['agent-task-roots:s1']).toEqual(expect.objectContaining({ 'worker-b': expect.any(String) }))
+  expect(seen.store['agent-task-roots:s1']).not.toHaveProperty('worker-a')
+})
+
+// Regression caught: a worker's own Bash result was unavailable to clm_task, so verified work stayed uncertain.
+test('a spawned worker can finish a task with a quote from its Bash result', OPTS, async ($, on) => {
+  const s: State = {
+    rows: [M('user', 'Delegate the checks.')],
+    agentRows: { worker: [M('user', 'Run the focused checks.'), use('tu_bash', 'Bash'), res('tu_bash', 'the focused checks passed successfully')] },
+    replies: [],
+  }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'verification', status: 'doing' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
+  ])
+  on('agent.spawn', () => ({ model: 'haiku', agentId: 'worker' }))
+  const spawned = await $.agent.spawn({ prompt: 'Run the focused checks.', description: 'focused checks' })
+  if ('deny' in spawned || !spawned.agentId) throw new Error('worker did not spawn')
+  const child = snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'focused checks')
+  if (!child) throw new Error('spawned worker has no assigned child task')
+  const workerRequestIsNotAUserQuote = await $.tool.call({
+    tool: TASK_TOOL, id: child.id, status: 'dropped',
+    evidence: { ref: 'm1', quote: 'Run the focused checks' }, agentId: spawned.agentId,
+  } satisfies ToolCallInput)
+  expect('deny' in workerRequestIsNotAUserQuote).toBe(true)
+  const result = await $.tool.call({
+    tool: TASK_TOOL, id: child.id, status: 'done',
+    evidence: { ref: 'tu_bash', quote: 'the focused checks passed successfully' }, agentId: spawned.agentId,
+  } satisfies ToolCallInput)
+  if ('deny' in result) throw new Error(result.deny)
+  expect(result.result).toContain(`${child.id} done`)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === child.id)?.status).toBe('done')
+})
+
+// Regression caught: an Agent report was mistaken for evidence that the worker itself completed the task.
+test('a spawned worker cannot mark done from an Agent report quote', OPTS, async ($, on) => {
+  const s: State = {
+    rows: [M('user', 'Delegate the implementation.')],
+    agentRows: { worker: [M('user', 'Ask another agent to implement it.'), use('tu_agent', 'Agent'), res('tu_agent', 'The implementation is complete and all checks passed.')] },
+    replies: [],
+  }
+  const seen = bottoms(on, s)
+  panelHandlers(on, seen)
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'implementation', status: 'doing' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
+  ])
+  on('agent.spawn', () => ({ model: 'haiku', agentId: 'worker' }))
+  const spawned = await $.agent.spawn({ prompt: 'Implement the change.', description: 'implementation child' })
+  if ('deny' in spawned || !spawned.agentId) throw new Error('worker did not spawn')
+  const child = snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'implementation child')
+  if (!child) throw new Error('spawned worker has no assigned child task')
+  const result = await $.tool.call({
+    tool: TASK_TOOL, id: child.id, status: 'done',
+    evidence: { ref: 'tu_agent', quote: 'The implementation is complete and all checks passed' }, agentId: spawned.agentId,
+  } satisfies ToolCallInput)
+  if ('deny' in result) throw new Error(result.deny)
+  expect(result.result).toContain('recorded as uncertain because')
+  expect(result.result).toContain('Agent report')
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === child.id)?.status).toBe('uncertain')
+})
+
+// Regression caught: a task was dropped or reopened without a user quote authorizing that direction change.
+test('clm_task refuses drop and re-open without a quote from the user', OPTS, async ($, on) => {
+  const rows = [M('user', 'Please drop this child task if I ask, and reopen it when I say so.')]
+  const seen = bottoms(on, { rows, replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
+    { op: 'create', issue: 's1-child', title: 'child work', status: 'todo' },
+    { op: 'parent', issue: 's1-child', parent: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
+  ])
+  const droppedWithoutQuote = await $.tool.call({ tool: TASK_TOOL, id: 's1-child', status: 'dropped' } satisfies ToolCallInput)
+  expect('deny' in droppedWithoutQuote).toBe(true)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-child')?.status).toBe('todo')
+  const authorization = { ref: 'm1', quote: 'drop this child task if I ask, and reopen it when I say so' }
+  const dropped = await $.tool.call({ tool: TASK_TOOL, id: 's1-child', status: 'dropped', evidence: authorization } satisfies ToolCallInput)
+  if ('deny' in dropped) throw new Error(dropped.deny)
+  const reopenedWithoutQuote = await $.tool.call({ tool: TASK_TOOL, id: 's1-child', status: 'doing' } satisfies ToolCallInput)
+  expect('deny' in reopenedWithoutQuote).toBe(true)
+  const reopened = await $.tool.call({ tool: TASK_TOOL, id: 's1-child', status: 'doing', evidence: authorization } satisfies ToolCallInput)
+  if ('deny' in reopened) throw new Error(reopened.deny)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-child')?.status).toBe('doing')
+})
+
 // Regression caught: a completion claim with a quote absent from its cited tool row entered the completed ledger.
 test('a clm_task done with an absent quote is recorded as uncertain', OPTS, async ($, on) => {
   const s: State = { rows: [M('user', 'Investigate the task.'), use('tu_actual', 'Bash'), res('tu_actual', 'the command completed')], replies: [] }

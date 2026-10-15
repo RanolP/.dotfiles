@@ -25,28 +25,87 @@ import path from 'node:path'
 import assert from 'node:assert/strict'
 
 const textInput = text => [{ type: 'text', text, text_elements: [] }]
+const WORKSPACE_WRITE_PROFILE = 'codex-subagent-workspace-write'
+
+export function gitMetadataPermissions(writableRoots) {
+  const filesystem = {}
+  for (const root of writableRoots) {
+    const top = spawnSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' })
+    if (top.status !== 0) continue
+    try { if (fs.realpathSync(root) !== fs.realpathSync(top.stdout.trim())) continue } catch { continue }
+    const common = spawnSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf8' })
+    const gitDir = spawnSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-dir'], { encoding: 'utf8' })
+    if (common.status !== 0 || gitDir.status !== 0) continue
+    const commonDir = common.stdout.trim(); const rootGitDir = gitDir.stdout.trim()
+    // Grant commit-level write; commondir/gitdir redirect git to another config and modules/ holds submodule config/hooks, at the accepted cost of no worktree creation or submodule commits.
+    const entries = filesystem[commonDir] ??= { '.': 'write', config: 'read', 'config.worktree': 'read', 'hooks/**': 'read', commondir: 'read', 'modules/**': 'read', 'worktrees/**': 'read' }
+    const relativeGitDir = path.relative(commonDir, rootGitDir)
+    if (relativeGitDir && relativeGitDir !== '..' && !relativeGitDir.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeGitDir)) {
+      entries[relativeGitDir] = 'write'
+      for (const name of ['commondir', 'gitdir', 'config.worktree']) entries[path.join(relativeGitDir, name)] = 'read'
+    }
+  }
+  return filesystem
+}
+
+function workspaceWriteConfig(writableRoots) {
+  return { permissions: { [WORKSPACE_WRITE_PROFILE]: { extends: ':workspace', filesystem: gitMetadataPermissions(writableRoots), network: { enabled: true } } } }
+}
 
 export function turnStartParams(s, prompt) {
   return {
     threadId: s.threadId,
     effort: s.effort ?? null,
     input: textInput(prompt),
-    ...(s.sandbox === 'workspace-write' ? { sandboxPolicy: { type: 'workspaceWrite', writableRoots: s.writableRoots, networkAccess: true } } : {}),
+    ...(s.sandbox === 'workspace-write' ? { permissions: WORKSPACE_WRITE_PROFILE, runtimeWorkspaceRoots: s.writableRoots } : {}),
   }
 }
 
 if (process.argv[2] === '--selftest') {
-  const writableRoots = ['/repo', '/shared']
+  const writableRoots = ['/repo', '/worktree']
   assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: 'medium', sandbox: 'workspace-write', writableRoots }, 'work'), {
     threadId: 'thread-1',
     effort: 'medium',
     input: textInput('work'),
-    sandboxPolicy: { type: 'workspaceWrite', writableRoots, networkAccess: true },
+    permissions: WORKSPACE_WRITE_PROFILE,
+    runtimeWorkspaceRoots: writableRoots,
   })
   assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: null, sandbox: 'read-only', writableRoots }, 'work'), {
     threadId: 'thread-1', effort: null, input: textInput('work'),
   })
-  process.stdout.write('turnStartParams self-check passed\n')
+  assert.deepEqual(gitMetadataPermissions([path.join(os.tmpdir(), 'codex-bridge-selftest-non-git')]), {})
+  const available = spawnSync('codex', ['--version'], { encoding: 'utf8' })
+  if (available.error?.code === 'ENOENT') { process.stdout.write('sandbox probe skipped: codex not found\ncodex bridge self-check passed\n'); process.exit(0) }
+  assert.equal(available.status, 0, available.stderr)
+  const nested = spawnSync('codex', ['sandbox', '-C', process.cwd(), '-P', ':workspace', '/usr/bin/true'], { encoding: 'utf8' })
+  if (nested.status !== 0 && /sandbox_apply: Operation not permitted/.test(nested.stderr)) { process.stdout.write('sandbox probe skipped: nested sandbox\ncodex bridge self-check passed\n'); process.exit(0) }
+  assert.equal(nested.status, 0, `${nested.stdout}\n${nested.stderr}`)
+  const cache = path.join(os.homedir(), '.cache'); fs.mkdirSync(cache, { recursive: true })
+  const fixture = fs.mkdtempSync(path.join(cache, 'codex-bridge-selftest-'))
+  try {
+    const repo = path.join(fixture, 'repo'); const worktree = path.join(fixture, 'worktree')
+    fs.mkdirSync(repo)
+    const git = args => { const r = spawnSync('git', args, { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim() }
+    git(['-C', repo, 'init', '-q']); git(['-C', repo, '-c', 'user.name=selftest', '-c', 'user.email=selftest@example.invalid', 'commit', '--allow-empty', '-qm', 'base']); git(['-C', repo, 'worktree', 'add', '-q', worktree])
+    const common = git(['-C', repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
+    const worktreeGitDir = git(['-C', worktree, 'rev-parse', '--path-format=absolute', '--git-dir']); const relativeGitDir = path.relative(common, worktreeGitDir)
+    fs.mkdirSync(path.join(common, 'modules', 's'), { recursive: true })
+    const emittedConfig = workspaceWriteConfig([repo, worktree])
+    const toml = value => typeof value === 'string' ? JSON.stringify(value) : typeof value === 'boolean' ? String(value) : `{${Object.entries(value).map(([key, entry]) => `${JSON.stringify(key)}=${toml(entry)}`).join(',')}}`
+    const profileArgs = ['-P', WORKSPACE_WRITE_PROFILE, '-c', `permissions.${WORKSPACE_WRITE_PROFILE}.extends=":workspace"`, '-c', `permissions.${WORKSPACE_WRITE_PROFILE}.filesystem=${toml(emittedConfig.permissions[WORKSPACE_WRITE_PROFILE].filesystem)}`, '-c', `permissions.${WORKSPACE_WRITE_PROFILE}.network.enabled=true`]
+    const commit = root => { const r = spawnSync('codex', ['sandbox', '-C', root, ...profileArgs, 'git', '-c', 'user.name=selftest', '-c', 'user.email=selftest@example.invalid', 'commit', '--allow-empty', '-qm', 'sandbox-selftest'], { encoding: 'utf8' }); assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`) }
+    commit(repo); commit(worktree)
+    const targets = [path.join(common, 'config'), path.join(common, 'config.worktree'), path.join(common, 'commondir'), path.join(common, 'hooks', 'x'), path.join(worktreeGitDir, 'commondir'), path.join(worktreeGitDir, 'gitdir'), path.join(worktreeGitDir, 'config.worktree'), path.join(common, 'worktrees', 'evil', 'commondir'), path.join(common, 'modules', 's', 'config')]
+    // Regression: a sandboxed write cannot alter a path that later unsandboxed git trusts.
+    for (const target of targets) {
+      const r = spawnSync('codex', ['sandbox', '-C', repo, ...profileArgs, '/bin/sh', '-c', 'mkdir -p "$(dirname "$1")" 2>/dev/null; printf attack >> "$1"', 'probe', target], { encoding: 'utf8' })
+      assert.notEqual(r.status, 0, `sandbox write unexpectedly succeeded: ${target}`)
+    }
+    const rename = spawnSync('codex', ['sandbox', '-C', repo, ...profileArgs, 'mv', path.join(common, 'hooks'), path.join(common, 'hooks-renamed')], { encoding: 'utf8' })
+    assert.notEqual(rename.status, 0, 'sandbox hooks rename unexpectedly succeeded')
+    process.stdout.write(`sandbox probe passed: ${JSON.stringify({ emittedConfig, relativeGitDir })}\n`)
+  } finally { fs.rmSync(fixture, { recursive: true, force: true }) }
+  process.stdout.write('codex bridge self-check passed\n')
   process.exit(0)
 }
 
@@ -557,7 +616,9 @@ async function withSchemas(b) {
 async function open(b) {
   let s = sessions.get(b.key)
   if (s) return s
-  const common = { model: b.model ?? null, cwd: b.cwd ?? null, approvalPolicy: 'never', sandbox: b.sandbox ?? 'read-only', developerInstructions: b.developerInstructions ?? null }
+  const writableRoots = b.writableRoots?.length ? b.writableRoots : [b.cwd]
+  const workspaceWrite = b.sandbox === 'workspace-write'
+  const common = { model: b.model ?? null, cwd: b.cwd ?? null, approvalPolicy: 'never', ...(workspaceWrite ? { permissions: WORKSPACE_WRITE_PROFILE, runtimeWorkspaceRoots: writableRoots, config: workspaceWriteConfig(writableRoots) } : { sandbox: b.sandbox ?? 'read-only' }), developerInstructions: b.developerInstructions ?? null }
   // A threadId from the mod means this bridge restarted: rejoin the thread codex persisted.
   let r
   if (b.threadId) r = await rpc('thread/resume', { threadId: b.threadId, ...common, excludeTurns: true })
@@ -573,7 +634,7 @@ async function open(b) {
     }
   }
   const interruptRequested = pendingInterrupts.delete(b.key)
-  s = { key: b.key, agentType: b.agentType, cwd: b.cwd, writableRoots: b.writableRoots?.length ? b.writableRoots : [b.cwd], sandbox: b.sandbox ?? 'read-only', threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, interruptRequested, interrupting: interruptRequested, held: new Map(), messages: [], errors: [] }
+  s = { key: b.key, agentType: b.agentType, cwd: b.cwd, writableRoots, sandbox: b.sandbox ?? 'read-only', threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, interruptRequested, interrupting: interruptRequested, held: new Map(), messages: [], errors: [] }
   sessions.set(b.key, s); byThread.set(s.threadId, s)
   persisted.agents[b.key] = { type: s.agentType, cwd: s.cwd, writableRoots: s.writableRoots, threadId: s.threadId }
   saveState()

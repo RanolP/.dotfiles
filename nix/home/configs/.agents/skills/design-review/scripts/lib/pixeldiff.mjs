@@ -126,3 +126,15 @@ export async function findChangedRegions(asisPath, tobePath, logicalWidth, optio
   }
   return result.sort((a, b) => a.y - b.y || a.x - b.x);
 }
+
+export async function changedPixelFraction(aPath, bPath, threshold = 16) {
+  const [a, b] = await Promise.all([decodePng(aPath), decodePng(bPath)]);
+  if (a.width !== b.width || a.height !== b.height) return null;
+  let count = 0;
+  for (let i = 0, ia = 0, ib = 0; i < a.width * a.height; i++, ia += a.channels, ib += b.channels) {
+    const pa = [a.pixels[ia], a.pixels[ia + 1], a.pixels[ia + 2], a.channels === 4 ? a.pixels[ia + 3] : 255];
+    const pb = [b.pixels[ib], b.pixels[ib + 1], b.pixels[ib + 2], b.channels === 4 ? b.pixels[ib + 3] : 255];
+    if (changed(pa, pb, threshold)) count++;
+  }
+  return count / (a.width * a.height);
+}

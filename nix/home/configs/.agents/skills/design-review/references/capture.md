@@ -6,7 +6,15 @@ How to reach one state and capture it, on web with `agent-browser` and on iOS/An
 
 The agent's own round trip between two commands is seconds; a toast, a skeleton, or a mid-animation frame is gone by then. Write the whole walk to a state -- navigation, the readiness wait, the screenshot, the measurement -- as one batch so the CLI runs it at machine speed.
 
-The readiness wait goes inside the batch, right before the screenshot, and names the thing the state shows (a text, a selector, a labelled landmark). A fixed duration is the last resort, for a state that has no distinguishing element.
+The readiness wait goes inside the batch, right before the screenshot, and names the element that distinguishes THIS state: present here and absent from its sibling states (a pre-air state's reservation bar, not the header both states share), or the content that defines the state (the pinned notice in a live chat). When that wait fails, the state is not reached, so no shot is saved under its name. A fixed duration is the last resort, for a state that has no distinguishing element.
+
+### Staging a state
+
+Stage data by mocking responses: on web, `agent-browser network route <url> --body <json>`; on apps, a proxy or response-replacement tool. A write that other people or sessions can see -- a chat message, server-side data in a shared QA environment -- needs the user's go first, and other sessions' writes can push your staged content out of a live window.
+
+### Dev overlays
+
+A dev-build overlay or badge in a shot (the Next.js dev "Issues" badge, a React Native RedBox or LogBox) is opened and read before any verdict on that shot, and its content goes into the box note or the platform reason; a runtime-only crash can surface nowhere else.
 
 ## Record once, replay after
 
@@ -34,6 +42,8 @@ perl -e 'alarm 25; exec @ARGV' -- agent-browser --session dr-<repo> batch --bail
 ### Screenshot time limit and the Chrome switch
 
 Run every `agent-browser` call that takes a screenshot under a time limit, with an absolute output path. `perl -e 'alarm 25; exec @ARGV' -- <command>` works everywhere Perl does; macOS ships no `timeout`.
+
+When a screenshot hangs, check first whether the displays are asleep: `system_profiler SPDisplaysDataType | grep -i asleep`. `caffeinate -u -t 2` wakes them, and `caffeinate -d -t <seconds>` keeps them awake for a long capture. Go on to the Chrome switch below only with the displays awake.
 
 Some bundled Chrome for Testing builds never answer the screenshot request on some OS versions: open, eval, click and wait all work, and only the screenshot hangs. When a screenshot hits the limit while `agent-browser --session dr-<repo> eval '1+1'` still answers, switch browsers:
 
@@ -67,7 +77,9 @@ agent-device screenshot shots/c1s1/ios-asis.png
 agent-device snapshot -i --json > shots/c1s1/ios-asis.snapshot.json
 ```
 
-The `wait` before `save-script` is required: a selector wait on a labelled or id-bearing element. A duration wait or `wait stable` is refused as a destination guard.
+The `wait` before `save-script` is required: a selector wait on a labelled or id-bearing element that distinguishes this state from its siblings (One state, one call). A duration wait or `wait stable` is refused as a destination guard.
+
+Before judging an app to-be capture, confirm the app runs the working tree's bundle: check which dev server the app is connected to, since another worktree's Metro may be serving it (an Android emulator's debug app talks to `10.0.2.2:8081` directly and ignores `adb reverse`). An as-is bundle read as to-be produces false regressions.
 
 Replay, then capture in the surviving session:
 
@@ -90,7 +102,7 @@ agent-device devices --platform ios          # also --platform android
 agent-device boot --platform android --device "<name from devices>"
 ```
 
-`boot` takes the device through the selection flags. When the second platform cannot be booted, record its platform entry as `missing` with the reason.
+`adb devices -l` lists connected Android hardware as well. `boot` takes the device through the selection flags. Which device to use (real or emulator, which model) comes from the repo docs or the user's memory. When the second platform still cannot be booted, record its platform entry as `missing` with the reason and the user action that would unblock it.
 
 ## Login on web
 

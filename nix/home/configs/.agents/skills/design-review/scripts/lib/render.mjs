@@ -67,7 +67,11 @@ function rowBoxes(review, stateId, platformName) {
   return review.boxes.filter(box => box.state === stateId && box.platform === platformName);
 }
 
-export async function renderGallery(review, reviewPath, outputPath, title) {
+export function duplicateKey(stateId, platformName) {
+  return JSON.stringify([stateId, platformName]);
+}
+
+export async function renderGallery(review, reviewPath, outputPath, title, duplicates = new Map()) {
   const reviewDir = path.dirname(path.resolve(reviewPath));
   const outputDir = path.dirname(path.resolve(outputPath));
   const images = new Set();
@@ -102,7 +106,7 @@ export async function renderGallery(review, reviewPath, outputPath, title) {
         const tableRows = boxList.map(box => {
           const files = box.files.length ? box.files.map(esc).join('<br>') : '–';
           const commit = box.commit ? box.commit.slice(0, 8) : '–';
-          return `<tr class="box-record ${boxClass(box)}" data-box-id="${esc(box.id)}" data-kind="${esc(box.kind)}" data-status="${esc(box.status)}"><td><button type="button" class="table-box-label" data-copy="${esc(copyPhrase(box))}" aria-label="${esc(box.id)} 해결 문구 복사">${esc(box.id)}</button></td><td>${esc(kindLabels[box.kind])}</td><td>${esc(box.node.name)}</td><td>${esc(box.property)}</td><td>${esc(box.asis)} <span aria-hidden="true">→</span> ${esc(box.answer)}</td><td>${files}</td><td>${esc(statusLabels[box.status])}</td><td>${esc(commit)}</td></tr>`;
+          return `<tr class="box-record ${boxClass(box)}" data-box-id="${esc(box.id)}" data-kind="${esc(box.kind)}" data-status="${esc(box.status)}"><td><button type="button" class="table-box-label" data-copy="${esc(copyPhrase(box))}" aria-label="${esc(box.id)} 해결 문구 복사">${esc(box.id)}</button></td><td>${esc(kindLabels[box.kind])}</td><td>${esc(box.node.name)}</td><td>${esc(box.property)}</td><td>${esc(box.asis)} <span aria-hidden="true">→</span> ${esc(box.answer)}</td><td>${files}</td><td>${esc(statusLabels[box.status])}${box.noPhotoReason ? `<span class="no-photo">no photo: ${esc(box.noPhotoReason)}</span>` : ''}</td><td>${esc(commit)}</td></tr>`;
         }).join('');
         const table = tableRows
           ? `<div class="table-wrap"><table><thead><tr><th>ID</th><th>종류</th><th>노드</th><th>속성</th><th>기준 → 답</th><th>파일</th><th>상태</th><th>커밋</th></tr></thead><tbody>${tableRows}</tbody></table></div>`
@@ -110,11 +114,13 @@ export async function renderGallery(review, reviewPath, outputPath, title) {
         const warning = platform.status === 'missing'
           ? `<p class="missing-notice">플랫폼 캡처 없음${platform.reason ? ` · ${esc(platform.reason)}` : ''}</p>`
           : '';
+        const duplicateBadges = (duplicates.get(duplicateKey(state.id, platform.name)) || [])
+          .map(item => `<p class="duplicate-notice">looks identical to ${esc(item.other)} (${esc(item.side)})</p>`).join('');
         const figma = `<div class="screen figma-screen" style="aspect-ratio:${numberText(state.frame.w)} / ${numberText(state.frame.h)}">${shotImage(figmaShot, 'Figma 디자인')}</div>`;
         const asisView = `<div class="screen comparison-screen" style="aspect-ratio:${ratio}">${shotImage(asis, '기준 화면')}${rowMarkers}</div>`;
         const tobeView = `<div class="screen comparison-screen" style="aspect-ratio:${ratio}">${shotImage(tobe, '작업 후 화면')}${rowMarkers}</div>`;
         const onion = `<div class="screen comparison-screen onion-screen" style="aspect-ratio:${ratio}"><div class="onion-pair">${shotImage(asis, '기준 화면', 'onion-image onion-asis')}${shotImage(tobe, '작업 후 화면', 'onion-image onion-tobe')}</div><canvas class="sep-canvas" aria-label="색 분리 비교"></canvas>${rowMarkers}</div>`;
-        rows.push(`<article class="review-row" data-concern="${esc(concern.id)}" data-platform="${esc(platform.name)}"><header class="row-heading"><h3>${esc(state.name)} <span class="platform-tag">${esc(platform.name)}</span></h3>${textNotes(state.notes, 'state-notes')}</header>${warning}<div class="comparison-grid"><figure class="shot"><figcaption>Figma <span>${numberText(state.frame.w)} × ${numberText(state.frame.h)}</span></figcaption>${figma}</figure><figure class="shot"><figcaption>기준</figcaption>${asisView}</figure><figure class="shot"><figcaption>작업 후</figcaption>${tobeView}</figure><figure class="shot"><figcaption>겹쳐 보기</figcaption>${onion}</figure></div>${table}</article>`);
+        rows.push(`<article class="review-row" data-concern="${esc(concern.id)}" data-platform="${esc(platform.name)}"><header class="row-heading"><h3>${esc(state.name)} <span class="platform-tag">${esc(platform.name)}</span></h3>${textNotes(state.notes, 'state-notes')}</header>${warning}${duplicateBadges}<div class="comparison-grid"><figure class="shot"><figcaption>Figma <span>${numberText(state.frame.w)} × ${numberText(state.frame.h)}</span></figcaption>${figma}</figure><figure class="shot"><figcaption>기준</figcaption>${asisView}</figure><figure class="shot"><figcaption>작업 후</figcaption>${tobeView}</figure><figure class="shot"><figcaption>겹쳐 보기</figcaption>${onion}</figure></div>${table}</article>`);
       }
     }
     sections.push(`<section class="concern-section" data-concern-section="${esc(concern.id)}"><div class="concern-heading"><h2>${esc(concern.name)}</h2>${concern.nodeId ? `<span class="node-ref">Figma ${esc(concern.nodeId)}</span>` : ''}</div>${textNotes(concern.notes, 'concern-notes')}${rows.join('')}</section>`);

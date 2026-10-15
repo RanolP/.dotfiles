@@ -98,6 +98,8 @@ export function validateReview(review) {
     stringArray(box.files, `${field}.files`);
     if (box.batch !== null && (!Number.isInteger(box.batch) || box.batch < 1)) throw new TypeError(`${field}.batch must be null or a positive integer`);
     if (box.commit !== null) string(box.commit, `${field}.commit`);
+    if (box.fixedAt !== undefined) string(box.fixedAt, `${field}.fixedAt`);
+    if (box.noPhotoReason !== undefined) string(box.noPhotoReason, `${field}.noPhotoReason`);
     if (box.status !== 'resolved' && box.commit !== null) throw new TypeError(`${field}.commit must be null unless status is resolved`);
   });
   return review;

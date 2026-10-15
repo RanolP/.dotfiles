@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 import { editReview } from './lib/edits.mjs';
 import { parseCliArgs, run, UsageError } from './lib/cli.mjs';
+import { encodePng } from './lib/png.mjs';
+import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import assert from 'node:assert/strict';
 
 const usages = {
   main: `Usage:
   node scripts/review-edit.mjs <union|add|status|batches|set|platform|meta> --review <path/review.json> [options]
   node scripts/review-edit.mjs --help [<subcommand>]
+  node scripts/review-edit.mjs --selftest
 
 Subcommands:
   union     --review <path/review.json> --id <DR-###> [--asis <x,y,w,h>] [--tobe <x,y,w,h>]
   add       --review <path/review.json> --kind <fix|unintended> --state <id> --platform <name> --rect <x,y,w,h> [--node-id <id>] [--node-name <name>] [--property <text>] [--asis <text>] [--answer <text>] [--files <a,b>] [--batch <n>] [--note <text>]
-  status    --review <path/review.json> --id <DR-###> --to <open|fixed|resolved|accepted> [--commit <sha>]
+  status    --review <path/review.json> --id <DR-###> --to <open|fixed|resolved|accepted> [--commit <sha>] [--no-photo-reason <text>]
   batches   --review <path/review.json> [--write]
   set       --review <path/review.json> --id <DR-###> [--batch <n>] [--files <a,b>] [--note <text>]
   platform  --review <path/review.json> --state <id> --name <platform> [--tobe <path>] [--asis <path>] [--status <captured|missing>] [--reason <text>]
@@ -22,8 +28,13 @@ Subcommands:
   node scripts/review-edit.mjs add --review <path/review.json> --kind <fix|unintended> --state <id> --platform <name> --rect <x,y,w,h> [--node-id <id>] [--node-name <name>] [--property <text>] [--asis <text>] [--answer <text>] [--files <a,b>] [--batch <n>] [--note <text>]
   node scripts/review-edit.mjs add --help`,
   status: `Usage:
-  node scripts/review-edit.mjs status --review <path/review.json> --id <DR-###> --to <open|fixed|resolved|accepted> [--commit <sha>]
-  node scripts/review-edit.mjs status --help`,
+  node scripts/review-edit.mjs status --review <path/review.json> --id <DR-###> --to <open|fixed|resolved|accepted> [--commit <sha>] [--no-photo-reason <text>]
+  node scripts/review-edit.mjs status --help
+
+  --to fixed stamps fixedAt; --to open clears it.
+  --to resolved on a fix box requires the box's state/platform to have a to-be photo
+  whose file is at least as new as fixedAt; --no-photo-reason <text> bypasses that
+  check and records the reason on the box.`,
   batches: `Usage:
   node scripts/review-edit.mjs batches --review <path/review.json> [--write]
   node scripts/review-edit.mjs batches --help`,
@@ -49,7 +60,7 @@ const actionOptions = {
     'node-id': { type: 'string' }, 'node-name': { type: 'string' }, property: { type: 'string' },
     asis: { type: 'string' }, answer: { type: 'string' }, files: { type: 'string' }, batch: { type: 'string' }, note: { type: 'string' },
   },
-  status: { id: { type: 'string' }, to: { type: 'string' }, commit: { type: 'string' } },
+  status: { id: { type: 'string' }, to: { type: 'string' }, commit: { type: 'string' }, 'no-photo-reason': { type: 'string' } },
   batches: { write: { type: 'boolean', default: false } },
   set: { id: { type: 'string' }, batch: { type: 'string' }, files: { type: 'string' }, note: { type: 'string' } },
   platform: {
@@ -97,6 +108,10 @@ function validateInvocation(action, values) {
     if (!['open', 'fixed', 'resolved', 'accepted'].includes(values.to)) throw new UsageError(`--to must be open, fixed, resolved, or accepted; received ${values.to}`, action);
     if (values.to === 'resolved' && !values.commit) throw new UsageError('--commit is required with --to resolved', action);
     if (values.to !== 'resolved' && values.commit) throw new UsageError('--commit is only valid with --to resolved', action);
+    if (values['no-photo-reason'] !== undefined) {
+      if (values.to !== 'resolved') throw new UsageError('--no-photo-reason is only valid with --to resolved', action);
+      if (!values['no-photo-reason'].trim()) throw new UsageError('--no-photo-reason must be non-empty text', action);
+    }
   } else if (action === 'set') {
     requireValue(values, 'id', action);
     if (values.batch === undefined && values.files === undefined && values.note === undefined) {
@@ -119,9 +134,53 @@ function validateInvocation(action, values) {
   }
 }
 
+async function selftest() {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'design-review-edit-selftest-'));
+  try {
+    const reviewPath = path.join(root, 'review.json');
+    const platform = { name: 'ios', width: 2, asis: null, tobe: null, status: 'captured' };
+    const box = { id: 'DR-001', kind: 'fix', state: 's1', platform: 'ios', rect: { x: 0, y: 0, w: 1, h: 1 }, node: { id: '', name: '' },
+      property: '', asis: '', answer: '', files: ['a.js'], batch: 1, status: 'open', commit: null, note: '' };
+    await writeFile(reviewPath, JSON.stringify({
+      figma: { url: 'https://www.figma.com/design/KEY/file', fileKey: 'KEY' }, repo: 'r',
+      base: { branch: 'main', sha: 'a' }, tobe: { branch: 'w', sha: 'b', dirty: false },
+      concerns: [{ id: 'c1', name: 'c', nodeId: '', notes: [], states: [{ id: 's1', name: 's', nodeId: '', notes: [], frame: { w: 2, h: 2 }, figmaShot: null, platforms: [platform] }] }],
+      boxes: [box],
+    }));
+    const resolve = extra => editReview(reviewPath, 'status', { id: 'DR-001', to: 'resolved', commit: 'abc1234', ...extra });
+    const reload = async () => JSON.parse(await readFile(reviewPath, 'utf8')).boxes[0];
+    await editReview(reviewPath, 'status', { id: 'DR-001', to: 'fixed' });
+    const fixedAt = (await reload()).fixedAt;
+    // Catches a fix box closing with zero photos.
+    await assert.rejects(resolve(), /DR-001.*s1.*ios.*no to-be photo/);
+    const photo = path.join(root, 'tobe.png');
+    await writeFile(photo, encodePng(1, 1, 4, new Uint8Array([0, 0, 0, 255])));
+    await editReview(reviewPath, 'platform', { state: 's1', name: 'ios', tobe: path.relative(process.cwd(), photo) });
+    const stale = new Date(Date.parse(fixedAt) - 60_000);
+    await utimes(photo, stale, stale);
+    // Catches a box closing on a photo captured before the fix landed.
+    await assert.rejects(resolve(), /DR-001.*before the box was marked fixed/);
+    // Catches a reason-bypassed resolve leaving no trace on the box.
+    await resolve({ 'no-photo-reason': 'simulator down' });
+    assert.equal((await reload()).noPhotoReason, 'simulator down');
+    await editReview(reviewPath, 'status', { id: 'DR-001', to: 'fixed' });
+    const fresh = new Date(Date.now() + 1000);
+    await utimes(photo, fresh, fresh);
+    // Catches the gate refusing a box whose fresh photo exists, and a stale bypass reason surviving.
+    await resolve();
+    const resolved = await reload();
+    assert.equal(resolved.status, 'resolved');
+    assert.equal(resolved.noPhotoReason, undefined);
+    console.log('selftest ok: resolve gate refuses no-photo and stale photo, passes fresh photo and --no-photo-reason');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 0) throw new UsageError('subcommand is required', 'main');
+  if (args.length === 1 && args[0] === '--selftest') return selftest();
   if (args[0] === '--help') {
     if (args.length === 1) {
       process.stdout.write(`${usages.main}\n`);

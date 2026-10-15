@@ -144,3 +144,5 @@ tr.box-resolved, tr.box-accepted { opacity: .55; }
   th, td { padding: 4px 2px; font-size: 10px; }
   .box-label { font-size: 9px; }
 }
+.duplicate-notice { display: inline-block; margin: 0 8px 8px 0; padding: 2px 8px; color: var(--fix-open); border: 1px solid var(--fix-open); border-radius: 999px; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.no-photo { display: block; margin-top: 3px; padding: 1px 6px; width: fit-content; color: var(--fix-fixed); border: 1px dashed var(--fix-fixed); border-radius: 4px; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }

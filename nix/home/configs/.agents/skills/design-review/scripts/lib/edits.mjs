@@ -25,6 +25,28 @@ async function platformImagePath(value, flag, reviewPath) {
   return relativePath.split(path.sep).join('/');
 }
 
+async function requireFreshPhoto(review, box, reviewPath) {
+  const where = `${box.id} (state ${box.state}, platform ${box.platform})`;
+  const bypass = 'capture it with review-edit platform --tobe <path>, or pass --no-photo-reason <text>';
+  const platform = review.concerns.flatMap(concern => concern.states)
+    .filter(state => state.id === box.state)
+    .flatMap(state => state.platforms)
+    .find(item => item.name === box.platform);
+  if (!platform) throw new Error(`Refusing to resolve ${where}: the state has no platform entry ${box.platform}; ${bypass}`);
+  if (platform.status === 'missing') throw new Error(`Refusing to resolve ${where}: the platform is marked missing${platform.reason ? ` (${platform.reason})` : ''}, so no to-be photo exists; ${bypass}`);
+  if (!platform.tobe) throw new Error(`Refusing to resolve ${where}: no to-be photo is recorded; ${bypass}`);
+  const file = path.resolve(path.dirname(path.resolve(reviewPath)), platform.tobe);
+  let info;
+  try {
+    info = await stat(file);
+  } catch (error) {
+    throw new Error(`Refusing to resolve ${where}: to-be photo ${file} cannot be read (${error.message}); ${bypass}`);
+  }
+  if (box.fixedAt && info.mtimeMs < Date.parse(box.fixedAt)) {
+    throw new Error(`Refusing to resolve ${where}: to-be photo ${file} was taken ${info.mtime.toISOString()}, before the box was marked fixed at ${box.fixedAt}; recapture after the fix (${bypass})`);
+  }
+}
+
 export async function editReview(reviewPath, action, values) {
   const review = await loadReview(reviewPath);
   if (action === 'union') {
@@ -56,8 +78,13 @@ export async function editReview(reviewPath, action, values) {
     const status = values.to;
     if (status === 'resolved' && box.kind !== 'fix') throw new Error('resolved status is only valid for fix boxes');
     if (status === 'accepted' && box.kind !== 'unintended') throw new Error('accepted status is only valid for unintended boxes');
+    if (status === 'resolved' && values['no-photo-reason'] === undefined) await requireFreshPhoto(review, box, reviewPath);
     box.status = status;
     box.commit = status === 'resolved' ? values.commit : null;
+    if (status === 'fixed') box.fixedAt = new Date().toISOString();
+    if (status === 'open') delete box.fixedAt;
+    if (values['no-photo-reason'] !== undefined) box.noPhotoReason = values['no-photo-reason'];
+    else delete box.noPhotoReason;
     await writeReviewAtomic(reviewPath, review);
     return box.id;
   }

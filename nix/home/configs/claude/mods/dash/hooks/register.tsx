@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type {
   DashDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
-import type { LineChanges, TrackedAgent, UsageSnapshot } from '../types'
+import type { TrackedAgent, UsageSnapshot } from '../types'
 import { reconcileAgents, recordCompletion, recordMessage, recordSpawn } from './fleet'
 
 type Elements = ReturnType<EngineInterface['ui']['resolve']>
@@ -12,7 +12,7 @@ const PANE = 'dash'
 const TITLE = 'Dash'
 const REFRESH_MS = 15_000
 const dashboard = atom({ plugin: 'dash', key: 'dashboard' } as const, {
-  now: 0, usage: null, lines: { added: 0, removed: 0 }, agents: [], clm: null,
+  now: 0, usage: null, agents: [], clm: null,
 } satisfies DashDashboardState)
 
 function errorText(error: unknown): string {
@@ -53,26 +53,9 @@ async function change($: EngineInterface, operation: string, fn: (state: DashDas
   }
 }
 
-function snapshot(usage: Pick<SessionUsage, 'rateLimits' | 'cost'> & Partial<Pick<SessionUsage, 'startedAt'>>): UsageSnapshot {
+function snapshot(usage: Pick<SessionUsage, 'rateLimits'>): UsageSnapshot {
   return {
-    ...(usage.startedAt === undefined ? {} : { startedAt: usage.startedAt }),
     rateLimits: usage.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ kind, percentUsed, ...(resetsAt ? { resetsAt } : {}) })),
-    ...(usage.cost ? { costUsd: usage.cost.usd } : {}),
-  }
-}
-
-// Edit and Write results carry the diff the engine applied; SessionUsage has no line counts, so the dash tallies them.
-function lineChanges(tool: string, result: unknown): LineChanges | undefined {
-  if (tool !== 'Edit' && tool !== 'Write') return undefined
-  const { structuredPatch, type, content, staged } = (result ?? {}) as {
-    structuredPatch?: { lines: string[] }[]; type?: string; content?: string; staged?: boolean
-  }
-  if (staged || !Array.isArray(structuredPatch)) return undefined
-  const lines = structuredPatch.flatMap(hunk => hunk.lines)
-  if (lines.length === 0 && type === 'create' && content) return { added: content.split('\n').length - (content.endsWith('\n') ? 1 : 0), removed: 0 }
-  return {
-    added: lines.filter(line => line.startsWith('+')).length,
-    removed: lines.filter(line => line.startsWith('-')).length,
   }
 }
 
@@ -250,17 +233,10 @@ function usageRows(elements: Elements, state: DashDashboardState, width: number)
     if (!limit) return []
     return [...(index > 0 && limitOf('five_hour') ? [[' / ', 'label'] satisfies Span] : []), ...rateLimitSpans(kind, limit, state.now)]
   })
-  const windowRow = windows.length === 0 ? null : spanRow(elements, 'windows', windows, width)
-  const summary = [
-    usage.costUsd === undefined ? undefined : `$${usage.costUsd.toFixed(2)}`,
-    usage.startedAt === undefined ? undefined : durationLabel(Math.max(0, state.now - usage.startedAt)),
-    `+${state.lines.added} -${state.lines.removed}`,
-  ].filter(part => part !== undefined).join(' · ')
   return (
     <Box flexDirection="column">
-      {windowRow}
+      {windows.length === 0 ? null : spanRow(elements, 'windows', windows, width)}
       {others.map(limit => spanRow(elements, limit.kind, rateLimitSpans(limit.kind, limit, state.now), width))}
-      <Text>{clip(summary, width)}</Text>
     </Box>
   )
 }
@@ -269,10 +245,9 @@ function clmHead(state: DashDashboardState, width: number): { text: string, dim:
   if (state.clm === null) return { text: clip('▸ Loading clm status…', width), dim: true }
   if ('error' in state.clm) return { text: clip(`▸ clm is unavailable: ${state.clm.error.replace(/\s+/g, ' ')}`, width), dim: false }
   const { status } = state.clm
-  const fold = status.lastFoldAt === null ? 'never' : durationLabel(Math.max(0, state.now - status.lastFoldAt))
   const focus = status.focus ? `${status.focus.title} (${status.focus.status})` : 'no focus'
   const depth = status.focus && status.stackDepth > 1 ? ` · depth ${status.stackDepth}` : ''
-  return { text: clip(`▸ ${focus}${depth} · later ${status.later.length} · issues ${status.openIssues} · fold ${fold}`, width), dim: false, status }
+  return { text: clip(`▸ ${focus}${depth} · later ${status.later.length} · issues ${status.openIssues}`, width), dim: false, status }
 }
 
 function workRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
@@ -333,26 +308,10 @@ export const register: Register = on => {
       await change($, 'session.measure state update', state => ({
         ...state,
         now: measuredAt,
-        usage: snapshot({
-          rateLimits: e.rateLimits,
-          ...(e.cost === undefined ? {} : { cost: e.cost }),
-          ...(state.usage?.startedAt === undefined ? {} : { startedAt: state.usage.startedAt }),
-        }),
+        usage: snapshot({ rateLimits: e.rateLimits }),
       }))
     }
     return result
-  })
-
-  on('tool.call', async ($, e, next) => {
-    const called = await pass($, 'tool.call', () => next(e))
-    const changed = 'result' in called ? lineChanges(e.tool, called.result) : undefined
-    if (changed) {
-      await change($, `tally lines for ${e.tool}`, state => ({
-        ...state,
-        lines: { added: state.lines.added + changed.added, removed: state.lines.removed + changed.removed },
-      }))
-    }
-    return called
   })
 
   on('agent.spawn', async ($, e, next) => {

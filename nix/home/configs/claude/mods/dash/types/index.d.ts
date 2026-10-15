@@ -1,10 +1,6 @@
 export type UsageSnapshot = {
   rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[]
-  costUsd?: number
-  startedAt?: number
 }
-
-export type LineChanges = { added: number; removed: number }
 
 export type TrackedAgent = {
   id: string
@@ -20,7 +16,6 @@ declare module 'claude-code' {
   export type DashDashboardState = {
     now: number
     usage: UsageSnapshot | null
-    lines: LineChanges
     agents: TrackedAgent[]
     clm: { status: Awaited<ReturnType<EngineInterface['clm']['status']>> } | { error: string } | null
   }

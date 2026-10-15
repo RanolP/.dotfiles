@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 
 const start = ($: Engine) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
 
-const mountPane = ($: Engine) => $.ui.mount({
+const mountPane = ($: Engine, bodyColumns = 60) => $.ui.mount({
   plugin: 'dash',
   surface: 'terminal',
   component: 'Pane',
@@ -11,7 +11,7 @@ const mountPane = ($: Engine) => $.ui.mount({
   props: {
     title: 'Dash',
     isFocused: true,
-    bodyColumns: 60,
+    bodyColumns,
     placement: 'inline',
     scroll: { offset: 0, bodyRows: 40 },
     view: {},
@@ -163,8 +163,7 @@ test('one pane stacks Usage rows and the Work head line with no tabs and no head
   const ui = await mountPane($)
   for (const removed of [/^── /, /^Focus /, /^Agents /, /^No subagents yet/]) expect(await ui.find({ type: 'Text', text: removed })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '5h 40% \u{F0450} in 2h13m' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '$1.50 · 0m · +0 -0' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '▸ Focus (doing) · depth 3 · later 1 · issues 4 · fold never' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ Focus (doing) · depth 3 · later 1 · issues 4' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^  Pending  .+…/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '  Resume  Resume task' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '  · worker-a Agent task (doing)' })).toBeDefined()
@@ -180,7 +179,7 @@ test('neither a Usage nor a Work header row renders', async ($, on) => {
 
   const ui = await mountPane($)
   expect(await ui.find({ type: 'Text', text: /^── (Usage|Work)/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^▸ no focus · later 0 · issues 0 · fold never$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^▸ no focus · later 0 · issues 0$/ })).toBeDefined()
 })
 
 // Regression: a paired agent kept printing running/done instead of its clm task title, or an unpaired agent lost its status word.
@@ -198,8 +197,8 @@ test('a paired agent shows its clm title in place of its status; an unpaired age
   expect(await ui.find({ type: 'Text', text: /· agent-2/ })).toBeUndefined()
 })
 
-// Regression: the later/issues/fold counters moved off the head line into a separate row again.
-test('the head line carries later, issues and fold', async ($, on) => {
+// Regression: the later/issues counters moved off the head line into a separate row again.
+test('the head line carries later and issues', async ($, on) => {
   const now = Date.parse('2026-10-15T03:00:00Z')
   mock.clock(on, { now })
   on('session.start', () => ({ cwd: '/work' }))
@@ -211,7 +210,7 @@ test('the head line carries later, issues and fold', async ($, on) => {
   await start($)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (doing) · later 2 · issues 1 · fold 3m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (doing) · later 2 · issues 1' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^(Later|Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
 })
 
@@ -243,29 +242,6 @@ test('session start fetches clm status, rendering a logged one-line error when c
   expect(await ui.find({ type: 'Text', text: /Loading clm status/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /clm is unavailable: .+/ })).toBeDefined()
   expect(logs.some(message => message.startsWith('[dash] clm.status:'))).toBe(true)
-})
-
-// Regression: the statusline's second line moved here, so the pane must show session duration and edited lines.
-test('Usage shows session duration and lines tallied from Edit and Write results', async ($, on) => {
-  mock.clock(on, { now: 601_000 })
-  on('session.start', () => ({ cwd: '/work' }))
-  on('session.usage', () => ({ value: {
-    startedAt: 1_000,
-    context: { window: 200_000, tokens: 50_000, percent: 25 },
-    rateLimits: [],
-    cost: { usd: 1.5 },
-  } }))
-  const patch = [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 3, lines: [' keep', '-old', '+new', '+extra'] }]
-  on('tool.call', (_$, e: any) => ({ result: e.tool === 'Edit'
-    ? { structuredPatch: patch }
-    : { type: 'create', content: 'a\nb\n', structuredPatch: [] } }) as never)
-  await start($)
-  await $.tool.call({ tool: 'Edit', file_path: '/work/a', old_string: 'old', new_string: 'new' } as never)
-  await $.tool.call({ tool: 'Write', file_path: '/work/b', content: 'a\nb\n' } as never)
-
-  const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: /^Ctx/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: '$1.50 · 10m · +4 -1' })).toBeDefined()
 })
 
 // Regression: the compact layout drifted from the statusline's rate-limit rows, split the two limits across rows, brought back the Ctx row, or showed empty clm rows that waste pane height.
@@ -307,8 +283,7 @@ test('compact Usage joins both rate limits on one row with no Ctx row, and Work 
   expect((await ui.find({ type: 'Text', text: /^weekly $/ }))?.props.color).toBe('gray')
   expect((await ui.find({ type: 'Text', text: /^31%$/ }))?.props.color).toBe('whiteBright')
   expect(await ui.find({ type: 'Text', text: /^Ctx/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: '$3.21 · 1h12m · +0 -0' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (active) · later 2 · issues 1 · fold 3m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (active) · later 2 · issues 1' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^(Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
 })
 
@@ -329,4 +304,35 @@ test('Usage with only one rate limit shows that half alone, with no separator', 
   expect(await ui.find({ type: 'Text', text: '5h 68% \u{F0450} in 2h13m' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: / \/ / })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /weekly/ })).toBeUndefined()
+})
+
+// Regression: the cost, duration and edit-count summary came back into the Usage row.
+test('the Usage row carries no used segment', async ($, on) => {
+  const now = Date.parse('2026-10-15T03:00:00Z')
+  mock.clock(on, { now })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.usage', () => ({ value: {
+    startedAt: now - 72 * 60_000,
+    context: { window: 200_000, tokens: 1, percent: 1 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 68, resetsAt: new Date(now + 133 * 60_000).toISOString() }],
+    cost: { usd: 3.21 },
+  } }))
+  await start($)
+
+  const ui = await mountPane($, 120)
+  expect(await ui.find({ type: 'Text', text: '5h 68% \u{F0450} in 2h13m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /used|\$3\.21|edits/ })).toBeUndefined()
+})
+
+// Regression: the fold age came back onto the Work head line.
+test('the head line has no fold segment', async ($, on) => {
+  const now = Date.parse('2026-10-15T03:00:00Z')
+  mock.clock(on, { now })
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => ({ ...emptyStatus, lastFoldAt: now - 3 * 60_000 }))
+  await start($)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /^▸ no focus · later 0 · issues 0$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /fold/ })).toBeUndefined()
 })

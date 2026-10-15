@@ -24,14 +24,8 @@ const CODEX = 'codex-subagent:'
 const MAIN_ABORT = 'main-abort'
 const STATUS_REFRESH_MS = 60_000
 
-// Unlimited mode is the user's unattended run ("맥북 꺼두고 자동사냥하고 싶음"):
-// no budget stops the work. `/budget-unlimited on <condition>` also starts
-// Claude Code's own `/goal`, whose Stop hook keeps the work going until the
-// condition holds; the goal's end turns unlimited off and lets the Mac sleep.
-const UNLIMITED = { plugin: 'time-budget', key: 'unlimited' } as const
 const GOAL = { plugin: 'time-budget', key: 'goal' } as const
 const UNLIMITED_ENV = 'CLAUDE_TIME_BUDGET_UNLIMITED'
-const UNLIMITED_COMMAND = 'budget-unlimited'
 const GOAL_COMMAND = 'goal'
 // The words `/goal` itself reads as a clear (the binary's set of them).
 const GOAL_CLEAR_WORDS = new Set(['clear', 'stop', 'off', 'reset', 'none', 'cancel'])
@@ -91,9 +85,8 @@ type S = {
   pairs?: Pair[]
   calibrationWrite?: Promise<void>
   refresh?: Timer
-  unlimited: boolean
   envUnlimited: boolean
-  /** The condition of the `/goal` this plugin started, while it runs. */
+  /** The condition of the user's active `/goal`, null when none runs; it alone turns unlimited on. */
   goal: string | null
   /** Why the last goal ended, shown until the next one starts. */
   goalEnd?: string
@@ -102,7 +95,7 @@ type S = {
   awake?: Timer
 }
 
-const isUnlimited = (s: S) => s.unlimited || s.envUnlimited
+const isUnlimited = (s: S) => s.goal !== null || s.envUnlimited
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 
@@ -330,12 +323,11 @@ function unreadReports(s: S, now: number): string[] {
   return out
 }
 
-async function saveUnlimited($: Ctx, s: S) {
+async function saveGoal($: Ctx, s: S) {
   try {
-    await $.state.set(UNLIMITED, s.unlimited)
     await $.state.set(GOAL, s.goal)
   } catch (err) {
-    log($, `state.set (unlimited) failed: ${errText(err)}`)
+    log($, `state.set (goal) failed: ${errText(err)}`)
   }
 }
 
@@ -383,30 +375,19 @@ async function endGoal($: Ctx, s: S, reason: string) {
   s.goal = null
   s.goalEnd = reason
   s.goalRowLast = false
-  s.unlimited = false
   stopAwakeRefresh(s)
   try {
     await setAwake($, 0)
   } catch (err) {
     log($, `stay-awake clear failed: ${errText(err)}`)
   }
-  await saveUnlimited($, s)
+  await saveGoal($, s)
   await showStatus($, s)
   try {
     $.ui.toast(`time-budget: ${goalText(s)}`)
   } catch (err) {
     log($, `ui.toast failed: ${errText(err)}`)
   }
-}
-
-// `$.command.run` queues behind the session going idle, so it is sent from a timer rather than awaited inside a command hook.
-function runGoal($: Ctx, s: S, args: string) {
-  $.clock.after(0, () => {
-    $.command.run({ command: GOAL_COMMAND, args }).catch(err => {
-      log($, `/${GOAL_COMMAND} ${args} failed: ${errText(err)}`)
-      if (args !== 'clear') void endGoal($, s, `/${GOAL_COMMAND} could not start: ${errText(err)}`)
-    })
-  })
 }
 
 // Turning unlimited on lifts every stop already in force, and the abort waiting on it.
@@ -424,7 +405,7 @@ async function liftHalts($: Ctx, s: S) {
 }
 
 export const register: Register = (on) => {
-  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set(), unlimited: false, envUnlimited: false, goal: null, goalRowLast: false }
+  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set(), envUnlimited: false, goal: null, goalRowLast: false }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -433,22 +414,11 @@ export const register: Register = (on) => {
       s.units = read.value ? { ...read.value } : {}
       const parked = await $.state.get(PARKED)
       s.parked = parked.value ? { ...parked.value } : {}
-      s.unlimited = (await $.state.get(UNLIMITED)).value === true
       s.goal = (await $.state.get(GOAL)).value ?? null
     } catch (err) {
       log($, `state.get failed: ${errText(err)}`)
     }
     s.envUnlimited = /^(1|true|on|yes)$/i.test((await $.env.get('CLAUDE_TIME_BUDGET_UNLIMITED')) ?? '')
-    try {
-      await $.command.register({
-        name: UNLIMITED_COMMAND,
-        description: `on [<condition>]|off: unattended mode. No time budget stops the work; with a condition it also runs /${GOAL_COMMAND} <condition>, keeps the Mac awake, and turns itself off when the goal ends. ${UNLIMITED_ENV}=1 in the environment turns it on too.`,
-        argumentHint: 'on [<condition>] | off',
-        immediate: true,
-      })
-    } catch (err) {
-      log($, `command.register(${UNLIMITED_COMMAND}) failed: ${errText(err)}`)
-    }
     // The old prompt-scoped state used the literal key `main`; it cannot be tied to a clm issue.
     if (s.units.main?.kind === 'main') {
       disarm(s, 'main')
@@ -465,7 +435,7 @@ export const register: Register = (on) => {
     }
     for (const key of Object.keys(s.units)) await arm($, s, key)
     if (isUnlimited(s)) await liftHalts($, s)
-    if (s.goal !== null && s.unlimited) await startAwakeRefresh($, s)
+    if (s.goal !== null) await startAwakeRefresh($, s)
     s.refresh?.cancel()
     s.refresh = $.clock.every(STATUS_REFRESH_MS, () => { void showStatus($, s) })
     await showStatus($, s)
@@ -484,55 +454,21 @@ export const register: Register = (on) => {
     return next(e)
   })
 
-  on('command.run', { command: UNLIMITED_COMMAND }, async ($, e) => {
-    const raw = (e.args ?? '').trim()
-    const [head = '', ...rest] = raw.split(/\s+/)
-    const arg = head.toLowerCase()
-    const condition = raw.slice(head.length).trim()
-    if (arg === 'on') {
-      if (GOAL_CLEAR_WORDS.has(condition.toLowerCase())) return { text: `"${condition}" is a word /${GOAL_COMMAND} reads as clear; name the condition to work toward.` }
-      s.unlimited = true
-      if (condition) {
-        s.goal = condition
-        s.goalEnd = undefined
-        s.goalRowLast = false
-        runGoal($, s, condition)
-        await startAwakeRefresh($, s)
-      }
-      await saveUnlimited($, s)
-      await liftHalts($, s)
-    } else if (arg === 'off' && !rest.length) {
-      s.unlimited = false
-      const ours = s.goal !== null
-      await endGoal($, s, 'turned off by /budget-unlimited off')
-      if (ours) runGoal($, s, 'clear')
-      await saveUnlimited($, s)
-      await showStatus($, s)
-    } else if (arg) {
-      return { text: `Usage: /${UNLIMITED_COMMAND} on [<condition>] | off (or ${UNLIMITED_ENV}=1 in the environment)` }
-    }
-    const env = s.envUnlimited ? ` ${UNLIMITED_ENV} is set, so it stays on until that is unset.` : ''
-    if (s.goal !== null) return { text: `Unlimited mode is on until /${GOAL_COMMAND} "${s.goal}" ends: no time budget stops the work, the goal keeps it going, and the Mac stays awake meanwhile.${env}` }
-    const ended = s.goalEnd ? `The last goal ended: ${s.goalEnd}. ` : ''
-    return { text: isUnlimited(s)
-      ? `${ended}Unlimited mode is on: no time budget stops the work.${env}`
-      : `${ended}Unlimited mode is off: the time budget stops the work as usual.` }
-  })
-
-  // A typed /goal never turns unlimited on; it only replaces or clears the goal this plugin started.
   on('command.run', { command: GOAL_COMMAND }, async ($, e, next) => {
-    const r = await next(e)
-    if (s.goal === null) return r
     const args = e.args.trim()
+    const clearWord = GOAL_CLEAR_WORDS.has(args.toLowerCase())
+    const r = await next(e)
     const out = r.text ?? ''
-    const cleared = out.startsWith('Goal cleared') || out.startsWith('No goal set') || (!out && GOAL_CLEAR_WORDS.has(args.toLowerCase()))
-    if (cleared) await endGoal($, s, `goal cleared by /${GOAL_COMMAND} ${args}`)
-    else if (out.startsWith('Goal set: ') || (!out && args)) {
+    const cleared = clearWord || out.startsWith('Goal cleared') || out.startsWith('No goal set')
+    if (cleared) {
+      await endGoal($, s, `goal cleared by /${GOAL_COMMAND} ${args}`)
+    } else if (out.startsWith('Goal set: ') || (!out && args)) {
       s.goal = out.startsWith('Goal set: ') ? out.slice('Goal set: '.length) : args
-      await saveUnlimited($, s)
-      await showStatus($, s)
-    } else if (args && out) {
-      await endGoal($, s, `/${GOAL_COMMAND} did not start: ${out}`)
+      s.goalEnd = undefined
+      s.goalRowLast = false
+      await saveGoal($, s)
+      await startAwakeRefresh($, s)
+      await liftHalts($, s)
     }
     return r
   })

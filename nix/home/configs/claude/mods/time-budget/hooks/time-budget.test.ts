@@ -5,10 +5,10 @@ import { GRACE_MS, TOOL } from './budget'
 const MIN = 60_000
 const T0 = 1_000_000_000
 
-function world(on: any) {
+function world(on: any, env: Record<string, string> = {}, persistedState: Record<string, unknown> = {}) {
   const seen = {
     files: {} as Record<string, string>,
-    state: {} as Record<string, unknown>,
+    state: { ...persistedState } as Record<string, unknown>,
     status: [] as (string | undefined)[],
     aborted: [] as string[],
     steps: 0,
@@ -17,10 +17,12 @@ function world(on: any) {
     prompts: [] as string[],
     promptSubmissions: [] as { text: string; origin: any }[],
     goalRuns: [] as string[],
+    goalOutput: undefined as string | undefined,
+    goalThrows: false,
     toasts: [] as string[],
   }
   const clock: MockClock = mock.clock(on, { now: T0 })
-  mock.env(on, { HOME: '/home/t' })
+  mock.env(on, { HOME: '/home/t', ...env })
   on('engine.create', async (_$: any, e: any, next: any) => ({
     ...(await next(e)),
     clm: {
@@ -37,6 +39,9 @@ function world(on: any) {
     seen.state[e.key] = e.value
     return result
   })
+  on('state.get', (_$: any, e: any, next: any) => Object.prototype.hasOwnProperty.call(persistedState, e.key)
+    ? { value: { value: persistedState[e.key], version: 1 } }
+    : next(e))
   on('process.run', (_$: any, e: any) => {
     if (e.argv[0] === 'rm') delete seen.files[e.argv[2]]
     if (e.argv[0] === 'mv') {
@@ -71,7 +76,10 @@ function world(on: any) {
   // Core /goal's own output lines, as the 2.1.288 binary prints them.
   on('command.run', { command: 'goal' }, (_$: any, e: any) => {
     seen.goalRuns.push(e.args)
-    return { text: ['clear', 'stop', 'off'].includes(e.args) ? 'Goal cleared: x' : `Goal set: ${e.args}` }
+    if (seen.goalThrows) throw new Error('core /goal failed')
+    if (seen.goalOutput !== undefined) return { text: seen.goalOutput }
+    if (!e.args.trim()) return { text: '' }
+    return { text: ['clear', 'stop', 'off', 'reset', 'none', 'cancel'].includes(e.args) ? 'Goal cleared: x' : `Goal set: ${e.args}` }
   })
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
@@ -87,6 +95,7 @@ function world(on: any) {
 }
 
 const start = ($: Engine) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+const end = ($: Engine) => $.session.end({ sessionId: 's1' } satisfies Parameters<Engine['session']['end']>[0])
 const prompt = ($: Engine, text: string) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
 // A builtin's typed input has no agentId, so a subagent's call goes through an MCP name, whose arguments are loose.
 const run = ($: Engine, input: Parameters<Engine['tool']['call']>[0]) => $.tool.call(input)
@@ -370,7 +379,7 @@ test('a task stopped before session end stays stopped when resumed', async ($, o
   const first = Object.keys(seen.clm)[0] ?? ''
   await clock.advance(15 * MIN + 1)
   expect((await report($, 2, 4)).result).toContain('Stop here')
-  await $.session.end({ sessionId: 's1' } as never)
+  await end($)
   await start($)
   await estimate($, 30, undefined, first)
   expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('Stop here')
@@ -385,7 +394,7 @@ test('a report due before session end is still due when resumed', async ($, on) 
   const first = Object.keys(seen.clm)[0] ?? ''
   await clock.advance(11 * MIN)
   expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('Checkpoint 1/3')
-  await $.session.end({ sessionId: 's1' } as never)
+  await end($)
   await start($)
   await estimate($, 30, undefined, first)
   expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('Checkpoint 1/3')
@@ -542,22 +551,16 @@ test('a main answer carries the budget line only when a report is due', async ($
   expect(r.text).toContain('report due')
 })
 
-const unlimited = ($: Engine, arg: 'on' | 'off') => $.command.run({ command: 'budget-unlimited', args: arg } as any)
+const goal = ($: Engine, args: string) => $.command.run({ command: 'goal', args } satisfies Parameters<Engine['command']['run']>[0])
+const AWAKE = '/home/t/.local/state/claude-awake/until'
+const awakeAt = (ms: number) => `${Math.floor(ms / 1000 + 30 * 60)}\n`
+// The harness has no store beneath session.append, so the row is observed and its store attempt's rejection ignored.
+const append = ($: Engine, row: Record<string, unknown>) => $.session.append({ uuid: `row-${Math.random()}`, ...row } as any).catch(() => undefined)
+const goalRow = ($: Engine) => append($, { message: { type: 'attachment', name: 'goal_status', content: [] }, door: 'attachment', origin: { kind: 'engine' } })
+const responseRow = ($: Engine) => append($, { message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'working' }] }, door: 'response', origin: { kind: 'model', model: 'm' } })
 
-// Regression: unlimited mode still stopped every tool once the budget ran out, ending the unattended run.
-test('unlimited mode suppresses the budget halt', async ($, on) => {
-  const { clock } = world(on)
-  await start($)
-  await unlimited($, 'on')
-  await prompt($, 'go')
-  await estimate($, 15)
-  await clock.advance(15 * MIN + 1)
-  await report($, 1, 0)
-  expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
-})
-
-// Regression: turning unlimited on over a halted task left the grace abort armed, which killed the running turn anyway.
-test('unlimited mode lifts an existing halt and never arms the main abort', async ($, on) => {
+// Regression: a typed goal left a halted task and its grace abort in place, or failed to keep the Mac awake.
+test('a typed /goal turns unlimited on, lifts an existing halt, and keeps the Mac awake', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
@@ -565,7 +568,10 @@ test('unlimited mode lifts an existing halt and never arms the main abort', asyn
   await estimate($, 15)
   await clock.advance(15 * MIN + 1)
   expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 15 min is spent')
-  await unlimited($, 'on')
+  await goal($, 'all tests pass')
+  expect(seen.goalRuns).toEqual(['all tests pass'])
+  expect(seen.state.goal).toBe('all tests pass')
+  expect(seen.files[AWAKE]).toBe(awakeAt(T0 + 15 * MIN + 1))
   await clock.advance(GRACE_MS * 3)
   expect(seen.aborted).toEqual([])
   expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
@@ -575,60 +581,40 @@ test('unlimited mode lifts an existing halt and never arms the main abort', asyn
   expect(drawn).toContain('no implementation for ui.render')
 })
 
-const unlimitedGoal = ($: Engine, condition: string) => $.command.run({ command: 'budget-unlimited', args: `on ${condition}` } as any)
-const AWAKE = '/home/t/.local/state/claude-awake/until'
-const awakeAt = (ms: number) => `${Math.floor(ms / 1000 + 30 * 60)}\n`
-// The harness has no store beneath session.append, so the row is observed and its store attempt's rejection ignored.
-const append = ($: Engine, row: Record<string, unknown>) => $.session.append({ uuid: `row-${Math.random()}`, ...row } as any).catch(() => undefined)
-// The /goal run is sent from a zero-delay timer; let it fire and its promise settle.
-const settle = async (clock: MockClock) => {
-  await clock.advance(1)
-  for (let i = 0; i < 5; i++) await Promise.resolve()
-}
-const goalRow = ($: Engine) => append($, { message: { type: 'attachment', name: 'goal_status', content: [] }, door: 'attachment', origin: { kind: 'engine' } })
-const responseRow = ($: Engine) => append($, { message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'working' }] }, door: 'response', origin: { kind: 'model', model: 'm' } })
-
-// Regression: `on <condition>` turned unlimited on without starting /goal, so nothing kept the unattended run going.
-test('on <cond> runs /goal with the condition and keeps the Mac awake', async ($, on) => {
-  const { seen, clock } = world(on)
+// Regression: the goal's evaluator writes a final row before turn.complete; only that end turns the mode off.
+test('a goal end turns unlimited off and clears stay-awake', async ($, on) => {
+  const { seen } = world(on)
   await start($)
-  await unlimitedGoal($, 'all tests pass')
-  await settle(clock)
-  expect(seen.goalRuns).toEqual(['all tests pass'])
-  expect(seen.state.unlimited).toBe(true)
-  expect(seen.state.goal).toBe('all tests pass')
-  expect(seen.files[AWAKE]).toBe(awakeAt(T0))
-  await clock.advance(2 * MIN)
-  expect(seen.files[AWAKE]).toBe(awakeAt(T0 + 1 + 2 * MIN))
-})
-
-// Regression: a met goal left unlimited on and the Mac awake with nothing running.
-test('goal end turns unlimited off and clears stay-awake', async ($, on) => {
-  const { seen, clock } = world(on)
-  await start($)
-  await unlimitedGoal($, 'done')
-  await settle(clock)
+  await goal($, 'done')
   await prompt($, 'go')
   await responseRow($)
   await goalRow($)
   await complete($, 'turn-goal', 'met')
-  expect(seen.state.unlimited).toBe(false)
   expect(seen.state.goal).toBe(null)
   expect(seen.files[AWAKE]).toBeUndefined()
   expect(seen.status.at(-1)).toContain('goal ended')
   expect(seen.toasts.at(-1)).toContain('unlimited off')
 })
 
-// Regression: a "not met" check, which the model answers by working on, ended the unattended run.
-test('a goal check followed by more model output keeps unlimited on', async ($, on) => {
+// Regression: the one-minute lease stopped refreshing while a typed goal was still active.
+test('a running goal refreshes the stay-awake lease every minute', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
-  await unlimitedGoal($, 'done')
-  await settle(clock)
+  await goal($, 'all tests pass')
+  expect(seen.state.goal).toBe('all tests pass')
+  expect(seen.files[AWAKE]).toBe(awakeAt(T0))
+  await clock.advance(2 * MIN)
+  expect(seen.files[AWAKE]).toBe(awakeAt(T0 + 2 * MIN))
+})
+
+// Regression: a "not met" check, which the model answers by working on, ended the unattended run.
+test('a goal check followed by more model output keeps unlimited on', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await goal($, 'done')
   await goalRow($)
   await responseRow($)
   await complete($, 'turn-not-met', 'still going')
-  expect(seen.state.unlimited).toBe(true)
   expect(seen.state.goal).toBe('done')
 })
 
@@ -636,34 +622,113 @@ test('a goal check followed by more model output keeps unlimited on', async ($, 
 test('awake refresh stops when the goal ends', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
-  await unlimitedGoal($, 'done')
-  await settle(clock)
-  await $.command.run({ command: 'goal', args: 'clear' } as any)
-  expect(seen.state.unlimited).toBe(false)
+  await goal($, 'done')
+  await goal($, 'clear')
   expect(seen.files[AWAKE]).toBeUndefined()
   await clock.advance(5 * MIN)
   expect(seen.files[AWAKE]).toBeUndefined()
 })
 
-// Regression: a goal the user set by hand switched the budget off without their opt-in.
-test('a typed /goal does not enable unlimited', async ($, on) => {
-  const { seen, clock } = world(on)
+// Regression: clearing an active goal leaves unlimited on or keeps the Mac awake.
+test('/goal clear turns unlimited off and lets the Mac sleep', async ($, on) => {
+  const { seen } = world(on)
   await start($)
-  await $.command.run({ command: 'goal', args: 'ship it' } as any)
-  await clock.advance(2 * MIN)
-  expect(seen.state.unlimited).not.toBe(true)
+  await goal($, 'ship it')
+  await goal($, 'clear')
+  expect(seen.state.goal).toBe(null)
   expect(seen.files[AWAKE]).toBeUndefined()
 })
 
-// Regression: `off` left the plugin's /goal running, so Claude kept working with the budget back on.
-test("off clears the plugin's goal and stay-awake", async ($, on) => {
-  const { seen, clock } = world(on)
+// Regression: ending a goal also disabled the configured always-on override.
+test('the unlimited environment setting survives goal end', async ($, on) => {
+  const { seen, clock } = world(on, { CLAUDE_TIME_BUDGET_UNLIMITED: '1' })
   await start($)
-  await unlimitedGoal($, 'done')
-  await settle(clock)
-  await unlimited($, 'off')
-  await settle(clock)
-  expect(seen.goalRuns).toEqual(['done', 'clear'])
-  expect(seen.state.unlimited).toBe(false)
+  await prompt($, 'go')
+  await estimate($, 15)
+  await goal($, 'done')
+  await clock.advance(15 * MIN + 1)
+  await prompt($, 'go')
+  await responseRow($)
+  await goalRow($)
+  await complete($, 'turn-goal', 'met')
+  await report($, 1, 0)
+  expect(seen.state.goal).toBe(null)
   expect(seen.files[AWAKE]).toBeUndefined()
+  expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
+})
+
+// Regression: a persisted goal must survive session end and restart with its awake lease and halted unit lifted.
+test('a persisted goal survives session end and restart', async ($, on) => {
+  const startAt = T0 - 15 * MIN - 1
+  const { seen, clock } = world(on, {}, {
+    goal: 'finish the task',
+    units: {
+      'persisted-task': {
+        kind: 'main', start: startAt, budgetMin: 15, fired: 5,
+        halted: 'the budget of 15 min is spent (15 min elapsed)', haltedAt: T0,
+      },
+    },
+  })
+  await start($)
+  expect(seen.state.goal).toBe('finish the task')
+  expect(seen.status.at(-1)).toContain('unlimited until goal')
+  expect(seen.files[AWAKE]).toBe(awakeAt(T0))
+  await end($)
+  await start($)
+  await clock.advance(2 * MIN)
+  expect(seen.files[AWAKE]).toBe(awakeAt(T0 + 2 * MIN))
+  await estimate($, 15, undefined, 'persisted-task')
+  expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
+})
+
+// catches a leaked refresh timer keeping the Mac awake after /clear
+test('a cleared goal stays asleep after session restart', async ($, on) => {
+  const persistedState: Record<string, unknown> = {}
+  const { seen, clock } = world(on, {}, persistedState)
+  await start($)
+  await goal($, 'finish the task')
+  await end($)
+  persistedState.goal = null
+  await start($)
+  const awake = seen.files[AWAKE]
+  await clock.advance(2 * MIN)
+  expect(seen.files[AWAKE]).toBe(awake)
+})
+
+// Regression: a legacy unlimited=true value without a goal must not bypass an exhausted budget.
+test('legacy unlimited state without a goal loads as off', async ($, on) => {
+  const { clock } = world(on, {}, { unlimited: true })
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 15)
+  await clock.advance(15 * MIN + 1)
+  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 15 min is spent')
+})
+
+// Regression: `/goal` without arguments must leave an empty session without a tracked goal or awake lease.
+test('a bare /goal without an active goal changes nothing', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await goal($, '')
+  expect(seen.state.goal).toBeUndefined()
+  expect(seen.files[AWAKE]).toBeUndefined()
+})
+
+// Regression: a rejected or thrown replacement goal must leave the active goal and awake lease intact.
+test('a failed replacement goal keeps the existing goal and awake lease', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await goal($, 'finish the task')
+  const awake = seen.files[AWAKE]
+  seen.goalOutput = 'Goal condition is limited to N'
+  await goal($, 'replacement')
+  expect(seen.state.goal).toBe('finish the task')
+  expect(seen.files[AWAKE]).toBe(awake)
+
+  seen.goalOutput = undefined
+  seen.goalThrows = true
+  const failure = await goal($, 'another replacement').then(() => undefined, err => String(err))
+  expect(failure).toBeTruthy()
+  expect(seen.state.goal).toBe('finish the task')
+  expect(seen.files[AWAKE]).toBe(awake)
 })

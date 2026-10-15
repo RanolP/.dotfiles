@@ -1,6 +1,6 @@
 import { test, expect, mock, type Engine, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnInput, McpToolName, RenderPropsOf, ToolCallResult, TurnCompleteInput } from 'claude-code'
-import { GRACE_MS, MAX_RESUMES, TOOL } from './budget'
+import { GRACE_MS, TOOL } from './budget'
 
 const MIN = 60_000
 const T0 = 1_000_000_000
@@ -16,8 +16,8 @@ function world(on: any) {
     clm: {} as Record<string, { id: string; title: string; status: string; updated: string }>,
     prompts: [] as string[],
     promptSubmissions: [] as { text: string; origin: any }[],
-    resumeRequests: [] as string[],
-    resumeStatus: 'submitted' as 'submitted' | 'queued',
+    goalRuns: [] as string[],
+    toasts: [] as string[],
   }
   const clock: MockClock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/home/t' })
@@ -38,6 +38,7 @@ function world(on: any) {
     return result
   })
   on('process.run', (_$: any, e: any) => {
+    if (e.argv[0] === 'rm') delete seen.files[e.argv[2]]
     if (e.argv[0] === 'mv') {
       seen.files[e.argv[2]] = seen.files[e.argv[1]]
       delete seen.files[e.argv[1]]
@@ -66,7 +67,12 @@ function world(on: any) {
   on('clm.issues', (_$: any, e: any) => ({
     value: Object.values(seen.clm).filter(issue => (!e?.issue || issue.id === e.issue) && (!e?.status || issue.status === e.status)),
   }))
-  on('clm.resume', (_$: any, e: any) => { seen.resumeRequests.push(e.text); return { value: seen.resumeStatus } })
+  on('ui.toast', (_$: any, e: any) => { seen.toasts.push(e.text); return { value: undefined } })
+  // Core /goal's own output lines, as the 2.1.288 binary prints them.
+  on('command.run', { command: 'goal' }, (_$: any, e: any) => {
+    seen.goalRuns.push(e.args)
+    return { text: ['clear', 'stop', 'off'].includes(e.args) ? 'Goal cleared: x' : `Goal set: ${e.args}` }
+  })
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
   on('agent.spawn', (_$: any, e: any) => ({ model: 'm', agentId: e.description }))
@@ -226,7 +232,6 @@ test('the +20m button extends a halted unit and submits asUser directly', async 
   const ui = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
   await ui.press({ key: 'time-budget:+20m' })
   expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
-  expect(seen.resumeRequests).toEqual([])
   expect(seen.prompts.at(-1)).toBe('Continue this task.')
   expect(seen.promptSubmissions.at(-1)?.origin?.asUser).toBe(true)
 })
@@ -538,7 +543,6 @@ test('a main answer carries the budget line only when a report is due', async ($
 })
 
 const unlimited = ($: Engine, arg: 'on' | 'off') => $.command.run({ command: 'budget-unlimited', args: arg } as any)
-const resumes = (seen: ReturnType<typeof world>['seen']) => seen.resumeRequests.filter(p => p.startsWith('Unlimited mode, auto-resume'))
 
 // Regression: unlimited mode still stopped every tool once the budget ran out, ending the unattended run.
 test('unlimited mode suppresses the budget halt', async ($, on) => {
@@ -571,79 +575,95 @@ test('unlimited mode lifts an existing halt and never arms the main abort', asyn
   expect(drawn).toContain('no implementation for ui.render')
 })
 
-// Regression: the loop resubmitted with nothing open (an endless idle loop), or never resumed open work.
-test('auto-resume fires only in unlimited mode and only with open clm work', async ($, on) => {
-  const { seen } = world(on)
+const unlimitedGoal = ($: Engine, condition: string) => $.command.run({ command: 'budget-unlimited', args: `on ${condition}` } as any)
+const AWAKE = '/home/t/.local/state/claude-awake/until'
+const awakeAt = (ms: number) => `${Math.floor(ms / 1000 + 30 * 60)}\n`
+// The harness has no store beneath session.append, so the row is observed and its store attempt's rejection ignored.
+const append = ($: Engine, row: Record<string, unknown>) => $.session.append({ uuid: `row-${Math.random()}`, ...row } as any).catch(() => undefined)
+// The /goal run is sent from a zero-delay timer; let it fire and its promise settle.
+const settle = async (clock: MockClock) => {
+  await clock.advance(1)
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+}
+const goalRow = ($: Engine) => append($, { message: { type: 'attachment', name: 'goal_status', content: [] }, door: 'attachment', origin: { kind: 'engine' } })
+const responseRow = ($: Engine) => append($, { message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'working' }] }, door: 'response', origin: { kind: 'model', model: 'm' } })
+
+// Regression: `on <condition>` turned unlimited on without starting /goal, so nothing kept the unattended run going.
+test('on <cond> runs /goal with the condition and keeps the Mac awake', async ($, on) => {
+  const { seen, clock } = world(on)
   await start($)
-  await prompt($, 'go')
-  await estimate($, 30)
-  await complete($, 'turn-1', 'a')
-  expect(resumes(seen)).toEqual([])
-  await unlimited($, 'on')
-  await complete($, 'turn-2', 'b')
-  expect(resumes(seen).length).toBe(1)
-  expect(resumes(seen)[0]).toContain('task-1')
-  onlyIssue(seen).status = 'done'
-  await complete($, 'turn-3', 'c')
-  expect(resumes(seen).length).toBe(1)
+  await unlimitedGoal($, 'all tests pass')
+  await settle(clock)
+  expect(seen.goalRuns).toEqual(['all tests pass'])
+  expect(seen.state.unlimited).toBe(true)
+  expect(seen.state.goal).toBe('all tests pass')
+  expect(seen.files[AWAKE]).toBe(awakeAt(T0))
+  await clock.advance(2 * MIN)
+  expect(seen.files[AWAKE]).toBe(awakeAt(T0 + 1 + 2 * MIN))
 })
 
-// Regression: time-budget submitted its own automatic prompt, bypassing clm's continuation priority and one-submit guard.
-test('auto-resume registers with clm without submitting directly', async ($, on) => {
-  const { seen } = world(on)
+// Regression: a met goal left unlimited on and the Mac awake with nothing running.
+test('goal end turns unlimited off and clears stay-awake', async ($, on) => {
+  const { seen, clock } = world(on)
   await start($)
-  await unlimited($, 'on')
+  await unlimitedGoal($, 'done')
+  await settle(clock)
   await prompt($, 'go')
-  await estimate($, 30)
-  await complete($, 'turn-auto-resume', 'a')
-  expect(resumes(seen).length).toBe(1)
-  expect(seen.prompts.filter(p => p.startsWith('Unlimited mode, auto-resume'))).toEqual([])
+  await responseRow($)
+  await goalRow($)
+  await complete($, 'turn-goal', 'met')
+  expect(seen.state.unlimited).toBe(false)
+  expect(seen.state.goal).toBe(null)
+  expect(seen.files[AWAKE]).toBeUndefined()
+  expect(seen.status.at(-1)).toContain('goal ended')
+  expect(seen.toasts.at(-1)).toContain('unlimited off')
 })
 
-// Regression caught: queued resumes counted toward MAX_RESUMES before submission, and notifications incorrectly reset that cap.
-test('queued auto-resumes count only when clm submits them and task notifications preserve the count', async ($, on) => {
-  const { seen } = world(on)
-  seen.resumeStatus = 'queued'
+// Regression: a "not met" check, which the model answers by working on, ended the unattended run.
+test('a goal check followed by more model output keeps unlimited on', async ($, on) => {
+  const { seen, clock } = world(on)
   await start($)
-  await unlimited($, 'on')
-  await prompt($, 'go')
-  await estimate($, 30)
-  await complete($, 'turn-queued-resume', 'a')
-  const request = seen.resumeRequests.at(-1)
-  expect(request).toContain('auto-resume 1/50')
-  expect(seen.state.resumes).toBe(0)
-  await $.prompt.submit({ text: request, wait: false, origin: { kind: 'plugin', name: 'clm' } } as any)
-  expect(seen.state.resumes).toBe(1)
-  await $.prompt.submit({ text: 'background notification', wait: false, origin: { kind: 'task-notification' } } as any)
-  expect(seen.state.resumes).toBe(1)
-  await $.prompt.submit({ text: 'continue', wait: false, origin: { kind: 'composer' } } as any)
-  expect(seen.state.resumes).toBe(0)
+  await unlimitedGoal($, 'done')
+  await settle(clock)
+  await goalRow($)
+  await responseRow($)
+  await complete($, 'turn-not-met', 'still going')
+  expect(seen.state.unlimited).toBe(true)
+  expect(seen.state.goal).toBe('done')
 })
 
-// Regression: a task the model can never close drove the unattended loop forever.
-test(`auto-resume stops after ${MAX_RESUMES} in a row`, async ($, on) => {
-  const { seen } = world(on)
+// Regression: the stay-awake refresh kept rewriting the deadline after the goal was cleared.
+test('awake refresh stops when the goal ends', async ($, on) => {
+  const { seen, clock } = world(on)
   await start($)
-  await unlimited($, 'on')
-  await prompt($, 'go')
-  await estimate($, 30)
-  for (let i = 0; i < MAX_RESUMES + 5; i++) await complete($, `turn-${i}`, 'a')
-  expect(resumes(seen).length).toBe(MAX_RESUMES)
-  expect(resumes(seen).at(-1)).toContain(`${MAX_RESUMES}/${MAX_RESUMES}`)
+  await unlimitedGoal($, 'done')
+  await settle(clock)
+  await $.command.run({ command: 'goal', args: 'clear' } as any)
+  expect(seen.state.unlimited).toBe(false)
+  expect(seen.files[AWAKE]).toBeUndefined()
+  await clock.advance(5 * MIN)
+  expect(seen.files[AWAKE]).toBeUndefined()
 })
 
-// Regression: once the cap was hit, the user's own prompt could never restart the loop.
-test("the user's own prompt resets the auto-resume counter; the plugin's prompt does not", async ($, on) => {
-  const { seen } = world(on)
+// Regression: a goal the user set by hand switched the budget off without their opt-in.
+test('a typed /goal does not enable unlimited', async ($, on) => {
+  const { seen, clock } = world(on)
   await start($)
-  await unlimited($, 'on')
-  await prompt($, 'go')
-  await estimate($, 30)
-  for (let i = 0; i < MAX_RESUMES; i++) await complete($, `turn-${i}`, 'a')
-  await complete($, 'turn-capped', 'a')
-  expect(resumes(seen).length).toBe(MAX_RESUMES)
-  await prompt($, 'keep going')
-  await complete($, 'turn-after', 'a')
-  expect(resumes(seen).length).toBe(MAX_RESUMES + 1)
-  expect(resumes(seen).at(-1)).toContain(`1/${MAX_RESUMES}`)
+  await $.command.run({ command: 'goal', args: 'ship it' } as any)
+  await clock.advance(2 * MIN)
+  expect(seen.state.unlimited).not.toBe(true)
+  expect(seen.files[AWAKE]).toBeUndefined()
+})
+
+// Regression: `off` left the plugin's /goal running, so Claude kept working with the budget back on.
+test("off clears the plugin's goal and stay-awake", async ($, on) => {
+  const { seen, clock } = world(on)
+  await start($)
+  await unlimitedGoal($, 'done')
+  await settle(clock)
+  await unlimited($, 'off')
+  await settle(clock)
+  expect(seen.goalRuns).toEqual(['done', 'clear'])
+  expect(seen.state.unlimited).toBe(false)
+  expect(seen.files[AWAKE]).toBeUndefined()
 })

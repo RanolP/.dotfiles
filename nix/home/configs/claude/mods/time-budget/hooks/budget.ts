@@ -28,8 +28,6 @@ const FACTOR_MAX = 10
 // After 6/6, a main turn that is still running gets this long to write its
 // report with every tool but `report` denied, then it is aborted.
 export const GRACE_MS = 2 * 60_000
-// Unlimited mode auto-resumes a turn that ended with clm tasks open at most this many times in a row.
-export const MAX_RESUMES = 50
 
 export const TOOL = {
   estimate: 'mcp__time-budget__estimate',

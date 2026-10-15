@@ -1,0 +1,131 @@
+[
+  {
+    "id": "release-global",
+    "fixture": "release",
+    "kind": "instruction",
+    "expect": "Never push to origin.",
+    "mustBe": "resident"
+  },
+  {
+    "id": "release-scope",
+    "fixture": "release",
+    "kind": "instruction",
+    "expect": "For the release audit SYNTH-417, inspect tracked files only and do not modify generated outputs.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "release-decision",
+    "fixture": "release",
+    "kind": "decision",
+    "expect": "Use UTC timestamps for the release report.",
+    "mustBe": "resident-or-recall",
+    "forbid": "Use local timestamps for the release report."
+  },
+  {
+    "id": "release-focus",
+    "fixture": "release",
+    "kind": "focus",
+    "expect": "Interleave SYNTH-52 above SYNTH-417 and keep the release audit open under it.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "release-fact",
+    "fixture": "release",
+    "kind": "fact",
+    "expect": "s3://acme-archive/release/SYNTH-417/manifest.json",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "release-stack",
+    "fixture": "release",
+    "kind": "stack",
+    "expect": "SYNTH-52 is complete and popped; SYNTH-417 is active again.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "auth-global",
+    "fixture": "auth",
+    "kind": "instruction",
+    "expect": "Never push to origin.",
+    "mustBe": "resident"
+  },
+  {
+    "id": "auth-scope",
+    "fixture": "auth",
+    "kind": "instruction",
+    "expect": "For this auth audit SYNTH-208, inspect tracked config only and do not edit generated clients.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "auth-decision",
+    "fixture": "auth",
+    "kind": "decision",
+    "expect": "Use in-memory session tokens.",
+    "mustBe": "resident-or-recall",
+    "forbid": "Keep session tokens in browser storage."
+  },
+  {
+    "id": "auth-focus",
+    "fixture": "auth",
+    "kind": "focus",
+    "expect": "Interleave SYNTH-88 above SYNTH-208 and keep the auth audit open under it.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "auth-fact",
+    "fixture": "auth",
+    "kind": "fact",
+    "expect": "/srv/qa/auth/SYNTH-208/session-matrix.csv",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "auth-stack",
+    "fixture": "auth",
+    "kind": "stack",
+    "expect": "SYNTH-88 is complete and popped; SYNTH-208 is active again.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "migration-global",
+    "fixture": "migration",
+    "kind": "instruction",
+    "expect": "Never push to origin.",
+    "mustBe": "resident"
+  },
+  {
+    "id": "migration-scope",
+    "fixture": "migration",
+    "kind": "instruction",
+    "expect": "For this migration SYNTH-933, edit the schema source only and do not change generated clients.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "migration-decision",
+    "fixture": "migration",
+    "kind": "decision",
+    "expect": "Use UUIDs for migration checkpoints.",
+    "mustBe": "resident-or-recall",
+    "forbid": "Use integer ids for migration checkpoints."
+  },
+  {
+    "id": "migration-focus",
+    "fixture": "migration",
+    "kind": "focus",
+    "expect": "Interleave SYNTH-71 above SYNTH-933 and keep the migration open under it.",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "migration-fact",
+    "fixture": "migration",
+    "kind": "fact",
+    "expect": "s3://db-evidence/SYNTH-933/rollback-plan.sql",
+    "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "migration-stack",
+    "fixture": "migration",
+    "kind": "stack",
+    "expect": "SYNTH-71 is complete and popped; SYNTH-933 is active again.",
+    "mustBe": "resident-or-recall"
+  }
+]

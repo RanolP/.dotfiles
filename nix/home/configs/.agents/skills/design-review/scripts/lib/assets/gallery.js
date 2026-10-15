@@ -118,36 +118,52 @@
     item.addEventListener('focusout', () => setPairHighlight(item.dataset.boxId, false));
   });
 
-  const storeKeys = { on: 'design-review.boxes', settled: 'design-review.showSettled' };
+  const storeKeys = { view: 'design-review.boxView', settled: 'design-review.showSettled' };
   const readStore = key => { try { return localStorage.getItem(key); } catch { return null; } };
   const writeStore = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
-  const boxButton = document.querySelector('.box-toggle');
+  const offButton = document.querySelector('.box-off');
+  const restoreButton = document.querySelector('.box-restore');
   const settledBox = document.getElementById('show-settled');
   const settledStatuses = ['resolved', 'accepted'];
-  let boxesOn = readStore(storeKeys.on) === '1';
-  let isolated = null;
+  const knownBox = id => id !== null && [...document.querySelectorAll('[data-box-id]')].some(item => item.dataset.boxId === id);
+  const readView = () => {
+    let saved = null;
+    try { saved = JSON.parse(readStore(storeKeys.view)); } catch {}
+    const clean = view => view && typeof view.on === 'boolean' ? { on: view.on, isolated: knownBox(view.isolated) ? view.isolated : null } : null;
+    return { view: clean(saved?.view) ?? { on: true, isolated: null }, previous: clean(saved?.previous) };
+  };
+  let { view, previous } = readView();
+  const boxesOff = () => !view.on && view.isolated === null;
   settledBox.checked = readStore(storeKeys.settled) === '1';
 
-  function setBoxes(on) {
-    boxesOn = on;
-    isolated = null;
-    writeStore(storeKeys.on, on ? '1' : '0');
+  function setView(next) {
+    view = next;
+    writeStore(storeKeys.view, JSON.stringify({ view, previous }));
     applyFilters();
   }
-  boxButton.addEventListener('click', () => setBoxes(!(boxesOn || isolated)));
+  function boxesAllOff() {
+    if (boxesOff()) return;
+    previous = { ...view };
+    setView({ on: false, isolated: null });
+  }
+  function boxesRestore() {
+    if (!boxesOff()) return;
+    setView(previous ? { ...previous } : { on: true, isolated: null });
+  }
+  offButton.addEventListener('click', boxesAllOff);
+  restoreButton.addEventListener('click', boxesRestore);
   settledBox.addEventListener('change', () => { writeStore(storeKeys.settled, settledBox.checked ? '1' : '0'); applyFilters(); });
   document.addEventListener('click', event => {
     const button = event.target.closest('.table-box-label');
     if (!button) return;
     const id = button.closest('tr').dataset.boxId;
-    isolated = isolated === id ? null : id;
-    applyFilters();
+    setView({ on: true, isolated: view.isolated === id ? null : id });
   });
   document.addEventListener('keydown', event => {
     if ((event.key !== 'b' && event.code !== 'KeyB') || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
     const target = event.target;
     if (target && (/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName) || target.isContentEditable)) return;
-    setBoxes(!(boxesOn || isolated));
+    if (boxesOff()) boxesRestore(); else boxesAllOff();
   });
 
   // Greedy per-screen label placement: smallest boxes pick first, since a big box's corner label rarely hides what it marks.
@@ -197,9 +213,9 @@
     const status = document.getElementById('status-filter').value;
     const showSettled = settledBox.checked;
     const boxFilterActive = kind !== 'all' || status !== 'all';
-    const markersOn = boxesOn || isolated !== null;
-    boxButton.textContent = isolated ? `${isolated}만 표시 중` : boxesOn ? '박스 끄기' : '박스 켜기';
-    boxButton.setAttribute('aria-pressed', String(markersOn));
+    const { on: markersOn, isolated } = view;
+    offButton.disabled = boxesOff();
+    restoreButton.disabled = !boxesOff() || !previous;
     let visibleRows = 0;
     document.querySelectorAll('.review-row').forEach(row => {
       let visibleBoxes = 0;

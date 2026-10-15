@@ -18,6 +18,23 @@ const mountPane = ($: Engine) => $.ui.mount({
   },
 })
 
+const emptyStatus: Awaited<ReturnType<Engine['clm']['status']>> = {
+  focus: null, stackDepth: 1, pending: [], agents: [], later: [],
+  resumeRequest: null, lastFoldAt: null, ledgerPath: '/tmp/l.md', openIssues: 0,
+}
+
+const listAgents = (on: any, ids: string[]) => on('agent.list', () => ({ value: ids.map(id => ({ id, description: id, type: 'opus', status: 'running' })) }))
+
+const withClm = (on: any, status: () => Promise<Awaited<ReturnType<Engine['clm']['status']>>>) => on('engine.create', async (_$: any, e: any, next: any) => ({
+  ...(await next(e)),
+  clm: {
+    track: () => { throw new Error('test clm.track base') },
+    issues: () => { throw new Error('test clm.issues base') },
+    resume: () => { throw new Error('test clm.resume base') },
+    status,
+  },
+}))
+
 // Regression: every session start opened dash, so subagents could create panes and main-session startup could take focus.
 test('a main session start opens the dash pane without focus; a subagent session start does not', async ($, on) => {
   mock.clock(on, { now: 1_000 })
@@ -119,12 +136,12 @@ test('the main session ticker reopens dash without focus after unload', async ($
   ])
 })
 
-// Regression: the dashboard was split into tabs.
-test('one pane stacks Usage, Fleet and Clm sections with no tabs', async ($, on) => {
+// Regression: the dashboard was split into tabs, or a Usage or Work header row came back and wastes pane height.
+test('one pane stacks Usage rows and the Work head line with no tabs and no header rows', async ($, on) => {
   mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
   const status: Awaited<ReturnType<Engine['clm']['status']>> = {
-    focus: { id: 's1-2', title: 'Focused task', status: 'doing' },
+    focus: { id: 's1-2', title: 'Focus', status: 'doing' },
     stackDepth: 3,
     pending: [{ id: 's1-3', title: 'Pending task with a long title that should be clipped at the pane width' }],
     agents: [{ agentId: 'worker-agent-123456', taskId: 's1-4', title: 'Agent task', status: 'doing' }],
@@ -134,15 +151,7 @@ test('one pane stacks Usage, Fleet and Clm sections with no tabs', async ($, on)
     ledgerPath: '/tmp/clm-ledger.md',
     openIssues: 4,
   }
-  on('engine.create', async (_$: any, e: any, next: any) => ({
-    ...(await next(e)),
-    clm: {
-      track: () => { throw new Error('test clm.track base') },
-      issues: () => { throw new Error('test clm.issues base') },
-      resume: () => { throw new Error('test clm.resume base') },
-      status: async () => status,
-    },
-  }))
+  withClm(on, async () => status)
   on('session.usage', () => ({ value: {
     startedAt: 0,
     context: { window: 100_000, tokens: 25_000, percent: 25 },
@@ -152,15 +161,74 @@ test('one pane stacks Usage, Fleet and Clm sections with no tabs', async ($, on)
   await start($)
 
   const ui = await mountPane($)
-  for (const header of [/^── Usage ─+$/, /^── Fleet \(0\) ─+$/, /^── Clm ─+$/]) expect(await ui.find({ type: 'Text', text: header })).toBeDefined()
+  for (const removed of [/^── /, /^Focus /, /^Agents /, /^No subagents yet/]) expect(await ui.find({ type: 'Text', text: removed })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '5h 40% \u{F0450} in 2h13m' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '$1.50 · 0m · +0 -0' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Focus  Focused task (doing) · depth 3' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Pending  .+…/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Agents  worker-a → Agent task (doing)' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Resume  Resume task' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Later 1 · Issues 4 · fold never' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ Focus (doing) · depth 3 · later 1 · issues 4 · fold never' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^  Pending  .+…/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '  Resume  Resume task' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '  · worker-a Agent task (doing)' })).toBeDefined()
   expect(await ui.find({ type: 'Button' })).toBeUndefined()
+})
+
+// Regression: a Usage or Work header row came back above the rows and wasted pane height.
+test('neither a Usage nor a Work header row renders', async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => emptyStatus)
+  await start($)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /^── (Usage|Work)/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^▸ no focus · later 0 · issues 0 · fold never$/ })).toBeDefined()
+})
+
+// Regression: a paired agent kept printing running/done instead of its clm task title, or an unpaired agent lost its status word.
+test('a paired agent shows its clm title in place of its status; an unpaired agent keeps the status word', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  void clock
+  on('session.start', () => ({ cwd: '/work' }))
+  listAgents(on, ['agent-1', 'agent-2'])
+  withClm(on, async () => ({ ...emptyStatus, agents: [{ agentId: 'agent-2', taskId: 't1', title: 'Paired task', status: 'doing' }] }))
+  await start($)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /^  ● opus 0m {2}Paired task$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^  ● opus 0m {2}running$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /· agent-2/ })).toBeUndefined()
+})
+
+// Regression: the later/issues/fold counters moved off the head line into a separate row again.
+test('the head line carries later, issues and fold', async ($, on) => {
+  const now = Date.parse('2026-10-15T03:00:00Z')
+  mock.clock(on, { now })
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => ({
+    ...emptyStatus,
+    focus: { id: 's1-1', title: 'dash 디자인', status: 'doing' },
+    later: [{ text: 'a' }, { text: 'b' }], openIssues: 1, lastFoldAt: now - 3 * 60_000,
+  }))
+  await start($)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (doing) · later 2 · issues 1 · fold 3m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^(Later|Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
+})
+
+// Regression: while clm is loading the agents vanished along with the clm status.
+test('the head line falls back to Loading while clm is loading and agents still render', async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  listAgents(on, ['agent-1'])
+  let release = () => {}
+  withClm(on, () => new Promise(resolve => { release = () => resolve(emptyStatus) }))
+  const started = start($)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: '▸ Loading clm status…' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^  ● opus 0m {2}running$/ })).toBeDefined()
+  release()
+  await started
 })
 
 // Regression: clm status was fetched only when a Clm tab was pressed, so the unified pane stayed on "Loading".
@@ -201,7 +269,7 @@ test('Usage shows session duration and lines tallied from Edit and Write results
 })
 
 // Regression: the compact layout drifted from the statusline's rate-limit rows, split the two limits across rows, brought back the Ctx row, or showed empty clm rows that waste pane height.
-test('compact Usage joins both rate limits on one row with no Ctx row, and Clm hides empty rows', async ($, on) => {
+test('compact Usage joins both rate limits on one row with no Ctx row, and Work hides empty rows', async ($, on) => {
   const now = Date.parse('2026-10-15T03:00:00Z')
   mock.clock(on, { now })
   on('session.start', () => ({ cwd: '/work' }))
@@ -240,8 +308,7 @@ test('compact Usage joins both rate limits on one row with no Ctx row, and Clm h
   expect((await ui.find({ type: 'Text', text: /^31%$/ }))?.props.color).toBe('whiteBright')
   expect(await ui.find({ type: 'Text', text: /^Ctx/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '$3.21 · 1h12m · +0 -0' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Focus  dash 디자인 (active)' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Later 2 · Issues 1 · fold 3m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (active) · later 2 · issues 1 · fold 3m' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^(Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
 })
 

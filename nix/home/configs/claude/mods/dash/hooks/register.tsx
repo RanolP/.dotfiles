@@ -184,11 +184,6 @@ function spanRow({ Text }: Elements, key: string, spans: Span[], width: number) 
   )
 }
 
-function header({ Text }: Elements, name: string, width: number) {
-  const lead = `── ${name} `
-  return <Text bold>{clip(lead + '─'.repeat(Math.max(0, width - lead.length)), width)}</Text>
-}
-
 function untilLabel(iso: string | undefined, current: number): string | undefined {
   const at = iso ? Date.parse(iso) : NaN
   if (!Number.isFinite(at)) return undefined
@@ -270,41 +265,40 @@ function usageRows(elements: Elements, state: DashDashboardState, width: number)
   )
 }
 
-function fleetRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
-  if (state.agents.length === 0) return <Text dimColor>No subagents yet.</Text>
-  const typeWidth = Math.max(...state.agents.map(agent => typeLabel(agent.type).length))
+function clmHead(state: DashDashboardState, width: number): { text: string, dim: boolean, status?: ClmStatus } {
+  if (state.clm === null) return { text: clip('▸ Loading clm status…', width), dim: true }
+  if ('error' in state.clm) return { text: clip(`▸ clm is unavailable: ${state.clm.error.replace(/\s+/g, ' ')}`, width), dim: false }
+  const { status } = state.clm
+  const fold = status.lastFoldAt === null ? 'never' : durationLabel(Math.max(0, state.now - status.lastFoldAt))
+  const focus = status.focus ? `${status.focus.title} (${status.focus.status})` : 'no focus'
+  const depth = status.focus && status.stackDepth > 1 ? ` · depth ${status.stackDepth}` : ''
+  return { text: clip(`▸ ${focus}${depth} · later ${status.later.length} · issues ${status.openIssues} · fold ${fold}`, width), dim: false, status }
+}
+
+function workRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
+  const head = clmHead(state, width)
+  const titles = new Map((head.status?.agents ?? []).map(agent => [agent.agentId, agent.title]))
+  const paired = state.agents.filter(agent => titles.has(agent.id))
+  const agents = [...paired, ...state.agents.filter(agent => !titles.has(agent.id))]
+  const known = new Set(state.agents.map(agent => agent.id))
+  const orphans = (head.status?.agents ?? []).filter(agent => !known.has(agent.agentId))
+  const typeWidth = Math.max(0, ...agents.map(agent => typeLabel(agent.type).length))
+  const elapsedWidth = Math.max(0, ...agents.map(agent => elapsedLabel(agent, state.now).length))
+  const status = head.status
   return (
     <Box flexDirection="column">
-      {state.agents.map(agent => (
+      <Text dimColor={head.dim}>{head.text}</Text>
+      {status?.pending.length ? <Text>{clip(`  Pending  ${status.pending.map(item => item.title).join(', ')}`, width)}</Text> : null}
+      {status?.resumeRequest ? <Text>{clip(`  Resume  ${status.resumeRequest.text}`, width)}</Text> : null}
+      {agents.map(agent => (
         <Box key={agent.id} flexDirection="column">
-          <Text>{clip(`${statusGlyph(agent.status)} ${typeLabel(agent.type).padEnd(typeWidth)} ${elapsedLabel(agent, state.now)}  ${agent.status}`, width)}</Text>
-          {agent.lastMessage ? <Text dimColor>{clip(`  └ ${agent.lastMessage}`, width)}</Text> : null}
+          <Text>{clip(`  ${statusGlyph(agent.status)} ${typeLabel(agent.type).padEnd(typeWidth)} ${elapsedLabel(agent, state.now).padEnd(elapsedWidth)}  ${titles.get(agent.id) ?? agent.status}`, width)}</Text>
+          {agent.lastMessage ? <Text dimColor>{clip(`    └ ${agent.lastMessage}`, width)}</Text> : null}
         </Box>
       ))}
+      {orphans.map(agent => <Text key={agent.agentId} dimColor>{clip(`  · ${agent.agentId.slice(0, 8)} ${agent.title} (${agent.status})`, width)}</Text>)}
     </Box>
   )
-}
-
-function clmStatusRows({ Box, Text }: Elements, status: ClmStatus, current: number, width: number) {
-  const fold = status.lastFoldAt === null ? 'never' : durationLabel(Math.max(0, current - status.lastFoldAt))
-  return (
-    <Box flexDirection="column">
-      <Text>{clip(status.focus
-        ? `Focus  ${status.focus.title} (${status.focus.status})${status.stackDepth > 1 ? ` · depth ${status.stackDepth}` : ''}`
-        : 'Focus  none', width)}</Text>
-      {status.pending.length === 0 ? null : <Text>{clip(`Pending  ${status.pending.map(item => item.title).join(', ')}`, width)}</Text>}
-      {status.agents.map(agent => <Text key={agent.agentId}>{clip(`Agents  ${agent.agentId.slice(0, 8)} → ${agent.title} (${agent.status})`, width)}</Text>)}
-      {status.resumeRequest ? <Text>{clip(`Resume  ${status.resumeRequest.text}`, width)}</Text> : null}
-      <Text>{clip(`Later ${status.later.length} · Issues ${status.openIssues} · fold ${fold}`, width)}</Text>
-    </Box>
-  )
-}
-
-function clmRows(elements: Elements, state: DashDashboardState, width: number) {
-  const { Text } = elements
-  if (state.clm === null) return <Text dimColor>{clip('Loading clm status…', width)}</Text>
-  if ('error' in state.clm) return <Text>{clip(`clm is unavailable: ${state.clm.error.replace(/\s+/g, ' ')}`, width)}</Text>
-  return clmStatusRows(elements, state.clm.status, state.now, width)
 }
 
 export const register: Register = on => {
@@ -420,12 +414,8 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {header(elements, 'Usage', width)}
         {usageRows(elements, state, width)}
-        {header(elements, `Fleet (${state.agents.length})`, width)}
-        {fleetRows(elements, state, width)}
-        {header(elements, 'Clm', width)}
-        {clmRows(elements, state, width)}
+        {workRows(elements, state, width)}
       </Box>
     )
   })

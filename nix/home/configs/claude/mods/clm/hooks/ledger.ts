@@ -120,14 +120,17 @@ function withSection(notes: string, name: string, body: string): string {
 // --- key facts -------------------------------------------------------------
 
 export const FACT_KEEP = 25
-export type Fact = { text: string; evidence: Evidence[] }
+export type Fact = { text: string; evidence: Evidence[]; kind?: 'constraint' | 'learned' }
+const CONSTRAINT_FACT = '[constraint] '
 const isMarked = (line: string) => line.includes(OVERSIZE_MARK) || line.includes(PRESERVED_MARK) || line.includes(FOLDED_MARK)
 const factBody = (line: string) => line.trim().replace(/^-\s*/, '')
 /** The fact lines a ledger holds, the harness's oversize and preserved-output lines aside. */
 export const factLines = (notes: string) =>
   (sectionOf(notes, FACTS) ?? '').split('\n').slice(1).filter(l => /^\s*- /.test(l) && l.trim() !== '- (none yet)' && !isMarked(l)).map(factBody)
+export const constraintFactLines = (notes: string) => factLines(notes).filter(line => line.startsWith(CONSTRAINT_FACT))
+export const learnedFactLines = (notes: string) => factLines(notes).filter(line => !line.startsWith(CONSTRAINT_FACT))
 /** One fact line: the claim, then the quote that carries it. */
-export const factLine = (f: Fact) => `${f.text} — quote: ${JSON.stringify(clip(f.evidence[0]?.quote.replace(/\s+/g, ' ').trim() ?? '', 120))}`
+export const factLine = (f: Fact) => `${f.kind === 'constraint' ? CONSTRAINT_FACT : ''}${f.text} — quote: ${JSON.stringify(clip(f.evidence[0]?.quote.replace(/\s+/g, ' ').trim() ?? '', 120))}`
 /**
  * Owns 핵심 사실·경로: the facts already there minus `retracted` (matched by
  * instructionKey), then `added`, newest FACT_KEEP; the harness's marked lines
@@ -136,7 +139,10 @@ export const factLine = (f: Fact) => `${f.text} — quote: ${JSON.stringify(clip
 export function rememberFacts(notes: string, added: readonly Fact[], retracted: readonly string[] = []): string {
   const gone = new Set(retracted.map(r => instructionKey(factBody(r))))
   const marked = (sectionOf(notes, FACTS) ?? '').split('\n').slice(1).filter(isMarked)
-  const facts = [...new Set([...factLines(notes).filter(l => !gone.has(instructionKey(l))), ...added.map(factLine)])].slice(-FACT_KEEP)
+  const prior = factLines(notes).filter(line => !gone.has(instructionKey(line)))
+  const constraints = [...prior.filter(line => line.startsWith(CONSTRAINT_FACT)), ...added.filter(fact => fact.kind === 'constraint').map(factLine)]
+  const learned = [...prior.filter(line => !line.startsWith(CONSTRAINT_FACT)), ...added.filter(fact => fact.kind !== 'constraint').map(factLine)].slice(-FACT_KEEP)
+  const facts = [...new Set([...constraints, ...learned])]
   const lines = [...facts.map(f => `- ${f}`), ...marked]
   return withSection(notes, FACTS, lines.length ? lines.join('\n') : '- (none yet)')
 }
@@ -255,11 +261,13 @@ export const MERGE_SYSTEM = [
   '  {"op":"retitle","issue":"<id from the issues>","title":"<new one line title>"}',
   '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
   '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
-  `  {"op":"fact","text":"<a file path with line number, id, version, number or decision a later step needs>",${EVIDENCE_FIELD}}`,
+  `  {"op":"fact","kind":"constraint|learned","text":"<a fact with a quote for a later step>",${EVIDENCE_FIELD}}`,
   '  {"op":"retract","fact":"<one line of <facts>, copied exactly>"} when the removed turns show that fact no longer holds.',
   '  {"op":"withdraw","instruction":"<one line of <instructions>, copied exactly>"} when the removed turns show the user taking that instruction back.',
   'Every done (a create with status done, or a status op to done) and every fact carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
   'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
+  'A fact stands when the cited row states it. Mark a stable constraint or preference discovered in tool output as kind constraint; mark a lesson from a failure or user correction as kind learned.',
+  'A constraint carries a quote from a tool result. A learned item carries the failed result or the user correction verbatim as its quote.',
   'Every id, number and date in one claim comes from the same row and names the same object as that row.',
   'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
@@ -285,6 +293,7 @@ export const SPLIT_MERGE_SYSTEM = [
   'Summarize only A into notes, ops and topic summaries. The caller keeps B from its numbered turn boundary verbatim.',
   `Set notes to the required plain-markdown note sections headed ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')}; set ops to the JSON array of changes supported by A.`,
   'Set topics to an array of {topic, summary} records for A, preserving distinct topics as separate entries and using concise summaries.',
+  'Summarize only the focus topic that remains active after A in the 목표 notes; keep each closed topic in its own concise topic record.',
   'Reply with only JSON: {"split":2,"notes":"## 목표\\n...","ops":[],"topics":[{"topic":"...","summary":"..."}]}.',
 ].join('\n')
 
@@ -292,12 +301,13 @@ export const SPLIT_MERGE_SYSTEM = [
 export const LEDGER_COMPACT_SYSTEM = [
   'You compact the topic summaries that make up a coding session ledger.',
   'Each topic record gives its topic, summary, last-written fold sequence, and estimated token count. New summaries also include their token counts.',
-  'Return one JSON object with a topics array of {topic, summary, seq} records.',
+  'Each topic has a focusIssue field naming the tracker issue whose focus it describes, or null for work with no focused issue. Keep every summary scoped to that focusIssue.',
+  'Return one JSON object with a topics array of {topic, summary, seq, focusIssue} records.',
   'Fit the complete ledger within the supplied token budget. Give recent topics more room and re-summarize older topics more tightly.',
-  'Merge recurring topics into one entry. Keep a closed topic as its outcome and key facts.',
+  'Merge recurring topics into one entry only when their focusIssue matches. Keep a closed topic as its outcome and key facts.',
   'Keep distinct topics distinct and preserve their facts and outcomes.',
   'Use the supplied fold sequence for each topic whose summary you rewrite; retain an earlier sequence for a topic whose summary stays unchanged.',
-  'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1}]}.',
+  'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1,"focusIssue":null}]}.',
 ].join('\n')
 
 export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): string {
@@ -342,7 +352,10 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
   const withdraws = rawOps.filter(isWithdraw)
   const withdrawn = withdraws.map(o => o.instruction).filter(t => current.has(instructionKey(t)))
   const factOps = rawOps.filter(o => isOp(o, 'fact'))
-  const proposed = factOps.flatMap(o => (typeof o.text === 'string' && o.text.trim() ? [{ text: oneLine(o.text.trim()).slice(0, 300), evidence: readEvidence(o.evidence) }] : []))
+  const proposed = factOps.flatMap(o => (typeof o.text === 'string' && o.text.trim() ? [{
+    text: oneLine(o.text.trim()).slice(0, 300), evidence: readEvidence(o.evidence),
+    kind: o.kind === 'constraint' ? 'constraint' as const : 'learned' as const,
+  }] : []))
   const knownFacts = new Set(facts.map(instructionKey))
   const retractOps = rawOps.filter(o => isOp(o, 'retract'))
   const retracted = retractOps.flatMap(o => (typeof o.fact === 'string' && knownFacts.has(instructionKey(o.fact.replace(/^\s*-\s*/, ''))) ? [o.fact] : []))
@@ -365,6 +378,7 @@ export const REVIEW_SYSTEM = [
   '- A move to dropped stands when the cited user message abandons, suspends or redirects away from that issue\'s direction.',
   '- A move out of dropped stands only when the cited user message resumes that issue\'s direction.',
   '- A fact stands when the cited row states it. Any other claim stands when the turns show it.',
+  '- A constraint claim stands only when a tool result states the constraint or preference. A learned claim quotes the failed result or the user correction that supports it.',
   'Give every claim id exactly one verdict. Reply with only this JSON object:',
   '{"verdicts":[{"id":"<claim id>","accept":true,"reason":"<one line>"}]}',
 ].join('\n')

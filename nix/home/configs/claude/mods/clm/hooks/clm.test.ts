@@ -15,7 +15,7 @@ import { fingerprint } from './fold'
 const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] } satisfies SessionMessage)
 const intentReply = (fields: Record<string, unknown> = {}) => JSON.stringify({
-  intent: 'continue', target: null, title: null, rule: null, later: [], laterDrop: [], ...fields,
+  intent: 'continue', target: null, title: null, rule: null, later: [], laterDrop: [], raised: [], resolved: [], ...fields,
 })
 const use = (id: string, tool: string) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input: { id }, text: 'ok' }] })
 const res = (id: string, text: string) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError: false }] })
@@ -168,9 +168,9 @@ async function turnEnds($: any, s: State, seen: { results: SessionCompactResult[
   await $.turn.complete({ ...TURN, answer })
   seen.results.push(await $.session.compact({ trigger: 'manual', messages: handled(s.rows) }))
 }
-async function waitForPending(seen: { store: Record<string, unknown> }) {
-  for (let i = 0; i < 2000 && !seen.store['pending:s1']; i++) await Promise.resolve()
-  if (!seen.store['pending:s1']) throw new Error('background fold did not write Pending')
+async function waitForPending(seen: { store: Record<string, unknown>; logs: string[]; splitPrompts: string[]; compressionPrompts: string[]; reviewPrompts: string[] }) {
+  for (let i = 0; i < 2000 && !seen.store['pending:s1']; i++) await new Promise(resolve => setTimeout(resolve, 1))
+  if (!seen.store['pending:s1']) throw new Error(`background fold did not write Pending; calls split=${seen.splitPrompts.length}, compress=${seen.compressionPrompts.length}, review=${seen.reviewPrompts.length}; recent logs: ${seen.logs.slice(-5).join(' | ')}`)
 }
 const BG_OPTS = { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }
 const logEvents = (seen: { files: Record<string, string> }) => (seen.files[LOG_FILE] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
@@ -451,7 +451,7 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   const out = seen.results[0].messages
   expect(out[0].text).toBe('please investigate the build')
   expect(out[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(out[1].text).not.toContain('a.ts:12 is the bad import')
+  expect(section(out[1].text, 'learned')).toContain('a.ts:12 is the bad import')
   expect(storedLedger(seen)).toContain('a.ts:12 is the bad import')
   expect(shape(out.slice(2))).toEqual(['run tests', 'tu_c', 'tu_c', 'tests pass', 'commit it', 'done'])
   expect(out.some((m: any) => m.handle !== undefined)).toBe(false)
@@ -474,7 +474,7 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
   const out = seen.results[1].messages
   expect(out.filter((m: any) => m.text.startsWith('[clm ledger')).length).toBe(1)
   expect(out[1].text).toMatch(/^\[clm ledger #2 · /)
-  expect(out[1].text).not.toContain('SECOND-FACT')
+  expect(section(out[1].text, 'learned')).toContain('SECOND-FACT')
   expect(storedLedger(seen)).toContain('SECOND-FACT')
   expect(out.map((m: any) => m.text).filter(Boolean)).toEqual(['please investigate the build', out[1].text, 'commit it', 'done', 'add docs', 'docs added', 'push', 'pushed'])
 })
@@ -655,7 +655,7 @@ test('a rewind restores the newest snapshot before removed rows without another 
 })
 
 // Regression caught: re-folding kept T1 at its old size or discarded an exact user instruction.
-test('ledger recompression shrinks the old topic and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 200, reserve: 100 } }, async ($, on) => {
+test('ledger recompression shrinks the old topic and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 150, reserve: 100 } }, async ($, on) => {
   const instruction = 'Keep the public API stable while changing the parser.'
   const oldSummary = 'T1 '.repeat(160)
   const oldLedger = `[clm ledger #1 · 2026-10-14 09:00 KST] Earlier turns of this session were folded into these notes by a Haiku summary (file: ${LEDGER_FILE}).\n\n## 목표\n- T1: ${oldSummary}\n\n## 사용자 지시\n- (none yet)\n\n## 한 일\n- (none yet)\n\n## 할 일\n- (none yet)\n\n## 미결 질문\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
@@ -672,11 +672,11 @@ test('ledger recompression shrinks the old topic and preserves each user instruc
   await waitForPending(seen)
   const result: any = await $.session.compact(compactInput('plugin', handled(rows)))
   const ledgerRow = result.messages[1].text
-  expect(seen.compressionPrompts).toHaveLength(0)
+  expect(seen.compressionPrompts).toHaveLength(1)
   expect(storedLedger(seen)).toContain('T1:')
-  expect(ledgerRow).not.toContain('T1:')
+  expect(ledgerRow).toContain('T1: T1 closed outcome')
   expect(ledgerRow).not.toContain(oldSummary)
-  expect(est(result.messages[1])).toBeLessThanOrEqual(200)
+  expect(est(result.messages[1])).toBeLessThanOrEqual(150)
   expect(instructionValues(storedLedger(seen))).toContain(instruction)
 })
 
@@ -816,7 +816,7 @@ test('auto compaction with no pending plan produces a clm ledger instead of an e
   const seen = bottoms(on, s)
   const auto = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
   expect(auto[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(auto[1].text).not.toContain('INLINE-FACT')
+  expect(section(auto[1].text, 'learned')).toContain('INLINE-FACT')
   expect(storedLedger(seen)).toContain('INLINE-FACT')
   // A failed merge still folds, mechanically, rather than handing over to the engine.
   const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
@@ -895,6 +895,80 @@ test('a global prohibition stays indexed across folds and its address recalls th
   expect(row).not.toContain('pending task title')
   expect(recallTranscriptAddress(rawRows.join('\n'), '@c130a62d')).toEqual({ text: rawRows[0] })
   expect(recallTranscriptAddress(rawRows.join('\n'), '@c130a62d..@e330c1ab')).toEqual({ text: rawRows.join('\n') })
+})
+
+// Regression caught: the compact row exposed every task instead of the six scoped sections.
+test('the six-section ledger keeps actions under the focused task and requests global', async () => {
+  const issue = (id: string, title: string, status: Issue['status'], parent?: string, notes: string[] = []) => ({
+    id, title, status, ...(parent ? { parent } : {}), notes, linked: [],
+    origin: { session: 's1', repo: 'github.com/o/r', cwd: '/w' }, updated: '2026-10-15T00:00:00Z',
+  } satisfies Issue)
+  const top = issue('s1-1', 'focused build', 'doing', undefined, ['last build note'])
+  const child = issue('s1-2', 'run focused tests', 'todo', top.id)
+  const unrelated = issue('s1-3', 'unrelated docs', 'todo')
+  const uncertain = issue('s1-4', 'verify package checksum', 'uncertain', undefined, ['check the release digest'])
+  const row = residentLedgerText(top, '@e330c1ab', 2, 1, [], new Set([top.id]), {
+    where: ['Build verification: tests are next.'], children: [child, unrelated],
+    requests: [{ id: 'R1', text: 'Rebuild the package.', quote: 'Please rebuild the package', status: 'open' }],
+    constraints: ['- preserve generated outputs — quote: "build tool generated this file" @aabbccdd'],
+    uncertain: [uncertain], learned: ['- the build tool failed once — quote: "exit code 1"'],
+  })
+  expect([...row.matchAll(/^## (.+)$/gm)].map(match => match[1])).toEqual([
+    'where we are', 'what to do', 'what to request', 'constraints & preferences', 'uncertain', 'learned',
+  ])
+  expect(row).toContain('focused build — last build note @e330c1ab')
+  expect(row).toContain('Build verification: tests are next.')
+  expect(row).toContain('run focused tests')
+  expect(row).not.toContain('unrelated docs')
+  expect(row).toContain('[R1] Rebuild the package.')
+  expect(row).toContain('preserve generated outputs')
+  expect(row).toContain('verify package checksum — settling check: check the release digest')
+  expect(row).toContain('the build tool failed once')
+  expect(row).toContain('Stack size\n2\nPending count\n1')
+})
+
+// Regression caught: the merge model received B and moved it into the summary even though the swap keeps B verbatim.
+test('the merge and review inputs exclude the verbatim tail after split selection', BG_OPTS, async ($, on) => {
+  const rows = [
+    M('user', 'protected request'),
+    M('user', 'A completed topic'), M('assistant', `A summary source ${'A'.repeat(6000)}`),
+    M('user', 'B active topic'), M('assistant', 'B-TAIL-ONLY secret details'),
+  ]
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'A topic', 'A summary', 'A summary')] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  const result = compactedMessages(await $.session.compact(compactInput('plugin', handled(rows))) as SessionCompactResult)
+  expect(seen.splitPrompts[0]).toContain('B-TAIL-ONLY secret details')
+  expect(seen.reviewPrompts[0]).toContain('A completed topic')
+  expect(seen.reviewPrompts[0]).not.toContain('B-TAIL-ONLY secret details')
+  expect(result.slice(2)).toEqual(rows.slice(3))
+})
+
+// Regression caught: an unverified constraint disappeared after the next fold because it was stored with decaying lessons.
+test('a quoted tool constraint survives two folds without entering topic decay', OPTS, async ($, on) => {
+  const first = `## 목표\n- build work\n\n<ops>${JSON.stringify([{ op: 'fact', kind: 'constraint', text: 'The build tool requires generated artifacts to stay checked in.', evidence: [{ ref: 'tu_a', quote: 'log: make fails at' }] }])}</ops>`
+  const second = '## 목표\n- build work continues\n\n<ops>[]</ops>'
+  const s: State = { rows: ROWS, replies: [first, second] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  expect(section(seen.results[0].messages[1].text, 'constraints & preferences')).toContain('generated artifacts to stay checked in')
+  const firstMessages = seen.results[0].messages
+  s.rows = [...ROWS, ...firstMessages, ...ROWS.slice(4)]
+  await turnEnds($, s, seen)
+  expect(section(seen.results[1].messages[1].text, 'constraints & preferences')).toContain('generated artifacts to stay checked in')
+  expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('[constraint] The build tool requires generated artifacts to stay checked in.')
+})
+
+// Regression caught: a done claim without verified evidence was shown as active work instead of awaiting verification.
+test('an unevidenced done becomes uncertain with a settling check', OPTS, async ($, on) => {
+  const ops = JSON.stringify([{ op: 'create', title: 'verify the package checksum', status: 'done' }])
+  const s: State = { rows: ROWS, replies: [`## 목표\n- build summary\n\n<ops>${ops}</ops>`] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const row = seen.results[0].messages[1].text
+  expect(snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? '')).find(issue => issue.title === 'verify the package checksum')?.status).toBe('uncertain')
+  expect(section(row, 'uncertain')).toContain('verify the package checksum — settling check: verify the claim')
 })
 
 // Regression caught: a new merge kept sending already-small old topics back to the model.
@@ -1204,13 +1278,13 @@ test('a close the assistant only recommended, with the PR still OPEN, ends not d
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
   expect(section(storedLedger(seen), '한 일')).not.toContain('PR #<pr>')
-  expect(storedLedger(seen)).toContain('PR #<pr> 닫기')
-  expect(storedLedger(seen)).toContain('PR #<pr> 정리')
+  expect(section(row, 'uncertain')).toContain('PR #<pr> 닫기')
+  expect(section(row, 'uncertain')).toContain('PR #<pr> 정리')
   expect(seen.reviewPrompts[0]).toContain('"quote":"PR <pr> state: OPEN"')
   expect(seen.reviewPrompts[0]).toContain('[assistant] I recommend closing PR #<pr>; closed it.')
   const events = logEvents(seen)
-  expect(events.find(e => e.event === 'evidence-rejected')?.reason).toContain('PR #<pr> 정리" as done: done downgraded to doing (quote "I recommend closing PR #<pr>; closed it" is not in tu_pr)')
-  expect(events.find(e => e.event === 'review-rejected')?.reason).toContain('done downgraded to doing')
+  expect(events.find(e => e.event === 'evidence-rejected')?.reason).toContain('PR #<pr> 정리" as done: done moved to uncertain (quote "I recommend closing PR #<pr>; closed it" is not in tu_pr)')
+  expect(events.find(e => e.event === 'review-rejected')?.reason).toContain('done moved to uncertain')
 })
 
 // Regression caught (b): a fact whose quote appears nowhere in the folded rows was kept as if the user or a tool had said it.
@@ -1224,6 +1298,7 @@ test('a fabricated quote is rejected for a fact', OPTS, async ($, on) => {
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
   expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('the build log is long')
+  expect(row).toContain('the build log is long — quote:')
   expect(row).not.toContain('the build passes')
   expect(logEvents(seen).find(e => e.event === 'evidence-rejected')?.reason).toContain('"the build passed cleanly" is not in tu_a')
 })
@@ -1251,7 +1326,7 @@ test('a reviewer failure records no done, holds the facts out of the ledger, and
   const row = seen.results[0].messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
   expect(section(storedLedger(seen), '한 일')).toBe('- (none yet)')
-  expect(section(storedLedger(seen), '할 일')).toContain('(doing) 빌드 로그 확인')
+  expect(section(row, 'uncertain')).toContain('빌드 로그 확인')
   expect(row).not.toContain('HELD-FACT-ONE')
   expect(heldIn(seen).map(h => [h.kind, h.text])).toEqual([['fact', 'HELD-FACT-ONE']])
   expect(logEvents(seen).find(e => e.event === 'review-failed')?.reason).toContain('review call failed')
@@ -1324,7 +1399,7 @@ test('empty verdicts record no done and drop the unverdicted facts', OPTS, async
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
   expect(section(storedLedger(seen), '한 일')).toBe('- (none yet)')
-  expect(section(storedLedger(seen), '할 일')).toContain('(doing) 빌드 로그 확인')
+  expect(section(row, 'uncertain')).toContain('빌드 로그 확인')
   expect(row).not.toContain('UNREVIEWED-FACT')
   expect(logEvents(seen).find(e => e.event === 'review-rejected')?.reason).toContain('no verdict')
 })
@@ -1720,6 +1795,59 @@ test('valid later survives invalid focus output', OPTS, async ($, on) => {
   expect(seen.logs.some(line => line.includes('unknown intent not-an-intent'))).toBe(true)
 })
 
+// Regression caught: a concrete rebuild request without a question mark was omitted from the request ledger.
+test('a rebuild request without a question mark is stored', OPTS, async ($, on) => {
+  const prompt = 'Please rebuild the configuration before release.'
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({ raised: [{ text: 'Rebuild the configuration before release.', quote: 'rebuild the configuration before release' }] })],
+  })
+  await $.prompt.submit(promptInput(prompt))
+  for (let i = 0; i < 100 && !Array.isArray(seen.store['requests:s1:main']); i++)
+    await new Promise(resolve => setTimeout(resolve, 2))
+  expect(seen.store['requests:s1:main']).toEqual([
+    expect.objectContaining({ text: 'Rebuild the configuration before release.', status: 'open' }),
+  ])
+})
+
+// Regression caught: one assistant response could answer several queued requests, but only the last one was closed.
+test('one assistant answer resolves every matching open request', OPTS, async ($, on) => {
+  const quote = 'The configuration was rebuilt and the docs were updated'
+  const seen = bottoms(on, {
+    rows: [M('user', 'earlier prompt'), M('assistant', quote)], replies: [],
+    intentReplies: [
+      intentReply({ raised: [
+        { text: 'Rebuild the configuration.', quote: 'Please rebuild the configuration' },
+        { text: 'Update the docs.', quote: 'also update the docs' },
+      ] }),
+      intentReply({ resolved: [
+        { id: 'R1', how: 'answered', quote },
+        { id: 'R2', how: 'answered', quote },
+      ] }),
+    ],
+  })
+  await $.prompt.submit(promptInput('Please rebuild the configuration, and also update the docs.'))
+  for (let i = 0; i < 100 && !Array.isArray(seen.store['requests:s1:main']); i++) await new Promise(resolve => setTimeout(resolve, 2))
+  await $.prompt.submit(promptInput('Those two requests are finished.'))
+  for (let i = 0; i < 100 && (seen.store['requests:s1:main'] as { status?: string }[] | undefined)?.some(item => item.status === 'open'); i++)
+    await new Promise(resolve => setTimeout(resolve, 2))
+  expect(seen.intentPrompts[1]).toContain('<open_requests>\nR1 | Rebuild the configuration.\nR2 | Update the docs.')
+  expect((seen.store['requests:s1:main'] as { status: string }[]).map(request => request.status)).toEqual(['answered', 'answered'])
+})
+
+// Regression caught: an assistant-authored phrase became a user request without a supporting user quote.
+test('a request quoted only from assistant text is rejected', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [M('assistant', 'I might rebuild the configuration next week.')], replies: [],
+    intentReplies: [intentReply({ raised: [{ text: 'Rebuild the configuration.', quote: 'I might rebuild the configuration' }] })],
+  })
+  await $.prompt.submit(promptInput('Let us discuss priorities.'))
+  for (let i = 0; i < 100 && !seen.logs.some(line => line.includes('dropped unsupported raised quote')); i++)
+    await new Promise(resolve => setTimeout(resolve, 2))
+  expect(seen.store['requests:s1:main']).toBeUndefined()
+  expect(seen.logs.some(line => line.includes('dropped unsupported raised quote'))).toBe(true)
+})
+
 // Regression caught: a chat deferral was silently dropped instead of being queued alongside the active focus label.
 test('a mixed chat queues exactly its deferred part and still applies its focus label', OPTS, async ($, on) => {
   const seen = bottoms(on, {
@@ -1875,7 +2003,7 @@ test('the ledger header carries a KST time and is still read as a ledger row', O
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
-  expect(row).toMatch(/^\[clm ledger #1 · \d{4}-\d\d-\d\d \d\d:\d\d KST\]\n\n## Focus/)
+  expect(row).toMatch(/^\[clm ledger #1 · \d{4}-\d\d-\d\d \d\d:\d\d KST\]\n\n## where we are/)
   s.rows = [...seen.results[0].messages, ...ROWS.slice(4)]
   await turnEnds($, s, seen)
   expect(seen.results[1].messages.filter((m: any) => m.text.startsWith('[clm ledger')).length).toBe(1)

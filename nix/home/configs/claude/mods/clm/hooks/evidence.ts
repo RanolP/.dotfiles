@@ -13,7 +13,7 @@ import type { Payload } from './tracker'
 // system reminders inside it are cut before it is rendered or quoted.
 
 export type Evidence = { ref: string; quote: string }
-export type SourceKind = 'user' | 'tool_result'
+export type SourceKind = 'user' | 'tool_result' | 'assistant'
 // `full` is the row's text before display clipping, kept so a quote taken from
 // past the clip still matches; it is itself capped so a held source stays small.
 export type Source = { kind: SourceKind; text: string; full?: string; tool?: string; isError?: boolean }
@@ -133,7 +133,7 @@ export function checkEvidence(list: readonly Evidence[], sources: Sources, admis
 export const isDoneClaim = (o: Payload) => (o.op === 'create' || o.op === 'status') && o.status === 'done'
 
 /** A done claim that lost its evidence: a create keeps the step as `doing`; a status move to done becomes a move to doing. */
-export const downgrade = (o: Payload): Payload => (o.op === 'create' || o.op === 'status' ? { ...o, status: 'doing' } : o)
+export const downgrade = (o: Payload): Payload => (o.op === 'create' || o.op === 'status' ? { ...o, status: 'uncertain' } : o)
 
 /** Appends the first held quote to a done create's note, so 한 일 shows what proved it. */
 export function citeNote(o: Payload, held: readonly Evidence[]): Payload {
@@ -180,7 +180,7 @@ export function gateOps(ops: readonly Payload[], evidence: readonly Evidence[][]
       kept.push(held)
       return
     }
-    rejections.push(`${describeOp(o)}: done downgraded to doing (${problems.join('; ') || 'no evidence'})`)
+    rejections.push(`${describeOp(o)}: done moved to uncertain (${problems.join('; ') || 'no evidence'})`)
     out.push(downgrade(o))
     kept.push([])
   })

@@ -10,7 +10,7 @@ import {
   type Evidence, type Source,
 } from './evidence'
 import {
-  composeLedger, EMPTY_LEDGER, factLine, factLines, fallbackLedger, instructionKey, instructionValues, issueList, legacyItems, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
+  composeLedger, EMPTY_LEDGER, factLine, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, issueList, legacyItems, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
   parseChanges, parseMerge, parseReview, preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
   withNotes, WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective, type Fact,
 } from './ledger'
@@ -18,7 +18,7 @@ import {
   archivedDone, describe, injected, isOpen, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
   focusOf, issueId, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
-import { compose, INTENT_SYSTEM, intentPrompt, parseFocus, parseLater, xmlText } from './intent'
+import { compose, INTENT_SYSTEM, intentPrompt, parseFocus, parseLater, parseRequests, xmlText, type RequestClassification } from './intent'
 import type { ClmStatus, ClmWorkflow } from '../types'
 
 // Each transcript has one compaction job. Turn-end work starts it in the
@@ -162,7 +162,7 @@ type FoldJob =
   | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[]; turnEnd: boolean }
   | { state: 'ready'; plan: Pending; fingerprints: string[]; turnEnd: boolean }
   | { state: 'swapping'; promise: Promise<SessionCompactResult> }
-type Topic = { topic: string; summary: string; seq: number; sourceTokens?: number }
+type Topic = { topic: string; summary: string; seq: number; sourceTokens?: number; focusIssue?: string | null }
 type LedgerSnapshot = { seq: number; coveredRows: string[]; ledger: string; topics?: Topic[]; instructions?: unknown; addresses?: unknown }
 // `foldTokens` is the usage reading taken when the last fold landed: the
 // engine keeps reporting it until the next API response, so an equal reading
@@ -182,11 +182,29 @@ const ledgerSnapshotsKey = (key: string) => `ledger-snapshots:${key}`
 const transcriptRowsKey = (key: string) => `transcript-rows:${key}`
 const instructionIndexKey = (key: string) => `instruction-index:${key}`
 const issueAddressKey = (key: string) => `issue-addresses:${key}`
+const requestsKey = (key: string) => `requests:${key}`
+const requestPromptSeqKey = (key: string) => `request-prompt-seq:${key}`
 const transcriptPaths = new Map<string, string>()
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 export type AddressRow = { raw: string; uuid: string; parentUuid?: string; role?: string; text: string }
 export type InstructionIndex = { address: string; issue: string | null; text: string }
+export type RequestRecord = {
+  id: string
+  text: string
+  quote: string
+  status: 'open' | 'answered' | 'declined' | 'skipped'
+  resolution?: { how: 'answered' | 'declined' | 'skipped'; quote?: string }
+}
+export type ResidentLedgerSections = {
+  where?: readonly string[]
+  children?: readonly Issue[]
+  requests?: readonly RequestRecord[]
+  constraints?: readonly string[]
+  uncertain?: readonly Issue[]
+  learned?: readonly string[]
+}
+type LedgerPreview = { notes?: string; topics?: Topic[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } }
 
 function transcriptRowText(value: Record<string, unknown>): string {
   const message = isRecord(value.message) ? value.message : value
@@ -238,7 +256,7 @@ export function recallTranscriptAddress(text: string, address: string): { text?:
 
 export function residentLedgerText(
   top: Issue | undefined, topAddress: string | undefined, stackSize: number, pendingCount: number,
-  instructions: readonly InstructionIndex[], ancestorIds: ReadonlySet<string>,
+  instructions: readonly InstructionIndex[], ancestorIds: ReadonlySet<string>, sections: ResidentLedgerSections = {},
 ): string {
   const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim()
   const lastNote = top?.notes.at(-1)
@@ -247,16 +265,29 @@ export function residentLedgerText(
     : '- (none)'
   const index = instructions.filter(item => item.issue === null || (item.issue !== null && ancestorIds.has(item.issue)))
     .map(item => `- ${[...item.text].slice(0, 80).join('')} ${item.address}`)
+  const where = [focus, ...(sections.where ?? []).map(line => `- ${oneLine(line)}`), 'Stack size', String(stackSize), 'Pending count', String(pendingCount)]
+  const tasks = (sections.children ?? []).filter(issue => issue.parent === top?.id && isOpen(issue))
+    .map(issue => `- ${oneLine(issue.title)}${issue.notes.at(-1) ? ` — ${oneLine(issue.notes.at(-1)!)}` : ''} [${issue.id}]`)
+  const requests = (sections.requests ?? []).filter(request => request.status === 'open')
+    .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
+  const constraints = [...index, ...(sections.constraints ?? []).map(oneLine)]
+  const uncertain = (sections.uncertain ?? []).filter(issue => issue.status === 'uncertain')
+    .map(issue => `- ${oneLine(issue.title)} — settling check: ${oneLine(issue.notes.at(-1) ?? 'verify the claim')} [${issue.id}]`)
+  const learned = (sections.learned ?? []).map(oneLine)
+  const body = (lines: readonly string[]) => lines.length ? lines.join('\n') : '- (none yet)'
   return [
-    '## Focus', focus,
-    '## Instructions', index.length ? index.join('\n') : '- (none)',
-    '## Stack size', String(stackSize),
-    '## Pending count', String(pendingCount),
-  ].join('\n')
+    '## where we are', where.join('\n'),
+    '## what to do', body(tasks),
+    '## what to request', body(requests),
+    '## constraints & preferences', body(constraints),
+    '## uncertain', body(uncertain),
+    '## learned', body(learned),
+  ].join('\n\n')
 }
 const isTopic = (v: unknown): v is Topic => isRecord(v) && typeof v.topic === 'string' && v.topic.trim() !== ''
   && typeof v.summary === 'string' && v.summary.trim() !== '' && typeof v.seq === 'number' && Number.isInteger(v.seq) && v.seq > 0
   && (v.sourceTokens === undefined || (typeof v.sourceTokens === 'number' && Number.isInteger(v.sourceTokens) && v.sourceTokens >= 0))
+  && (v.focusIssue === undefined || v.focusIssue === null || typeof v.focusIssue === 'string')
 const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) && Object.values(v).every(n => typeof n === 'number')
 const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
 const isMeta = (v: unknown): v is Partial<Meta> =>
@@ -300,13 +331,75 @@ function promptAddress(rows: readonly AddressRow[], prompt: string): string | un
   return row ? `@${row.uuid.slice(0, 8)}` : undefined
 }
 
+function isRequestRecord(value: unknown): value is RequestRecord {
+  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.text !== 'string' || typeof value.quote !== 'string'
+    || !['open', 'answered', 'declined', 'skipped'].includes(String(value.status))) return false
+  if (value.resolution === undefined) return value.status === 'open'
+  return isRecord(value.resolution)
+    && ['answered', 'declined', 'skipped'].includes(String(value.resolution.how))
+    && (value.resolution.quote === undefined || typeof value.resolution.quote === 'string')
+}
+
+async function readRequests($: EngineInterface, key: string): Promise<RequestRecord[]> {
+  const value = await $.store.get(requestsKey(key))
+  return Array.isArray(value) ? value.filter(isRequestRecord) : []
+}
+
+function supportedRequestQuote(quote: string, sourceText: string, kind: Source['kind']): boolean {
+  const source: Source = { kind, text: sourceText }
+  return checkEvidence([{ ref: 'evidence', quote }], new Map([['evidence', source]]), [kind]).held.length > 0
+}
+
+async function applyRequestClassification(
+  $: EngineInterface, key: string, promptSeq: number, classification: RequestClassification,
+  userPrompt: string, lastAssistantReply: string,
+): Promise<void> {
+  const previousSeq = await $.store.get(requestPromptSeqKey(key))
+  if (typeof previousSeq === 'number' && previousSeq >= promptSeq) return
+  const records = await readRequests($, key)
+  const open = new Set(records.filter(request => request.status === 'open').map(request => request.id))
+  const next = [...records]
+  for (const request of classification.raised) {
+    if (!supportedRequestQuote(request.quote, userPrompt, 'user')) {
+      $.ui.log(`clm request: dropped unsupported raised quote for ${request.text}`, { to: 'debug' })
+      continue
+    }
+    if (next.some(existing => existing.status === 'open' && instructionKey(existing.text) === instructionKey(request.text))) continue
+    const id = `R${next.reduce((max, item) => Math.max(max, Number(/^R(\d+)$/.exec(item.id)?.[1] ?? 0)), 0) + 1}`
+    next.push({ id, text: request.text, quote: request.quote, status: 'open' })
+    open.add(id)
+    $.ui.log(`clm: request raised ${id}`)
+  }
+  const resolved = new Set<string>()
+  for (const resolution of classification.resolved) {
+    if (!open.has(resolution.id) || resolved.has(resolution.id)) continue
+    if (resolution.how !== 'skipped' && resolution.quote === undefined) continue
+    if (resolution.quote !== undefined
+      && !supportedRequestQuote(resolution.quote, userPrompt, 'user')
+      && !supportedRequestQuote(resolution.quote, lastAssistantReply, 'assistant')) {
+      $.ui.log(`clm request: ignored unsupported resolution quote for ${resolution.id}`, { to: 'debug' })
+      continue
+    }
+    const index = next.findIndex(request => request.id === resolution.id && request.status === 'open')
+    if (index < 0) continue
+    next[index] = {
+      ...next[index]!, status: resolution.how,
+      resolution: { how: resolution.how, ...(resolution.quote === undefined ? {} : { quote: resolution.quote }) },
+    }
+    resolved.add(resolution.id)
+  }
+  if (next.length !== records.length || next.some((item, index) => item.status !== records[index]?.status))
+    await $.store.set(requestsKey(key), next)
+  await $.store.set(requestPromptSeqKey(key), promptSeq)
+}
+
 function isInstructionIndex(value: unknown): value is InstructionIndex {
   return isRecord(value) && typeof value.address === 'string' && /^@[\da-f]{8}$/i.test(value.address)
     && (typeof value.issue === 'string' || value.issue === null) && typeof value.text === 'string'
 }
 
 async function residentLedger(
-  $: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[],
+  $: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: LedgerPreview = {},
 ): Promise<string> {
   const rawIndex = await $.store.get(instructionIndexKey(key))
   const index = Array.isArray(rawIndex) ? rawIndex.filter(isInstructionIndex) : []
@@ -319,10 +412,12 @@ async function residentLedger(
     const address = `@${source.uuid.slice(0, 8)}`
     if (!seen.has(`${address}\0null`)) index.push({ address, issue: null, text: source.text })
   }
+  const shownIssues = preview.issues ?? [...issues]
+  const shownState = preview.state ?? state
   const addressesRaw = await $.store.get(issueAddressKey(key))
   const addresses = isRecord(addressesRaw) ? addressesRaw : {}
-  const byId = new Map(issues.map(issue => [issue.id, issue]))
-  const topId = state.stack.at(-1)
+  const byId = new Map(shownIssues.map(issue => [issue.id, issue]))
+  const topId = shownState.stack.at(-1)
   const top = topId ? byId.get(topId) : undefined
   const ancestors = new Set<string>()
   let current = top
@@ -331,7 +426,28 @@ async function residentLedger(
     current = current.parent ? byId.get(current.parent) : undefined
   }
   if (index.length !== (Array.isArray(rawIndex) ? rawIndex.length : 0)) await $.store.set(instructionIndexKey(key), index)
-  return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, state.stack.length, state.pending.length, index, ancestors)
+  const rawNotes = preview.notes ?? notesOf((await readText($, await ledgerPath($))) ?? EMPTY_LEDGER)
+  const meta = await readMeta($)
+  const topics = preview.topics ?? await storedTopics($, rawNotes, meta.seq, key)
+  const scopedTopics = topics
+    .map(topic => topic.focusIssue === undefined ? { ...topic, focusIssue: topId ?? null } : topic)
+    .filter(topic => (topic.focusIssue ?? null) === (topId ?? null))
+  const fallbackGoal = /^## 목표\s*\n([\s\S]*?)(?=\n## |$)/m.exec(rawNotes)?.[1]?.trim() ?? ''
+  const where = topics.length
+    ? scopedTopics.map(topic => `${topic.topic}: ${topic.summary}`)
+    : fallbackGoal && fallbackGoal !== '- (none yet)' ? [fallbackGoal] : []
+  const requests = (await readRequests($, key)).filter(request => request.status === 'open')
+  const constraints = constraintFactLines(rawNotes).map(line => line.replace(/^\[constraint\]\s*/, ''))
+  const learned = learnedFactLines(rawNotes)
+  const sections: ResidentLedgerSections = {
+    where,
+    children: shownIssues.filter(issue => topId !== undefined && issue.parent === topId && isOpen(issue)),
+    requests,
+    constraints,
+    uncertain: shownIssues.filter(issue => issue.status === 'uncertain'),
+    learned,
+  }
+  return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, shownState.stack.length, shownState.pending.length, index, ancestors, sections)
 }
 
 type TopicDraft = { topic: string; summary: string }
@@ -354,7 +470,7 @@ function parseSplitAnswer(raw: string): SplitAnswer | string {
 }
 
 function isTopicList(value: unknown): value is Topic[] {
-  return Array.isArray(value) && value.every(isTopic) && new Set(value.map(t => instructionKey(t.topic))).size === value.length
+  return Array.isArray(value) && value.every(isTopic) && new Set(value.map(topic => `${instructionKey(topic.topic)}\0${topic.focusIssue ?? ''}`)).size === value.length
 }
 
 function cleanTopicDrafts(drafts: readonly TopicDraft[]): TopicDraft[] {
@@ -368,6 +484,8 @@ async function storedTopics($: EngineInterface, notes: string, seq: number, key?
   if (!goal || goal === '- (none yet)') return []
   return [{ topic: '기존 세션 주제', summary: goal, seq: Math.max(1, seq) }]
 }
+
+const topicKey = (topic: Pick<Topic, 'topic' | 'focusIssue'>) => `${instructionKey(topic.topic)}\0${topic.focusIssue ?? ''}`
 
 function notesWithTopics(notes: string, topics: readonly Topic[]): string {
   const goal = topics.length ? topics.map(t => `- ${t.topic}: ${t.summary}`).join('\n') : '- (none yet)'
@@ -385,15 +503,25 @@ function parseTopics(raw: string): Topic[] | string {
 }
 
 async function compressTopics(
-  $: EngineInterface, opts: Opts, input: readonly Topic[], seq: number, notes: string, issues: readonly Issue[],
+  $: EngineInterface, opts: Opts, input: readonly Topic[], seq: number, notes: string, issues: readonly Issue[], key?: string,
 ): Promise<{ topics: Topic[]; ledgerTokens: number }> {
   const normalized = input.map(topic => ({ ...topic, sourceTokens: topic.sourceTokens ?? topicTokens(topic) }))
-  const old = new Map(normalized.map(topic => [instructionKey(topic.topic), topic]))
+  const old = new Map(normalized.map(topic => [topicKey(topic), topic]))
   const fixedNotes = notes.replace(/^## 목표\n[\s\S]*?(?=\n## |$)/m, '## 목표\n')
-  const fixedLedger = composeLedger(fixedNotes, issues)
-  const fixedTokens = Math.ceil(fixedLedger.length / 4)
-  const topicBudget = Math.max(0, opts.ledgerTarget - fixedTokens)
+  const origin = await captureOrigin($)
+  const events = await readAll($)
+  const state = focusOf(events, origin.session)
+  const ledgerKey = key ?? transcriptKey(origin.session)
   const pointer = await ledgerPath($)
+  const renderRow = async (topicList: readonly Topic[], ledgerNotes: string): Promise<SessionMessage> => {
+    const text = await residentLedger($, ledgerKey, issues, state, events, {
+      notes: ledgerNotes, topics: [...topicList], issues, state,
+    })
+    return { role: 'user', text: ledgerRowText(seq, kst(), pointer, text), toolUses: [] }
+  }
+  const fixedRow = await renderRow([], fixedNotes)
+  const fixedTokens = sum([fixedRow])
+  const topicBudget = Math.max(0, opts.ledgerTarget - fixedTokens)
   const allocation = ageDecayPlan(normalized.map(topic => ({
     sourceTokens: topic.sourceTokens!, currentTokens: topicTokens(topic), floorTokens: topicFloorTokens(topic), seq: topic.seq,
   })), topicBudget)
@@ -403,7 +531,7 @@ async function compressTopics(
   let latest = [...normalized]
   let latestTokens = 0
   if (!rewrite.length) {
-    const row: SessionMessage = { role: 'user', text: ledgerRowText(seq, kst(), pointer, composeLedger(notesWithTopics(notes, latest), issues)), toolUses: [] }
+    const row = await renderRow(latest, notesWithTopics(notes, latest))
     latestTokens = sum([row])
     if (latestTokens > opts.ledgerTarget) {
       const over = latestTokens - opts.ledgerTarget
@@ -419,7 +547,7 @@ async function compressTopics(
         system: LEDGER_COMPACT_SYSTEM,
         prompt: [
           `<budget>\n${opts.ledgerTarget} tokens for the complete ledger; fixed sections use about ${fixedTokens} tokens and topic summaries have ${topicBudget} tokens.</budget>`,
-          `<fixed_sections>\n${xmlText(fixedLedger)}\n</fixed_sections>`,
+          `<fixed_sections>\n${xmlText(fixedRow.text)}\n</fixed_sections>`,
           `<topic_entries>\n${rewrite.map(topic => JSON.stringify({ ...topic, tokens: topicTokens(topic), targetTokens: targets[normalized.indexOf(topic)] })).join('\n') || '(none)'}\n</topic_entries>`,
           `<new_summary>\n${rewrite.filter(topic => topic.seq === seq).map(topic => JSON.stringify({ ...topic, tokens: topicTokens(topic), targetTokens: targets[normalized.indexOf(topic)] })).join('\n') || '(none)'}\n</new_summary>`,
           retryReason ? `<retry_rule>\n${retryReason}\n</retry_rule>` : '',
@@ -433,19 +561,20 @@ async function compressTopics(
         if (attempt === 1) $.ui.log(`clm: topic merge failed (${parsed}); keeping the summaries as written`, { to: 'debug' })
         continue
       }
-      const byName = new Map(parsed.map(topic => [instructionKey(topic.topic), topic]))
+      const byName = new Map(parsed.map(topic => [topicKey(topic), topic]))
       latest = normalized.map(topic => {
-        const response = rewrite.some(candidate => instructionKey(candidate.topic) === instructionKey(topic.topic))
-          ? byName.get(instructionKey(topic.topic))
+        const response = rewrite.some(candidate => topicKey(candidate) === topicKey(topic))
+          ? byName.get(topicKey(topic)) ?? (parsed.filter(candidate => instructionKey(candidate.topic) === instructionKey(topic.topic)).length === 1
+            ? parsed.find(candidate => instructionKey(candidate.topic) === instructionKey(topic.topic)) : undefined)
           : undefined
-        const previous = old.get(instructionKey(topic.topic))
+        const previous = old.get(topicKey(topic))
         if (!response) return topic
         return {
           ...topic, summary: response.summary,
           seq: previous?.summary === response.summary ? previous.seq : seq,
         }
       })
-      const row: SessionMessage = { role: 'user', text: ledgerRowText(seq, kst(), pointer, composeLedger(notesWithTopics(notes, latest), issues)), toolUses: [] }
+      const row = await renderRow(latest, notesWithTopics(notes, latest))
       latestTokens = sum([row])
       if (latestTokens <= opts.ledgerTarget) return { topics: latest, ledgerTokens: latestTokens }
       retryReason = `The previous ledger used ${latestTokens} tokens, exceeding ${opts.ledgerTarget} by ${latestTokens - opts.ledgerTarget}. Re-summarize older topics more tightly and return the full topics array.`
@@ -454,7 +583,7 @@ async function compressTopics(
       if (attempt === 1) $.ui.log(`clm: topic merge failed (${String(err).slice(0, 120)}); keeping the summaries as written`, { to: 'debug' })
     }
   }
-  const fallbackRow: SessionMessage = { role: 'user', text: ledgerRowText(seq, kst(), pointer, composeLedger(notesWithTopics(notes, latest), issues)), toolUses: [] }
+  const fallbackRow = await renderRow(latest, notesWithTopics(notes, latest))
   latestTokens = sum([fallbackRow])
   if (latestTokens > opts.ledgerTarget) {
     const over = latestTokens - opts.ledgerTarget
@@ -685,13 +814,15 @@ async function recordPromptIntent($: EngineInterface, text: string, promptSeq: n
     const events = await readAll($)
     const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
     const state = focusOf(events, origin.session)
+    const key = transcriptKey(origin.session)
+    const requests = (await readRequests($, key)).filter(request => request.status === 'open').map(({ id, text }) => ({ id, text }))
     const workflow = await readWorkflow($)
     const queueSnapshot = workflow.later.map(item => ({ ...item }))
     const rows = await $.session.messages()
     const lastAssistantReply = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
     const r = await $.model.complete({
       model: 'haiku', system: INTENT_SYSTEM,
-      prompt: intentPrompt({ state, issues, lastAssistantReply, userPrompt, later: queueSnapshot }),
+      prompt: intentPrompt({ state, issues, lastAssistantReply, userPrompt, later: queueSnapshot, requests }),
       maxTokens: 1800, timeoutMs: 15000,
     })
     if (!r.isAnswered) throw new Error(`model did not answer (${r.reason})`)
@@ -703,6 +834,12 @@ async function recordPromptIntent($: EngineInterface, text: string, promptSeq: n
     } catch (err) {
       $.ui.log(`clm intent: later classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }
+    let requestClassification: RequestClassification | undefined
+    try {
+      requestClassification = parseRequests(r.text)
+    } catch (err) {
+      $.ui.log(`clm intent: request classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
 
     try {
       await serialized(origin.session, async () => {
@@ -711,6 +848,10 @@ async function recordPromptIntent($: EngineInterface, text: string, promptSeq: n
           $.ui.log(`clm intent: dropped older focus result ${promptSeq} (applied ${workflowAtApply.focusAppliedSeq})`, { to: 'debug' })
           return
         }
+      if (requestClassification) {
+        try { await applyRequestClassification($, key, promptSeq, requestClassification, userPrompt, lastAssistantReply) }
+        catch (err) { $.ui.log(`clm request: store update failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+      }
       const currentEvents = await readAll($)
       const allIssues = snapshot(currentEvents)
       const currentIssues = allIssues.filter(issue => issue.origin.session === origin.session)
@@ -1013,8 +1154,9 @@ async function gateMerge($: EngineInterface, ops: readonly Payload[], evidence: 
   const kept: Fact[] = []
   for (const f of facts) {
     const { held, problems } = checkEvidence(f.evidence, sources)
-    if (held.length) kept.push({ text: f.text, evidence: held })
-    else rejections.push(`fact "${f.text}" dropped (${problems.join('; ') || 'no evidence'})`)
+    const hasToolEvidence = held.some(item => sources.get(item.ref)?.kind === 'tool_result')
+    if (held.length && (f.kind !== 'constraint' || hasToolEvidence)) kept.push({ ...f, evidence: held })
+    else rejections.push(`fact "${f.text}" dropped (${problems.join('; ') || (f.kind === 'constraint' ? 'constraint needs tool-result evidence' : 'no evidence')})`)
   }
   if (rejections.length) await logEvent($, 'evidence-rejected', { ratio, reason: rejections.join(' | ').slice(0, 2000) })
   return { ops: gated.ops, evidence: gated.evidence, facts: kept }
@@ -1027,11 +1169,12 @@ async function gateMerge($: EngineInterface, ops: readonly Payload[], evidence: 
 // fact whose fold review failed. Each entry keeps the cited rows' text, since
 // those rows may be gone by the time a fold runs, and a nonce: a fold settles
 // (key, nonce), so an entry a step rewrote after the fold read it survives.
-export type Held = { key: string; nonce: string; kind: 'step' | 'drop' | 'fact'; issue?: string; text?: string; evidence: Evidence[]; sources: Record<string, Source> }
+export type Held = { key: string; nonce: string; kind: 'step' | 'drop' | 'fact'; factKind?: Fact['kind']; issue?: string; text?: string; evidence: Evidence[]; sources: Record<string, Source> }
 const heldKey = async ($: EngineInterface) => `held:${await sid($)}`
 export function isHeld(v: unknown): v is Held {
   return isRecord(v) && typeof v.key === 'string' && typeof v.nonce === 'string' && (v.kind === 'step' || v.kind === 'drop' || v.kind === 'fact')
-    && optional(v.issue, 'string') && optional(v.text, 'string') && Array.isArray(v.evidence) && isRecord(v.sources)
+    && optional(v.issue, 'string') && optional(v.text, 'string') && (v.factKind === undefined || v.factKind === 'constraint' || v.factKind === 'learned')
+    && Array.isArray(v.evidence) && isRecord(v.sources)
 }
 const token = (h: Pick<Held, 'key' | 'nonce'>) => `${h.key}#${h.nonce}`
 const newNonce = async ($: EngineInterface) => `${await $.clock.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -1112,9 +1255,9 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
   const withSource = (c: HeldClaim) => Object.fromEntries(c.evidence.map(e => [e.ref, c.held.sources[e.ref]?.text ?? '']))
   const claims = [
     ...input.ops.map((o, i) => ({ id: `op${i + 1}`, claim: describeOp(o, 'issue' in o ? title(o.issue) : undefined), evidence: input.evidence[i] ?? [] })),
-    ...input.facts.map((f, i) => ({ id: `fact${i + 1}`, claim: `fact: ${f.text}`, evidence: f.evidence })),
+    ...input.facts.map((f, i) => ({ id: `fact${i + 1}`, claim: `fact (${f.kind ?? 'learned'}): ${f.text}`, kind: f.kind ?? 'learned', evidence: f.evidence })),
     ...input.steps.map((c, i) => ({ id: `step${i + 1}`, claim: describeOp({ op: 'status', issue: c.issue!.id, status: heldStatus(c.held) }, c.issue!.title), evidence: c.evidence, source: withSource(c) })),
-    ...input.heldFacts.map((c, i) => ({ id: `held${i + 1}`, claim: `fact: ${c.held.text}`, evidence: c.evidence, source: withSource(c) })),
+    ...input.heldFacts.map((c, i) => ({ id: `held${i + 1}`, claim: `fact (${c.held.factKind ?? 'learned'}): ${c.held.text}`, kind: c.held.factKind ?? 'learned', evidence: c.evidence, source: withSource(c) })),
   ]
   let review
   try {
@@ -1139,8 +1282,8 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
     const hold: Held[] = []
     for (const [i, o] of input.ops.entries()) if (o.op === 'status' && isDropClaim(o)) hold.push(await heldDrop($, o.issue, input.evidence[i] ?? [], citedSources(input.evidence[i] ?? [], input.range.sources)))
     const drops = hold.length
-    for (const f of input.facts) hold.push({ key: `fact:${instructionKey(f.text)}`, nonce: await newNonce($), kind: 'fact', text: f.text, evidence: f.evidence, sources: citedSources(f.evidence, input.range.sources) })
-    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) downgraded to doing, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(o => describeOp(o)).join('; ')})` : ''}, ${drops} drop(s) held, retracts dropped, ${input.facts.length} fact(s) and ${input.steps.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
+    for (const f of input.facts) hold.push({ key: `fact:${instructionKey(f.text)}`, nonce: await newNonce($), kind: 'fact', factKind: f.kind, text: f.text, evidence: f.evidence, sources: citedSources(f.evidence, input.range.sources) })
+    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) moved to uncertain, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(o => describeOp(o)).join('; ')})` : ''}, ${drops} drop(s) held, retracts dropped, ${input.facts.length} fact(s) and ${input.steps.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
     return { ops: input.ops.filter(o => landsUnreviewed(o, dropped)).map(o => (isDoneClaim(o) ? downgrade(o) : o)), facts: [], promoted: [], hold, settled: [], failed: true }
   }
   const verdict = new Map(review.map(v => [v.id, v]))
@@ -1150,7 +1293,7 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
     if (v?.accept) return [o]
     if (!v && !isDoneClaim(o)) return [o]
     const why = v ? v.reason : 'no verdict'
-    lines.push(`op${i + 1} ${describeOp(o)}: ${isDoneClaim(o) ? 'done downgraded to doing' : 'dropped'} (${why})`)
+    lines.push(`op${i + 1} ${describeOp(o)}: ${isDoneClaim(o) ? 'done moved to uncertain' : 'dropped'} (${why})`)
     return isDoneClaim(o) ? [downgrade(o)] : []
   })
   const facts = input.facts.filter((f, i) => {
@@ -1167,7 +1310,7 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
     else lines.push(`${id} ${c.held.key}: settled unaccepted (${v.reason})`)
   }
   input.steps.forEach((c, i) => judge(`step${i + 1}`, c, () => promoted.push({ op: 'status', issue: c.issue!.id, status: heldStatus(c.held) })))
-  input.heldFacts.forEach((c, i) => judge(`held${i + 1}`, c, () => facts.push({ text: c.held.text!, evidence: c.evidence })))
+  input.heldFacts.forEach((c, i) => judge(`held${i + 1}`, c, () => facts.push({ text: c.held.text!, evidence: c.evidence, kind: c.held.factKind })))
   if (lines.length) await logEvent($, 'review-rejected', { ratio: input.ratio, reason: lines.join(' | ').slice(0, 2000) })
   return { ops, facts, promoted, hold: [], settled, failed: false }
 }
@@ -1279,15 +1422,33 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
 
   const seq = meta.seq + 1
   const currentView = await trackerView($, here, [...ops, ...promoted])
+  const currentEvents = await readAll($)
+  const focusState = focusOf(currentEvents, here.session)
+  const focusIssue = focusState.stack.at(-1) ?? null
+  const previousTopics = (await storedTopics($, notesOf(prev), meta.seq, transcript))
+    .map(topic => topic.focusIssue === undefined ? { ...topic, focusIssue } : topic)
   if (prepared) {
-    const previousTopics = await storedTopics($, notesOf(prev), meta.seq, transcript)
-    const freshTopics = prepared.topics.map(t => ({ ...t, sourceTokens: topicTokens(t), seq }))
-    const compacted = await compressTopics($, opts, [...previousTopics, ...freshTopics], seq, notes, currentView.issues)
+    const freshTopics = prepared.topics.map(t => ({ ...t, sourceTokens: topicTokens(t), seq, focusIssue }))
+    const compacted = await compressTopics($, opts, [...previousTopics, ...freshTopics], seq, notes, currentView.issues, transcript ?? `${here.session}:main`)
     notes = notesWithTopics(notes, compacted.topics)
     fullNotes = notesWithTopics(fullNotes, compacted.topics)
     topics = compacted.topics
+  } else {
+    const goal = /^## 목표\s*\n([\s\S]*?)(?=\n## |$)/m.exec(notes)?.[1]?.trim() ?? ''
+    if (goal && goal !== '- (none yet)') {
+      const focus = currentView.issues.find(issue => issue.id === focusIssue)
+      const latest: Topic = {
+        topic: focus?.title ?? '현재 작업', summary: goal, seq, sourceTokens: Math.ceil(goal.length / 4), focusIssue,
+      }
+      topics = [...previousTopics.filter(topic => topic.focusIssue !== focusIssue), latest]
+      notes = notesWithTopics(notes, topics)
+      fullNotes = notesWithTopics(fullNotes, topics)
+    } else topics = previousTopics
   }
-  const text = ledgerRowText(seq, kst(), await ledgerPath($), composeLedger(notes, currentView.issues))
+  const previewLedger = await residentLedger($, transcript ?? `${here.session}:main`, currentView.issues, focusState, currentEvents, {
+    notes: fullNotes, topics, issues: currentView.issues, state: focusState,
+  })
+  const text = ledgerRowText(seq, kst(), await ledgerPath($), previewLedger)
   const tokensBefore = messageTokens(rows, observed, meta)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
   const tailTokens = sum([{ role: 'user', text, toolUses: [] }, ...plan.tail.filter(m => !isLedgerRow(m) && !isSystemRow(m))])
@@ -1615,7 +1776,11 @@ async function applyFoldPlan(
   await updateHeld($, use.settled ?? [], use.hold ?? [])
   const stateEvents = await readAll($)
   const currentView = await trackerView($, here)
-  const ledger = await residentLedger($, key, snapshot(stateEvents).filter(issue => issue.origin.session === here.session), focusOf(stateEvents, here.session), stateEvents)
+  const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
+  const liveFocus = focusOf(stateEvents, here.session)
+  const ledger = await residentLedger($, key, liveIssues, liveFocus, stateEvents, {
+    notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus,
+  })
   const fileLedger = composeLedger(use.fullNotes, currentView.issues)
   const text = ledgerRowText(use.seq, kst(), await ledgerPath($), ledger)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
@@ -1655,7 +1820,11 @@ async function applyRewindPlan(
   const here = await captureOrigin($)
   const stateEvents = await readAll($)
   const view = await trackerView($, here)
-  const ledger = await residentLedger($, key, snapshot(stateEvents).filter(issue => issue.origin.session === here.session), focusOf(stateEvents, here.session), stateEvents)
+  const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
+  const liveFocus = focusOf(stateEvents, here.session)
+  const ledger = await residentLedger($, key, liveIssues, liveFocus, stateEvents, {
+    notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus,
+  })
   const fullLedger = composeLedger(use.fullNotes, view.issues)
   const text = ledgerRowText(use.seq, kst(), await ledgerPath($), ledger)
   const row: SessionMessage = { role: 'user', text, toolUses: [] }
@@ -1774,7 +1943,7 @@ async function stepOnce($: EngineInterface, call: StepCall): Promise<void> {
     if (!isDoneClaim(o) || (o.op !== 'create' && o.op !== 'status')) return o
     const evidence = gated.evidence[i] ?? []
     held.push({ ...(o.op === 'status' ? { issue: o.issue } : { title: o.title.trim() }), evidence, sources: citedSources(evidence, sources) })
-    return downgrade(o)
+    return { ...o, status: 'doing' }
   })
   const events = await append($, stepOps, here, true, true)
   if (held.length) {

@@ -11,6 +11,7 @@ import { readEvidence, type Evidence } from './evidence'
 export const STATUSES = ['todo', 'doing', 'done', 'question', 'uncertain', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
 export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' && (STATUSES as readonly string[]).includes(v)
+export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 export type Origin = { session: string; repo: string; branch?: string; cwd: string }
 type Base = { ts: string; seq: number; issue: string; origin: Origin }

@@ -3,7 +3,7 @@ import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { boardHtml } from './board'
 import { checkEvidence, describeOp, renderRange, type Evidence, type Source, type SourceKind } from './evidence'
 import { compose } from './intent'
-import { archivedDone, focusOf, injected, isOpen, issueId, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
+import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { FocusState } from './tracker'
 
 export const TASK_TOOL = 'mcp__clm__clm_task'
@@ -52,8 +52,6 @@ const panelSubject = (issue: Issue) => `${issue.status === 'question' ? '질문:
 const panelDescription = (issue: Issue) => issue.notes.at(-1) ?? issue.title
 const agentTaskRootsKey = (session: string) => `agent-task-roots:${session}`
 const taskStatuses = new Set(['doing', 'done', 'uncertain', 'dropped'])
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
-
 export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (!isRecord(value)) return false
   const input = value

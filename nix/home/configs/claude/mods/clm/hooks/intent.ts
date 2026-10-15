@@ -1,4 +1,4 @@
-import { isOpen, type FocusState as TrackerFocusState, type Intent, type Issue, type Payload } from './tracker'
+import { isOpen, isRecord, type FocusState as TrackerFocusState, type Intent, type Issue, type Payload } from './tracker'
 import { checkEvidence, type Source } from './evidence'
 import { isHarnessText, stripReminders } from './fold'
 import { removeQueueSnapshotTargets } from './workflow'
@@ -6,6 +6,7 @@ import type { ClmWorkflow } from '../types'
 import type { AddressRow } from './address'
 import { describe, focusOf, issueId, snapshot, type Origin, type TrackerEvent } from './tracker'
 import { instructionKey, isDirective } from './ledger'
+import { instructionIndexKey, issueAddressKey, isInstructionIndex } from './resident'
 
 export type FocusState = TrackerFocusState
 
@@ -84,8 +85,6 @@ const isRequestResolution = (value: unknown): value is RequestResolution => isRe
 
 const INTENTS: readonly string[] = ['continue', 'handoff', 'interleave', 'pending', 'question']
 const isIntent = (value: unknown): value is Intent => typeof value === 'string' && INTENTS.includes(value)
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
 
 // clm-prompt
 export const INTENT_SYSTEM = `You classify one message the user just typed to a coding agent. Read the focus stack, the pending set, the open issues, and the agent's last reply, then decide which task the message is about and how it moves the agent's attention.
@@ -313,13 +312,6 @@ export type PromptIntentIo = {
 const requestKey = (key: string) => `requests:${key}`
 const requestPromptSeqKey = (key: string) => `request-prompt-seq:${key}`
 const intentSessionKey = (session: string) => `${session}:main`
-const instructionIndexKey = (key: string) => `instruction-index:${key}`
-const issueAddressKey = (key: string) => `issue-addresses:${key}`
-const isIndexEntry = (value: unknown): value is { address: string; issue: string | null; text: string } =>
-  typeof value === 'object' && value !== null && 'address' in value && typeof value.address === 'string'
-  && (/^@[\da-f]{8}$/i.test(value.address) || value.address === '@unknown')
-  && 'issue' in value && (typeof value.issue === 'string' || value.issue === null)
-  && 'text' in value && typeof value.text === 'string'
 
 export async function applyRequestClassification(
   io: PromptIntentIo, key: string, promptSeq: number, classification: RequestClassification, userPrompt: string, lastAssistantReply: string,
@@ -475,7 +467,7 @@ export async function recordPromptIntent(io: PromptIntentIo, text: string, promp
           if (classification.rule !== null || (classification.intent !== 'question' && isDirective(userPrompt))) {
             const indexKey = instructionIndexKey(key)
             const rawIndex = await io.get(indexKey)
-            const index = Array.isArray(rawIndex) ? rawIndex.filter(isIndexEntry) : []
+            const index = Array.isArray(rawIndex) ? rawIndex.filter(isInstructionIndex) : []
             if (!index.some(item => item.address === address && item.issue === scopeIssue)) {
               const source = sourceRows.find(row => `@${row.uuid.slice(0, 8)}` === address)
               if (source) {

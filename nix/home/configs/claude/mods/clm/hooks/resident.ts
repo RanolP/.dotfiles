@@ -1,4 +1,4 @@
-import { isOpen, type Issue, type TrackerEvent } from './tracker'
+import { isOpen, isRecord, type Issue, type TrackerEvent } from './tracker'
 import {
   EMPTY_LEDGER, constraintFactLines, instructionKey, instructionValues, learnedFactLines, notesOf, withdrawnInstructionKeys,
   WITHDRAWN_PREFIX, type Topic,
@@ -32,10 +32,9 @@ export type ResidentIo = {
 }
 
 type LedgerPreview = { notes?: string; topics?: Topic[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } }
-const instructionIndexKey = (key: string) => `instruction-index:${key}`
-const issueAddressKey = (key: string) => `issue-addresses:${key}`
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
-function isInstructionIndex(value: unknown): value is InstructionIndex {
+export const instructionIndexKey = (key: string) => `instruction-index:${key}`
+export const issueAddressKey = (key: string) => `issue-addresses:${key}`
+export function isInstructionIndex(value: unknown): value is InstructionIndex {
   return isRecord(value) && typeof value.address === 'string' && (/^@[\da-f]{8}$/i.test(value.address) || value.address === '@unknown')
     && (typeof value.issue === 'string' || value.issue === null) && typeof value.text === 'string'
 }

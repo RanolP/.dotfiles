@@ -1,5 +1,6 @@
+import { isRecord } from './tracker'
+
 type AddressRow = { raw: string; uuid: string; parentUuid?: string; role?: string; text: string }
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 function transcriptRowText(value: Record<string, unknown>): string {
   const message = isRecord(value.message) ? value.message : value

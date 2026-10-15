@@ -1,6 +1,6 @@
 import { checkEvidence, describeOp, downgrade, gateOps, isDoneClaim, isDropClaim, isReopenClaim, type Evidence, type Source } from './evidence'
 import { instructionKey, parseReview, REVIEW_SYSTEM, type Fact } from './ledger'
-import { type Payload } from './tracker'
+import { isRecord, type Payload } from './tracker'
 
 export type Held = { key: string; nonce: string; kind: 'drop' | 'fact'; factKind?: Fact['kind']; issue?: string; text?: string; evidence: Evidence[]; sources: Record<string, Source> }
 export type HeldClaim = { held: Extract<Held, { kind: 'drop' }>; issue: Issue; evidence: Evidence[] }
@@ -21,8 +21,6 @@ type HeldIo = {
   logEvent: (event: HeldLogEvent, fields: { ratio?: number; reason?: string }) => Promise<void>
   complete: (request: { model: string; system: string; prompt: string; maxTokens: number; timeoutMs: number }) => Promise<{ isAnswered: boolean; text: string; reason: string }>
 }
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
-
 export function isHeld(value: unknown): value is Held {
   if (!isRecord(value)) return false
   const item = value

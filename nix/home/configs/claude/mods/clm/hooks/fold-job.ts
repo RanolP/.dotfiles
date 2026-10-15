@@ -12,7 +12,8 @@ import { focusOf, snapshot, type Issue, type Origin, type Payload, type TrackerE
 import type { Held } from './held'
 import type { Fold, FoldPreview, Meta, Opts, PreparedFold, TopicState, TrackerView } from './fold-runtime'
 import { parseSplitAnswer } from './fold-runtime'
-import { readLedgerSnapshots, saveLedgerSnapshot, type RewindIo, type RewindPlan } from './rewind'
+import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type RewindIo, type RewindPlan } from './rewind'
+import { xmlText } from './intent'
 import type { LogEvent, LogFields } from './events'
 
 type Pending = {
@@ -38,14 +39,12 @@ export type FoldJobIo = {
   writeMeta(meta: Meta): Promise<void>
   readLedger(): Promise<string | undefined>
   ledgerPath(): Promise<string>
-  logPath(): Promise<string>
   basePath(): Promise<string>
   readFile(path: string): Promise<string | undefined>
   writeFile(path: string, text: string): Promise<void>
   fileExists(path: string): Promise<boolean>
   fileList(path: string): Promise<{ name: string; kind: string }[]>
   run(args: string[], options: { timeoutMs: number }): Promise<{ exitCode: number; stderr: string }>
-  storeGet(key: string): Promise<unknown>
   storeSet(key: string, value: unknown): Promise<void>
   storeDelete(key: string): Promise<void>
   pendingKey(key: string): Promise<string>
@@ -53,7 +52,6 @@ export type FoldJobIo = {
   captureOrigin(): Promise<Origin>
   readAll(): Promise<TrackerEvent[]>
   trackerView(origin: Origin, ops?: readonly Payload[]): Promise<TrackerView>
-  readHeld(): Promise<Held[]>
   updateHeld(settled: readonly string[], hold: readonly Held[]): Promise<void>
   ensureInstructionIndex(key: string, notes: string): Promise<void>
   residentLedger(key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview?: FoldPreview): Promise<string>
@@ -69,7 +67,6 @@ export type FoldJobIo = {
 
 const foldJobs = new Map<string, FoldJob>()
 export const transcriptKey = (session: string, agentId?: string) => `${session}:${agentId ?? 'main'}`
-const transcriptRowsKey = (key: string) => `transcript-rows:${key}`
 const WITHHELD = '.withheld-'
 const shownChanges = new Map<string, Set<string>>()
 const changeHash = (line: string): string => {
@@ -77,7 +74,6 @@ const changeHash = (line: string): string => {
   for (let i = 0; i < line.length; i++) h = Math.imul(h ^ line.charCodeAt(i), 16777619)
   return (h >>> 0).toString(16)
 }
-const xmlText = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 const isPromptStart = (message: SessionMessage) => isPrompt(message) && !isHarnessText(message.text)
 
 export function foldJobDropFps(key: string): string[] | undefined {
@@ -381,7 +377,6 @@ export async function showTurnChanges(io: FoldJobIo, answer: string): Promise<vo
 export async function handleSessionCompact(
   io: FoldJobIo, opts: Opts, all: readonly SessionMessage[], trigger: string,
 ): Promise<SessionCompactResult | { skip: string }> {
-  if (trigger === 'precompute') return { skip: 'clm replaces compaction' }
   const compactStartedAt = await io.now()
   const meta = await io.readMeta()
   const workingRows = liveRows(all, meta.boundary)

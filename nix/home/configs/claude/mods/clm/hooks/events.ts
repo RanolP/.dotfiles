@@ -13,7 +13,6 @@ type FsEntry = { name: string; kind: string; size: number; mtimeMs: number; isLi
 export type EventsIo = {
   sessionId: () => Promise<string>
   cwd: () => Promise<string>
-  home: () => Promise<string | undefined>
   run: (args: string[], options: { cwd?: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
   exists: (path: string) => Promise<boolean>
   list: (path: string) => Promise<FsEntry[]>

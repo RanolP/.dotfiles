@@ -18,13 +18,13 @@ import {
 } from './ledger'
 import {
   archivedDone, injected, normalizeRemote, parseLog, parseOps, toEvents,
-  focusOf, type Issue, type Origin, type Payload, type TrackerEvent,
+  focusOf, isRecord, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
-import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, xmlText, type RequestRecord, type PromptIntentIo } from './intent'
+import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { recallAddress, recallIo as makeRecallIo, rememberTranscriptPath as rememberAddressTranscriptPath, transcriptRows as readAddressRows, type AddressRuntimeIo } from './address'
-import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type InstructionIndex, type ResidentIo } from './resident'
+import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { clearFoldJob, foldJobDropFps, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
@@ -128,12 +128,7 @@ const topicsKey = async ($: EngineInterface, key?: string) => {
   const session = await sid($)
   return `topics:${key && key !== `${session}:main` ? key : session}`
 }
-const transcriptRowsKey = (key: string) => `transcript-rows:${key}`
-const instructionIndexKey = (key: string) => `instruction-index:${key}`
-const issueAddressKey = (key: string) => `issue-addresses:${key}`
 const requestsKey = (key: string) => `requests:${key}`
-const requestPromptSeqKey = (key: string) => `request-prompt-seq:${key}`
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) && Object.values(v).every(n => typeof n === 'number')
 const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
@@ -159,7 +154,6 @@ async function readText($: EngineInterface, p: string): Promise<string | undefin
 const eventsIo = ($: EngineInterface): EventsIo => ({
   sessionId: () => $.session.id(),
   cwd: () => $.session.cwd(),
-  home: () => $.env.get('HOME'),
   run: (args, options) => $.process.run(args, options),
   exists: path => $.fs.exists(path),
   list: path => $.fs.list(path),
@@ -331,14 +325,12 @@ const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   writeMeta: meta => writeMeta($, meta),
   readLedger: async () => readText($, await ledgerPath($)),
   ledgerPath: () => ledgerPath($),
-  logPath: () => logPath($),
   basePath: () => basePath($),
   readFile: async path => readText($, path),
   writeFile: (path, text) => $.fs.write(path, text),
   fileExists: path => $.fs.exists(path),
   fileList: path => $.fs.list(path),
   run: (args, options) => $.process.run(args, options),
-  storeGet: key => $.store.get(key),
   storeSet: (key, value) => $.store.set(key, value),
   storeDelete: key => $.store.delete(key),
   pendingKey: key => pendingKey($, key),
@@ -346,7 +338,6 @@ const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   captureOrigin: () => captureOrigin($),
   readAll: () => readAll($),
   trackerView: (origin, ops) => trackerView($, origin, ops),
-  readHeld: () => readHeld($),
   updateHeld: (settled, hold) => updateHeld($, settled, hold),
   ensureInstructionIndex: (key, notes) => ensureInstructionIndex($, key, notes),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
@@ -513,6 +504,7 @@ export const register: Register = (on, options) => {
   // The engine and the turn-end check share one per-transcript job.
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
+    if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
     if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
     return compactFoldJob(foldJobIo($), opts, e.messages, e.trigger)
   })

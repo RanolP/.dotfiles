@@ -1,14 +1,11 @@
 import type { PromptOrigin } from 'claude-code'
 import type { ClmWorkflow } from '../types'
-import { describe, focusOf, issueId, isOpen, snapshot, type FocusState, type Intent, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
+import { describe, focusOf, issueId, isOpen, isRecord, snapshot, type FocusState, type Intent, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 
 const emptyWorkflow = (): ClmWorkflow => ({
   later: [], resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null,
   promptSeq: 0, focusAppliedSeq: 0, replayed: null,
 })
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
 
 export function workflowValue(value: unknown): ClmWorkflow {
   const empty = emptyWorkflow()

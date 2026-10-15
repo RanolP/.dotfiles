@@ -297,6 +297,16 @@ test('precompute skips and subagent compaction leaves the main ledger and metada
   expect(seen.engineCompactions).toBe(1)
 })
 
+test("a precompute compaction without messages still skips as 'clm replaces compaction'", OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  const input = { trigger: 'precompute' } as SessionCompactInput
+  const result = await $.session.compact(input)
+  if (!('skip' in result)) throw new Error('precompute compaction without messages did not skip')
+  expect(result.skip).toBe('clm replaces compaction')
+  expect(seen.prompts.length).toBe(0)
+  expect(seen.engineCompactions).toBe(0)
+})
+
 // Regression caught: every ledger row showed the latest fold's duration, deferred time leaked into it, expanded rows were hidden, and ledger-like user text was intercepted.
 test('each folded ledger renders its own compact duration and ledger-like user text passes through', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('FIRST-FACT'), ledger('FIRST-FACT; SECOND-FACT')], mergeDelays: [1200, 3400] }
@@ -384,4 +394,3 @@ test('a fold over an older fold drops the /clear row and the stale ledger', OPTS
   expect(out.filter((m: any) => m.text.startsWith('[clm ledger')).map((m: any) => m.text.slice(0, 14))).toEqual(['[clm ledger #1'])
   expect(out[0].text.startsWith('[clm ledger #1')).toBe(true)
 })
-

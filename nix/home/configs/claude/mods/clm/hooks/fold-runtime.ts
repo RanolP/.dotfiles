@@ -9,10 +9,11 @@ import {
   preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved,
   withheldLines, WITHDRAWN_PREFIX, withNotes, type Fact,
 } from './ledger'
-import { archivedDone, injected, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
+import { archivedDone, injected, isRecord, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held, HeldClaims, ReviewInput, Reviewed } from './held'
 import type { RewindTopic } from './rewind'
 import type { LogEvent } from './events'
+import { xmlText } from './intent'
 
 export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
 export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number }
@@ -43,7 +44,6 @@ export type FoldRuntimeIo = {
   log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
 }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 export const isTopic = (value: unknown): value is TopicState => isRecord(value) && typeof value.topic === 'string' && value.topic.trim() !== ''
   && typeof value.summary === 'string' && value.summary.trim() !== '' && typeof value.seq === 'number' && Number.isInteger(value.seq) && value.seq > 0
   && (value.sourceTokens === undefined || (typeof value.sourceTokens === 'number' && Number.isInteger(value.sourceTokens) && value.sourceTokens >= 0))
@@ -56,8 +56,6 @@ const ratioMin = 1, ratioMax = 4
 const clampRatio = (value: number) => Math.round(Math.min(ratioMax, Math.max(ratioMin, value)) * 1000) / 1000
 const freshReal = (reading: number | undefined, meta: Meta) => (reading !== meta.foldTokens ? reading : undefined)
 const droppedShown = 5
-const xmlText = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-
 export function parseSplitAnswer(raw: string): SplitAnswer | string {
   let value: unknown
   try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `split reply is not JSON (${String(err).slice(0, 80)})` }

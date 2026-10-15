@@ -1,7 +1,8 @@
 import type { SessionMessage } from 'claude-code'
 import { fingerprint, liveRows, protectedIndex, type Boundary } from './fold'
 import { EMPTY_LEDGER, notesOf } from './ledger'
-import type { Payload } from './tracker'
+import { isRecord, type Payload } from './tracker'
+import { instructionIndexKey, issueAddressKey } from './resident'
 
 export type RewindTopic = { topic: string; summary: string; seq: number; sourceTokens?: number; focusIssue?: string | null }
 export type RewindMeta = {
@@ -35,10 +36,7 @@ export type RewindIo = {
 }
 
 const ledgerSnapshotsKey = (key: string) => `ledger-snapshots:${key}`
-const transcriptRowsKey = (key: string) => `transcript-rows:${key}`
-const instructionIndexKey = (key: string) => `instruction-index:${key}`
-const issueAddressKey = (key: string) => `issue-addresses:${key}`
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+export const transcriptRowsKey = (key: string) => `transcript-rows:${key}`
 
 function isTopic(value: unknown): value is RewindTopic {
   return isRecord(value) && typeof value.topic === 'string' && value.topic.trim() !== ''

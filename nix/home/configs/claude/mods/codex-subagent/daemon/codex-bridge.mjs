@@ -58,7 +58,8 @@ export function turnStartParams(s, prompt) {
     threadId: s.threadId,
     effort: s.effort ?? null,
     input: textInput(prompt),
-    ...(s.sandbox === 'workspace-write' ? { permissions: WORKSPACE_WRITE_PROFILE, runtimeWorkspaceRoots: s.writableRoots } : {}),
+    // turn/start reloads config without the thread's `config` override, so naming the profile here fails with "default_permissions requires a [permissions] table"; the thread already holds the profile.
+    ...(s.sandbox === 'workspace-write' ? { runtimeWorkspaceRoots: s.writableRoots } : {}),
   }
 }
 
@@ -68,7 +69,6 @@ if (process.argv[2] === '--selftest') {
     threadId: 'thread-1',
     effort: 'medium',
     input: textInput('work'),
-    permissions: WORKSPACE_WRITE_PROFILE,
     runtimeWorkspaceRoots: writableRoots,
   })
   assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: null, sandbox: 'read-only', writableRoots }, 'work'), {

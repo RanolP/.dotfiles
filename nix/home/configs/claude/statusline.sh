@@ -17,10 +17,6 @@ EFFORT=$(echo "$input" | jq -r '.effort.level // empty')
 THINKING=$(echo "$input" | jq -r '.thinking.enabled // false')
 DIR=$(echo "$input" | jq -r '.workspace.current_dir')
 SESSION_ID=$(echo "$input" | jq -r '.session_id')
-FIVE_H=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
-FIVE_H_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
-WEEK=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
-WEEK_RESET=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
 PR_NUM=$(echo "$input" | jq -r '.pr.number // empty')
 PR_STATE=$(echo "$input" | jq -r '.pr.review_state // empty')
 
@@ -137,64 +133,3 @@ GAP1=$((COLS - L1L_W - L1R_W))
 [ "$GAP1" -lt 1 ] && GAP1=1
 printf -v PAD1 '%*s' "$GAP1" ''
 printf '%s%s%s\n' "$L1L" "$PAD1" "$L1R"
-
-# ── LINE 2 ────────────────────────────────────────────────────────────────────
-
-# Cost, context, lines and duration live in the dash pane.
-
-RL_ICON=$(printf '\xf3\xb0\x91\x90')
-
-# 5h rate limit
-if [ -n "$FIVE_H" ]; then
-    FH=$(printf '%.0f' "$FIVE_H")
-    TIME_UNTIL=""
-    if [ -n "$FIVE_H_RESET" ]; then
-        NOW_TS=$(date +%s)
-        DIFF_SEC=$((FIVE_H_RESET - NOW_TS))
-        if [ "$DIFF_SEC" -le 0 ]; then
-            TIME_UNTIL="now"
-        elif [ "$DIFF_SEC" -lt 3600 ]; then
-            DIFF_M=$((DIFF_SEC / 60))
-            TIME_UNTIL="${DIFF_M}m"
-        else
-            DIFF_H=$((DIFF_SEC / 3600))
-            DIFF_M=$(((DIFF_SEC % 3600) / 60))
-            if [ "$DIFF_M" -gt 0 ]; then
-                TIME_UNTIL="${DIFF_H}h${DIFF_M}m"
-            else
-                TIME_UNTIL="${DIFF_H}h"
-            fi
-        fi
-    fi
-    FH_STR="${GR}5h ${RS}${W}${FH}%${RS}${GR} ${RL_ICON}${RS}"
-    if [ -n "$TIME_UNTIL" ]; then
-        FH_STR+="${GR} in ${RS}${W}${TIME_UNTIL}${RS}"
-    fi
-else
-    FH_STR="${GR}5h ${RS}${W}unknown${RS}"
-fi
-
-# Weekly rate limit
-if [ -n "$WEEK" ]; then
-    WK=$(printf '%.0f' "$WEEK")
-    WEEK_RESET_FMT=""
-    if [ -n "$WEEK_RESET" ]; then
-        read -r WK_DOW WK_HR WK_MIN <<< "$(date -r "$WEEK_RESET" "+%a %H %M" 2>/dev/null)"
-        if [ -n "$WK_DOW" ]; then
-            WEEK_RESET_FMT="$WK_DOW $((10#$WK_HR)):$WK_MIN"
-        fi
-    fi
-    WK_STR="${GR}weekly ${RS}${W}${WK}%${RS}${GR} ${RL_ICON}${RS}"
-    if [ -n "$WEEK_RESET_FMT" ]; then
-        WK_STR+="${GR} at ${RS}${W}${WEEK_RESET_FMT}${RS}"
-    fi
-else
-    WK_STR="${GR}weekly ${RS}${W}unknown${RS}"
-fi
-
-if [ -n "$FH_STR" ]; then
-    L3="${FH_STR}${GR}  ${RS}${WK_STR}"
-else
-    L3="${WK_STR}"
-fi
-printf '%s\n' "$L3"

@@ -18,6 +18,23 @@ const mountPane = ($: Engine) => $.ui.mount({
   },
 })
 
+// Regression: every session start opened dash, so subagents could create panes and main-session startup could take focus.
+test('a main session start opens the dash pane without focus; a subagent session start does not', async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  const opens: Array<{ id: string, title?: string, focus?: true }> = []
+  on('ui.open', (_$, e) => {
+    opens.push(e)
+    return { value: { isPlaced: true } }
+  })
+
+  await start($)
+  const subagentStart = { cwd: '/work', surface: 'terminal' as const, isInteractive: true, agentId: 'agent-1' }
+  await $.session.start(subagentStart)
+
+  expect(opens).toEqual([{ id: 'dash', title: 'Dash' }])
+})
+
 // Regression: the dashboard was split into tabs and showed context fill, which clm already owns.
 test('one pane stacks Usage, Fleet and Clm sections with no tabs and no context line', async ($, on) => {
   mock.clock(on, { now: 1_000 })

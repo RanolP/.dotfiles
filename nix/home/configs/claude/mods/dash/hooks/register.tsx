@@ -205,26 +205,18 @@ export const register: Register = on => {
   let ticker: Timer | undefined
 
   on('session.start', async ($, e, next) => {
-    try {
-      await $.command.register({ name: 'dash', description: 'Open the unified usage, subagent, and clm status dashboard' })
-    } catch (error) {
-      await log($, 'command.register dash', error)
-    }
     const started = await pass($, 'session.start', () => next(e))
     await initialize($)
     await refreshClm($)
     ticker = startTicker($, ticker)
-    return started
-  })
-
-  on('command.run', { command: 'dash' }, async $ => {
-    try {
-      const opened = await $.ui.open({ id: PANE, title: TITLE, focus: true })
-      return { text: opened.isPlaced ? 'Dash opened.' : 'Dash opened and is waiting for a pane-capable surface.' }
-    } catch (error) {
-      await log($, 'ui.open dash', error)
-      return { text: 'Dash could not open; see the debug log.' }
+    if (!('agentId' in e)) {
+      try {
+        await $.ui.open({ id: PANE, title: TITLE })
+      } catch (error) {
+        await log($, 'ui.open dash at session start', error)
+      }
     }
+    return started
   })
 
   on('session.measure', async ($, e, next) => {

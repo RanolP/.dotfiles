@@ -196,5 +196,7 @@ export const describeOp = (o: Payload, title?: string): string => {
     case 'note': return `issue ${o.issue} gets note "${o.text}"`
     case 'task': return `issue ${o.issue} links panel task ${o.taskId}`
     case 'link': return `issue ${o.issue} is linked`
+    case 'parent': return `issue ${o.issue} gets parent ${o.parent ?? '(none)'}`
+    case 'focus': return `focus -> [${o.stack.join(', ')}] (${o.intent})`
   }
 }

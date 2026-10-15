@@ -124,6 +124,7 @@ path = [
     "nix/home/configs/claude/mods/clm/hooks/clm.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/tracker.ts",
     "nix/home/configs/claude/mods/clm/hooks/tracker.test.ts",
+    "nix/home/configs/claude/mods/clm/hooks/intent.ts",
     "nix/home/configs/claude/mods/clm/hooks/evidence.ts",
     "nix/home/configs/claude/mods/clm/hooks/board.ts",
     "nix/home/configs/claude/mods/clm/types/index.d.ts",

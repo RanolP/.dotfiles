@@ -15,6 +15,8 @@ export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' 
 export type Origin = { session: string; repo: string; branch?: string; cwd: string }
 type Base = { ts: string; seq: number; issue: string; origin: Origin }
 type Create = { op: 'create'; title: string; status: IssueStatus; note?: string; taskId?: string }
+export type Intent = 'continue' | 'handoff' | 'interleave' | 'pending' | 'question'
+export type FocusState = { stack: string[]; pending: string[] }
 export type TrackerEvent = Base & (
   | Create
   | { op: 'status'; status: IssueStatus }
@@ -24,15 +26,19 @@ export type TrackerEvent = Base & (
   | { op: 'note'; text: string }
   // Links `issue` to `origin.session`, so it is injected there whatever its repo.
   | { op: 'link' }
+  | { op: 'parent'; parent: string | null }
+  | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
 )
 export type Payload =
-  | Create
+  | { op: 'create'; issue?: string; title: string; status: IssueStatus; note?: string; taskId?: string }
   | { op: 'status'; issue: string; status: IssueStatus }
   | { op: 'retitle'; issue: string; title: string }
   | { op: 'progress'; issue: string; done: number; total: number }
   | { op: 'task'; issue: string; taskId: string }
   | { op: 'note'; issue: string; text: string }
   | { op: 'link'; issue: string }
+  | { op: 'parent'; issue: string; parent: string | null }
+  | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
 
 export type Issue = {
   id: string
@@ -43,6 +49,7 @@ export type Issue = {
   notes: string[]
   linked: string[]
   taskId?: string
+  parent?: string
   updated: string
   /** Position of the event that last made this issue done, in snapshot order; later is larger. */
   doneOrder?: number
@@ -82,6 +89,7 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
         })
       continue
     }
+    if (e.op === 'focus') continue
     const i = issues.get(e.issue)
     if (!i) continue
     if (e.op === 'status') {
@@ -92,7 +100,11 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
     else if (e.op === 'progress') i.progress = { done: e.done, total: e.total }
     else if (e.op === 'task') i.taskId = e.taskId
     else if (e.op === 'note') i.notes.push(e.text)
-    else if (!i.linked.includes(e.origin.session)) i.linked.push(e.origin.session)
+    else if (e.op === 'parent') {
+      if (e.parent === null) delete i.parent
+      else i.parent = e.parent
+    }
+    else if (e.op === 'link' && !i.linked.includes(e.origin.session)) i.linked.push(e.origin.session)
     i.updated = e.ts
   }
   return [...issues.values()]
@@ -105,15 +117,31 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
     seq += 1
     const base = { ts, seq, origin }
     switch (p.op) {
-      case 'create': return { ...base, issue: issueId(origin.session, seq), ...p }
+      case 'create': return {
+        ...base, issue: p.issue ?? issueId(origin.session, seq), op: 'create', title: p.title, status: p.status,
+        ...(p.note === undefined ? {} : { note: p.note }), ...(p.taskId === undefined ? {} : { taskId: p.taskId }),
+      }
       case 'status': return { ...base, issue: p.issue, op: 'status', status: p.status }
       case 'retitle': return { ...base, issue: p.issue, op: 'retitle', title: p.title }
       case 'progress': return { ...base, issue: p.issue, op: 'progress', done: p.done, total: p.total }
       case 'task': return { ...base, issue: p.issue, op: 'task', taskId: p.taskId }
       case 'note': return { ...base, issue: p.issue, op: 'note', text: p.text }
       case 'link': return { ...base, issue: p.issue, op: 'link' }
+      case 'parent': return { ...base, issue: p.issue, op: 'parent', parent: p.parent }
+      // Focus snapshots are session metadata, so the log's issue key is the session id.
+      case 'focus': return { ...base, issue: origin.session, op: 'focus', stack: [...p.stack], pending: [...p.pending], intent: p.intent, ...(p.rule === undefined ? {} : { rule: p.rule }) }
     }
   })
+}
+
+/** The latest main-agent focus snapshot for one session. */
+export function focusOf(events: readonly TrackerEvent[], session: string): FocusState {
+  let latest: TrackerEvent | undefined
+  for (const event of events) {
+    if (event.op === 'focus' && event.issue === session && event.origin.session === session && (!latest || latest.op !== 'focus' || event.seq > latest.seq))
+      latest = event
+  }
+  return latest?.op === 'focus' ? { stack: [...latest.stack], pending: [...latest.pending] } : { stack: [], pending: [] }
 }
 
 export const isOpen = (i: Issue) => i.status === 'todo' || i.status === 'doing' || i.status === 'question'
@@ -234,6 +262,10 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       if (current) current.title = e.title
     } else if (e.op === 'task') {
       // Task ids are projection state, not a user-facing tracker change.
+    } else if (e.op === 'parent') {
+      out.push(`작업 '${title}' 상위 작업: ${e.parent ? state.get(e.parent)?.title ?? e.parent : '(none)'}`)
+    } else if (e.op === 'focus') {
+      out.push(`주 작업 초점 갱신 (${e.intent})`)
     } else if (e.op === 'note') {
       out.push(`작업 '${title}' 메모: ${clip((e.text.split(/\r?\n/, 1)[0] ?? '').trim(), 60)}`)
     } else {

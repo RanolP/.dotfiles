@@ -2,7 +2,7 @@ import { update, type BuiltinToolInputs, type EngineInterface, type PromptOrigin
 
 import { boardHtml } from './board'
 import {
-  buildCleared, fingerprint, isLedgerRow, isSystemRow, isUserTyped, kst, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
+  buildCleared, fingerprint, isHarnessText, isLedgerRow, isSystemRow, isUserTyped, kst, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
   type Boundary, type ClearPlan,
 } from './fold'
 import {
@@ -16,8 +16,9 @@ import {
 } from './ledger'
 import {
   archivedDone, describe, injected, isOpen, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
-  type Issue, type Origin, type Payload, type TrackerEvent,
+  focusOf, issueId, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
+import { compose, INTENT_SYSTEM, intentPrompt, parseClassified } from './intent'
 import type { ClmStatus, ClmWorkflow } from '../types'
 
 // clm replaces the engine's compaction for the main conversation. When the
@@ -309,6 +310,71 @@ async function append($: EngineInterface, payloads: readonly Payload[], origin?:
     if (project) await syncPanelSafely($, o, events)
     return events
   })
+}
+
+async function recordPromptIntent($: EngineInterface, text: string): Promise<void> {
+  const userPrompt = stripReminders(text)
+  if (!userPrompt || isHarnessText(userPrompt)) return
+  try {
+    const origin = await captureOrigin($)
+    const events = await readAll($)
+    const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
+    const state = focusOf(events, origin.session)
+    const workflow = await readWorkflow($)
+    const rows = await $.session.messages()
+    const lastAssistantReply = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
+    const r = await $.model.complete({
+      model: 'haiku', system: INTENT_SYSTEM,
+      prompt: intentPrompt({ state, issues, lastAssistantReply, userPrompt, later: workflow.later }),
+      maxTokens: 1800, timeoutMs: 15000,
+    })
+    if (!r.isAnswered) throw new Error(`model did not answer (${r.reason})`)
+
+    const cls = await serialized(origin.session, async () => {
+      const currentEvents = await readAll($)
+      const allIssues = snapshot(currentEvents)
+      const currentIssues = allIssues.filter(issue => issue.origin.session === origin.session)
+      const currentState = focusOf(currentEvents, origin.session)
+      const focused = new Set([...currentState.stack, ...currentState.pending])
+      const shownOpen = currentIssues.filter(issue => isOpen(issue) && !focused.has(issue.id)).slice(0, 30)
+      const isCurrentOpen = (id: string) => currentIssues.some(issue => issue.id === id && isOpen(issue))
+      const knownIds = new Set([
+        ...currentState.stack.filter(isCurrentOpen),
+        ...currentState.pending.filter(isCurrentOpen),
+        ...shownOpen.map(issue => issue.id),
+      ])
+      const cls = parseClassified(r.text, knownIds)
+      const lastSeq = currentEvents.filter(event => event.origin.session === origin.session).reduce((n, event) => Math.max(n, event.seq), 0)
+      const { payloads, next } = compose(currentState, cls, currentIssues, () => issueId(origin.session, lastSeq + 1))
+      const written = await writeEvents($, [
+        ...payloads,
+        { op: 'focus', stack: next.stack, pending: next.pending, intent: cls.intent, ...(cls.rule === null ? {} : { rule: cls.rule }) },
+      ], origin)
+      try {
+        for (const line of describe(written, allIssues)) $.ui.log(line)
+      } catch { /* display notices never block tracker writes */ }
+      if (payloads.length) await syncPanelSafely($, origin, written)
+      return cls
+    })
+
+    if (cls.later.length || cls.laterDrop === 'all' || cls.laterDrop.length) {
+      try {
+        const { dropped, queued } = await changeWorkflow($, current => {
+          const shouldDrop = (index: number) => cls.laterDrop === 'all' || cls.laterDrop.includes(index + 1)
+          const dropped = current.later.flatMap((item, index) => shouldDrop(index) ? [{ item, number: index + 1 }] : [])
+          const remaining = current.later.filter((_, index) => !shouldDrop(index))
+          const queued = cls.later.map((item, index) => ({ item, number: remaining.length + index + 1 }))
+          return { next: { ...current, later: [...remaining, ...cls.later] }, result: { dropped, queued } }
+        })
+        for (const item of dropped) $.ui.log(`clm: dropped later item ${item.number}: ${item.item}`)
+        for (const item of queued) $.ui.log(`clm: queued later item ${item.number}`)
+      } catch (err) {
+        $.ui.log(`clm later queue: update failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      }
+    }
+  } catch (err) {
+    $.ui.log(`clm intent: classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+  }
 }
 
 export async function sessionIssues($: EngineInterface, query: { issue?: string; status?: Issue['status'] } = {}): Promise<Issue[]> {
@@ -1212,37 +1278,7 @@ export const register: Register = (on, options) => {
       description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session (shown to you only).',
       immediate: true,
     })
-    await $.command.register({ name: 'later', description: 'Queue a follow-up for the next turn, list queued follow-ups, or drop one.', immediate: true })
     return next(e)
-  })
-
-  on('command.run', { command: 'later' }, async ($, e) => {
-    const text = (e.args ?? '').trim()
-    try {
-      if (!text) {
-        const queue = (await readWorkflow($)).later
-        $.ui.log(queue.length ? `clm later queue:\n${queue.map((item, i) => `${i + 1}. ${item}`).join('\n')}` : 'clm: later queue is empty')
-      } else if (text === 'drop' || text.startsWith('drop ')) {
-        const target = text.slice(4).trim()
-        if (!target || (target !== 'all' && !/^\d+$/.test(target))) {
-          $.ui.log('clm: usage /later drop <n|all>')
-        } else {
-          const dropped = await changeWorkflow($, current => {
-            if (target === 'all') return { next: { ...current, later: [] }, result: current.later.length }
-            const index = Number(target)
-            if (index < 1 || index > current.later.length) return { next: current, result: 0 }
-            return { next: { ...current, later: current.later.filter((_, i) => i !== index - 1) }, result: 1 }
-          })
-          $.ui.log(dropped ? `clm: dropped ${dropped} later item${dropped === 1 ? '' : 's'}` : 'clm: no such later item')
-        }
-      } else {
-        const count = await changeWorkflow($, current => ({ next: { ...current, later: [...current.later, text] }, result: current.later.length + 1 }))
-        $.ui.log(`clm: queued later item ${count}`)
-      }
-    } catch (err) {
-      $.ui.log(`clm: later command failed (${String(err).slice(0, 160)})`, { to: 'debug' })
-    }
-    return {}
   })
 
   // Printed through ui.log, which the engine draws as a notice and never sends
@@ -1483,6 +1519,8 @@ export const register: Register = (on, options) => {
         $.ui.log(`clm: resume reset failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       }
     }
-    return next(e)
+    const submitted = await next(e)
+    if (isHumanOrigin(e.origin)) void recordPromptIntent($, e.text)
+    return submitted
   })
 }

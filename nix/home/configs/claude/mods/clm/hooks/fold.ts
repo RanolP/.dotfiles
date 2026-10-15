@@ -53,8 +53,9 @@ export const stripReminders = (text: string) => text.replace(REMINDER, '').trim(
 // a session driven by hand-backs keeps its fold boundaries, but they are not
 // the user speaking, so they are neither citable as the user nor instructions.
 const HARNESS_TEXT = /^(?:Another Claude session sent a message:|Base directory for this skill: )/
+export const isHarnessText = (text: string) => HARNESS_TEXT.test(text)
 /** A prompt the user wrote: what may be quoted as the user and kept under 사용자 지시. */
-export const isUserTyped = (m: SessionMessage) => isPrompt(m) && !HARNESS_TEXT.test(stripReminders(m.text))
+export const isUserTyped = (m: SessionMessage) => isPrompt(m) && !isHarnessText(stripReminders(m.text))
 
 // A ledger row ahead of every prompt means the first request was already
 // folded away; the ledger then marks the head, and buildCleared replaces it.

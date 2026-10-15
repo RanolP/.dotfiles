@@ -5,13 +5,17 @@ import type { RenderPropsOf, SessionCompactResult, SessionMessage, ToolCallInput
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, STEP_SYSTEM, submitWithRecovery, trackIssue } from './register'
 import type { Meta } from './register'
+import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM } from './ledger'
-import { parseLog, snapshot, toEvents } from './tracker'
+import { focusOf, parseLog, snapshot, toEvents } from './tracker'
 
 const M = (role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) =>
   ({ role, text, toolUses: [], ...extra }) as any
+const intentReply = (fields: Record<string, unknown> = {}) => JSON.stringify({
+  intent: 'continue', target: null, title: null, rule: null, later: [], laterDrop: [], ...fields,
+})
 const use = (id: string, tool: string) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input: { id }, text: 'ok' }] })
 const res = (id: string, text: string) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError: false }] })
 const BIG = 'x'.repeat(4000) // ~1000 tokens
@@ -41,10 +45,10 @@ const est = (m: any) => Math.ceil((m.text.length + m.toolUses.reduce((k: number,
 const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 
-type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[] }
+type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; intentReplies?: (string | Error)[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[] }
 function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -67,6 +71,12 @@ function bottoms(on: any, s: State) {
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
   // The merge call answers from s.replies, the turn-time change call from s.turnReplies.
   on('model.complete', async (_$: any, e: any) => {
+    if (e.system === INTENT_SYSTEM) {
+      seen.intentPrompts.push(e.prompt)
+      const text = s.intentReplies?.shift() ?? intentReply()
+      if (text instanceof Error) throw text
+      return { value: { isAnswered: true, text, usage: {} } }
+    }
     if (e.system === STEP_SYSTEM) {
       seen.stepPrompts.push(e.prompt)
       if (s.stepDelay) await clock.sleep(s.stepDelay)
@@ -1341,38 +1351,41 @@ test('a drop lands only on a user quote, and a failed review holds it for the ne
 })
 
 const runClm = ($: { command: { run(e: { command: string; args: string }): Promise<unknown> } }, args: string) => $.command.run({ command: 'clm', args })
-const runWorkflowCommand = ($: any, _command: 'later', args = '') => $.command.run({ command: 'later', args })
-
 const LATER_BAND_PROPS: RenderPropsOf['AbovePrompt'] = {
   hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {},
 }
 
-// Regression caught: a queued follow-up lived in module memory and disappeared when session hooks rebound, or could not be dropped by its displayed position.
-test('the later queue stays in session state and supports list, positional drop, and all', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [] })
+const waitForLog = async (seen: { logs: string[] }, message: string) => {
+  for (let i = 0; i < 50 && !seen.logs.includes(message); i++)
+    await new Promise(resolve => setTimeout(resolve, 5))
+}
+
+// Regression caught: chat deferrals disappeared when session hooks rebound instead of remaining visible in the numbered band.
+test('chat deferrals stay in session state and the band numbers them', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], intentReplies: [intentReply({ later: ['Check the release notes', 'Verify the changelog'] })],
+  })
   await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true })
-  await runWorkflowCommand($, 'later', 'Check the release notes')
+  await $.prompt.submit({ text: 'Check the release notes and verify the changelog later', origin: { kind: 'composer' } } as any)
+  await waitForLog(seen, 'clm: queued later item 2')
+  expect(seen.logs).toContain('clm: queued later item 1')
+  expect(seen.logs).toContain('clm: queued later item 2')
   await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true })
-  await runWorkflowCommand($, 'later', 'Verify the changelog')
-  await runWorkflowCommand($, 'later')
-  expect(seen.logs.at(-1)).toContain('1. Check the release notes')
-  expect(seen.logs.at(-1)).toContain('2. Verify the changelog')
   const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
-  expect(JSON.stringify(await band.drawn())).toContain('Check the release notes')
-  expect(JSON.stringify(await band.drawn())).toContain('Verify the changelog')
-  await runWorkflowCommand($, 'later', 'drop 1')
-  await runWorkflowCommand($, 'later')
-  expect(seen.logs.at(-1)).toContain('1. Verify the changelog')
-  expect(seen.logs.at(-1)).not.toContain('Check the release notes')
-  await runWorkflowCommand($, 'later', 'drop all')
-  await runWorkflowCommand($, 'later')
-  expect(seen.logs.at(-1)).toBe('clm: later queue is empty')
+  const drawn = JSON.stringify(await band.drawn())
+  expect(drawn).toContain('1. Check the release notes')
+  expect(drawn).toContain('2. Verify the changelog')
+  expect(drawn.indexOf('Check the release notes')).toBeLessThan(drawn.indexOf('Verify the changelog'))
 })
 
 // Regression caught: queue continuations lost asUser or repeated after duplicate completion events.
 test('the continuation arbiter submits the later queue once per turn', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [] })
-  await runWorkflowCommand($, 'later', 'Run the focused verification')
+  const seen = bottoms(on, {
+    rows: [], replies: [], intentReplies: [intentReply({ later: ['Run the focused verification'] })],
+  })
+  await $.prompt.submit({ text: 'Run the focused verification later', origin: { kind: 'composer' } } as any)
+  await waitForLog(seen, 'clm: queued later item 1')
+  seen.submissions.length = 0
   const end = (turnId: string, extra: Record<string, unknown> = {}) => $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId, reason: 'answer', ...extra } as any)
   await end('t1', { isAborted: true })
   await end('t-agent', { agentId: 'agent-1' })
@@ -1383,6 +1396,89 @@ test('the continuation arbiter submits the later queue once per turn', OPTS, asy
   await end('t2')
   await end('t2')
   expect(seen.submissions).toEqual([{ text: 'Run the focused verification', asUser: true }])
+})
+
+// Regression caught: a hand-back fabricated a handoff in the main session.
+test('intent classification skips harness hand-backs but records a composer prompt', OPTS, async ($, on) => {
+  const s: State = {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({ intent: 'handoff', title: 'Fix the build' })],
+  }
+  const seen = bottoms(on, s)
+  await $.prompt.submit({ text: 'Another Claude session sent a message: the review is complete', origin: { kind: 'composer' } } as any)
+  expect(seen.intentPrompts).toEqual([])
+
+  await $.prompt.submit({ text: 'Please fix the build', origin: { kind: 'composer' } } as any)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(seen.intentPrompts.length).toBe(1)
+  const trackerFile = '/home/t/.claude-work/tracker/events/s1.jsonl'
+  let events = (seen.files[trackerFile] ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  for (let i = 0; i < 20 && !events.some(event => event.op === 'focus'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+    events = (seen.files[trackerFile] ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  }
+  expect(events.some(event => event.op === 'focus' && event.origin.session === 's1' && event.stack.length === 1)).toBe(true)
+})
+
+// Regression caught: a hallucinated target id created a phantom stack entry.
+test('an unknown classifier target writes no tracker events', OPTS, async ($, on) => {
+  const s: State = {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({ intent: 'handoff', target: 'ghost-1' })],
+  }
+  const seen = bottoms(on, s)
+  await $.prompt.submit({ text: 'Switch to the missing issue', origin: { kind: 'composer' } } as any)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(seen.intentPrompts.length).toBe(1)
+  expect(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl']).toBeUndefined()
+  expect(seen.logs.some(line => line.includes('unknown target id ghost-1'))).toBe(true)
+})
+
+// Regression caught: a chat deferral was silently dropped instead of being queued alongside the active focus label.
+test('a mixed chat queues exactly its deferred part and still applies its focus label', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [], intentReplies: [intentReply({ intent: 'handoff', title: 'A 고쳐', later: ['B 고쳐'] })],
+  })
+  await $.prompt.submit({ text: 'A 고쳐, B는 나중에', origin: { kind: 'composer' } } as any)
+  await waitForLog(seen, 'clm: queued later item 1')
+  const events = parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? '')
+  const focus = focusOf(events, 's1')
+  const focusedIssue = snapshot(events).find(issue => issue.id === focus.stack.at(-1))
+  expect(focusedIssue?.title).toBe('A 고쳐')
+  expect(focusedIssue?.status).toBe('doing')
+})
+
+// Regression caught: a later item re-queued itself forever when the arbiter replayed it as a plugin continuation.
+test('a replayed later continuation is not classified', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [], intentReplies: [intentReply({ intent: 'pending', title: 'Run the focused verification', later: ['Run the focused verification'] })],
+  })
+  await $.prompt.submit({ text: 'Run the focused verification later', origin: { kind: 'composer' } } as any)
+  await waitForLog(seen, 'clm: queued later item 1')
+  await $.turn.complete({ ...TURN, turnId: 'later-replay-turn' })
+  expect(seen.submissions).toContainEqual({ text: 'Run the focused verification', asUser: true })
+  expect(seen.intentPrompts).toHaveLength(1)
+})
+
+// Regression caught: chat removal deleted the wrong queued item or changed the order of the remaining requests.
+test('a chat drop removes exactly the named item and keeps the rest in order', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [], intentReplies: [
+      intentReply({ later: ['first request', 'second request', 'third request'] }),
+      intentReply({ laterDrop: [2] }),
+    ],
+  })
+  await $.prompt.submit({ text: 'Do these later: first request, second request, third request', origin: { kind: 'composer' } } as any)
+  await waitForLog(seen, 'clm: queued later item 3')
+  await $.prompt.submit({ text: 'later 2번 빼', origin: { kind: 'composer' } } as any)
+  await waitForLog(seen, 'clm: dropped later item 2: second request')
+  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
+  const drawn = JSON.stringify(await band.drawn())
+  expect(drawn).toContain('1. first request')
+  expect(drawn).toContain('2. third request')
+  expect(drawn.indexOf('first request')).toBeLessThan(drawn.indexOf('third request'))
+  expect(drawn).not.toContain('second request')
+  expect(seen.logs).toContain('clm: dropped later item 2: second request')
 })
 
 // Regression caught: a failed continuation submission consumed the queue head and blocked retrying the same turn.

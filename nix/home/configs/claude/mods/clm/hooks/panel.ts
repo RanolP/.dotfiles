@@ -201,6 +201,39 @@ async function createChildTask(
   return taskId
 }
 
+export const FOCUS_HINT = 'Call clm_task with status "doing" and a title, or the id of an open task, to focus one.'
+
+// The intent classifier writes main's focus only from a user prompt it can
+// classify; a session driven by harness text (a cross-session message, a
+// resume) gets none, and without this the main agent could neither own a
+// task nor spawn a worker.
+async function focusMainTask(
+  io: PanelIo, origin: Origin, input: ClmTaskInput, focus: FocusState,
+  roots: Readonly<Record<string, string>>, byId: ReadonlyMap<string, Issue>,
+): Promise<{ result: string }> {
+  if (input.status !== 'doing') return { result: `clm_task: the main agent has no focused task to own. ${FOCUS_HINT}` }
+  let taskId: string | undefined
+  if (input.id !== undefined) {
+    const target = byId.get(input.id)
+    if (!target) return { result: `clm_task: issue ${input.id} does not exist in this session.` }
+    if (!isOpen(target)) return { result: `clm_task: issue ${target.id} is ${target.status}; focus an open task or create one with a title.` }
+    const owner = taskOwner(target.id, [], roots, byId)
+    if (owner) return { result: `clm_task: issue ${target.id} belongs to ${taskOwnerName(owner)}.` }
+    taskId = target.id
+    const note = input.note?.trim()
+    await io.append([{ op: 'status', issue: taskId, status: 'doing' }, ...(note ? [{ op: 'note' as const, issue: taskId, text: note }] : [])], origin)
+  } else {
+    const title = input.title?.trim()
+    if (!title) return { result: `clm_task: the main agent has no focused task to own. ${FOCUS_HINT}` }
+    const note = input.note?.trim()
+    const created = await io.append([{ op: 'create', title, status: 'doing', ...(note ? { note } : {}) }], origin)
+    taskId = created.find(event => event.op === 'create')?.issue
+    if (!taskId) return { result: 'clm_task: task creation did not return an issue id.' }
+  }
+  await io.append([{ op: 'focus', stack: [taskId], pending: focus.pending.filter(id => id !== taskId), intent: 'continue' }], origin)
+  return { result: `clm_task: ${taskId} doing; now the main agent's focus.` }
+}
+
 export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: string): Promise<{ result: string } | { deny: string }> {
   const origin = await io.captureOrigin()
   const events = await io.readAll()
@@ -209,7 +242,8 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   const focus = focusOf(events, origin.session)
   const roots = await assignedTaskRoots(io, origin.session)
   const ownRoot = agentId ? roots[agentId] : focus.stack.at(-1)
-  if (!ownRoot) return { result: agentId ? `clm_task: subagent ${agentId} has no task assigned by the harness.` : 'clm_task: the main agent has no focused task to own.' }
+  if (!ownRoot && !agentId) return focusMainTask(io, origin, input, focus, roots, byId)
+  if (!ownRoot) return { result: `clm_task: subagent ${agentId} has no task assigned by the harness.` }
   const ownRootOwner = taskOwner(ownRoot, focus.stack, roots, byId)
   if (ownRootOwner !== (agentId ?? 'main')) return { result: `clm_task: ${ownRoot} belongs to ${taskOwnerName(ownRootOwner)}.` }
   const target = input.id === undefined ? undefined : byId.get(input.id)
@@ -252,7 +286,8 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
 export async function mirrorModelTask(io: Pick<PanelIo, 'captureOrigin' | 'readAll' | 'append'>, event: ModelTaskCall): Promise<Mirrored> {
   const origin = await io.captureOrigin()
   const issues = snapshot(await io.readAll())
-  const byTask = (taskId: string) => issues.find(issue => issue.origin.session === origin.session && issue.taskId === taskId)
+  // The deny text names clm's issue id, so a TaskUpdate may carry either id.
+  const byTask = (taskId: string) => issues.find(issue => issue.origin.session === origin.session && (issue.taskId === taskId || issue.id === taskId))
   const recordedAs = async (id: string | undefined, unrecorded: string[]): Promise<Mirrored> => {
     const after = id === undefined ? undefined : snapshot(await io.readAll()).find(issue => issue.id === id)
     return { recorded: after ? [after] : [], unrecorded }

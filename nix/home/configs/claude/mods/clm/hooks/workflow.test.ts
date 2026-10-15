@@ -431,6 +431,36 @@ test('a subagent cannot update a main-owned task', OPTS, async ($, on) => {
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-root')?.status).toBe('doing')
 })
 
+// Regression caught: with no classifier-written focus, clm_task, TaskUpdate and the spawn gate left main no way to own a task or spawn.
+test('a main agent with no focus can focus a task through clm_task and then spawn', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Implement it.')], replies: [] })
+  panelHandlers(on, seen)
+  on('agent.spawn', () => ({ model: 'haiku', agentId: 'worker' }))
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  const denied = await $.agent.spawn({ prompt: 'Implement.', description: 'impl' })
+  expect('deny' in denied && denied.deny).toContain('clm_task with status "doing"')
+  await $.tool.call({ tool: 'TaskCreate', subject: 'planned step', description: 'p' })
+  const planned = issueAt(tracker(), 0)
+  await $.tool.call({ tool: 'TaskUpdate', taskId: planned, subject: 'planned step renamed' })
+  expect(tracker().find(issue => issue.id === planned)?.title).toBe('planned step renamed')
+  const focused = await $.tool.call({ tool: TASK_TOOL, id: planned, status: 'doing' } satisfies ToolCallInput)
+  expect(focused.result).toContain(`${planned} doing`)
+  const spawned = await $.agent.spawn({ prompt: 'Implement.', description: 'impl' })
+  expect('deny' in spawned).toBe(false)
+  expect(tracker().find(issue => issue.title === 'impl')?.parent).toBe(planned)
+})
+
+test('a main agent with no focus can create and focus a task by title', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Implement it.')], replies: [] })
+  const created = await $.tool.call({ tool: TASK_TOOL, title: 'fresh root', status: 'doing' } satisfies ToolCallInput)
+  const root = snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'fresh root')
+  expect(root?.status).toBe('doing')
+  expect(created.result).toContain(`${root?.id} doing`)
+  const child = await $.tool.call({ tool: TASK_TOOL, title: 'child step', status: 'doing' } satisfies ToolCallInput)
+  expect('deny' in child).toBe(false)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'child step')?.parent).toBe(root?.id)
+})
+
 // Regression caught: concurrent agent spawns overwrote task ownership or left an ended agent's root assigned.
 test('parallel spawns keep separate child tasks and clear each root when its agent ends', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [M('user', 'Delegate two checks.')], replies: [] })

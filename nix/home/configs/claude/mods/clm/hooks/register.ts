@@ -1,6 +1,6 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields } from './events'
-import { assignedTaskRoots, createAgentTaskRoot, removeAgentTaskRoot, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignedTaskRoots, createAgentTaskRoot, FOCUS_HINT,removeAgentTaskRoot, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
@@ -520,7 +520,7 @@ export const register: Register = (on, options) => {
     const origin = await captureOrigin($)
     const roots = await assignedTaskRoots(io, origin.session)
     const parent = e.parentAgentId === undefined ? focusOf(await readAll($), origin.session).stack.at(-1) : roots[e.parentAgentId]
-    if (!parent) return { deny: `clm: ${e.parentAgentId ? `agent ${e.parentAgentId}` : 'the main agent'} needs an assigned task before spawning a child agent.` }
+    if (!parent) return { deny: e.parentAgentId ? `clm: agent ${e.parentAgentId} needs an assigned task before spawning a child agent.` : `clm: the main agent needs a focused task before spawning a child agent. ${FOCUS_HINT}` }
     const spawned = await next(e)
     if (!spawned.agentId) return spawned
     await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)

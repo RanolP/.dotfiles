@@ -193,10 +193,14 @@ const panelIo = ($: EngineInterface): PanelIo => ({
   now: () => kst(),
   log: (text, options) => $.ui.log(text, options),
 })
+const clmStatusIo = ($: StatusReader) => ({
+  readWorkflow: () => readWorkflow($), readMeta: () => readMeta($), readAll: () => readAll($),
+  sessionId: () => $.session.id(), ledgerPath: () => ledgerPath($), storeGet: (key: string) => $.store.get(key),
+})
 const syncPanelSafely = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => syncPanelDomain(panelIo($), origin, events)
 const projectPanel = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => panelIo($).serialize(origin.session, () => syncPanelSafely($, origin, events))
 export const sessionIssues = ($: EngineInterface, query: { issue?: string; status?: Issue['status'] } = {}) => panelIssues(panelIo($), query)
-export const clmStatus = ($: StatusReader) => panelStatus(panelIo($))
+export const clmStatus = ($: StatusReader) => panelStatus(clmStatusIo($))
 export const trackIssue = ($: EngineInterface, input: { title: string; status: Issue['status']; issue?: string }) => trackPanelIssue(panelIo($), input)
 export { isHeld, type Held }
 

@@ -188,26 +188,34 @@ function fleetRows({ Box, Text }: Elements, state: DashDashboardState, width: nu
   )
 }
 
-function clmStatusRows({ Box, Text }: Elements, status: ClmStatus, current: number) {
+function clmStatusRows({ Box, Text }: Elements, status: ClmStatus, current: number, width: number) {
   return (
     <Box flexDirection="column">
+      <Text>{clip(status.focus
+        ? `Focus: ${status.focus.title} (${status.focus.status}) · depth ${status.stackDepth}`
+        : 'Focus: none', width)}</Text>
+      <Text>{clip(`Pending: ${status.pending.map(item => item.title).join(', ') || 'none'}`, width)}</Text>
+      <Text>Agents:</Text>
+      {status.agents.length === 0
+        ? <Text dimColor>none</Text>
+        : status.agents.map(agent => <Text key={agent.agentId}>{clip(`${agent.agentId.slice(0, 8)} → ${agent.title} (${agent.status})`, width)}</Text>)}
       <Text>Later queue:</Text>
       {status.later.length === 0
         ? <Text dimColor>none</Text>
-        : status.later.map((item, index) => <Text key={`later-${index}`}>{`${index + 1}. ${item.text}`}</Text>)}
-      <Text>{`Pending resume: ${status.resumeRequest?.text ?? 'none'}`}</Text>
-      <Text>{`Last fold: ${status.lastFoldAt === null ? 'never' : `${durationLabel(Math.max(0, current - status.lastFoldAt))} ago`}`}</Text>
-      <Text>{`Open issues: ${status.openIssues}`}</Text>
-      <Text>{`Ledger: ${status.ledgerPath}`}</Text>
+        : status.later.map((item, index) => <Text key={`later-${index}`}>{clip(`${index + 1}. ${item.text}`, width)}</Text>)}
+      <Text>{clip(`Pending resume: ${status.resumeRequest?.text ?? 'none'}`, width)}</Text>
+      <Text>{clip(`Last fold: ${status.lastFoldAt === null ? 'never' : `${durationLabel(Math.max(0, current - status.lastFoldAt))} ago`}`, width)}</Text>
+      <Text>{clip(`Open issues: ${status.openIssues}`, width)}</Text>
+      <Text>{clip(`Ledger: ${status.ledgerPath}`, width)}</Text>
     </Box>
   )
 }
 
-function clmRows(elements: Elements, state: DashDashboardState) {
+function clmRows(elements: Elements, state: DashDashboardState, width: number) {
   const { Text } = elements
-  if (state.clm === null) return <Text dimColor>Loading clm status…</Text>
-  if ('error' in state.clm) return <Text>{`clm is unavailable: ${state.clm.error.replace(/\s+/g, ' ')}`}</Text>
-  return clmStatusRows(elements, state.clm.status, state.now)
+  if (state.clm === null) return <Text dimColor>{clip('Loading clm status…', width)}</Text>
+  if ('error' in state.clm) return <Text>{clip(`clm is unavailable: ${state.clm.error.replace(/\s+/g, ' ')}`, width)}</Text>
+  return clmStatusRows(elements, state.clm.status, state.now, width)
 }
 
 export const register: Register = on => {
@@ -306,7 +314,7 @@ export const register: Register = on => {
         <Text bold>Fleet</Text>
         {fleetRows(elements, state, width)}
         <Text bold>Clm</Text>
-        {clmRows(elements, state)}
+        {clmRows(elements, state, width)}
       </Box>
     )
   })

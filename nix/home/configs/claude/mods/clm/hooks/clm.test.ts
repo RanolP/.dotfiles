@@ -3,6 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
+import { clmStatus as readClmStatus } from './panel'
 import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallTranscriptAddress, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
@@ -86,12 +87,60 @@ test('the clm status noun reports its read-only session view', async () => {
   } satisfies Parameters<typeof clmStatus>[0]
 
   expect(await clmStatus(engine)).toEqual({
+    focus: null,
+    stackDepth: 0,
+    pending: [],
+    agents: [],
     later: [{ text: 'review the release' }],
     resumeRequest: { text: 'continue the audit' },
     lastFoldAt: 1_791_926_400_000,
     ledgerPath: '/home/t/.claude-work/plans/clm-status-session.md',
     openIssues: 3,
   })
+})
+
+// Regression caught: clm status omitted the main focus stack, pending work, and live subagent roots.
+test('clm status names the focus top, stack depth, pending and live subagent tasks', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [],
+    intentReplies: [
+      intentReply({ intent: 'handoff', title: 'Main task' }),
+      intentReply({ intent: 'interleave', title: 'Focused subtask' }),
+      intentReply({ intent: 'pending', title: 'Deferred task', later: ['Deferred task'] }),
+    ],
+  })
+  const agentId = 'worker-agent-123456'
+  on('agent.spawn', () => ({ model: 'haiku', agentId }))
+  const submit = async (text: string, notice: string) => {
+    await $.prompt.submit(promptInput(text))
+    await waitForLog(seen, notice)
+  }
+  await submit('Start the main task', '주 작업 초점 갱신 (handoff)')
+  await submit('Do a focused subtask', '주 작업 초점 갱신 (interleave)')
+  await submit('Do the deferred task later', '주 작업 초점 갱신 (pending)')
+
+  const spawned = await $.agent.spawn({ prompt: 'Run the focused checks', description: 'Agent checks' })
+  if ('deny' in spawned || !spawned.agentId) throw new Error('worker did not spawn')
+  const root = snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'Agent checks')
+  if (!root) throw new Error('spawned worker has no assigned task root')
+  const started = await $.tool.call({ tool: TASK_TOOL, id: root.id, status: 'doing', agentId: spawned.agentId } satisfies ToolCallInput)
+  if ('deny' in started) throw new Error(started.deny)
+
+  const status = await readClmStatus({
+    readWorkflow: async () => workflow(),
+    readMeta: async () => ({}),
+    readAll: async () => parseLog(seen.files[TRACKER] ?? ''),
+    sessionId: async () => 's1',
+    ledgerPath: async () => LEDGER_FILE,
+    storeGet: async key => seen.store[key],
+  })
+  const focusId = focusOf(parseLog(seen.files[TRACKER] ?? ''), 's1').stack.at(-1)
+  expect(status.focus).toEqual({ id: focusId, title: 'Focused subtask', status: 'doing' })
+  expect(status.stackDepth).toBe(2)
+  expect(status.pending.map(item => item.title)).toEqual(['Deferred task'])
+  expect(status.agents).toEqual([{
+    agentId, taskId: root.id, title: 'Agent checks', status: 'doing',
+  }])
 })
 
 // Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.

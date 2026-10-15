@@ -43,6 +43,10 @@ export type ClmWorkflow = {
 }
 
 export type ClmStatus = {
+  focus: { id: string; title: string; status: 'todo' | 'doing' | 'done' | 'question' | 'uncertain' | 'dropped' } | null
+  stackDepth: number
+  pending: Array<{ id: string; title: string }>
+  agents: Array<{ agentId: string; taskId: string; title: string; status: 'todo' | 'doing' | 'done' | 'question' | 'uncertain' | 'dropped' }>
   later: ClmLaterItem[]
   resumeRequest: { text: string } | null
   lastFoldAt: number | null

@@ -103,12 +103,27 @@ export async function sessionIssues(io: Pick<PanelIo, 'captureOrigin' | 'readAll
     && (query.status === undefined || issue.status === query.status))
 }
 
-export async function clmStatus(io: Pick<PanelIo, 'readWorkflow' | 'readMeta' | 'readAll' | 'sessionId' | 'ledgerPath'>): Promise<ClmStatus> {
+export async function clmStatus(io: Pick<PanelIo, 'readWorkflow' | 'readMeta' | 'readAll' | 'sessionId' | 'ledgerPath' | 'storeGet'>): Promise<ClmStatus> {
   const [workflow, meta, events, session, path] = await Promise.all([
     io.readWorkflow(), io.readMeta(), io.readAll(), io.sessionId(), io.ledgerPath(),
   ])
   const issues = snapshot(events).filter(issue => issue.origin.session === session)
+  const byId = new Map(issues.map(issue => [issue.id, issue]))
+  const focusState = focusOf(events, session)
+  const focusId = focusState.stack.at(-1)
+  const focusIssue = focusId === undefined ? undefined : byId.get(focusId)
+  const taskRoots = await assignedTaskRoots(io, session)
   return {
+    focus: focusIssue ? { id: focusIssue.id, title: focusIssue.title, status: focusIssue.status } : null,
+    stackDepth: focusState.stack.length,
+    pending: focusState.pending.flatMap(id => {
+      const issue = byId.get(id)
+      return issue ? [{ id: issue.id, title: issue.title }] : []
+    }),
+    agents: Object.entries(taskRoots).flatMap(([agentId, taskId]) => {
+      const issue = byId.get(taskId)
+      return issue ? [{ agentId, taskId, title: issue.title, status: issue.status }] : []
+    }),
     later: workflow.later.map(item => ({ ...item })),
     resumeRequest: workflow.resumeRequest ? { ...workflow.resumeRequest } : null,
     lastFoldAt: meta.lastFoldAt ?? null,

@@ -102,6 +102,26 @@ test('the main session ticker reopens dash without focus after unload', async ($
 test('one pane stacks Usage, Fleet and Clm sections with no tabs and no context line', async ($, on) => {
   mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
+  const status: Awaited<ReturnType<Engine['clm']['status']>> = {
+    focus: { id: 's1-2', title: 'Focused task', status: 'doing' },
+    stackDepth: 3,
+    pending: [{ id: 's1-3', title: 'Pending task with a long title that should be clipped at the pane width' }],
+    agents: [{ agentId: 'worker-agent-123456', taskId: 's1-4', title: 'Agent task', status: 'doing' }],
+    later: [{ text: 'Later task' }],
+    resumeRequest: { text: 'Resume task' },
+    lastFoldAt: null,
+    ledgerPath: '/tmp/clm-ledger.md',
+    openIssues: 4,
+  }
+  on('engine.create', async (_$: any, e: any, next: any) => ({
+    ...(await next(e)),
+    clm: {
+      track: () => { throw new Error('test clm.track base') },
+      issues: () => { throw new Error('test clm.issues base') },
+      resume: () => { throw new Error('test clm.resume base') },
+      status: async () => status,
+    },
+  }))
   on('session.usage', () => ({ value: {
     startedAt: 0,
     context: { window: 100_000, tokens: 25_000, percent: 25 },
@@ -114,6 +134,14 @@ test('one pane stacks Usage, Fleet and Clm sections with no tabs and no context 
   for (const header of ['Usage', 'Fleet', 'Clm']) expect(await ui.find({ type: 'Text', text: header })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '5h 40% @12:00Z' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Cost $1.50' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Focus: Focused task (doing) · depth 3' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Pending: .+…/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Agents:' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'worker-a → Agent task (doing)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1. Later task' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Pending resume: Resume task' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Open issues: 4' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Ledger: /tmp/clm-ledger.md' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /Context/ })).toBeUndefined()
   expect(await ui.find({ type: 'Button' })).toBeUndefined()
 })

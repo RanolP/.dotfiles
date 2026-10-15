@@ -245,7 +245,7 @@ function clmHead(state: DashDashboardState, width: number): { text: string, dim:
   if (state.clm === null) return { text: clip('▸ Loading clm status…', width), dim: true }
   if ('error' in state.clm) return { text: clip(`▸ clm is unavailable: ${state.clm.error.replace(/\s+/g, ' ')}`, width), dim: false }
   const { status } = state.clm
-  const focus = status.focus ? `${status.focus.title} (${status.focus.status})` : 'no focus'
+  const focus = status.focus ? `${status.focus.title}${status.focus.status === 'doing' ? '' : ` (${status.focus.status})`}` : 'no focus'
   const depth = status.focus && status.stackDepth > 1 ? ` · depth ${status.stackDepth}` : ''
   return { text: clip(`▸ ${focus}${depth} · later ${status.later.length} · issues ${status.openIssues}`, width), dim: false, status }
 }

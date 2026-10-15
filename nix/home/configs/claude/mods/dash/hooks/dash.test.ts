@@ -163,7 +163,7 @@ test('one pane stacks Usage rows and the Work head line with no tabs and no head
   const ui = await mountPane($)
   for (const removed of [/^── /, /^Focus /, /^Agents /, /^No subagents yet/]) expect(await ui.find({ type: 'Text', text: removed })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '5h 40% \u{F0450} in 2h13m' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '▸ Focus (doing) · depth 3 · later 1 · issues 4' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ Focus · depth 3 · later 1 · issues 4' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^  Pending  .+…/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '  Resume  Resume task' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '  · worker-a Agent task (doing)' })).toBeDefined()
@@ -210,7 +210,7 @@ test('the head line carries later and issues', async ($, on) => {
   await start($)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (doing) · later 2 · issues 1' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 · later 2 · issues 1' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^(Later|Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
 })
 
@@ -335,4 +335,21 @@ test('the head line has no fold segment', async ($, on) => {
   const ui = await mountPane($)
   expect(await ui.find({ type: 'Text', text: /^▸ no focus · later 0 · issues 0$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /fold/ })).toBeUndefined()
+})
+
+// Regression: the always-true doing label returned, or a non-doing status such as uncertain got hidden with it.
+test('the head line hides a doing focus status but shows any other', async ($, on) => {
+  on('session.start', () => ({ cwd: '/work' }))
+  let status: 'doing' | 'uncertain' = 'doing'
+  const clock = mock.clock(on, { now: 1_000 })
+  withClm(on, async () => ({ ...emptyStatus, focus: { id: 's1', title: 'dash 디자인', status } }))
+  await start($)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 · later 0 · issues 0' })).toBeDefined()
+  await ui.unmount()
+  status = 'uncertain'
+  await clock.advance(15_000)
+  const again = await mountPane($)
+  expect(await again.find({ type: 'Text', text: '▸ dash 디자인 (uncertain) · later 0 · issues 0' })).toBeDefined()
 })

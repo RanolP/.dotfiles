@@ -411,7 +411,7 @@ in
       # time-budget gates every tool on an estimate and stops the work at the
       # budget: checkpoint reports at 1/3, 1/2, 2/3, 5/6, then abort past 6/6.
       ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
-      # dash: /dash opens one pane with Usage, Context and Fleet tabs.
+      # dash: one auto-opened pane stacking Usage (limits, cost, context, duration, lines), Fleet and Clm.
       ".claude/mods/dash".source = ./configs/claude/mods/dash;
       # tool-compose: the exec tool runs a script whose tools.* calls relay to
       # $.tool.call; the child runs under sandbox-exec + node --permission.

@@ -17,11 +17,6 @@ EFFORT=$(echo "$input" | jq -r '.effort.level // empty')
 THINKING=$(echo "$input" | jq -r '.thinking.enabled // false')
 DIR=$(echo "$input" | jq -r '.workspace.current_dir')
 SESSION_ID=$(echo "$input" | jq -r '.session_id')
-PCT=$(echo "$input" | jq -r '.context_window.used_percentage // 0' | cut -d. -f1)
-COST=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
-DURATION_MS=$(echo "$input" | jq -r '.cost.total_duration_ms // 0')
-LINES_ADDED=$(echo "$input" | jq -r '.cost.total_lines_added // 0')
-LINES_REMOVED=$(echo "$input" | jq -r '.cost.total_lines_removed // 0')
 FIVE_H=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 FIVE_H_RESET=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
 WEEK=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
@@ -145,37 +140,9 @@ printf '%s%s%s\n' "$L1L" "$PAD1" "$L1R"
 
 # ── LINE 2 ────────────────────────────────────────────────────────────────────
 
-[ -z "$PCT" ] && PCT=0
+# Cost, context, lines and duration live in the dash pane.
 
-if [ "$PCT" -ge 80 ]; then BAR_C="$R"
-elif [ "$PCT" -ge 60 ]; then BAR_C="$O"
-elif [ "$PCT" -ge 40 ]; then BAR_C="$Y"
-else BAR_C="$G"
-fi
-
-COST_FMT=$(printf '$%.2f' "$COST")
 RL_ICON=$(printf '\xf3\xb0\x91\x90')
-
-# Left: used $cost with N% contexts
-L2L="${GR}used ${RS}${Y}${COST_FMT}${RS}${GR} with ${RS}${BAR_C}${PCT}%${RS}${GR} contexts${RS}"
-L2L_W=$((5 + ${#COST_FMT} + 6 + ${#PCT} + 10))
-
-# Right: +added -removed  Xm Ys
-DUR_SEC=$((DURATION_MS / 1000))
-MINS=$((DUR_SEC / 60))
-SECS=$((DUR_SEC % 60))
-DUR="${MINS}m ${SECS}s"
-ADDED_STR="+${LINES_ADDED}"
-REMOVED_STR="-${LINES_REMOVED}"
-L2R="${G}${ADDED_STR}${RS} ${R}${REMOVED_STR}${RS} ${GR}${DUR}${RS}"
-L2R_W=$((${#ADDED_STR} + 1 + ${#REMOVED_STR} + 1 + ${#DUR}))
-
-GAP2=$((COLS - L2L_W - L2R_W))
-[ "$GAP2" -lt 1 ] && GAP2=1
-printf -v PAD2 '%*s' "$GAP2" ''
-printf '%s%s%s\n' "$L2L" "$PAD2" "$L2R"
-
-# ── LINE 3 ────────────────────────────────────────────────────────────────────
 
 # 5h rate limit
 if [ -n "$FIVE_H" ]; then

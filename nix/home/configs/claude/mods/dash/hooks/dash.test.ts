@@ -35,6 +35,27 @@ test('a main session start opens the dash pane without focus; a subagent session
   expect(opens).toEqual([{ id: 'dash', title: 'Dash' }])
 })
 
+// Regression: an unasked open waits undrawn below 144 columns, so on a narrow terminal dash never showed until the person's own prompt asked for it.
+test('a prompt the person enters opens dash in the main session; an sdk prompt and a subagent session do not', async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  const opens: string[] = []
+  on('ui.open', (_$, e) => { opens.push(e.id); return { value: { isPlaced: true } } })
+  const submit = (origin: { kind: 'composer' } | { kind: 'sdk' }) => $.prompt.submit({ text: 'hi', wait: false, origin } as never)
+
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true, agentId: 'agent-1' })
+  await submit({ kind: 'composer' })
+  expect(opens).toEqual([])
+
+  await start($)
+  opens.length = 0
+  await submit({ kind: 'sdk' })
+  expect(opens).toEqual([])
+  await submit({ kind: 'composer' })
+  expect(opens).toEqual(['dash'])
+})
+
 // Regression: closing dash removed its only view until the next session.
 test('a person closing the dash pane leaves it open', { plugins: [{
   name: 'close-dash',
@@ -98,8 +119,8 @@ test('the main session ticker reopens dash without focus after unload', async ($
   ])
 })
 
-// Regression: the dashboard was split into tabs and showed context fill, which clm already owns.
-test('one pane stacks Usage, Fleet and Clm sections with no tabs and no context line', async ($, on) => {
+// Regression: the dashboard was split into tabs.
+test('one pane stacks Usage, Fleet and Clm sections with no tabs', async ($, on) => {
   mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
   const status: Awaited<ReturnType<Engine['clm']['status']>> = {
@@ -142,7 +163,6 @@ test('one pane stacks Usage, Fleet and Clm sections with no tabs and no context 
   expect(await ui.find({ type: 'Text', text: 'Pending resume: Resume task' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Open issues: 4' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Ledger: /tmp/clm-ledger.md' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Context/ })).toBeUndefined()
   expect(await ui.find({ type: 'Button' })).toBeUndefined()
 })
 
@@ -158,4 +178,28 @@ test('session start fetches clm status, rendering a logged one-line error when c
   expect(await ui.find({ type: 'Text', text: /Loading clm status/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /clm is unavailable: .+/ })).toBeDefined()
   expect(logs.some(message => message.startsWith('[dash] clm.status:'))).toBe(true)
+})
+
+// Regression: the statusline's second line moved here, so the pane must show context, session duration and edited lines.
+test('Usage shows context, session duration and lines tallied from Edit and Write results', async ($, on) => {
+  mock.clock(on, { now: 601_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.usage', () => ({ value: {
+    startedAt: 1_000,
+    context: { window: 200_000, tokens: 50_000, percent: 25 },
+    rateLimits: [],
+    cost: { usd: 1.5 },
+  } }))
+  const patch = [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 3, lines: [' keep', '-old', '+new', '+extra'] }]
+  on('tool.call', (_$, e: any) => ({ result: e.tool === 'Edit'
+    ? { structuredPatch: patch }
+    : { type: 'create', content: 'a\nb\n', structuredPatch: [] } }) as never)
+  await start($)
+  await $.tool.call({ tool: 'Edit', file_path: '/work/a', old_string: 'old', new_string: 'new' } as never)
+  await $.tool.call({ tool: 'Write', file_path: '/work/b', content: 'a\nb\n' } as never)
+
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: 'Context 25% 50k/200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Session 10m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Lines +4 -1' })).toBeDefined()
 })

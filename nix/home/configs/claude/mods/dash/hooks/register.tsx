@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type {
   DashDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
-import type { TrackedAgent, UsageSnapshot } from '../types'
+import type { LineChanges, TrackedAgent, UsageSnapshot } from '../types'
 import { reconcileAgents, recordCompletion, recordMessage, recordSpawn } from './fleet'
 
 type Elements = ReturnType<EngineInterface['ui']['resolve']>
@@ -12,7 +12,7 @@ const PANE = 'dash'
 const TITLE = 'Dash'
 const REFRESH_MS = 15_000
 const dashboard = atom({ plugin: 'dash', key: 'dashboard' } as const, {
-  now: 0, usage: null, agents: [], clm: null,
+  now: 0, usage: null, lines: { added: 0, removed: 0 }, agents: [], clm: null,
 } satisfies DashDashboardState)
 
 function errorText(error: unknown): string {
@@ -53,10 +53,28 @@ async function change($: EngineInterface, operation: string, fn: (state: DashDas
   }
 }
 
-function snapshot(usage: Pick<SessionUsage, 'rateLimits' | 'cost'>): UsageSnapshot {
+function snapshot(usage: Pick<SessionUsage, 'rateLimits' | 'cost' | 'context'> & Partial<Pick<SessionUsage, 'startedAt'>>): UsageSnapshot {
+  const { window, tokens, percent } = usage.context
   return {
+    context: { window, ...(tokens === undefined ? {} : { tokens }), ...(percent === undefined ? {} : { percent }) },
+    ...(usage.startedAt === undefined ? {} : { startedAt: usage.startedAt }),
     rateLimits: usage.rateLimits.map(({ kind, percentUsed, resetsAt }) => ({ kind, percentUsed, ...(resetsAt ? { resetsAt } : {}) })),
     ...(usage.cost ? { costUsd: usage.cost.usd } : {}),
+  }
+}
+
+// Edit and Write results carry the diff the engine applied; SessionUsage has no line counts, so the dash tallies them.
+function lineChanges(tool: string, result: unknown): LineChanges | undefined {
+  if (tool !== 'Edit' && tool !== 'Write') return undefined
+  const { structuredPatch, type, content, staged } = (result ?? {}) as {
+    structuredPatch?: { lines: string[] }[]; type?: string; content?: string; staged?: boolean
+  }
+  if (staged || !Array.isArray(structuredPatch)) return undefined
+  const lines = structuredPatch.flatMap(hunk => hunk.lines)
+  if (lines.length === 0 && type === 'create' && content) return { added: content.split('\n').length - (content.endsWith('\n') ? 1 : 0), removed: 0 }
+  return {
+    added: lines.filter(line => line.startsWith('+')).length,
+    removed: lines.filter(line => line.startsWith('-')).length,
   }
 }
 
@@ -91,9 +109,19 @@ async function refreshClm($: EngineInterface): Promise<void> {
   }
 }
 
+async function refreshUsage($: EngineInterface): Promise<void> {
+  try {
+    const usage = snapshot(await $.session.usage())
+    await change($, 'usage state update', state => ({ ...state, usage }))
+  } catch (error) {
+    await log($, 'session.usage during refresh', error)
+  }
+}
+
 async function openDash($: EngineInterface, operation: string): Promise<void> {
   try {
-    await $.ui.open({ id: PANE, title: TITLE })
+    const opened = await $.ui.open({ id: PANE, title: TITLE })
+    if (!opened.isPlaced) await log($, operation, `pane not placed: ${opened.reason}`)
   } catch (error) {
     await log($, operation, error)
   }
@@ -108,6 +136,7 @@ function startTicker($: EngineInterface, isMainSession: boolean, timer?: Timer):
         if (current !== undefined) {
           await change($, 'elapsed refresh state update', state => ({ ...state, now: current }))
         }
+        await refreshUsage($)
         await refreshClm($)
         if (isMainSession) await openDash($, 'ui.open dash during refresh')
       })().catch(error => log($, 'elapsed refresh', error))
@@ -160,6 +189,11 @@ function durationLabel(elapsed: number): string {
   return totalMinutes < 60 ? `${totalMinutes}m` : `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`
 }
 
+function contextLabel({ window, tokens, percent }: NonNullable<UsageSnapshot['context']>): string {
+  const k = (value: number) => `${Math.round(value / 1000)}k`
+  return `Context ${percent === undefined ? '—' : `${percent}%`}${tokens === undefined ? '' : ` ${k(tokens)}/${k(window)}`}`
+}
+
 function usageRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   const usage = state.usage
   if (!usage) return <Text dimColor>Usage figures unavailable.</Text>
@@ -169,6 +203,9 @@ function usageRows({ Box, Text }: Elements, state: DashDashboardState, width: nu
         ? <Text dimColor>No rate limits</Text>
         : usage.rateLimits.map(limit => <Text key={limit.kind}>{clip(`${kindLabel(limit.kind)} ${number(limit.percentUsed)}%${resetTime(limit.resetsAt)}`, width)}</Text>)}
       {usage.costUsd === undefined ? null : <Text>{clip(`Cost $${usage.costUsd.toFixed(2)}`, width)}</Text>}
+      {usage.context === undefined ? null : <Text>{clip(contextLabel(usage.context), width)}</Text>}
+      {usage.startedAt === undefined ? null : <Text>{clip(`Session ${durationLabel(Math.max(0, state.now - usage.startedAt))}`, width)}</Text>}
+      <Text>{clip(`Lines +${state.lines.added} -${state.lines.removed}`, width)}</Text>
     </Box>
   )
 }
@@ -232,6 +269,12 @@ export const register: Register = on => {
     return started
   })
 
+  // Opened inside the hook of a prompt the person entered, so the engine counts it as asked and places it at any width.
+  on('prompt.submit', async ($, e, next) => {
+    if (isMainSession && e.origin.kind === 'composer') await openDash($, 'ui.open dash at prompt submit')
+    return next(e)
+  })
+
   on('ui.close', { id: PANE }, async (_$, e, next) => {
     if (e.origin.kind === 'unload') return next(e)
     return { value: undefined }
@@ -244,10 +287,27 @@ export const register: Register = on => {
       await change($, 'session.measure state update', state => ({
         ...state,
         now: measuredAt,
-        usage: snapshot({ rateLimits: e.rateLimits, ...(e.cost === undefined ? {} : { cost: e.cost }) }),
+        usage: snapshot({
+          context: e.context,
+          rateLimits: e.rateLimits,
+          ...(e.cost === undefined ? {} : { cost: e.cost }),
+          ...(state.usage?.startedAt === undefined ? {} : { startedAt: state.usage.startedAt }),
+        }),
       }))
     }
     return result
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const called = await pass($, 'tool.call', () => next(e))
+    const changed = 'result' in called ? lineChanges(e.tool, called.result) : undefined
+    if (changed) {
+      await change($, `tally lines for ${e.tool}`, state => ({
+        ...state,
+        lines: { added: state.lines.added + changed.added, removed: state.lines.removed + changed.removed },
+      }))
+    }
+    return called
   })
 
   on('agent.spawn', async ($, e, next) => {

@@ -169,40 +169,54 @@ def lease_violation(args, d, lookup, head):
     if any(a in ("--all", "--mirror", "--branches") for a in args):
         return ("`--force-with-lease` with --all/--mirror/--branches: the pushed branches "
                 "cannot be enumerated to check their PRs for review comments. Name the "
-                "branch explicitly.")
+                "branch explicitly."), []
     branches, missing = target_branches(pos, d, head)
     if branches is None:
         return (f"`--force-with-lease` to {remote} denied: could not determine the pushed "
                 f"branch ({missing}), so its PR could not be checked for review comments. "
-                "Name the branch as a refspec.")
+                "Name the branch as a refspec."), []
+    notes = []
     for b in branches:
         prs, err = lookup(b, d)
         if err:
             return (f"`--force-with-lease` of `{b}` to {remote} denied: the PR review check "
-                    f"failed, and this guard fails closed. {err}")
+                    f"failed, and this guard fails closed. {err}"), []
         for pr in prs:
-            reviews = others_reviews(pr) if isinstance(pr, dict) else []
+            if not isinstance(pr, dict):
+                continue
+            reviews = others_reviews(pr)
             if reviews:
                 return (f"`--force-with-lease` of `{b}` denied: PR #{pr.get('number')} "
                         f"({pr.get('url')}) has {len(reviews)} review(s). The PR already "
                         "carries review comments; rewriting its history detaches them. "
                         "Push new commits on top instead (fixup commits, no rebase), or "
-                        "ask the user.")
-    return None
+                        "ask the user."), []
+            own = len(pr.get("reviews") or [])
+            if own:
+                notes.append(
+                    f"This force-push rewrites the history under PR #{pr.get('number')} "
+                    f"({pr.get('url')}), which carries {own} explainer review(s) by its own "
+                    "author. GitHub marks those comments outdated once the push lands. In "
+                    "your final message, tell the user that the explainer comments on PR "
+                    f"#{pr.get('number')} need updating against the new commits, with the "
+                    "PR URL.")
+    return None, notes
 
 
 def violation(toks, cwd=".", lookup=gh_open_prs, head=current_branch):
-    """Return the deny reason for the first offending git invocation, else None."""
+    """Return (deny reason for the first offending git invocation or None,
+    notes for the model about pushes that are allowed but leave work behind)."""
+    notes = []
     for sub, args, d in git_invocations(toks, cwd):
         if sub == "commit":
             if "--no-verify" in args or has_short(args, "n"):
                 return ("`git commit --no-verify` skips the repo's hooks, which are "
                         "the enforcement the repo was given on purpose. Fix what the "
-                        "hook reports, or stash the unrelated work, then commit again.")
+                        "hook reports, or stash the unrelated work, then commit again."), []
         elif sub == "push":
             if "--no-verify" in args:
                 return ("`git push --no-verify` skips the pre-push hooks. Let them run; "
-                        "stash untracked WIP if they trip on it.")
+                        "stash untracked WIP if they trip on it."), []
             lease = any(a == "--force-with-lease" or a.startswith("--force-with-lease=")
                         for a in args)
             plus = any(p.startswith("+") for p in push_positionals(args)[1:])
@@ -212,12 +226,13 @@ def violation(toks, cwd=".", lookup=gh_open_prs, head=current_branch):
                         "`--force-with-lease` overwrites remote history unchecked and is "
                         "never allowed. Fetch and rebase instead, or use "
                         "`--force-with-lease` on a branch whose PR has no review comments; "
-                        "ask the user when the rebase is not obviously safe.")
+                        "ask the user when the rebase is not obviously safe."), []
             if lease:
-                reason = lease_violation(args, d, lookup, head)
+                reason, lease_notes = lease_violation(args, d, lookup, head)
                 if reason:
-                    return reason
-    return None
+                    return reason, []
+                notes += lease_notes
+    return None, notes
 
 
 def deny(reason):
@@ -246,9 +261,14 @@ def main():
                      "parsed safely. Rewrite it without the flag.")
         sys.exit(0)
 
-    reason = violation(toks, cwd=data.get("cwd") or os.getcwd())
+    reason, notes = violation(toks, cwd=data.get("cwd") or os.getcwd())
     if reason:
         deny(reason)
+    if notes:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "additionalContext": "\n\n".join(notes),
+        }}))
     sys.exit(0)
 
 
@@ -266,7 +286,7 @@ def selftest():
     detached = lambda d: None
 
     def v(cmd, lookup=no_pr, head=on_feat):
-        return violation(shlex.split(cmd), "/repo", lookup, head)
+        return violation(shlex.split(cmd), "/repo", lookup, head)[0]
 
     assert v("git commit -m 'x'") is None
     assert v("git commit --no-verify -m x") is not None
@@ -298,6 +318,12 @@ def selftest():
     assert v("git push --force-with-lease", lookup=reviewed) is not None
     # the PR worker's own explainer comments blocking its rebase
     assert v("git push --force-with-lease origin main", lookup=self_explained) is None
+    # the allowed push leaving its outdated explainers unmentioned to the user
+    _, notes = violation(shlex.split("git push --force-with-lease origin main"), "/repo",
+                         self_explained, on_feat)
+    assert len(notes) == 1 and "PR #8" in notes[0], notes
+    assert violation(shlex.split("git push --force-with-lease origin main"), "/repo",
+                     unreviewed, on_feat)[1] == []
     # a teammate's review hidden behind the author's own explainer comments
     assert v("git push --force-with-lease origin main", lookup=mixed) is not None
     # gh failure read as "no PR" (fail open)

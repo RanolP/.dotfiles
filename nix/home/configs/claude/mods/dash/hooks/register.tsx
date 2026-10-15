@@ -147,6 +147,11 @@ function startTicker($: EngineInterface, isMainSession: boolean, timer?: Timer):
   }
 }
 
+const RESET_ICON = '\u{F0450}'
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+type Span = [text: string, tone: 'label' | 'value']
+
 function number(value: number | undefined): string {
   if (value === undefined || !Number.isFinite(value)) return '—'
   return Number.isInteger(value) ? String(value) : value.toFixed(1)
@@ -157,26 +162,78 @@ function clip(text: string, columns: number): string {
   return text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text
 }
 
-function resetTime(iso: string | undefined): string {
-  if (!iso) return ''
-  const time = iso.match(/T(\d{2}:\d{2})/)?.[1]
-  return time ? ` @${time}${iso.endsWith('Z') ? 'Z' : ''}` : ` @${iso.slice(0, 10)}`
+function clipSpans(spans: Span[], columns: number): Span[] {
+  const whole = spans.map(([text]) => text).join('')
+  const kept = clip(whole, columns)
+  if (kept === whole) return spans
+  let left = kept.length - 1
+  const clipped: Span[] = []
+  for (const [text, tone] of spans) {
+    if (left <= 0) break
+    clipped.push([text.slice(0, left), tone])
+    left -= text.length
+  }
+  return [...clipped, ['…', 'value']]
+}
+
+function spanRow({ Text }: Elements, key: string, spans: Span[], width: number) {
+  return (
+    <Text key={key}>
+      {clipSpans(spans, width).map(([text, tone], index) => (
+        <Text key={index} color={tone === 'label' ? 'gray' : 'whiteBright'}>{text}</Text>
+      ))}
+    </Text>
+  )
+}
+
+function header({ Text }: Elements, name: string, width: number) {
+  const lead = `── ${name} `
+  return <Text bold>{clip(lead + '─'.repeat(Math.max(0, width - lead.length)), width)}</Text>
+}
+
+function untilLabel(iso: string | undefined, current: number): string | undefined {
+  const at = iso ? Date.parse(iso) : NaN
+  if (!Number.isFinite(at)) return undefined
+  const seconds = Math.floor((at - current) / 1000)
+  if (seconds <= 0) return 'now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+  const minutes = Math.floor((seconds % 3600) / 60)
+  return `${Math.floor(seconds / 3600)}h${minutes > 0 ? `${minutes}m` : ''}`
+}
+
+function resetTime(iso: string | undefined): string | undefined {
+  const at = iso ? new Date(iso) : undefined
+  if (!at || !Number.isFinite(at.getTime())) return undefined
+  return `${WEEKDAYS[at.getDay()]} ${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`
 }
 
 function kindLabel(kind: string): string {
   if (kind === 'five_hour') return '5h'
-  if (kind === 'seven_day') return '7d'
+  if (kind === 'seven_day') return 'weekly'
   if (kind === 'spend_limit') return 'spend'
   return kind.slice(0, 8)
+}
+
+function rateLimitSpans(kind: string, limit: UsageSnapshot['rateLimits'][number] | undefined, current: number): Span[] {
+  const label: Span = [`${kindLabel(kind)} `, 'label']
+  if (!limit || !Number.isFinite(limit.percentUsed)) return [label, ['unknown', 'value']]
+  if (kind !== 'five_hour' && kind !== 'seven_day') return [label, [`${number(limit.percentUsed)}%`, 'value']]
+  const [word, reset] = kind === 'five_hour' ? ['in', untilLabel(limit.resetsAt, current)] : ['at', resetTime(limit.resetsAt)]
+  return [
+    label, [`${Math.round(limit.percentUsed)}%`, 'value'], [` ${RESET_ICON}`, 'label'],
+    ...(reset ? [[` ${word} `, 'label'], [reset, 'value']] satisfies Span[] : []),
+  ]
 }
 
 function typeLabel(type: string): string {
   return type.startsWith('codex-subagent:') ? `codex:${type.slice('codex-subagent:'.length)}` : type
 }
 
-function timeLabel(value: number, estimated: boolean): string {
-  const clock = new Date(value).toISOString().slice(11, 16)
-  return `${estimated ? '~' : ''}${clock}Z`
+function statusGlyph(status: string): string {
+  if (status === 'running') return '●'
+  if (status === 'done' || status === 'completed') return '✓'
+  if (status === 'failed' || status === 'error') return '✗'
+  return '·'
 }
 
 function elapsedLabel(agent: TrackedAgent, current: number): string {
@@ -191,34 +248,41 @@ function durationLabel(elapsed: number): string {
 
 function contextLabel({ window, tokens, percent }: NonNullable<UsageSnapshot['context']>): string {
   const k = (value: number) => `${Math.round(value / 1000)}k`
-  return `Context ${percent === undefined ? '—' : `${percent}%`}${tokens === undefined ? '' : ` ${k(tokens)}/${k(window)}`}`
+  const filled = percent === undefined ? 0 : Math.min(10, Math.max(0, Math.round(percent / 10)))
+  const bar = '█'.repeat(filled) + '░'.repeat(10 - filled)
+  return `Ctx ${bar} ${percent === undefined ? '—' : `${percent}%`}${tokens === undefined ? '' : ` ${k(tokens)}/${k(window)}`}`
 }
 
-function usageRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
+function usageRows(elements: Elements, state: DashDashboardState, width: number) {
+  const { Box, Text } = elements
   const usage = state.usage
   if (!usage) return <Text dimColor>Usage figures unavailable.</Text>
+  const limitOf = (kind: string) => usage.rateLimits.find(limit => limit.kind === kind)
+  const others = usage.rateLimits.filter(limit => limit.kind !== 'five_hour' && limit.kind !== 'seven_day')
+  const summary = [
+    usage.costUsd === undefined ? undefined : `$${usage.costUsd.toFixed(2)}`,
+    usage.startedAt === undefined ? undefined : durationLabel(Math.max(0, state.now - usage.startedAt)),
+    `+${state.lines.added} -${state.lines.removed}`,
+  ].filter(part => part !== undefined).join(' · ')
   return (
     <Box flexDirection="column">
-      {usage.rateLimits.length === 0
-        ? <Text dimColor>No rate limits</Text>
-        : usage.rateLimits.map(limit => <Text key={limit.kind}>{clip(`${kindLabel(limit.kind)} ${number(limit.percentUsed)}%${resetTime(limit.resetsAt)}`, width)}</Text>)}
-      {usage.costUsd === undefined ? null : <Text>{clip(`Cost $${usage.costUsd.toFixed(2)}`, width)}</Text>}
+      {['five_hour', 'seven_day'].map(kind => spanRow(elements, kind, rateLimitSpans(kind, limitOf(kind), state.now), width))}
+      {others.map(limit => spanRow(elements, limit.kind, rateLimitSpans(limit.kind, limit, state.now), width))}
       {usage.context === undefined ? null : <Text>{clip(contextLabel(usage.context), width)}</Text>}
-      {usage.startedAt === undefined ? null : <Text>{clip(`Session ${durationLabel(Math.max(0, state.now - usage.startedAt))}`, width)}</Text>}
-      <Text>{clip(`Lines +${state.lines.added} -${state.lines.removed}`, width)}</Text>
+      <Text>{clip(summary, width)}</Text>
     </Box>
   )
 }
 
 function fleetRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   if (state.agents.length === 0) return <Text dimColor>No subagents yet.</Text>
+  const typeWidth = Math.max(...state.agents.map(agent => typeLabel(agent.type).length))
   return (
     <Box flexDirection="column">
       {state.agents.map(agent => (
         <Box key={agent.id} flexDirection="column">
-          <Text>{clip(`id ${agent.id}`, width)}</Text>
-          <Text>{clip(`${typeLabel(agent.type)} · ${timeLabel(agent.startedAt, agent.startEstimated)} · ${elapsedLabel(agent, state.now)} · ${agent.status}`, width)}</Text>
-          <Text dimColor>{clip(agent.lastMessage || 'No message yet', width)}</Text>
+          <Text>{clip(`${statusGlyph(agent.status)} ${typeLabel(agent.type).padEnd(typeWidth)} ${elapsedLabel(agent, state.now)}  ${agent.status}`, width)}</Text>
+          {agent.lastMessage ? <Text dimColor>{clip(`  └ ${agent.lastMessage}`, width)}</Text> : null}
         </Box>
       ))}
     </Box>
@@ -226,24 +290,16 @@ function fleetRows({ Box, Text }: Elements, state: DashDashboardState, width: nu
 }
 
 function clmStatusRows({ Box, Text }: Elements, status: ClmStatus, current: number, width: number) {
+  const fold = status.lastFoldAt === null ? 'never' : durationLabel(Math.max(0, current - status.lastFoldAt))
   return (
     <Box flexDirection="column">
       <Text>{clip(status.focus
-        ? `Focus: ${status.focus.title} (${status.focus.status}) · depth ${status.stackDepth}`
-        : 'Focus: none', width)}</Text>
-      <Text>{clip(`Pending: ${status.pending.map(item => item.title).join(', ') || 'none'}`, width)}</Text>
-      <Text>Agents:</Text>
-      {status.agents.length === 0
-        ? <Text dimColor>none</Text>
-        : status.agents.map(agent => <Text key={agent.agentId}>{clip(`${agent.agentId.slice(0, 8)} → ${agent.title} (${agent.status})`, width)}</Text>)}
-      <Text>Later queue:</Text>
-      {status.later.length === 0
-        ? <Text dimColor>none</Text>
-        : status.later.map((item, index) => <Text key={`later-${index}`}>{clip(`${index + 1}. ${item.text}`, width)}</Text>)}
-      <Text>{clip(`Pending resume: ${status.resumeRequest?.text ?? 'none'}`, width)}</Text>
-      <Text>{clip(`Last fold: ${status.lastFoldAt === null ? 'never' : `${durationLabel(Math.max(0, current - status.lastFoldAt))} ago`}`, width)}</Text>
-      <Text>{clip(`Open issues: ${status.openIssues}`, width)}</Text>
-      <Text>{clip(`Ledger: ${status.ledgerPath}`, width)}</Text>
+        ? `Focus  ${status.focus.title} (${status.focus.status})${status.stackDepth > 1 ? ` · depth ${status.stackDepth}` : ''}`
+        : 'Focus  none', width)}</Text>
+      {status.pending.length === 0 ? null : <Text>{clip(`Pending  ${status.pending.map(item => item.title).join(', ')}`, width)}</Text>}
+      {status.agents.map(agent => <Text key={agent.agentId}>{clip(`Agents  ${agent.agentId.slice(0, 8)} → ${agent.title} (${agent.status})`, width)}</Text>)}
+      {status.resumeRequest ? <Text>{clip(`Resume  ${status.resumeRequest.text}`, width)}</Text> : null}
+      <Text>{clip(`Later ${status.later.length} · Issues ${status.openIssues} · fold ${fold}`, width)}</Text>
     </Box>
   )
 }
@@ -369,11 +425,11 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        <Text bold>Usage</Text>
+        {header(elements, 'Usage', width)}
         {usageRows(elements, state, width)}
-        <Text bold>Fleet</Text>
+        {header(elements, `Fleet (${state.agents.length})`, width)}
         {fleetRows(elements, state, width)}
-        <Text bold>Clm</Text>
+        {header(elements, 'Clm', width)}
         {clmRows(elements, state, width)}
       </Box>
     )

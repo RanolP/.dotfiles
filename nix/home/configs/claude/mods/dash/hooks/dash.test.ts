@@ -146,23 +146,20 @@ test('one pane stacks Usage, Fleet and Clm sections with no tabs', async ($, on)
   on('session.usage', () => ({ value: {
     startedAt: 0,
     context: { window: 100_000, tokens: 25_000, percent: 25 },
-    rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-14T12:00:00Z' }],
+    rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(1_000 + 133 * 60_000).toISOString() }],
     cost: { usd: 1.5 },
   } }))
   await start($)
 
   const ui = await mountPane($)
-  for (const header of ['Usage', 'Fleet', 'Clm']) expect(await ui.find({ type: 'Text', text: header })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '5h 40% @12:00Z' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Cost $1.50' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Focus: Focused task (doing) · depth 3' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Pending: .+…/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Agents:' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'worker-a → Agent task (doing)' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '1. Later task' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Pending resume: Resume task' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Open issues: 4' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Ledger: /tmp/clm-ledger.md' })).toBeDefined()
+  for (const header of [/^── Usage ─+$/, /^── Fleet \(0\) ─+$/, /^── Clm ─+$/]) expect(await ui.find({ type: 'Text', text: header })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '5h 40% \u{F0450} in 2h13m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '$1.50 · 0m · +0 -0' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Focus  Focused task (doing) · depth 3' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Pending  .+…/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Agents  worker-a → Agent task (doing)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Resume  Resume task' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Later 1 · Issues 4 · fold never' })).toBeDefined()
   expect(await ui.find({ type: 'Button' })).toBeUndefined()
 })
 
@@ -199,7 +196,50 @@ test('Usage shows context, session duration and lines tallied from Edit and Writ
   await $.tool.call({ tool: 'Write', file_path: '/work/b', content: 'a\nb\n' } as never)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: 'Context 25% 50k/200k' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Session 10m' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Lines +4 -1' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Ctx ███░░░░░░░ 25% 50k/200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '$1.50 · 10m · +4 -1' })).toBeDefined()
+})
+
+// Regression: the compact layout drifted from the statusline's rate-limit rows, lost the context bar, or showed empty clm rows that waste pane height.
+test('compact Usage shows statusline-style rate limits and a context bar, and Clm hides empty rows', async ($, on) => {
+  const now = Date.parse('2026-10-15T03:00:00Z')
+  mock.clock(on, { now })
+  on('session.start', () => ({ cwd: '/work' }))
+  const weeklyReset = new Date('2026-10-19T00:00:00Z')
+  on('session.usage', () => ({ value: {
+    startedAt: now - 72 * 60_000,
+    context: { window: 200_000, tokens: 84_000, percent: 42 },
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 67.6, resetsAt: new Date(now + 45 * 60_000).toISOString() },
+      { kind: 'seven_day', percentUsed: 31, resetsAt: weeklyReset.toISOString() },
+    ],
+    cost: { usd: 3.21 },
+  } }))
+  on('engine.create', async (_$: any, e: any, next: any) => ({
+    ...(await next(e)),
+    clm: {
+      track: () => { throw new Error('test clm.track base') },
+      issues: () => { throw new Error('test clm.issues base') },
+      resume: () => { throw new Error('test clm.resume base') },
+      status: async () => ({
+        focus: { id: 's1-1', title: 'dash 디자인', status: 'active' },
+        stackDepth: 1, pending: [], agents: [], later: [{ text: 'a' }, { text: 'b' }],
+        resumeRequest: null, lastFoldAt: now - 3 * 60_000, ledgerPath: '/tmp/l.md', openIssues: 1,
+      }),
+    },
+  }))
+  await start($)
+
+  const ui = await mountPane($)
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][weeklyReset.getDay()]
+  const weekly = `weekly 31% \u{F0450} at ${weekday} ${weeklyReset.getHours()}:${String(weeklyReset.getMinutes()).padStart(2, '0')}`
+  expect(await ui.find({ type: 'Text', text: '5h 68% \u{F0450} in 45m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: weekly })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: /^weekly $/ }))?.props.color).toBe('gray')
+  expect((await ui.find({ type: 'Text', text: /^31%$/ }))?.props.color).toBe('whiteBright')
+  expect(await ui.find({ type: 'Text', text: 'Ctx ████░░░░░░ 42% 84k/200k' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '$3.21 · 1h12m · +0 -0' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Focus  dash 디자인 (active)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Later 2 · Issues 1 · fold 3m' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^(Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
 })

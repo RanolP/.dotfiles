@@ -118,26 +118,101 @@
     item.addEventListener('focusout', () => setPairHighlight(item.dataset.boxId, false));
   });
 
-  const filterIds = ['concern-filter', 'platform-filter', 'kind-filter', 'status-filter', 'open-only'];
+  const storeKeys = { on: 'design-review.boxes', settled: 'design-review.showSettled' };
+  const readStore = key => { try { return localStorage.getItem(key); } catch { return null; } };
+  const writeStore = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
+  const boxButton = document.querySelector('.box-toggle');
+  const settledBox = document.getElementById('show-settled');
+  const settledStatuses = ['resolved', 'accepted'];
+  let boxesOn = readStore(storeKeys.on) === '1';
+  let isolated = null;
+  settledBox.checked = readStore(storeKeys.settled) === '1';
+
+  function setBoxes(on) {
+    boxesOn = on;
+    isolated = null;
+    writeStore(storeKeys.on, on ? '1' : '0');
+    applyFilters();
+  }
+  boxButton.addEventListener('click', () => setBoxes(!(boxesOn || isolated)));
+  settledBox.addEventListener('change', () => { writeStore(storeKeys.settled, settledBox.checked ? '1' : '0'); applyFilters(); });
+  document.addEventListener('click', event => {
+    const button = event.target.closest('.table-box-label');
+    if (!button) return;
+    const id = button.closest('tr').dataset.boxId;
+    isolated = isolated === id ? null : id;
+    applyFilters();
+  });
+  document.addEventListener('keydown', event => {
+    if ((event.key !== 'b' && event.code !== 'KeyB') || event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    const target = event.target;
+    if (target && (/^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName) || target.isContentEditable)) return;
+    setBoxes(!(boxesOn || isolated));
+  });
+
+  // Greedy per-screen label placement: smallest boxes pick first, since a big box's corner label rarely hides what it marks.
+  const labelGap = 2;
+  function placeLabels(screen) {
+    const width = screen.clientWidth, height = screen.clientHeight;
+    if (!width || !height) return;
+    const origin = screen.getBoundingClientRect();
+    const ox = origin.left + screen.clientLeft, oy = origin.top + screen.clientTop;
+    const markers = [...screen.querySelectorAll('.box-marker')].filter(marker => !marker.hidden).map(marker => {
+      const rect = marker.getBoundingClientRect();
+      return { marker, label: marker.querySelector('.box-label'), x: rect.left - ox, y: rect.top - oy, w: rect.width, h: rect.height };
+    }).sort((a, b) => a.w * a.h - b.w * b.h || a.marker.dataset.boxId.localeCompare(b.marker.dataset.boxId));
+    const placed = [];
+    const hits = (r, q) => r.x < q.x + q.w && q.x < r.x + r.w && r.y < q.y + q.h && q.y < r.y + r.h;
+    for (const box of markers) {
+      const { label, marker } = box;
+      label.classList.remove('label-inside');
+      label.style.cssText = 'left:0;top:0;bottom:auto;right:auto';
+      const w = label.offsetWidth, h = label.offsetHeight;
+      const above = box.y - h - labelGap, below = box.y + box.h + labelGap;
+      const left = box.x, right = box.x + box.w - w;
+      const candidates = [[left, above], [right, above], [left, below], [right, below]];
+      const step = Math.max(4, Math.round(h / 2));
+      for (const y of [above, below]) for (let k = 1; k * step <= width; k++) candidates.push([left + k * step, y], [left - k * step, y]);
+      const free = candidates.map(([x, y]) => ({ x, y, w, h })).find(r => r.x >= 0 && r.y >= 0 && r.x + r.w <= width && r.y + r.h <= height && !placed.some(q => hits(r, q)));
+      const spot = free || { x: box.x, y: box.y, w, h };
+      if (!free) label.classList.add('label-inside');
+      const inset = marker.clientLeft;
+      label.style.left = `${spot.x - box.x - inset}px`;
+      label.style.top = `${spot.y - box.y - marker.clientTop}px`;
+      placed.push(spot);
+    }
+  }
+  const placeAll = () => document.querySelectorAll('.screen').forEach(placeLabels);
+  if ('ResizeObserver' in window) {
+    const observer = new ResizeObserver(entries => entries.forEach(entry => placeLabels(entry.target)));
+    document.querySelectorAll('.screen').forEach(screen => { if (screen.querySelector('.box-marker')) observer.observe(screen); });
+  } else window.addEventListener('resize', placeAll);
+
+  const filterIds = ['concern-filter', 'platform-filter', 'kind-filter', 'status-filter'];
   filterIds.forEach(id => document.getElementById(id).addEventListener('change', applyFilters));
   function applyFilters() {
     const concern = document.getElementById('concern-filter').value;
     const platform = document.getElementById('platform-filter').value;
     const kind = document.getElementById('kind-filter').value;
     const status = document.getElementById('status-filter').value;
-    const openOnly = document.getElementById('open-only').checked;
+    const showSettled = settledBox.checked;
     const boxFilterActive = kind !== 'all' || status !== 'all';
+    const markersOn = boxesOn || isolated !== null;
+    boxButton.textContent = isolated ? `${isolated}만 표시 중` : boxesOn ? '박스 끄기' : '박스 켜기';
+    boxButton.setAttribute('aria-pressed', String(markersOn));
     let visibleRows = 0;
     document.querySelectorAll('.review-row').forEach(row => {
       let visibleBoxes = 0;
       row.querySelectorAll('.box-record').forEach(record => {
-        const visible = (kind === 'all' || record.dataset.kind === kind)
-          && (status === 'all' || record.dataset.status === status)
-          && (!openOnly || !['resolved', 'accepted'].includes(record.dataset.status));
+        const id = record.dataset.boxId;
+        const filterMatch = (kind === 'all' || record.dataset.kind === kind) && (status === 'all' || record.dataset.status === status);
+        const visible = filterMatch && (showSettled || !settledStatuses.includes(record.dataset.status));
         record.hidden = !visible;
         if (visible) visibleBoxes++;
+        record.querySelector('.table-box-label').setAttribute('aria-pressed', String(isolated === id));
+        const markerVisible = isolated ? isolated === id : markersOn && filterMatch && (showSettled || record.dataset.status === 'open');
         row.querySelectorAll('.box-marker').forEach(marker => {
-          if (marker.dataset.boxId === record.dataset.boxId) marker.hidden = !visible;
+          if (marker.dataset.boxId === id) marker.hidden = !markerVisible;
         });
       });
       const match = (concern === 'all' || row.dataset.concern === concern)
@@ -151,6 +226,7 @@
       section.hidden = !concernMatch || ![...section.querySelectorAll('.review-row')].some(row => !row.hidden);
     });
     document.querySelector('.no-results').hidden = visibleRows !== 0;
+    placeAll();
   }
   applyFilters();
 })();

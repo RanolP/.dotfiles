@@ -57,4 +57,65 @@ export function recallTranscriptAddress(text: string, address: string): { text?:
   return { text: reverse.reverse().map(row => row.raw).join('\n') }
 }
 
+export type AddressIo = {
+  transcriptPath: () => Promise<string | undefined>
+  read: (path: string) => Promise<string | undefined>
+  log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
+}
+
+export type AddressRuntimeIo = {
+  sessionId: () => Promise<string>
+  get: (key: string) => Promise<unknown>
+  set: (key: string, value: unknown) => Promise<void>
+  read: (path: string) => Promise<string | undefined>
+  log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
+}
+
+const transcriptPaths = new Map<string, string>()
+const transcriptPathKey = (session: string) => `transcript-path:${session}`
+
+export async function transcriptPath(io: AddressRuntimeIo, session: string): Promise<string | undefined> {
+  const stored = await io.get(transcriptPathKey(session))
+  const path = transcriptPaths.get(session) ?? (typeof stored === 'string' ? stored : undefined)
+  if (path) transcriptPaths.set(session, path)
+  return path
+}
+
+export async function transcriptRows(io: AddressRuntimeIo): Promise<AddressRow[]> {
+  const session = await io.sessionId()
+  const path = await transcriptPath(io, session)
+  if (!path) return []
+  const source = await io.read(path)
+  return source === undefined ? [] : parseTranscriptRows(source)
+}
+
+export async function rememberTranscriptPath(io: AddressRuntimeIo, session: string, path: string): Promise<void> {
+  transcriptPaths.set(session, path)
+  await io.set(transcriptPathKey(session), path)
+}
+
+export function recallIo(io: AddressRuntimeIo): AddressIo {
+  return {
+    transcriptPath: async () => transcriptPath(io, await io.sessionId()),
+    read: io.read,
+    log: io.log,
+  }
+}
+
+export async function recallAddress(io: AddressIo, address: unknown) {
+  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d or @first..@last.' }
+  const path = await io.transcriptPath()
+  if (!path) return { result: 'The transcript path is unavailable for this session.', isError: true, isReadOnly: true }
+  try {
+    const source = await io.read(path)
+    if (source === undefined) return { result: 'The transcript file is unavailable.', isError: true, isReadOnly: true }
+    const recalled = recallTranscriptAddress(source, address)
+    if (recalled.error) return { result: recalled.error, isError: true, isReadOnly: true }
+    return { result: recalled.text ?? '', isReadOnly: true }
+  } catch (err) {
+    io.log(`clm_recall: transcript read failed (${String(err).slice(0, 120)})`, { to: 'debug' })
+    return { result: 'The transcript could not be read.', isError: true, isReadOnly: true }
+  }
+}
+
 export type { AddressRow }

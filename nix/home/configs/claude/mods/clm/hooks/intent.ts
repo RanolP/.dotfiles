@@ -1,5 +1,11 @@
 import { isOpen, type FocusState as TrackerFocusState, type Intent, type Issue, type Payload } from './tracker'
 import { checkEvidence, type Source } from './evidence'
+import { isHarnessText, stripReminders } from './fold'
+import { removeQueueSnapshotTargets } from './workflow'
+import type { ClmWorkflow } from '../types'
+import type { AddressRow } from './address'
+import { describe, focusOf, issueId, snapshot, type Origin, type TrackerEvent } from './tracker'
+import { instructionKey, isDirective } from './ledger'
 
 export type FocusState = TrackerFocusState
 
@@ -286,4 +292,226 @@ export function compose(
     }
   }
   return { payloads, next }
+}
+
+export type PromptIntentIo = {
+  captureOrigin: () => Promise<Origin>
+  readAll: () => Promise<TrackerEvent[]>
+  readWorkflow: () => Promise<ClmWorkflow>
+  changeWorkflow: <T>(change: (current: ClmWorkflow) => { next: ClmWorkflow; result: T }) => Promise<T>
+  sessionMessages: () => Promise<{ role: string; text: string }[]>
+  complete: (request: { model: string; system: string; prompt: string; maxTokens: number; timeoutMs: number }) => Promise<{ isAnswered: boolean; text: string; reason: string }>
+  get: (key: string) => Promise<unknown>
+  set: (key: string, value: unknown) => Promise<void>
+  writeEvents: (payloads: readonly Payload[], origin: Origin) => Promise<TrackerEvent[]>
+  transcriptRows: () => Promise<AddressRow[]>
+  serialize: <T>(session: string, run: () => Promise<T>) => Promise<T>
+  syncPanel: (origin: Origin, events: readonly TrackerEvent[]) => Promise<void>
+  log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
+}
+
+const requestKey = (key: string) => `requests:${key}`
+const requestPromptSeqKey = (key: string) => `request-prompt-seq:${key}`
+const intentSessionKey = (session: string) => `${session}:main`
+const instructionIndexKey = (key: string) => `instruction-index:${key}`
+const issueAddressKey = (key: string) => `issue-addresses:${key}`
+const isIndexEntry = (value: unknown): value is { address: string; issue: string | null; text: string } =>
+  typeof value === 'object' && value !== null && 'address' in value && typeof value.address === 'string'
+  && (/^@[\da-f]{8}$/i.test(value.address) || value.address === '@unknown')
+  && 'issue' in value && (typeof value.issue === 'string' || value.issue === null)
+  && 'text' in value && typeof value.text === 'string'
+
+export async function applyRequestClassification(
+  io: PromptIntentIo, key: string, promptSeq: number, classification: RequestClassification, userPrompt: string, lastAssistantReply: string,
+): Promise<void> {
+  const previousSeq = await io.get(requestPromptSeqKey(key))
+  if (typeof previousSeq === 'number' && previousSeq >= promptSeq) return
+  const value = await io.get(requestKey(key))
+  const records = Array.isArray(value) ? value.filter(isRequestRecord) : []
+  const open = new Set(records.filter(request => request.status === 'open').map(request => request.id))
+  const next = [...records]
+  for (const request of classification.raised) {
+    if (!supportedRequestQuote(request.quote, userPrompt, 'user')) {
+      io.log(`clm request: dropped unsupported raised quote for ${request.text}`, { to: 'debug' })
+      continue
+    }
+    if (next.some(existing => existing.status === 'open' && instructionKey(existing.text) === instructionKey(request.text))) continue
+    const id = `R${next.reduce((max, item) => Math.max(max, Number(/^R(\d+)$/.exec(item.id)?.[1] ?? 0)), 0) + 1}`
+    next.push({ id, text: request.text, quote: request.quote, status: 'open' })
+    open.add(id)
+    io.log(`clm: request raised ${id}`)
+  }
+  const resolved = new Set<string>()
+  for (const resolution of classification.resolved) {
+    if (!open.has(resolution.id) || resolved.has(resolution.id)) continue
+    if (resolution.how !== 'skipped' && resolution.quote === undefined) continue
+    if (resolution.quote !== undefined
+      && !supportedRequestQuote(resolution.quote, userPrompt, 'user')
+      && !supportedRequestQuote(resolution.quote, lastAssistantReply, 'assistant')) {
+      io.log(`clm request: ignored unsupported resolution quote for ${resolution.id}`, { to: 'debug' })
+      continue
+    }
+    const index = next.findIndex(request => request.id === resolution.id && request.status === 'open')
+    if (index < 0) continue
+    const request = next[index]
+    if (!request) continue
+    next[index] = { ...request, status: resolution.how, resolution: { how: resolution.how, ...(resolution.quote === undefined ? {} : { quote: resolution.quote }) } }
+    resolved.add(resolution.id)
+  }
+  if (next.length !== records.length || next.some((item, index) => item.status !== records[index]?.status)) await io.set(requestKey(key), next)
+  await io.set(requestPromptSeqKey(key), promptSeq)
+}
+
+async function applyLaterClassification(
+  io: PromptIntentIo, classification: LaterClassification, prompt: string, queueSnapshot: readonly ClmWorkflow['later'][number][],
+): Promise<void> {
+  const later = classification.later.filter(item => {
+    if (laterSupported(item, prompt)) return true
+    io.log(`clm: later item dropped (not supported by prompt): ${item}`)
+    return false
+  })
+  const drop = supportedLaterDrop(classification.laterDrop, prompt)
+  if (classification.laterDrop === 'all' && drop !== 'all') io.log('clm: ignored laterDrop=all without a queue reference')
+  if (Array.isArray(classification.laterDrop)) {
+    for (const index of classification.laterDrop) if (!drop.includes(index)) io.log(`clm: ignored later drop ${index}; its number is absent from the prompt`)
+  }
+  const dropItems = drop === 'all'
+    ? queueSnapshot.map((item, index) => ({ text: item.text, number: index + 1 }))
+    : drop.flatMap(number => {
+      const item = queueSnapshot[number - 1]
+      return item ? [{ text: item.text, number }] : []
+    })
+  if (!dropItems.length && !later.length) return
+  try {
+    const { dropped, queued } = await io.changeWorkflow(current => {
+      const { remaining, dropped } = removeQueueSnapshotTargets(current.later, queueSnapshot, dropItems.map(item => item.number))
+      const queued = later.map((item, index) => ({ item, number: remaining.length + index + 1 }))
+      return { next: { ...current, later: [...remaining, ...later.map(text => ({ text }))] }, result: { dropped, queued } }
+    })
+    for (const item of dropped) io.log(`clm: dropped later item ${item.number}: ${item.item}`)
+    for (const item of queued) io.log(`clm: queued later item ${item.number}`)
+  } catch (err) {
+    io.log(`clm later queue: update failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+  }
+}
+
+async function parseAndApplyLater(io: PromptIntentIo, raw: string, prompt: string, queue: readonly ClmWorkflow['later'][number][]): Promise<LaterClassification | undefined> {
+  try {
+    const classification = parseLater(raw)
+    await applyLaterClassification(io, classification, prompt, queue)
+    return classification
+  } catch (err) {
+    io.log(`clm intent: later classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    return undefined
+  }
+}
+
+function promptAddress(rows: readonly AddressRow[], prompt: string): string | undefined {
+  const normalized = instructionKey(stripReminders(prompt))
+  const row = [...rows].reverse().find(candidate => candidate.role === 'user' && instructionKey(stripReminders(candidate.text)) === normalized)
+  return row ? `@${row.uuid.slice(0, 8)}` : undefined
+}
+
+export async function recordPromptIntent(io: PromptIntentIo, text: string, promptSeq: number): Promise<void> {
+  const userPrompt = stripReminders(text)
+  if (!userPrompt || isHarnessText(userPrompt)) return
+  try {
+    const origin = await io.captureOrigin()
+    const events = await io.readAll()
+    const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
+    const state = focusOf(events, origin.session)
+    const key = intentSessionKey(origin.session)
+    const requestValue = await io.get(requestKey(key))
+    const requests = (Array.isArray(requestValue) ? requestValue.filter(isRequestRecord) : []).filter(request => request.status === 'open').map(({ id, text }) => ({ id, text }))
+    const workflow = await io.readWorkflow()
+    const queueSnapshot = workflow.later.map(item => ({ ...item }))
+    const rows = await io.sessionMessages()
+    const lastAssistantReply = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
+    const response = await io.complete({
+      model: 'haiku', system: INTENT_SYSTEM,
+      prompt: intentPrompt({ state, issues, lastAssistantReply, userPrompt, later: queueSnapshot, requests }),
+      maxTokens: 1800, timeoutMs: 15_000,
+    })
+    if (!response.isAnswered) throw new Error(`model did not answer (${response.reason})`)
+
+    const later = await parseAndApplyLater(io, response.text, userPrompt, queueSnapshot)
+    let requestClassification: RequestClassification | undefined
+    try { requestClassification = parseRequests(response.text) }
+    catch (err) { io.log(`clm intent: request classification failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+
+    try {
+      await io.serialize(origin.session, async () => {
+        const workflowAtApply = await io.readWorkflow()
+        if (promptSeq <= workflowAtApply.focusAppliedSeq) {
+          io.log(`clm intent: dropped older focus result ${promptSeq} (applied ${workflowAtApply.focusAppliedSeq})`, { to: 'debug' })
+          return
+        }
+        if (requestClassification) {
+          try { await applyRequestClassification(io, key, promptSeq, requestClassification, userPrompt, lastAssistantReply) }
+          catch (err) { io.log(`clm request: store update failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+        }
+        const currentEvents = await io.readAll()
+        const allIssues = snapshot(currentEvents)
+        const currentIssues = allIssues.filter(issue => issue.origin.session === origin.session)
+        const currentState = focusOf(currentEvents, origin.session)
+        const focused = new Set([...currentState.stack, ...currentState.pending])
+        const shownOpen = currentIssues.filter(issue => isOpen(issue) && !focused.has(issue.id)).slice(0, 30)
+        const isCurrentOpen = (id: string) => currentIssues.some(issue => issue.id === id && isOpen(issue))
+        const knownIds = new Set([...currentState.stack.filter(isCurrentOpen), ...currentState.pending.filter(isCurrentOpen), ...shownOpen.map(issue => issue.id)])
+        const classification = parseFocus(response.text, knownIds)
+        const lastSeq = currentEvents.filter(event => event.origin.session === origin.session).reduce((n, event) => Math.max(n, event.seq), 0)
+        const { payloads, next } = compose(currentState, classification, currentIssues, () => issueId(origin.session, lastSeq + 1))
+        const written = await io.writeEvents([
+          ...payloads,
+          { op: 'focus', stack: next.stack, pending: next.pending, intent: classification.intent, ...(classification.rule === null ? {} : { rule: classification.rule }) },
+        ], origin)
+        try { for (const line of describe(written, allIssues)) io.log(line) }
+        catch { /* display notices never block tracker writes */ }
+        const sourceRows = await io.transcriptRows()
+        const address = promptAddress(sourceRows, userPrompt)
+        if (address) {
+          const createdId = payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue
+          const scopeIssue = classification.rule !== null ? null : currentState.stack.at(-1) ?? classification.target ?? createdId ?? next.stack.at(-1) ?? null
+          if (classification.rule !== null || (classification.intent !== 'question' && isDirective(userPrompt))) {
+            const indexKey = instructionIndexKey(key)
+            const rawIndex = await io.get(indexKey)
+            const index = Array.isArray(rawIndex) ? rawIndex.filter(isIndexEntry) : []
+            if (!index.some(item => item.address === address && item.issue === scopeIssue)) {
+              const source = sourceRows.find(row => `@${row.uuid.slice(0, 8)}` === address)
+              if (source) {
+                index.push({ address, issue: scopeIssue, text: source.text })
+                await io.set(indexKey, index)
+              }
+            }
+          }
+          const addressesKey = issueAddressKey(key)
+          const rawAddresses = await io.get(addressesKey)
+          const addresses = typeof rawAddresses === 'object' && rawAddresses !== null && !Array.isArray(rawAddresses) ? { ...rawAddresses } as Record<string, unknown> : {}
+          for (const id of new Set([classification.target, next.stack.at(-1), createdId])) if (id && typeof addresses[id] !== 'string') addresses[id] = address
+          await io.set(addressesKey, addresses)
+        }
+        if (payloads.length) await io.syncPanel(origin, written)
+        await io.changeWorkflow(current => ({
+          next: promptSeq > current.focusAppliedSeq ? { ...current, focusAppliedSeq: promptSeq } : current,
+          result: undefined,
+        }))
+        if (later && classification.intent === 'pending' && later.later.length === 1) {
+          const pendingIssue = classification.target ?? payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue
+          const deferred = later.later[0]
+          if (pendingIssue && deferred) await io.changeWorkflow(current => {
+            const index = current.later.map(item => item.text).lastIndexOf(deferred)
+            const queued = current.later[index]
+            if (index < 0 || !queued || queued.issue === pendingIssue) return { next: current, result: undefined }
+            const items = [...current.later]
+            items[index] = { ...queued, issue: pendingIssue }
+            return { next: { ...current, later: items }, result: undefined }
+          })
+        }
+      })
+    } catch (err) {
+      io.log(`clm intent: focus classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+  } catch (err) {
+    io.log(`clm intent: classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+  }
 }

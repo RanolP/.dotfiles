@@ -15,6 +15,7 @@ import { parseSplitAnswer } from './fold-runtime'
 import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type RewindIo, type RewindPlan } from './rewind'
 import { xmlText } from './intent'
 import type { LogEvent, LogFields } from './events'
+import type { SentAt } from './address'
 
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
@@ -35,6 +36,7 @@ export type FoldJobIo = {
   sessionCompact(): Promise<SessionCompactResult>
   now(): Promise<number>
   usageReading(): Promise<number | undefined>
+  sentAt(): Promise<SentAt>
   readMeta(): Promise<Meta>
   writeMeta(meta: Meta): Promise<void>
   readLedger(): Promise<string | undefined>
@@ -100,11 +102,11 @@ function queueTurns(rows: readonly SessionMessage[], first: number): QueueTurn[]
   })
 }
 
-function splitPrompt(previous: string, turns: readonly QueueTurn[], retryRule: string): string {
+function splitPrompt(previous: string, turns: readonly QueueTurn[], retryRule: string, sentAt: SentAt): string {
   let refOffset = 0
   const numbered = turns.map(turn => {
     const citable = turn.rows.filter(message => !isSystemRow(message) && !isLedgerRow(message))
-    const rendered = renderRange(citable, 120_000, refOffset).text
+    const rendered = renderRange(citable, 120_000, refOffset, sentAt).text
     refOffset += citable.length
     return `<turn number="${turn.number}" tokens="${sum(turn.rows)}">\n${xmlText(rendered)}\n</turn>`
   }).join('\n')
@@ -122,9 +124,10 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
   const here = await io.captureOrigin()
   const view = await io.trackerView(here)
   const known = new Set([...view.issues, ...view.dropped].map(issue => issue.id))
+  const sentAt = await io.sentAt()
   let retryRule = ''
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await io.complete({ model: opts.model, system: SPLIT_MERGE_SYSTEM, prompt: splitPrompt(previous, turns, retryRule), maxTokens: 8192, timeoutMs: 120_000 })
+    const response = await io.complete({ model: opts.model, system: SPLIT_MERGE_SYSTEM, prompt: splitPrompt(previous, turns, retryRule, sentAt), maxTokens: 8192, timeoutMs: 120_000 })
     const answer = response.isAnswered ? parseSplitAnswer(response.text) : `split model gave no text (${response.reason})`
     if (typeof answer === 'string') {
       retryRule = `The previous reply failed: ${answer}. Return the required JSON object and choose a whole-turn split.`
@@ -358,7 +361,7 @@ export async function showTurnChanges(io: FoldJobIo, answer: string): Promise<vo
   try {
     const stored = notesOf((await io.readLedger()) ?? EMPTY_LEDGER)
     const ledger = `${mergeableNotes(stored)}\n\n## 핵심 사실·경로\n${factLines(stored).map(line => `- ${line}`).join('\n') || '- (none yet)'}`
-    const prompt = `<ledger_goal_and_key_facts>\n${ledger}\n</ledger_goal_and_key_facts>\n<finished_turn>\n${renderTurns(rows.slice(-8), 20000)}\n</finished_turn>`
+    const prompt = `<ledger_goal_and_key_facts>\n${ledger}\n</ledger_goal_and_key_facts>\n<finished_turn>\n${renderTurns(rows.slice(-8), 20000, await io.sentAt())}\n</finished_turn>`
     const response = await io.complete({ model: 'haiku', system: TURN_CHANGE_SYSTEM, prompt, maxTokens: 300, timeoutMs: 15000 })
     if (!response.isAnswered) return
     const seen = shownChanges.get(session) ?? new Set<string>()

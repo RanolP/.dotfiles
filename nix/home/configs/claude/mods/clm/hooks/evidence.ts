@@ -1,6 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 
-import { isUserTyped, stripReminders } from './fold'
+import type { SentAt } from './address'
+import { isUserTyped, kst, stripReminders } from './fold'
 import type { Payload } from './tracker'
 
 // A summary claim (a done step, a key fact, a user instruction) stands only on
@@ -36,6 +37,12 @@ const tooShort = (quote: string) => quote.split(' ').length < MIN_WORDS && !(CJK
 const RELAY_TOOLS = new Set(['Agent', 'Task', 'SendMessage'])
 
 
+/** ` 2026-10-15 14:03 KST` when the row's send time is known, '' otherwise. */
+export const sentStamp = (m: SessionMessage, sentAt?: SentAt) => {
+  const at = sentAt?.(m)
+  return at ? ` ${kst(at)}` : ''
+}
+
 /** The ref of a user row: its 1-based position in the rendered range. */
 export const rowRef = (i: number) => `m${i + 1}`
 
@@ -44,19 +51,20 @@ export const rowRef = (i: number) => `m${i + 1}`
  * ref's text exactly as rendered (clipped), which is what a quote is checked
  * against. Over `cap`, whole oldest rows go, so every kept ref is shown whole.
  */
-export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refOffset = 0): { text: string; sources: Map<string, Source> } {
+export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refOffset = 0, sentAt?: SentAt): { text: string; sources: Map<string, Source> } {
   const toolOf = new Map(rows.flatMap(m => m.toolUses.map(u => [u.tool_use_id, u.tool] as const)))
   const rendered = rows.map((m, i) => {
     const sources: [string, Source][] = []
-    let head = `[${m.role}]`
+    const at = sentStamp(m, sentAt)
+    let head = `[${m.role}${at}]`
     const shown = m.role === 'user' ? stripReminders(m.text) : m.text
     if (shown) {
       const { text, full } = clippedSource(shown, TEXT_CLIP)
-      if (m.role === 'assistant') head = `[assistant] ${text}`
+      if (m.role === 'assistant') head = `[assistant${at}] ${text}`
       else if (isUserTyped(m)) {
-        head = `[user ${rowRef(i + refOffset)}] ${text}`
+        head = `[user ${rowRef(i + refOffset)}${at}] ${text}`
         sources.push([rowRef(i + refOffset), { kind: 'user', text, ...(full ? { full } : {}) }])
-      } else head = `[harness] ${text}`
+      } else head = `[harness${at}] ${text}`
     }
     const parts = [head]
     for (const u of m.toolUses) parts.push(`  -> ${u.tool} ${clip(JSON.stringify(u.input ?? {}), INPUT_CLIP)}`)

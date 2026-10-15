@@ -1,6 +1,8 @@
+import type { SessionMessage } from 'claude-code'
+
 import { isRecord } from './tracker'
 
-type AddressRow = { raw: string; uuid: string; parentUuid?: string; role?: string; text: string }
+type AddressRow = { raw: string; uuid: string; parentUuid?: string; role?: string; text: string; timestamp?: string; toolIds?: string[] }
 
 function transcriptRowText(value: Record<string, unknown>): string {
   const message = isRecord(value.message) ? value.message : value
@@ -24,9 +26,45 @@ export function parseTranscriptRows(text: string): AddressRow[] {
       if (!isRecord(value) || typeof value.uuid !== 'string' || !value.uuid) return []
       const message = isRecord(value.message) ? value.message : value
       const role = typeof message.role === 'string' ? message.role : typeof value.type === 'string' ? value.type : undefined
-      return [{ raw, uuid: value.uuid, ...(typeof value.parentUuid === 'string' ? { parentUuid: value.parentUuid } : {}), role, text: transcriptRowText(value) }]
+      const toolIds = Array.isArray(message.content)
+        ? message.content.flatMap(block => !isRecord(block) ? [] : typeof block.id === 'string' ? [block.id] : typeof block.tool_use_id === 'string' ? [block.tool_use_id] : [])
+        : []
+      return [{
+        raw, uuid: value.uuid, ...(typeof value.parentUuid === 'string' ? { parentUuid: value.parentUuid } : {}), role, text: transcriptRowText(value),
+        ...(typeof value.timestamp === 'string' ? { timestamp: value.timestamp } : {}), ...(toolIds.length ? { toolIds } : {}),
+      }]
     } catch { return [] }
   })
+}
+
+/** When a message was sent, as the transcript's ISO time, or undefined when unknown. */
+export type SentAt = (m: SessionMessage) => string | undefined
+export const unknownSentAt: SentAt = () => undefined
+
+/**
+ * Joins messages to transcript rows for their send time. SessionMessage carries
+ * no time or uuid, so a tool use or result joins by its tool_use_id and any other
+ * row by its exact role and text; text sent at two different times is ambiguous
+ * and stays unstamped.
+ */
+export function sentAtOf(rows: readonly AddressRow[]): SentAt {
+  const byId = new Map<string, string>()
+  const byText = new Map<string, string | undefined>()
+  for (const row of rows) {
+    if (!row.timestamp) continue
+    for (const id of row.toolIds ?? []) byId.set(`${row.role}\0${id}`, row.timestamp)
+    if (!row.text) continue
+    const key = `${row.role}\0${row.text}`
+    byText.set(key, byText.has(key) && byText.get(key) !== row.timestamp ? undefined : row.timestamp)
+  }
+  return m => {
+    const ids = m.role === 'assistant' ? m.toolUses.map(u => u.tool_use_id) : (m.toolResults ?? []).map(r => r.tool_use_id)
+    for (const id of ids) {
+      const at = byId.get(`${m.role}\0${id}`)
+      if (at) return at
+    }
+    return m.text ? byText.get(`${m.role}\0${m.text}`) : undefined
+  }
 }
 
 export function recallTranscriptAddress(text: string, address: string): { text?: string; error?: string } {

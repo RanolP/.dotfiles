@@ -23,7 +23,7 @@ import {
 import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
-import { recallAddress, recallIo as makeRecallIo, rememberTranscriptPath as rememberAddressTranscriptPath, transcriptRows as readAddressRows, type AddressRuntimeIo } from './address'
+import { recallAddress, recallIo as makeRecallIo, rememberTranscriptPath as rememberAddressTranscriptPath, transcriptRows as readAddressRows, sentAtOf, unknownSentAt, type AddressRuntimeIo, type SentAt } from './address'
 import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
@@ -232,6 +232,7 @@ const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
   ledgerPath: () => ledgerPath($),
   topics: async key => $.store.get(await topicsKey($, key)),
   usageReading: () => usageReading($),
+  sentAt: () => sentAt($),
   complete: request => $.model.complete(request),
   logEvent: (event, fields) => logEvent($, event, fields),
   log: (text, options) => $.ui.log(text, options),
@@ -247,6 +248,15 @@ const addressRuntimeIo = ($: EngineInterface): AddressRuntimeIo => ({
   log: (text, options) => $.ui.log(text, options),
 })
 const transcriptRows = ($: EngineInterface) => readAddressRows(addressRuntimeIo($))
+// A row whose time cannot be read renders unstamped; the fold goes on without it.
+async function sentAt($: EngineInterface): Promise<SentAt> {
+  try {
+    return sentAtOf(await transcriptRows($))
+  } catch (err) {
+    $.ui.log(`clm: send times unavailable (${String(err).slice(0, 120)})`, { to: 'debug' })
+    return unknownSentAt
+  }
+}
 const rememberTranscriptPath = ($: EngineInterface, session: string, path: string) => rememberAddressTranscriptPath(addressRuntimeIo($), session, path)
 const addressIo = ($: EngineInterface) => makeRecallIo(addressRuntimeIo($))
 
@@ -325,6 +335,7 @@ const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   sessionCompact: () => $.session.compact({}),
   now: () => $.clock.now(),
   usageReading: () => usageReading($),
+  sentAt: () => sentAt($),
   readMeta: () => readMeta($),
   writeMeta: meta => writeMeta($, meta),
   readLedger: async () => readText($, await ledgerPath($)),

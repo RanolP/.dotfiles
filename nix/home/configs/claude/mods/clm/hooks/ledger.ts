@@ -1,6 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 
-import { readEvidence, type Evidence } from './evidence'
+import type { SentAt } from './address'
+import { readEvidence, sentStamp, type Evidence } from './evidence'
 import { isUserTyped, stripReminders } from './fold'
 import { isTrackerSection, parseOps, sectionLines, type Issue, type Payload } from './tracker'
 
@@ -260,6 +261,8 @@ export const MERGE_SYSTEM = [
   'You keep the working ledger of a coding session whose oldest turns are about to be deleted.',
   'You receive the goal notes, the user\'s standing instructions, the recorded key facts, the open issues of this session\'s tracker, and the turns being removed.',
   'In <removed_turns> a user message is headed `[user mN]` and a tool result `<- [id]`; mN and id are refs you cite. Assistant rows carry no ref: they show what the assistant said or proposed, and the tool results and the user\'s words show what actually happened.',
+  'A row whose send time is known carries it in its header after the role and ref, as `YYYY-MM-DD HH:MM KST`.',
+  'When a message you cite or summarize uses a relative time expression (내일, 어제 밤, 2시간 뒤), write the absolute KST date right after the original words as `<original>(=YYYY-MM-DD)`, computed from that message\'s own header time; for a sub-day expression write `<original>(=YYYY-MM-DD HH:MM)`. Keep the expression as written when its message carries no time.',
   `Reply with the updated notes and then \`<ops>\`, starting directly with the heading ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')} and writing the notes as plain markdown.`,
   '- 목표: what the session is trying to achieve, updated if the turns changed it.',
   'Then `<ops>` holding a JSON array of changes the removed turns show, and `</ops>`. Each op is one of:',
@@ -275,7 +278,7 @@ export const MERGE_SYSTEM = [
   'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
   'A fact stands when the cited row states it. Mark a stable constraint or preference discovered in tool output as kind constraint; mark a lesson from a failure or user correction as kind learned.',
   'A constraint carries a quote from a tool result. A learned item carries the failed result or the user correction verbatim as its quote.',
-  'Every id, number and date in one claim comes from the same row and names the same object as that row.',
+  'Every id, number and date in one claim comes from the same row and names the same object as that row; a `(=...)` date beside a relative expression comes from that row\'s header time plus the expression.',
   'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'For each existing issue changed by the turns, write an update using its existing id so its history stays attached. Omit an op for each unchanged issue. Items listed under <legacy> have no issue yet: create one for each that still holds.',
@@ -317,9 +320,10 @@ export const LEDGER_COMPACT_SYSTEM = [
   'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1,"focusIssue":null}]}.',
 ].join('\n')
 
-export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): string {
+export function renderTurns(rows: readonly SessionMessage[], cap = 120_000, sentAt?: SentAt): string {
   const out = rows.map(m => {
-    const parts = [m.text ? `[${m.role}] ${clip(m.text, 4000)}` : `[${m.role}]`]
+    const head = `[${m.role}${sentStamp(m, sentAt)}]`
+    const parts = [m.text ? `${head} ${clip(m.text, 4000)}` : head]
     for (const u of m.toolUses) parts.push(`  -> ${u.tool} ${clip(JSON.stringify(u.input ?? {}), 600)}`)
     for (const r of m.toolResults ?? []) parts.push(`  <- ${r.isError ? 'error ' : ''}${clip(r.text, 1500)}`)
     return parts.join('\n')
@@ -378,10 +382,10 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
 // clm-prompt
 export const REVIEW_SYSTEM = [
   'You audit a ledger update before it replaces the conversation turns it summarizes. Treat each claim as unproven until its cited quote proves it.',
-  'You receive <claims>, one JSON object per line with an id, the claim, the evidence it cites (a ref and a quote) and, where the cited row lies outside the range, that row\'s text as `source`; and <folded_range>, the turns, where a user message is headed `[user mN]`, a tool result `<- [id]`, and assistant rows carry no ref.',
+  'You receive <claims>, one JSON object per line with an id, the claim, the evidence it cites (a ref and a quote) and, where the cited row lies outside the range, that row\'s text as `source`; and <folded_range>, the turns, where a user message is headed `[user mN]`, a tool result `<- [id]`, and assistant rows carry no ref; a row whose send time is known carries it in its header after the role and ref.',
   'Judge each claim against the row its ref names, in <folded_range> or in its `source`:',
   '- A claim that a step is done stands only when a cited row shows the state-changing action executed: a tool result with its outcome, or the user saying it happened. A proposal, a recommendation, a plan, or a read-only look at the current state (a PR shown OPEN, a status printed) supports todo or question, so reject the done.',
-  '- Every id, number and date in the claim appears in the cited row for the same object; a date or number belonging to another PR, branch, ticket or file is a reject.',
+  '- Every id, number and date in the claim appears in the cited row for the same object; a date or number belonging to another PR, branch, ticket or file is a reject. A date written as `(=...)` beside a relative time expression stands when it equals the cited row\'s header time (`YYYY-MM-DD HH:MM KST`) plus that expression.',
   '- A move to dropped stands when the cited user message abandons, suspends or redirects away from that issue\'s direction.',
   '- A move out of dropped stands only when the cited user message resumes that issue\'s direction.',
   '- A fact stands when the cited row states it. Any other claim stands when the turns show it.',

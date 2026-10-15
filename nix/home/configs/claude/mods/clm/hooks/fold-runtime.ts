@@ -12,6 +12,7 @@ import {
 import { archivedDone, injected, isRecord, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held, HeldClaims, ReviewInput, Reviewed } from './held'
 import type { RewindTopic } from './rewind'
+import type { SentAt } from './address'
 import type { LogEvent } from './events'
 import { xmlText } from './intent'
 
@@ -39,6 +40,7 @@ export type FoldRuntimeIo = {
   ledgerPath: () => Promise<string>
   topics: (key: string) => Promise<unknown>
   usageReading: () => Promise<number | undefined>
+  sentAt: () => Promise<SentAt>
   complete: (request: { model: string; system: string; prompt: string; maxTokens: number; timeoutMs: number }) => Promise<{ isAnswered: boolean; text: string; reason: string }>
   logEvent: (event: LogEvent, fields: { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; durationMs?: number; summaryMs?: number; reason?: string }) => Promise<void>
   log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
@@ -219,7 +221,7 @@ export async function fold(
   const storedInstructions = instructionValues(notes)
   const instructions = storedInstructions.filter(item => !item.startsWith(WITHDRAWN_PREFIX))
   const priorFacts = factLines(notes)
-  const range = renderRange(plan.dropped)
+  const range = renderRange(plan.dropped, undefined, undefined, await io.sentAt())
   let ops: Payload[] = [], evidence: Evidence[][] = [], facts: Fact[] = [], retracted: string[] = [], withdrawn: string[] = []
   let fallback = false
   let promoted: Payload[] = [], hold: Held[] = []

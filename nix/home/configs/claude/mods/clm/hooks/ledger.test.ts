@@ -8,7 +8,9 @@ import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { parseTranscriptRows, sentAtOf } from './address'
+import { renderRange } from './evidence'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
@@ -393,4 +395,22 @@ test('a fold over an older fold drops the /clear row and the stale ledger', OPTS
   expect(out.some((m: any) => m.text.includes('<command-name>/clear'))).toBe(false)
   expect(out.filter((m: any) => m.text.startsWith('[clm ledger')).map((m: any) => m.text.slice(0, 14))).toEqual(['[clm ledger #1'])
   expect(out[0].text.startsWith('[clm ledger #1')).toBe(true)
+})
+
+// Regression caught: rendered turns lost each message's own send time, so a fold could not resolve "내일" against the day it was said.
+test('renderTurns and renderRange stamp each message with its own KST send time and leave an unknown one unstamped', async () => {
+  const jsonl = [
+    { uuid: 'u1', type: 'user', timestamp: '2026-10-15T05:03:00.000Z', message: { role: 'user', content: '내일 배포하자' } },
+    { uuid: 'a1', type: 'assistant', timestamp: '2026-10-15T05:04:00.000Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } },
+  ].map(row => JSON.stringify(row)).join('\n')
+  const sentAt = sentAtOf(parseTranscriptRows(jsonl))
+  const rows: SessionMessage[] = [
+    { role: 'user', text: '내일 배포하자', toolUses: [] },
+    { role: 'assistant', text: '', toolUses: [{ tool: 'Bash', tool_use_id: 't1', input: {} } as SessionMessage['toolUses'][number]] },
+    { role: 'user', text: 'never in the transcript', toolUses: [] },
+  ]
+  expect(renderTurns(rows, 120_000, sentAt).split('\n').filter(line => line.startsWith('['))).toEqual([
+    '[user 2026-10-15 14:03 KST] 내일 배포하자', '[assistant 2026-10-15 14:04 KST]', '[user] never in the transcript',
+  ])
+  expect(renderRange(rows, 120_000, 0, sentAt).text).toContain('[user m1 2026-10-15 14:03 KST] 내일 배포하자')
 })

@@ -14,9 +14,11 @@ NEVER aimed at a model is a request, not a guard, so both live here instead:
   checking what the remote holds.
 - `git push --force-with-lease[=...]` (optionally with `--force-if-includes`)
                                   -> denied if and only if the pushed branch has
-  an open GitHub PR whose `reviews` list is non-empty. Every inline review
-  comment arrives as a COMMENTED review, so that list covers the threads too;
-  rewriting the history under them detaches them. Anything the hook cannot
+  an open GitHub PR carrying a review by someone other than the PR's author.
+  Every inline review comment arrives as a COMMENTED review, so that list
+  covers the threads too; rewriting the history under them detaches them. The
+  author's own reviews are the explainer comments a PR worker leaves on its
+  diff, which nobody else is answering, so they do not block. Anything the hook cannot
   settle -- the branch, or gh failing -- is denied, fail closed.
 
 Deliberately separate from git-push-guard.py: that hook answers "which refspec
@@ -108,7 +110,7 @@ def gh_open_prs(branch, d):
     """Return (prs, None) with the open PRs whose head is `branch`, or
     (None, error) naming why gh could not answer."""
     cmd = ["gh", "pr", "list", "--head", branch, "--state", "open",
-           "--json", "number,url,reviews,reviewDecision"]
+           "--json", "number,url,author,reviews,reviewDecision"]
     try:
         p = subprocess.run(cmd, cwd=d, capture_output=True, text=True,
                            timeout=GH_TIMEOUT_S)
@@ -149,6 +151,18 @@ def target_branches(positionals, d, head):
     return out, None
 
 
+def login(who):
+    return who.get("login") if isinstance(who, dict) else None
+
+
+def others_reviews(pr):
+    """Reviews not written by the PR's author. An unknown author keeps every
+    review, so a missing field fails closed."""
+    author = login(pr.get("author"))
+    return [r for r in pr.get("reviews") or []
+            if not (author and isinstance(r, dict) and login(r.get("author")) == author)]
+
+
 def lease_violation(args, d, lookup, head):
     pos = push_positionals(args)
     remote = pos[0] if pos else "origin"
@@ -167,7 +181,7 @@ def lease_violation(args, d, lookup, head):
             return (f"`--force-with-lease` of `{b}` to {remote} denied: the PR review check "
                     f"failed, and this guard fails closed. {err}")
         for pr in prs:
-            reviews = pr.get("reviews") or [] if isinstance(pr, dict) else []
+            reviews = others_reviews(pr) if isinstance(pr, dict) else []
             if reviews:
                 return (f"`--force-with-lease` of `{b}` denied: PR #{pr.get('number')} "
                         f"({pr.get('url')}) has {len(reviews)} review(s). The PR already "
@@ -242,6 +256,11 @@ def selftest():
     no_pr = lambda b, d: ([], None)
     unreviewed = lambda b, d: ([{"number": 1, "url": "u", "reviews": []}], None)
     reviewed = lambda b, d: ([{"number": 7, "url": "u", "reviews": [{"state": "COMMENTED"}]}], None)
+    self_explained = lambda b, d: ([{"number": 8, "url": "u", "author": {"login": "me"},
+                                     "reviews": [{"state": "COMMENTED", "author": {"login": "me"}}]}], None)
+    mixed = lambda b, d: ([{"number": 9, "url": "u", "author": {"login": "me"},
+                            "reviews": [{"author": {"login": "me"}},
+                                        {"author": {"login": "rev"}}]}], None)
     gh_down = lambda b, d: (None, "`gh pr list` exited 1: auth required")
     on_feat = lambda d: "feat"
     detached = lambda d: None
@@ -277,6 +296,10 @@ def selftest():
     # lease allowed onto a PR that carries review comments
     assert v("git push --force-with-lease origin main", lookup=reviewed) is not None
     assert v("git push --force-with-lease", lookup=reviewed) is not None
+    # the PR worker's own explainer comments blocking its rebase
+    assert v("git push --force-with-lease origin main", lookup=self_explained) is None
+    # a teammate's review hidden behind the author's own explainer comments
+    assert v("git push --force-with-lease origin main", lookup=mixed) is not None
     # gh failure read as "no PR" (fail open)
     assert v("git push --force-with-lease origin main", lookup=gh_down) is not None
     # --force-if-includes alone accepted as if it were a lease

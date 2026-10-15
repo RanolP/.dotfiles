@@ -111,6 +111,11 @@ export const instructionKey = (text: string) => text.replace(/\s+/g, ' ').trim()
 const sectionOf = (notes: string, name: string) => sectionsOf(notes).find(p => isSection(p, name))
 export const instructionValues = (notes: string): string[] =>
   (sectionOf(notes, INSTRUCTIONS) ?? '').split('\n').slice(1).map(instructionValue).filter((v): v is string => v !== undefined)
+export const withdrawnInstructionKeys = (notes: string): Set<string> => new Set(instructionValues(notes).flatMap(value => {
+  if (!value.startsWith(WITHDRAWN_PREFIX)) return []
+  const raw = value.slice(WITHDRAWN_PREFIX.length)
+  return [instructionKey(value), instructionKey(storedInstructionValue(raw))]
+}))
 
 /** Rebuilds the stored note sections in ledger order, taking `name`'s body from `body`. */
 function withSection(notes: string, name: string, body: string): string {
@@ -199,21 +204,23 @@ export function ageDecayTargets(topics: readonly AgeDecayTopic[], budget: number
   if (!topics.length) return []
   const current = topics.map(topic => Math.max(0, topic.currentTokens))
   if (current.reduce((sum, value) => sum + value, 0) <= budget) return current
-  const floors = topics.map((topic, index) => Math.max(0, Math.min(current[index]!, topic.floorTokens)))
+  const floors = topics.map((topic, index) => Math.max(0, Math.min(current[index] ?? 0, topic.floorTokens)))
   const newestSeq = Math.max(...topics.map(topic => topic.seq))
   const newest = topics.flatMap((topic, index) => topic.seq === newestSeq ? [index] : [])
   const oldFloors = floors.reduce((sum, value, index) => sum + (newest.includes(index) ? 0 : value), 0)
-  const newestCurrent = newest.reduce((sum, index) => sum + current[index]!, 0)
+  const newestCurrent = newest.reduce((sum, index) => sum + (current[index] ?? 0), 0)
   if (oldFloors + newestCurrent > budget) {
     const room = Math.max(0, budget - oldFloors)
-    const total = newest.reduce((sum, index) => sum + topics[index]!.sourceTokens, 0)
-    return floors.map((floor, index) => newest.includes(index)
-      ? (total > 0 ? Math.floor(room * topics[index]!.sourceTokens / total) : 0)
-      : floor)
+    const total = newest.reduce((sum, index) => sum + (topics[index]?.sourceTokens ?? 0), 0)
+    return floors.map((floor, index) => {
+      const topic = topics[index]
+      if (!newest.includes(index) || !topic) return floor
+      return total > 0 ? Math.floor(room * topic.sourceTokens / total) : 0
+    })
   }
   const valueAt = (topic: AgeDecayTopic, index: number, d: number) => {
     const age = topics.filter(other => other.seq > topic.seq).length
-    return Math.max(floors[index]!, Math.min(current[index]!, topic.sourceTokens * (1 + age) ** -d))
+    return Math.max(floors[index] ?? 0, Math.min(current[index] ?? 0, topic.sourceTokens * (1 + age) ** -d))
   }
   const totalAt = (d: number) => {
     let total = 0
@@ -305,7 +312,7 @@ export const LEDGER_COMPACT_SYSTEM = [
   'Return one JSON object with a topics array of {topic, summary, seq, focusIssue} records.',
   'Fit the complete ledger within the supplied token budget. Give recent topics more room and re-summarize older topics more tightly.',
   'Merge recurring topics into one entry only when their focusIssue matches. Keep a closed topic as its outcome and key facts.',
-  'Keep distinct topics distinct and preserve their facts and outcomes.',
+  'Keep distinct topics distinct and preserve their supported facts and outcomes.',
   'Use the supplied fold sequence for each topic whose summary you rewrite; retain an earlier sequence for a topic whose summary stays unchanged.',
   'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1,"focusIssue":null}]}.',
 ].join('\n')

@@ -157,4 +157,4 @@ export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, le
 
 // clm-prompt
 export const ledgerRowText = (seq: number, at: string, _path: string, ledger: string) =>
-  `[clm ledger #${seq} · ${at}]\n\n${ledger}`
+	`[clm ledger #${seq} · ${at}]\n\n${ledger}\n\nPR, branch, deploy and ticket states may have moved since: re-query one before acting on it.`

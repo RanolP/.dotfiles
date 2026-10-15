@@ -50,6 +50,15 @@ export type ClmStatus = {
   openIssues: number
 }
 
+export type ClmRecallInput = { address: string }
+export type ClmTaskInput = {
+  id?: string
+  title?: string
+  status: 'doing' | 'done' | 'uncertain' | 'dropped'
+  note?: string
+  evidence?: { ref: string; quote: string }
+}
+
 export type Clm = {
   /** Create an issue in this session, or set an existing issue's status. */
   track(input: ClmTrackInput): Promise<ClmIssue>
@@ -62,6 +71,11 @@ export type Clm = {
 }
 
 declare module 'claude-code' {
+  interface McpToolInputs {
+    'mcp__clm__clm_recall': ClmRecallInput
+    'mcp__clm__clm_task': ClmTaskInput
+  }
+
   interface PluginState {
     clm: { workflow: ClmWorkflow }
   }

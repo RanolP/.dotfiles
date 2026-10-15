@@ -1,4 +1,4 @@
-import { update, type BuiltinToolInputs, type EngineInterface, type PromptOrigin, type Register, type SessionCompactResult, type SessionMessage } from 'claude-code'
+import { update, type BuiltinToolInputs, type EngineInterface, type Register, type SessionCompactResult, type SessionMessage } from 'claude-code'
 
 import { boardHtml } from './board'
 import {
@@ -10,7 +10,7 @@ import {
   type Evidence, type Source,
 } from './evidence'
 import {
-  composeLedger, EMPTY_LEDGER, factLine, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, issueList, legacyItems, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
+  composeLedger, EMPTY_LEDGER, factLine, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, withdrawnInstructionKeys, issueList, legacyItems, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
   parseChanges, parseMerge, parseReview, preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
   withNotes, WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective, type Fact,
 } from './ledger'
@@ -18,8 +18,15 @@ import {
   archivedDone, describe, injected, isOpen, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
   focusOf, issueId, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
-import { compose, INTENT_SYSTEM, intentPrompt, parseFocus, parseLater, parseRequests, xmlText, type RequestClassification } from './intent'
-import type { ClmStatus, ClmWorkflow } from '../types'
+import { compose, INTENT_SYSTEM, intentPrompt, isRequestRecord, laterSupported, parseFocus, parseLater, parseRequests, supportedLaterDrop, supportedRequestQuote, xmlText, type RequestClassification, type RequestRecord } from './intent'
+import { chooseContinuation, isHumanOrigin, removeQueueSnapshotTargets, resetUserWorkflow, restoreFailedContinuation, workflowValue, type Continuation } from './workflow'
+import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
+import { parseTranscriptRows, recallTranscriptAddress, type AddressRow } from './address'
+import { residentLedgerText, type InstructionIndex, type ResidentLedgerSections } from './resident'
+
+export { recallTranscriptAddress } from './address'
+export { residentLedgerText } from './resident'
+export { chooseContinuation, removeQueueSnapshotTargets, resetUserWorkflow, restoreFailedContinuation } from './workflow'
 
 // Each transcript has one compaction job. Turn-end work starts it in the
 // background; engine compactions join that job and apply its ready plan.
@@ -34,6 +41,7 @@ import type { ClmStatus, ClmWorkflow } from '../types'
 const FAILS_BEFORE_FALLBACK = 3
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 const RECALL_TOOL = 'mcp__clm__clm_recall'
+export const TASK_TOOL = 'mcp__clm__clm_task'
 
 type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value: unknown }> } }
 type SessionReader = { session: { id: () => Promise<string> } }
@@ -49,32 +57,6 @@ type TrackerReader = {
   ui: { log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void }
 }
 type StatusReader = WorkflowReader & StoreReader & TrackerReader
-
-const emptyWorkflow = (): ClmWorkflow => ({
-  later: [], resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null,
-  promptSeq: 0, focusAppliedSeq: 0, replayed: null,
-})
-function workflowValue(value: unknown): ClmWorkflow {
-  const empty = emptyWorkflow()
-  if (!isRecord(value)) return empty
-  const later = Array.isArray(value.later) ? value.later.flatMap((item): ClmWorkflow['later'] => {
-    if (typeof item === 'string') return item.trim() ? [{ text: item }] : []
-    if (!isRecord(item) || typeof item.text !== 'string' || !item.text.trim()) return []
-    return [{ text: item.text, ...(typeof item.issue === 'string' ? { issue: item.issue } : {}) }]
-  }) : []
-  const resumeRequest = value.resumeRequest === null || value.resumeRequest === undefined
-    ? null
-    : isRecord(value.resumeRequest) && typeof value.resumeRequest.text === 'string' ? { text: value.resumeRequest.text } : null
-  const replayed = isRecord(value.replayed) && typeof value.replayed.issue === 'string' ? { issue: value.replayed.issue } : null
-  return {
-    later, resumeRequest,
-    lastSubmittedTurn: typeof value.lastSubmittedTurn === 'string' ? value.lastSubmittedTurn : null,
-    activeTurnId: typeof value.activeTurnId === 'string' ? value.activeTurnId : null,
-    promptSeq: typeof value.promptSeq === 'number' && Number.isInteger(value.promptSeq) && value.promptSeq >= 0 ? value.promptSeq : 0,
-    focusAppliedSeq: typeof value.focusAppliedSeq === 'number' && Number.isInteger(value.focusAppliedSeq) && value.focusAppliedSeq >= 0 ? value.focusAppliedSeq : 0,
-    replayed,
-  }
-}
 
 async function readWorkflow($: WorkflowReader): Promise<ClmWorkflow> {
   const value: unknown = (await $.state.get(WORKFLOW)).value
@@ -148,8 +130,7 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 // A fold's `ops` wait here and reach the tracker only in session.compact, when
 // the fold is applied, so a planned fold that never lands (a headless session,
 // a re-fold) cannot leave issues behind for the next one to duplicate. The
-// tracker writes at call time are mirrorModelTask, for the model's own task
-// calls, and stepOnce, for the steps each tool call shows.
+// tracker writes at call time mirror the model's TaskCreate and TaskUpdate calls.
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: Topic[]
@@ -163,7 +144,7 @@ type FoldJob =
   | { state: 'ready'; plan: Pending; fingerprints: string[]; turnEnd: boolean }
   | { state: 'swapping'; promise: Promise<SessionCompactResult> }
 type Topic = { topic: string; summary: string; seq: number; sourceTokens?: number; focusIssue?: string | null }
-type LedgerSnapshot = { seq: number; coveredRows: string[]; ledger: string; topics?: Topic[]; instructions?: unknown; addresses?: unknown }
+type LedgerSnapshot = { seq: number; ledgerFp: string; coveredRows: string[]; ledger: string; topics?: Topic[]; instructions?: unknown; addresses?: unknown }
 // `foldTokens` is the usage reading taken when the last fold landed: the
 // engine keeps reporting it until the next API response, so an equal reading
 // describes the transcript before that fold and is ignored.
@@ -180,6 +161,7 @@ const topicsKey = async ($: EngineInterface, key?: string) => {
 }
 const ledgerSnapshotsKey = (key: string) => `ledger-snapshots:${key}`
 const transcriptRowsKey = (key: string) => `transcript-rows:${key}`
+const transcriptPathKey = (session: string) => `transcript-path:${session}`
 const instructionIndexKey = (key: string) => `instruction-index:${key}`
 const issueAddressKey = (key: string) => `issue-addresses:${key}`
 const requestsKey = (key: string) => `requests:${key}`
@@ -187,103 +169,7 @@ const requestPromptSeqKey = (key: string) => `request-prompt-seq:${key}`
 const transcriptPaths = new Map<string, string>()
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-export type AddressRow = { raw: string; uuid: string; parentUuid?: string; role?: string; text: string }
-export type InstructionIndex = { address: string; issue: string | null; text: string }
-export type RequestRecord = {
-  id: string
-  text: string
-  quote: string
-  status: 'open' | 'answered' | 'declined' | 'skipped'
-  resolution?: { how: 'answered' | 'declined' | 'skipped'; quote?: string }
-}
-export type ResidentLedgerSections = {
-  where?: readonly string[]
-  children?: readonly Issue[]
-  requests?: readonly RequestRecord[]
-  constraints?: readonly string[]
-  uncertain?: readonly Issue[]
-  learned?: readonly string[]
-}
 type LedgerPreview = { notes?: string; topics?: Topic[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } }
-
-function transcriptRowText(value: Record<string, unknown>): string {
-  const message = isRecord(value.message) ? value.message : value
-  const content = message.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content.flatMap(block => {
-    if (!isRecord(block)) return []
-    if (block.type === 'text' && typeof block.text === 'string') return [block.text]
-    if (block.type === 'tool_use' && typeof block.name === 'string') return [`${block.name} ${JSON.stringify(block.input ?? {})}`]
-    if (block.type === 'tool_result' && typeof block.content === 'string') return [block.content]
-    return []
-  }).join('\n')
-}
-
-export function parseTranscriptRows(text: string): AddressRow[] {
-  return text.split('\n').flatMap(raw => {
-    if (!raw.trim()) return []
-    try {
-      const value: unknown = JSON.parse(raw)
-      if (!isRecord(value) || typeof value.uuid !== 'string' || !value.uuid) return []
-      const message = isRecord(value.message) ? value.message : value
-      const role = typeof message.role === 'string' ? message.role : typeof value.type === 'string' ? value.type : undefined
-      return [{ raw, uuid: value.uuid, ...(typeof value.parentUuid === 'string' ? { parentUuid: value.parentUuid } : {}), role, text: transcriptRowText(value) }]
-    } catch { return [] }
-  })
-}
-
-export function recallTranscriptAddress(text: string, address: string): { text?: string; error?: string } {
-  const match = /^@([\da-f]{8})(?:\.\.@([\da-f]{8}))?$/i.exec(address.trim())
-  if (!match) return { error: 'address must be @xxxxxxxx or @first..@last' }
-  const rows = parseTranscriptRows(text)
-  const byAddress = (short: string) => rows.filter(row => row.uuid.slice(0, 8).toLowerCase() === short.toLowerCase())
-  const firstMatches = byAddress(match[1]!)
-  if (firstMatches.length !== 1) return { error: firstMatches.length ? `address @${match[1]} is ambiguous` : `address @${match[1]} was not found` }
-  if (!match[2]) return { text: firstMatches[0]!.raw }
-  const lastMatches = byAddress(match[2])
-  if (lastMatches.length !== 1) return { error: lastMatches.length ? `address @${match[2]} is ambiguous` : `address @${match[2]} was not found` }
-  const byUuid = new Map(rows.map(row => [row.uuid, row]))
-  const reverse = [lastMatches[0]!]
-  while (reverse.at(-1)?.uuid !== firstMatches[0]!.uuid) {
-    const parent = reverse.at(-1)?.parentUuid
-    const row = parent ? byUuid.get(parent) : undefined
-    if (!row || reverse.some(item => item.uuid === row.uuid)) return { error: `@${match[1]} is not an ancestor of @${match[2]}` }
-    reverse.push(row)
-  }
-  return { text: reverse.reverse().map(row => row.raw).join('\n') }
-}
-
-export function residentLedgerText(
-  top: Issue | undefined, topAddress: string | undefined, stackSize: number, pendingCount: number,
-  instructions: readonly InstructionIndex[], ancestorIds: ReadonlySet<string>, sections: ResidentLedgerSections = {},
-): string {
-  const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim()
-  const lastNote = top?.notes.at(-1)
-  const focus = top
-    ? `- ${oneLine(top.title)}${lastNote ? ` — ${oneLine(lastNote)}` : ''} ${topAddress ?? '@unknown'}`
-    : '- (none)'
-  const index = instructions.filter(item => item.issue === null || (item.issue !== null && ancestorIds.has(item.issue)))
-    .map(item => `- ${[...item.text].slice(0, 80).join('')} ${item.address}`)
-  const where = [focus, ...(sections.where ?? []).map(line => `- ${oneLine(line)}`), 'Stack size', String(stackSize), 'Pending count', String(pendingCount)]
-  const tasks = (sections.children ?? []).filter(issue => issue.parent === top?.id && isOpen(issue))
-    .map(issue => `- ${oneLine(issue.title)}${issue.notes.at(-1) ? ` — ${oneLine(issue.notes.at(-1)!)}` : ''} [${issue.id}]`)
-  const requests = (sections.requests ?? []).filter(request => request.status === 'open')
-    .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
-  const constraints = [...index, ...(sections.constraints ?? []).map(oneLine)]
-  const uncertain = (sections.uncertain ?? []).filter(issue => issue.status === 'uncertain')
-    .map(issue => `- ${oneLine(issue.title)} — settling check: ${oneLine(issue.notes.at(-1) ?? 'verify the claim')} [${issue.id}]`)
-  const learned = (sections.learned ?? []).map(oneLine)
-  const body = (lines: readonly string[]) => lines.length ? lines.join('\n') : '- (none yet)'
-  return [
-    '## where we are', where.join('\n'),
-    '## what to do', body(tasks),
-    '## what to request', body(requests),
-    '## constraints & preferences', body(constraints),
-    '## uncertain', body(uncertain),
-    '## learned', body(learned),
-  ].join('\n\n')
-}
 const isTopic = (v: unknown): v is Topic => isRecord(v) && typeof v.topic === 'string' && v.topic.trim() !== ''
   && typeof v.summary === 'string' && v.summary.trim() !== '' && typeof v.seq === 'number' && Number.isInteger(v.seq) && v.seq > 0
   && (v.sourceTokens === undefined || (typeof v.sourceTokens === 'number' && Number.isInteger(v.sourceTokens) && v.sourceTokens >= 0))
@@ -319,10 +205,18 @@ async function readText($: EngineInterface, p: string): Promise<string | undefin
 }
 
 async function transcriptRows($: EngineInterface): Promise<AddressRow[]> {
-  const path = transcriptPaths.get(await sid($))
+  const session = await sid($)
+  const storedPath = await $.store.get(transcriptPathKey(session))
+  const path = transcriptPaths.get(session) ?? (typeof storedPath === 'string' ? storedPath : undefined)
   if (!path) return []
+  transcriptPaths.set(session, path)
   const text = await readText($, path)
   return text === undefined ? [] : parseTranscriptRows(text)
+}
+
+async function rememberTranscriptPath($: EngineInterface, session: string, path: string): Promise<void> {
+  transcriptPaths.set(session, path)
+  await $.store.set(transcriptPathKey(session), path)
 }
 
 function promptAddress(rows: readonly AddressRow[], prompt: string): string | undefined {
@@ -331,23 +225,9 @@ function promptAddress(rows: readonly AddressRow[], prompt: string): string | un
   return row ? `@${row.uuid.slice(0, 8)}` : undefined
 }
 
-function isRequestRecord(value: unknown): value is RequestRecord {
-  if (!isRecord(value) || typeof value.id !== 'string' || typeof value.text !== 'string' || typeof value.quote !== 'string'
-    || !['open', 'answered', 'declined', 'skipped'].includes(String(value.status))) return false
-  if (value.resolution === undefined) return value.status === 'open'
-  return isRecord(value.resolution)
-    && ['answered', 'declined', 'skipped'].includes(String(value.resolution.how))
-    && (value.resolution.quote === undefined || typeof value.resolution.quote === 'string')
-}
-
 async function readRequests($: EngineInterface, key: string): Promise<RequestRecord[]> {
   const value = await $.store.get(requestsKey(key))
   return Array.isArray(value) ? value.filter(isRequestRecord) : []
-}
-
-function supportedRequestQuote(quote: string, sourceText: string, kind: Source['kind']): boolean {
-  const source: Source = { kind, text: sourceText }
-  return checkEvidence([{ ref: 'evidence', quote }], new Map([['evidence', source]]), [kind]).held.length > 0
 }
 
 async function applyRequestClassification(
@@ -382,8 +262,10 @@ async function applyRequestClassification(
     }
     const index = next.findIndex(request => request.id === resolution.id && request.status === 'open')
     if (index < 0) continue
+    const request = next[index]
+    if (!request) continue
     next[index] = {
-      ...next[index]!, status: resolution.how,
+      ...request, status: resolution.how,
       resolution: { how: resolution.how, ...(resolution.quote === undefined ? {} : { quote: resolution.quote }) },
     }
     resolved.add(resolution.id)
@@ -394,8 +276,26 @@ async function applyRequestClassification(
 }
 
 function isInstructionIndex(value: unknown): value is InstructionIndex {
-  return isRecord(value) && typeof value.address === 'string' && /^@[\da-f]{8}$/i.test(value.address)
+  return isRecord(value) && typeof value.address === 'string' && (/^@[\da-f]{8}$/i.test(value.address) || value.address === '@unknown')
     && (typeof value.issue === 'string' || value.issue === null) && typeof value.text === 'string'
+}
+
+async function ensureInstructionIndex($: EngineInterface, key: string, notes: string): Promise<void> {
+  const raw = await $.store.get(instructionIndexKey(key))
+  const index = Array.isArray(raw) ? raw.filter(isInstructionIndex) : []
+  const indexed = new Set(index.map(item => instructionKey(item.text)))
+  const rows = await transcriptRows($)
+  let changed = false
+  for (const text of instructionValues(notes)) {
+    if (text.startsWith(WITHDRAWN_PREFIX)) continue
+    const normalized = instructionKey(text)
+    if (!normalized || indexed.has(normalized)) continue
+    const source = [...rows].reverse().find(row => row.role === 'user' && instructionKey(stripReminders(row.text)) === normalized)
+    index.push({ address: source ? `@${source.uuid.slice(0, 8)}` : '@unknown', issue: null, text })
+    indexed.add(normalized)
+    changed = true
+  }
+  if (changed) await $.store.set(instructionIndexKey(key), index)
 }
 
 async function residentLedger(
@@ -406,8 +306,9 @@ async function residentLedger(
   const rows = await transcriptRows($)
   const seen = new Set(index.map(item => `${item.address}\0${item.issue}`))
   for (const event of events) {
-    if (event.op !== 'focus' || event.issue !== event.origin.session || !event.rule?.trim()) continue
-    const source = [...rows].reverse().find(row => row.role === 'user' && instructionKey(row.text).includes(instructionKey(event.rule!)))
+    const rule = event.op === 'focus' ? event.rule?.trim() : undefined
+    if (event.op !== 'focus' || event.issue !== event.origin.session || !rule) continue
+    const source = [...rows].reverse().find(row => row.role === 'user' && instructionKey(row.text).includes(instructionKey(rule)))
     if (!source) continue
     const address = `@${source.uuid.slice(0, 8)}`
     if (!seen.has(`${address}\0null`)) index.push({ address, issue: null, text: source.text })
@@ -447,7 +348,9 @@ async function residentLedger(
     uncertain: shownIssues.filter(issue => issue.status === 'uncertain'),
     learned,
   }
-  return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, shownState.stack.length, shownState.pending.length, index, ancestors, sections)
+  const withdrawn = withdrawnInstructionKeys(rawNotes)
+  const visibleIndex = index.filter(item => !withdrawn.has(instructionKey(item.text)))
+  return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, shownState.stack.length, shownState.pending.length, visibleIndex, ancestors, sections)
 }
 
 type TopicDraft = { topic: string; summary: string }
@@ -505,7 +408,7 @@ function parseTopics(raw: string): Topic[] | string {
 async function compressTopics(
   $: EngineInterface, opts: Opts, input: readonly Topic[], seq: number, notes: string, issues: readonly Issue[], key?: string,
 ): Promise<{ topics: Topic[]; ledgerTokens: number }> {
-  const normalized = input.map(topic => ({ ...topic, sourceTokens: topic.sourceTokens ?? topicTokens(topic) }))
+  const normalized: (Topic & { sourceTokens: number })[] = input.map(topic => ({ ...topic, sourceTokens: topic.sourceTokens ?? topicTokens(topic) }))
   const old = new Map(normalized.map(topic => [topicKey(topic), topic]))
   const fixedNotes = notes.replace(/^## 목표\n[\s\S]*?(?=\n## |$)/m, '## 목표\n')
   const origin = await captureOrigin($)
@@ -523,10 +426,13 @@ async function compressTopics(
   const fixedTokens = sum([fixedRow])
   const topicBudget = Math.max(0, opts.ledgerTarget - fixedTokens)
   const allocation = ageDecayPlan(normalized.map(topic => ({
-    sourceTokens: topic.sourceTokens!, currentTokens: topicTokens(topic), floorTokens: topicFloorTokens(topic), seq: topic.seq,
+    sourceTokens: topic.sourceTokens, currentTokens: topicTokens(topic), floorTokens: topicFloorTokens(topic), seq: topic.seq,
   })), topicBudget)
   const targets = allocation.targets
-  const rewrite = allocation.rewrite.map(index => normalized[index]!)
+  const rewrite = allocation.rewrite.flatMap(index => {
+    const topic = normalized[index]
+    return topic ? [topic] : []
+  })
   let retryReason = ''
   let latest = [...normalized]
   let latestTokens = 0
@@ -709,11 +615,9 @@ async function writeEvents($: EngineInterface, payloads: readonly Payload[], o: 
 }
 
 // `project` is false where the caller projects later, once its own writes are
-// done. `knownTitles` drops a model-derived create whose title any issue of this
-// session already carries: per-tool-call steps and the fold read overlapping
-// turns, and whichever lands second must not add the step again. A dropped
-// issue counts too: <issues> lists this session's newest dropped ones, so the
-// model re-opens one with a status op on its old id rather than a create.
+// done. `knownTitles` drops a model-derived create whose title an issue of this
+// session already carries. A dropped issue counts too: <issues> lists this
+// session's newest dropped ones, so the model re-opens it by id.
 async function append($: EngineInterface, payloads: readonly Payload[], origin?: Origin, project = true, knownTitles = false): Promise<TrackerEvent[]> {
   if (payloads.length === 0) return []
   const o = origin ?? (await captureOrigin($))
@@ -733,48 +637,6 @@ async function append($: EngineInterface, payloads: readonly Payload[], origin?:
   })
 }
 
-function laterSupported(item: string, prompt: string): boolean {
-  const grams = (text: string) => {
-    const chars = [...text.replace(/\s/gu, '').toLocaleLowerCase()]
-    const counts = new Map<string, number>()
-    for (let i = 0; i + 1 < chars.length; i++) {
-      const gram = chars[i]! + chars[i + 1]!
-      counts.set(gram, (counts.get(gram) ?? 0) + 1)
-    }
-    return counts
-  }
-  const itemGrams = grams(item), promptGrams = grams(prompt)
-  if (!itemGrams.size) return prompt.replace(/\s/gu, '').toLocaleLowerCase().includes(item.replace(/\s/gu, '').toLocaleLowerCase())
-  let matched = 0
-  let total = 0
-  for (const [gram, count] of itemGrams) {
-    total += count
-    matched += Math.min(count, promptGrams.get(gram) ?? 0)
-  }
-  return matched / total >= 0.5
-}
-
-function supportedLaterDrop(drop: number[] | 'all', prompt: string): number[] | 'all' {
-  if (drop === 'all') return /later|나중|큐|queue/i.test(prompt) ? 'all' : []
-  return drop.filter(index => new RegExp(`(?:^|[^\\p{N}])${index}(?:$|[^\\p{N}])`, 'u').test(prompt))
-}
-
-export function removeQueueSnapshotTargets(
-  current: readonly ClmWorkflow['later'][number][], snapshot: readonly ClmWorkflow['later'][number][], positions: readonly number[],
-): { remaining: ClmWorkflow['later']; dropped: { item: string; number: number }[] } {
-  const remaining = [...current]
-  const dropped: { item: string; number: number }[] = []
-  for (const number of positions) {
-    const target = snapshot[number - 1]
-    if (!target) continue
-    const index = remaining.findIndex(item => item.text === target.text)
-    if (index < 0) continue
-    remaining.splice(index, 1)
-    dropped.push({ item: target.text, number })
-  }
-  return { remaining, dropped }
-}
-
 async function applyLaterClassification(
   $: EngineInterface, classification: ReturnType<typeof parseLater>, prompt: string, queueSnapshot: readonly ClmWorkflow['later'][number][],
 ): Promise<void> {
@@ -791,7 +653,10 @@ async function applyLaterClassification(
   }
   const dropItems = drop === 'all'
     ? queueSnapshot.map((item, index) => ({ text: item.text, number: index + 1 }))
-    : drop.flatMap(number => queueSnapshot[number - 1] ? [{ text: queueSnapshot[number - 1]!.text, number }] : [])
+    : drop.flatMap(number => {
+      const item = queueSnapshot[number - 1]
+      return item ? [{ text: item.text, number }] : []
+    })
   if (!dropItems.length && !later.length) return
   try {
     const { dropped, queued } = await changeWorkflow($, current => {
@@ -803,6 +668,19 @@ async function applyLaterClassification(
     for (const item of queued) $.ui.log(`clm: queued later item ${item.number}`)
   } catch (err) {
     $.ui.log(`clm later queue: update failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+  }
+}
+
+async function parseAndApplyLater(
+  $: EngineInterface, raw: string, prompt: string, queueSnapshot: readonly ClmWorkflow['later'][number][],
+): Promise<ReturnType<typeof parseLater> | undefined> {
+  try {
+    const classification = parseLater(raw)
+    await applyLaterClassification($, classification, prompt, queueSnapshot)
+    return classification
+  } catch (err) {
+    $.ui.log(`clm intent: later classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    return undefined
   }
 }
 
@@ -827,13 +705,7 @@ async function recordPromptIntent($: EngineInterface, text: string, promptSeq: n
     })
     if (!r.isAnswered) throw new Error(`model did not answer (${r.reason})`)
 
-    let later: ReturnType<typeof parseLater> | undefined
-    try {
-      later = parseLater(r.text)
-      await applyLaterClassification($, later, userPrompt, queueSnapshot)
-    } catch (err) {
-      $.ui.log(`clm intent: later classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
-    }
+    const later = await parseAndApplyLater($, r.text, userPrompt, queueSnapshot)
     let requestClassification: RequestClassification | undefined
     try {
       requestClassification = parseRequests(r.text)
@@ -905,12 +777,14 @@ async function recordPromptIntent($: EngineInterface, text: string, promptSeq: n
       }))
       if (later && cls.intent === 'pending' && later.later.length === 1) {
         const pendingIssue = cls.target ?? payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue
-        if (pendingIssue) {
+        const deferred = later.later[0]
+        if (pendingIssue && deferred) {
           await changeWorkflow($, current => {
-            const index = current.later.map(item => item.text).lastIndexOf(later!.later[0]!)
-            if (index < 0 || current.later[index]?.issue === pendingIssue) return { next: current, result: undefined }
+            const index = current.later.map(item => item.text).lastIndexOf(deferred)
+            const queued = current.later[index]
+            if (index < 0 || !queued || queued.issue === pendingIssue) return { next: current, result: undefined }
             const items = [...current.later]
-            items[index] = { ...items[index]!, issue: pendingIssue }
+            items[index] = { ...queued, issue: pendingIssue }
             return { next: { ...current, later: items }, result: undefined }
           })
         }
@@ -962,6 +836,109 @@ export async function trackIssue($: EngineInterface, input: { title: string; sta
   const issue = issueId ? (await sessionIssues($, { issue: issueId }))[0] : undefined
   if (!issue) throw new Error('clm tracker did not return the tracked issue')
   return issue
+}
+
+const agentTaskRootsKey = (session: string) => `agent-task-roots:${session}`
+const taskStatuses = new Set(['doing', 'done', 'uncertain', 'dropped'])
+function isClmTaskInput(value: unknown): value is ClmTaskInput {
+  if (!isRecord(value) || !taskStatuses.has(String(value.status))) return false
+  if (value.id !== undefined && typeof value.id !== 'string') return false
+  if (value.title !== undefined && typeof value.title !== 'string') return false
+  if (value.note !== undefined && typeof value.note !== 'string') return false
+  return value.evidence === undefined || (isRecord(value.evidence) && typeof value.evidence.ref === 'string' && typeof value.evidence.quote === 'string')
+}
+
+async function assignedTaskRoots($: EngineInterface, session: string): Promise<Record<string, string>> {
+  const value = await $.store.get(agentTaskRootsKey(session))
+  if (!isRecord(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+}
+
+function isWithinTask(id: string, root: string, issues: ReadonlyMap<string, Issue>): boolean {
+  const seen = new Set<string>()
+  let current = issues.get(id)
+  while (current && !seen.has(current.id)) {
+    if (current.id === root) return true
+    seen.add(current.id)
+    current = current.parent ? issues.get(current.parent) : undefined
+  }
+  return false
+}
+
+function taskOwner(id: string, focusRoots: readonly string[], roots: Readonly<Record<string, string>>, issues: ReadonlyMap<string, Issue>): string | undefined {
+  const seen = new Set<string>()
+  let current = issues.get(id)
+  while (current && !seen.has(current.id)) {
+    const owner = Object.entries(roots).find(([, root]) => root === current?.id)?.[0]
+    if (owner) return owner
+    seen.add(current.id)
+    current = current.parent ? issues.get(current.parent) : undefined
+  }
+  return focusRoots.some(root => isWithinTask(id, root, issues)) ? 'main' : undefined
+}
+
+function taskOwnerName(owner: string | undefined): string {
+  return owner === 'main' ? 'the main agent' : owner ? `subagent ${owner}` : 'no assigned task owner'
+}
+
+async function runClmTask($: EngineInterface, input: ClmTaskInput, agentId?: string): Promise<{ result: string }> {
+  const origin = await captureOrigin($)
+  const events = await readAll($)
+  const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
+  const byId = new Map(issues.map(issue => [issue.id, issue]))
+  const focus = focusOf(events, origin.session)
+  const roots = await assignedTaskRoots($, origin.session)
+  const ownRoot = agentId ? roots[agentId] : focus.stack.at(-1)
+  if (!ownRoot) return { result: agentId ? `clm_task: subagent ${agentId} has no task assigned by the harness.` : 'clm_task: the main agent has no focused task to own.' }
+  const ownRootOwner = taskOwner(ownRoot, focus.stack, roots, byId)
+  if (ownRootOwner !== (agentId ?? 'main'))
+    return { result: `clm_task: ${ownRoot} belongs to ${taskOwnerName(ownRootOwner)}.` }
+
+  if (input.id !== undefined) {
+    const target = byId.get(input.id)
+    if (!target) return { result: `clm_task: issue ${input.id} does not exist in this session.` }
+    const owner = taskOwner(target.id, focus.stack, roots, byId)
+    if (owner !== (agentId ?? 'main')) return { result: `clm_task: issue ${target.id} belongs to ${taskOwnerName(owner)}.` }
+  } else if (!input.title?.trim()) return { result: 'clm_task: provide an issue id to update or a title to create a child task.' }
+
+  let status: ClmTaskInput['status'] = input.status
+  let reason: string | undefined
+  if (status === 'done') {
+    if (!input.evidence) reason = 'done requires a tool-result ref and a verbatim quote.'
+    else {
+      const range = renderRange(await $.session.messages())
+      const checked = checkEvidence([input.evidence], range.sources, ['tool_result'], true)
+      if (!checked.held.length) reason = checked.problems.join('; ') || 'the evidence did not match this transcript.'
+    }
+    if (reason) status = 'uncertain'
+  }
+
+  let taskId = input.id
+  const audit = status === 'done' && input.evidence ? `verified tool result ${input.evidence.ref}: ${input.evidence.quote}` : undefined
+  const note = [input.note?.trim(), audit].filter((line): line is string => Boolean(line)).join('\n')
+  if (taskId) {
+    await append($, [{ op: 'status', issue: taskId, status }, ...(note ? [{ op: 'note' as const, issue: taskId, text: note }] : [])], origin)
+  } else {
+    const title = input.title?.trim()
+    if (!title) return { result: 'clm_task: title must not be empty.' }
+    const created = await append($, [{ op: 'create', title, status, ...(note ? { note } : {}) }], origin)
+    taskId = created.find(event => event.op === 'create')?.issue
+    if (!taskId) return { result: 'clm_task: task creation did not return an issue id.' }
+    await append($, [{ op: 'parent', issue: taskId, parent: ownRoot }], origin)
+  }
+
+  if (taskId === focus.stack.at(-1) && (status === 'done' || status === 'dropped')) {
+    const currentEvents = await readAll($)
+    const currentFocus = focusOf(currentEvents, origin.session)
+    const currentIssues = snapshot(currentEvents).filter(issue => issue.origin.session === origin.session)
+    const lastSeq = currentEvents.reduce((n, event) => event.origin.session === origin.session ? Math.max(n, event.seq) : n, 0)
+    const composed = compose(currentFocus, { intent: 'continue', target: null, title: null, rule: null }, currentIssues, () => issueId(origin.session, lastSeq + 1))
+    await append($, [{ op: 'focus', stack: composed.next.stack, pending: composed.next.pending, intent: 'continue' }], origin)
+  }
+
+  const current = (await sessionIssues($, { issue: taskId }))[0]
+  const actualStatus = current?.status ?? status
+  return { result: `clm_task: ${taskId} ${actualStatus}${reason ? `; recorded as uncertain because ${reason}` : ''}.` }
 }
 
 const PANEL_STATUS: Record<Issue['status'], 'pending' | 'in_progress' | 'completed' | 'deleted'> = {
@@ -1120,11 +1097,11 @@ async function openBoard($: EngineInterface) {
 
 // `finished` is this session's archived done issues, shown to the merge model
 // only, so it does not re-create them from the turns being folded.
-// `dropped` is shown to the step and merge models only, so they can re-open one
+// `dropped` is shown to the merge model, so it can re-open one
 // by id; the ledger and the panel keep to `issues`.
 type TrackerView = { issues: Issue[]; dropped: Issue[]; finished: Issue[]; doneTitles: Set<string> }
 const DROPPED_SHOWN = 5
-/** The issues the step and merge models see and may name by id. */
+/** The issues the merge model sees and may name by id. */
 const modelIssues = (view: TrackerView) => [...view.issues, ...view.dropped]
 type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: Topic[]; tailTokens: number }
 
@@ -1163,16 +1140,14 @@ async function gateMerge($: EngineInterface, ops: readonly Payload[], evidence: 
 }
 
 // A claim no reviewer has accepted yet is held here, out of the ledger, until
-// a fold's reviewer judges it: a done the per-tool-call step saw (the issue
-// stays doing meanwhile; the step path has the mechanical check only), a drop
-// the step saw or a failed review could not audit (the issue stays open), and a
-// fact whose fold review failed. Each entry keeps the cited rows' text, since
-// those rows may be gone by the time a fold runs, and a nonce: a fold settles
-// (key, nonce), so an entry a step rewrote after the fold read it survives.
-export type Held = { key: string; nonce: string; kind: 'step' | 'drop' | 'fact'; factKind?: Fact['kind']; issue?: string; text?: string; evidence: Evidence[]; sources: Record<string, Source> }
+// a fold's reviewer judges it: a drop the review could not audit (the issue
+// stays open), and a fact whose fold review failed. Each entry keeps the cited
+// rows' text, since those rows may be gone by the time a fold runs, and a nonce
+// so a refreshed held entry survives a fold that read its earlier version.
+export type Held = { key: string; nonce: string; kind: 'drop' | 'fact'; factKind?: Fact['kind']; issue?: string; text?: string; evidence: Evidence[]; sources: Record<string, Source> }
 const heldKey = async ($: EngineInterface) => `held:${await sid($)}`
 export function isHeld(v: unknown): v is Held {
-  return isRecord(v) && typeof v.key === 'string' && typeof v.nonce === 'string' && (v.kind === 'step' || v.kind === 'drop' || v.kind === 'fact')
+  return isRecord(v) && typeof v.key === 'string' && typeof v.nonce === 'string' && (v.kind === 'drop' || v.kind === 'fact')
     && optional(v.issue, 'string') && optional(v.text, 'string') && (v.factKind === undefined || v.factKind === 'constraint' || v.factKind === 'learned')
     && Array.isArray(v.evidence) && isRecord(v.sources)
 }
@@ -1201,36 +1176,38 @@ async function updateHeld($: EngineInterface, settled: readonly string[], added:
   else await $.store.delete(await heldKey($))
 }
 /** The status a held issue claim moves its issue to once a reviewer accepts it. */
-const heldStatus = (h: Held) => (h.kind === 'drop' ? 'dropped' as const : 'done' as const)
+const heldStatus = () => 'dropped' as const
 const heldDrop = async ($: EngineInterface, issue: string, evidence: Evidence[], sources: Record<string, Source>): Promise<Held> =>
   ({ key: `drop:${issue}`, nonce: await newNonce($), kind: 'drop', issue, evidence, sources })
 const citedSources = (evidence: readonly Evidence[], sources: ReadonlyMap<string, Source>) =>
   Object.fromEntries(evidence.flatMap(e => { const src = sources.get(e.ref); return src ? [[e.ref, src]] : [] }))
 
 /** A held claim ready for review, its evidence re-checked against the stored rows. */
-type HeldClaim = { held: Held; issue?: Issue; evidence: Evidence[] }
+type HeldClaim = { held: Extract<Held, { kind: 'drop' }>; issue: Issue; evidence: Evidence[] }
+type HeldFactClaim = { held: Extract<Held, { kind: 'fact' }> & { text: string }; evidence: Evidence[] }
 
-/** Resolves the held entries: a step or drop needs this session's still-open issue, and any entry needs evidence that still holds; the rest are settled without a claim. */
-function heldClaims(list: readonly Held[], issues: readonly Issue[], session: string): { steps: HeldClaim[]; facts: HeldClaim[]; settled: string[] } {
-  const steps: HeldClaim[] = [], facts: HeldClaim[] = [], settled: string[] = []
+/** Resolves held drops against this session's still-open issues and re-checks each stored evidence quote. */
+function heldClaims(list: readonly Held[], issues: readonly Issue[], session: string): { claims: HeldClaim[]; facts: HeldFactClaim[]; settled: string[] } {
+  const claims: HeldClaim[] = [], facts: HeldFactClaim[] = [], settled: string[] = []
   for (const h of list) {
-    const { held } = checkEvidence(h.evidence, new Map(Object.entries(h.sources)), h.kind === 'drop' ? ['user'] : undefined, h.kind === 'step')
-    const issue = h.kind === 'fact' ? undefined : issues.find(i => i.id === h.issue && i.origin.session === session)
-    if (!held.length || (h.kind !== 'fact' && (!issue || issue.status === 'done' || issue.status === 'dropped')) || (h.kind === 'fact' && !h.text)) settled.push(token(h))
-    else (h.kind === 'fact' ? facts : steps).push({ held: h, issue, evidence: held })
+    const { held } = checkEvidence(h.evidence, new Map(Object.entries(h.sources)), h.kind === 'drop' ? ['user'] : undefined)
+    const issue = h.kind === 'drop' ? issues.find(i => i.id === h.issue && i.origin.session === session) : undefined
+    if (!held.length || (h.kind === 'drop' && (!issue || issue.status === 'done' || issue.status === 'dropped')) || (h.kind === 'fact' && !h.text)) settled.push(token(h))
+    else if (h.kind === 'fact' && h.text) facts.push({ held: { ...h, text: h.text }, evidence: held })
+    else if (issue) claims.push({ held: h, issue, evidence: held })
   }
-  return { steps, facts, settled }
+  return { claims, facts, settled }
 }
 
 type ReviewInput = {
   ops: readonly Payload[]; evidence: readonly Evidence[][]; facts: readonly Fact[]; issues: readonly Issue[]
-  steps: readonly HeldClaim[]; heldFacts: readonly HeldClaim[]; range: { text: string; sources: ReadonlyMap<string, Source> }; ratio: number
+  claims: readonly HeldClaim[]; heldFacts: readonly HeldFactClaim[]; range: { text: string; sources: ReadonlyMap<string, Source> }; ratio: number
 }
 type Reviewed = { ops: Payload[]; facts: Fact[]; promoted: Payload[]; hold: Held[]; settled: string[]; failed: boolean }
 // Room for one verdict line per claim, so a large held set cannot truncate the reply into a parse failure.
 const reviewMaxTokens = (claims: number) => Math.min(16_384, Math.max(2048, 512 + 100 * claims))
 const droppedIds = (issues: readonly Issue[]) => new Set(issues.filter(i => i.status === 'dropped').map(i => i.id))
-// What a failed review still lets land: ops that add a step or move it forward.
+// What a failed review still lets land: ops that add an issue or move it forward.
 // A note, a retitle, or a move to question rewrites what the tracker already
 // shows, and nothing has audited it; these carry no evidence for a held entry
 // to keep, so they are dropped and the next fold re-reads any that still hold
@@ -1256,7 +1233,7 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
   const claims = [
     ...input.ops.map((o, i) => ({ id: `op${i + 1}`, claim: describeOp(o, 'issue' in o ? title(o.issue) : undefined), evidence: input.evidence[i] ?? [] })),
     ...input.facts.map((f, i) => ({ id: `fact${i + 1}`, claim: `fact (${f.kind ?? 'learned'}): ${f.text}`, kind: f.kind ?? 'learned', evidence: f.evidence })),
-    ...input.steps.map((c, i) => ({ id: `step${i + 1}`, claim: describeOp({ op: 'status', issue: c.issue!.id, status: heldStatus(c.held) }, c.issue!.title), evidence: c.evidence, source: withSource(c) })),
+    ...input.claims.map((c, i) => ({ id: `drop${i + 1}`, claim: describeOp({ op: 'status', issue: c.issue.id, status: heldStatus() }, c.issue.title), evidence: c.evidence, source: withSource(c) })),
     ...input.heldFacts.map((c, i) => ({ id: `held${i + 1}`, claim: `fact (${c.held.factKind ?? 'learned'}): ${c.held.text}`, kind: c.held.factKind ?? 'learned', evidence: c.evidence, source: withSource(c) })),
   ]
   let review
@@ -1283,7 +1260,7 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
     for (const [i, o] of input.ops.entries()) if (o.op === 'status' && isDropClaim(o)) hold.push(await heldDrop($, o.issue, input.evidence[i] ?? [], citedSources(input.evidence[i] ?? [], input.range.sources)))
     const drops = hold.length
     for (const f of input.facts) hold.push({ key: `fact:${instructionKey(f.text)}`, nonce: await newNonce($), kind: 'fact', factKind: f.kind, text: f.text, evidence: f.evidence, sources: citedSources(f.evidence, input.range.sources) })
-    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) moved to uncertain, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(o => describeOp(o)).join('; ')})` : ''}, ${drops} drop(s) held, retracts dropped, ${input.facts.length} fact(s) and ${input.steps.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
+    await logEvent($, 'review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) moved to uncertain, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(o => describeOp(o)).join('; ')})` : ''}, ${drops} drop(s) held, retracts dropped, ${input.facts.length} fact(s) and ${input.claims.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
     return { ops: input.ops.filter(o => landsUnreviewed(o, dropped)).map(o => (isDoneClaim(o) ? downgrade(o) : o)), facts: [], promoted: [], hold, settled: [], failed: true }
   }
   const verdict = new Map(review.map(v => [v.id, v]))
@@ -1309,8 +1286,8 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
     if (v.accept) land()
     else lines.push(`${id} ${c.held.key}: settled unaccepted (${v.reason})`)
   }
-  input.steps.forEach((c, i) => judge(`step${i + 1}`, c, () => promoted.push({ op: 'status', issue: c.issue!.id, status: heldStatus(c.held) })))
-  input.heldFacts.forEach((c, i) => judge(`held${i + 1}`, c, () => facts.push({ text: c.held.text!, evidence: c.evidence, kind: c.held.factKind })))
+  input.claims.forEach((c, i) => judge(`drop${i + 1}`, c, () => promoted.push({ op: 'status', issue: c.issue.id, status: heldStatus() })))
+  input.heldFacts.forEach((c, i) => judge(`held${i + 1}`, c, () => facts.push({ text: c.held.text, evidence: c.evidence, kind: c.held.factKind })))
   if (lines.length) await logEvent($, 'review-rejected', { ratio: input.ratio, reason: lines.join(' | ').slice(0, 2000) })
   return { ops, facts, promoted, hold: [], settled, failed: false }
 }
@@ -1401,9 +1378,9 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
       $.ui.log(`clm: merge failed (${bad}); folded with a mechanical ledger instead`, { to: 'debug' })
       await logEvent($, 'fallback', { ratio, reason: bad })
     }
-    // The fallback's ops claim no done, so only the merge's claims and the held step dones go to review.
+    // The fallback's ops claim no done, so only the merge claims and held drops go to review.
     const reviewed = await reviewFold($, opts, {
-      ops: fallback ? [] : ops, evidence: fallback ? [] : evidence, facts, issues: modelIssues(view), steps: held.steps, heldFacts: held.facts, range, ratio,
+      ops: fallback ? [] : ops, evidence: fallback ? [] : evidence, facts, issues: modelIssues(view), claims: held.claims, heldFacts: held.facts, range, ratio,
     })
     if (!fallback) ops = reviewed.ops
     // A retract deletes a fact a reviewer once accepted; with no verdict on it, the fact stays.
@@ -1413,7 +1390,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
     hold = reviewed.hold
     settled = [...settled, ...reviewed.settled]
   }
-  // Backstop for the merge model: a step already recorded as done is never created twice.
+  // Backstop for the merge model: a completed issue is never created twice.
   ops = ops.filter(o => !(o.op === 'create' && o.status === 'done' && view.doneTitles.has(o.title.trim())))
   notes = rememberFacts(notes, facts, retracted)
   const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await ledgerPath($), withdrawn)
@@ -1576,9 +1553,10 @@ async function prepareBackgroundFold($: EngineInterface, opts: Opts, rows: reado
 
 function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryMs: number): Pending {
   const keepFrom = rows.length - folded.plan.tail.length
+  const keptRow = rows[keepFrom]
   return {
     notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, seq: folded.seq,
-    keepFp: rows[keepFrom] && fingerprint(rows[keepFrom]!), keepFrom,
+    ...(keptRow ? { keepFp: fingerprint(keptRow) } : {}), keepFrom,
     dropFps: folded.plan.dropped.filter(m => !isLedgerRow(m) && !isSystemRow(m)).map(fingerprint),
     cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback,
     summaryMs, topics: folded.topics,
@@ -1654,6 +1632,7 @@ function removedRows(previous: readonly string[], current: readonly string[]): s
 
 function isLedgerSnapshot(value: unknown): value is LedgerSnapshot {
   return isRecord(value) && typeof value.seq === 'number' && Number.isInteger(value.seq)
+    && typeof value.ledgerFp === 'string'
     && Array.isArray(value.coveredRows) && value.coveredRows.every(ref => typeof ref === 'string')
     && typeof value.ledger === 'string'
     && (value.topics === undefined || isTopicList(value.topics))
@@ -1665,13 +1644,13 @@ async function readLedgerSnapshots($: EngineInterface, key: string): Promise<Led
 }
 
 async function saveLedgerSnapshot(
-  $: EngineInterface, key: string, seq: number, ledger: string, topics: Topic[] | undefined, coveredRows: readonly string[],
+  $: EngineInterface, key: string, seq: number, ledgerFp: string, ledger: string, topics: Topic[] | undefined, coveredRows: readonly string[],
 ): Promise<void> {
   const history = await readLedgerSnapshots($, key)
   const instructions = await $.store.get(instructionIndexKey(key))
   const addresses = await $.store.get(issueAddressKey(key))
   const next: LedgerSnapshot = {
-    seq, ledger, coveredRows: [...new Set(coveredRows)],
+    seq, ledgerFp, ledger, coveredRows: [...new Set(coveredRows)],
     ...(topics ? { topics } : {}),
     ...(instructions === undefined ? {} : { instructions }),
     ...(addresses === undefined ? {} : { addresses }),
@@ -1693,9 +1672,10 @@ async function restoreLedgerSnapshot($: EngineInterface, key: string, snapshot: 
 async function rewindOnlyPlan($: EngineInterface, rows: readonly SessionMessage[], meta: Meta, key: string, snapshot: LedgerSnapshot | undefined): Promise<Pending> {
   const first = protectedIndex(rows)
   const ledger = snapshot?.ledger ?? EMPTY_LEDGER
+  const keptRow = rows[first + 1]
   return {
     notes: notesOf(ledger), fullNotes: notesOf(ledger), ops: [], seq: snapshot?.seq ?? 0,
-    keepFp: rows[first + 1] && fingerprint(rows[first + 1]!), keepFrom: first + 1, dropFps: [],
+    ...(keptRow ? { keepFp: fingerprint(keptRow) } : {}), keepFrom: first + 1, dropFps: [],
     cuts: {}, keptTurns: 0, fallback: false, rewindOnly: true,
     ...(snapshot?.topics ? { topics: snapshot.topics } : {}),
     coveredRows: snapshot?.coveredRows ?? [],
@@ -1715,8 +1695,9 @@ async function observeTranscript($: EngineInterface, _opts: Opts, key: string, a
 
   const removedSet = new Set(removed)
   const history = await readLedgerSnapshots($, key)
-  const restored = [...history].reverse().find(item => item.coveredRows.every(ref => !removedSet.has(ref)))
   const latest = history.at(-1)
+  const ledgerWasRemoved = latest !== undefined && removedSet.has(latest.ledgerFp)
+  const restored = ledgerWasRemoved ? history.at(-2) : undefined
   const existing = foldJobs.get(key)
   const invalidated = existing?.state === 'ready' && existing.plan.dropFps.some(ref => removedSet.has(ref))
   if (invalidated) {
@@ -1724,8 +1705,14 @@ async function observeTranscript($: EngineInterface, _opts: Opts, key: string, a
     await $.store.delete(await pendingKey($, key))
     $.ui.log('clm: rewound rows overlapped the pending summary; discarded its plan', { to: 'debug' })
   }
-  if (restored === latest && !invalidated) return
+  if (!ledgerWasRemoved) return
 
+  if (restored) {
+    const restoredIndex = history.indexOf(restored)
+    await $.store.set(ledgerSnapshotsKey(key), history.slice(0, restoredIndex + 1))
+  } else {
+    await $.store.delete(ledgerSnapshotsKey(key))
+  }
   await restoreLedgerSnapshot($, key, restored)
   const plan = await rewindOnlyPlan($, rows, meta, key, restored)
   foldJobs.set(key, { state: 'ready', plan, fingerprints: current, turnEnd: false })
@@ -1771,9 +1758,9 @@ async function applyFoldPlan(
   first: number, use: Pending, escaped: boolean, startedAt: number, key: string,
 ): Promise<SessionCompactResult> {
   const here = await captureOrigin($)
-  const covered = await steppedThrough($, workingRows, use.keepFrom)
-  const appended = await append($, [...(covered ? [] : use.ops), ...(use.promoted ?? [])], here, false, true)
+  const appended = await append($, [...use.ops, ...(use.promoted ?? [])], here, false, true)
   await updateHeld($, use.settled ?? [], use.hold ?? [])
+  await ensureInstructionIndex($, key, use.fullNotes)
   const stateEvents = await readAll($)
   const currentView = await trackerView($, here)
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
@@ -1791,7 +1778,7 @@ async function applyFoldPlan(
   if (use.topics) await $.store.set(await topicsKey($, key), use.topics)
   else await $.store.delete(await topicsKey($, key))
   const previousSnapshot = (await readLedgerSnapshots($, key)).at(-1)
-  await saveLedgerSnapshot($, key, use.seq, fileLedger, use.topics, [
+  await saveLedgerSnapshot($, key, use.seq, fingerprint(ledgerRow), fileLedger, use.topics, [
     ...(use.coveredRows ?? previousSnapshot?.coveredRows ?? []), ...use.dropFps,
   ])
   await $.store.set(transcriptRowsKey(key), messages.map(fingerprint))
@@ -1838,7 +1825,7 @@ async function applyRewindPlan(
   const messages = buildCleared(plan, row)
   await $.fs.write(await ledgerPath($), fullLedger + '\n')
   if (use.topics) await $.store.set(await topicsKey($, key), use.topics)
-  await saveLedgerSnapshot($, key, use.seq, fullLedger, use.topics, use.coveredRows ?? [])
+  await saveLedgerSnapshot($, key, use.seq, fingerprint(row), fullLedger, use.topics, use.coveredRows ?? [])
   const offset = messages.findIndex(message => message.text === text)
   await writeMeta($, { ...meta, seq: use.seq, lastClear: kst(), boundary: { fp: fingerprint(row), offset } })
   await $.store.set(transcriptRowsKey(key), messages.map(fingerprint))
@@ -1870,124 +1857,6 @@ async function showTurnChanges($: EngineInterface, e: { answer: string }) {
   } catch (err) {
     $.ui.log(`clm: turn context refresh failed (${String(err).slice(0, 160)})`, { to: 'debug' })
   }
-}
-
-// --- per-tool-call steps ----------------------------------------------------
-
-// Each main-loop tool call moves the tracker, and through append the notices
-// and the task panel, while the turn runs; the fold no longer holds every step
-// back until it lands. The tool.call hook only schedules this: the model call
-// runs detached, one at a time per session, and calls arriving meanwhile
-// collapse into one rerun over everything after the watermark.
-// clm-prompt
-export const STEP_SYSTEM = [
-  'You keep the task tracker of a coding session up to date while it works.',
-  'You receive the tracker\'s issues, the session rows added since your last update, and the tool call that just finished.',
-  'A user message is headed `[user mN]` and a tool result `<- [id]`; mN and id are refs you cite. Assistant rows carry no ref: they show what the assistant said or proposed, and the tool results and the user\'s words show what actually happened.',
-  'Reply with `<ops>` holding a JSON array of tracker changes those rows show, and `</ops>`, nothing else. Each op is one of:',
-  '  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<one line>","evidence":[{"ref":"<ref>","quote":"<text copied exactly from that row>"}]}',
-  '  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped","evidence":[{"ref":"<ref>","quote":"<text copied exactly from that row>"}]}',
-  '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
-  '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
-  'Every done carries evidence: the ref of a tool result or user message showing the state-changing action ran, and a quote copied character for character from that row. A step the assistant proposed or recommended, and a read-only check of the current state, is todo or question.',
-  'Create an issue for each step the assistant announced (todo), started (doing) or finished (done, with evidence), and each question waiting for the user (question).',
-  'Move an existing issue with a status op once the rows show it changed; never re-create it.',
-  'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
-  'When the user resumes a dropped direction, move that dropped issue back to todo or doing by its id; it keeps its id and history that way.',
-  'Write every title and note in Korean, keeping code identifiers, paths and commands verbatim.',
-  'Write `<ops>[]</ops>` when no task changed.',
-].join('\n')
-const steppedKey = async ($: EngineInterface) => `stepped:${await sid($)}`
-// The finished call, rendered, and its result as a citable source when the call carries an id.
-type StepCall = { text: string; source?: [string, Source] }
-const stepRuns = new Map<string, { queued?: StepCall }>()
-
-const renderCall = ({ tool, agentId: _a, tool_use_id: id, ...input }: { tool: string; agentId?: string; tool_use_id?: string }, r: { deny?: string; isError?: boolean; text?: string; result?: unknown }): StepCall => {
-  const raw = r.deny !== undefined ? `denied: ${r.deny}` : `${r.isError ? 'error ' : ''}${r.text ?? JSON.stringify(r.result ?? null)}`
-  const { text: out, full } = clippedSource(raw, 1500)
-  const text = `-> ${tool} ${JSON.stringify(input).slice(0, 600)}\n<- ${id ? `[${id}] ` : ''}${out}`
-  return id && r.deny === undefined ? { text, source: [id, { kind: 'tool_result', text: out, ...(full ? { full } : {}), tool, isError: r.isError === true }] } : { text }
-}
-
-async function stepOnce($: EngineInterface, call: StepCall): Promise<void> {
-  const meta = await readMeta($)
-  const rows = liveRows(await $.session.messages(), meta.boundary)
-  const key = await steppedKey($)
-  const mark = await $.store.get(key)
-  const fresh = rows.slice(typeof mark === 'string' ? rows.map(fingerprint).lastIndexOf(mark) + 1 : 0)
-  const here = await captureOrigin($)
-  const view = await trackerView($, here)
-  const range = renderRange(fresh, 20000)
-  const sources = new Map(range.sources)
-  if (call.source) sources.set(...call.source)
-  const r = await $.model.complete({
-    model: 'haiku',
-    system: STEP_SYSTEM,
-    prompt: [`<issues>\n${issueList(modelIssues(view))}\n</issues>`, `<new_rows>\n${range.text}\n</new_rows>`, `<tool_call>\n${call.text}\n</tool_call>`].join('\n\n'),
-    maxTokens: 1024,
-    timeoutMs: 30_000,
-  })
-  const body = r.isAnswered ? /<ops>([\s\S]*?)<\/ops>/.exec(r.text)?.[1] : undefined
-  const ops = body === undefined ? undefined : parseOps(normalizeLedger(body) || '[]', new Set(modelIssues(view).map(i => i.id)))
-  if (ops === undefined || typeof ops === 'string') {
-    $.ui.log(`clm steps: no update (${r.isAnswered ? (ops ?? 'reply has no <ops>') : r.reason})`, { to: 'debug' })
-    return
-  }
-  const gated = gateOps(ops.ops, ops.evidence, sources, droppedIds(view.dropped))
-  if (gated.rejections.length) await logEvent($, 'evidence-rejected', { reason: `step: ${gated.rejections.join(' | ')}`.slice(0, 2000) })
-  // No reviewer runs here, so a done that passed the mechanical check is recorded
-  // as doing and held for the next fold's review. A drop lands on its user quote
-  // alone, so a session that never folds still sheds an abandoned direction.
-  const held: { issue?: string; title?: string; evidence: Evidence[]; sources: Record<string, Source> }[] = []
-  const stepOps = gated.ops.map((o, i) => {
-    if (!isDoneClaim(o) || (o.op !== 'create' && o.op !== 'status')) return o
-    const evidence = gated.evidence[i] ?? []
-    held.push({ ...(o.op === 'status' ? { issue: o.issue } : { title: o.title.trim() }), evidence, sources: citedSources(evidence, sources) })
-    return { ...o, status: 'doing' }
-  })
-  const events = await append($, stepOps, here, true, true)
-  if (held.length) {
-    // A held create is keyed by the issue id it created, read off the event
-    // append wrote; a create deduped against an existing title resolves to that
-    // session's newest open issue of the title, and is dropped when none is open.
-    const open = held.some(h => h.title !== undefined) ? await sessionIssues($, {}) : []
-    const entries: Held[] = []
-    for (const h of held) {
-      const issue = h.issue
-        ?? events.find(ev => ev.op === 'create' && ev.title.trim() === h.title)?.issue
-        ?? open.filter(x => x.title.trim() === h.title && x.status !== 'done' && x.status !== 'dropped').at(-1)?.id
-      if (issue) entries.push({ key: `issue:${issue}`, nonce: await newNonce($), kind: 'step', issue, evidence: h.evidence, sources: h.sources })
-    }
-    await updateHeld($, [], entries)
-  }
-  // Advanced only once the ops landed, so a fold covers whatever a failed step left out.
-  const last = rows.at(-1)
-  if (last) await $.store.set(key, fingerprint(last))
-}
-
-async function trackSteps($: EngineInterface, call: StepCall): Promise<void> {
-  const session = await sid($)
-  const running = stepRuns.get(session)
-  if (running) {
-    running.queued = call
-    return
-  }
-  const run: { queued?: StepCall } = {}
-  stepRuns.set(session, run)
-  try {
-    for (let next: StepCall | undefined = call; next !== undefined; next = run.queued) {
-      run.queued = undefined
-      await stepOnce($, next)
-    }
-  } finally {
-    stepRuns.delete(session)
-  }
-}
-
-/** True when every row the fold drops lies at or before the per-tool-call watermark, so its steps were already emitted. */
-async function steppedThrough($: EngineInterface, rows: readonly SessionMessage[], keepFrom: number): Promise<boolean> {
-  const mark = await $.store.get(await steppedKey($))
-  return typeof mark === 'string' && rows.map(fingerprint).lastIndexOf(mark) >= keepFrom - 1
 }
 
 // The engine summarizer, not clm, folds the rows on the escape path, so their
@@ -2076,34 +1945,6 @@ export function report(ledger: string | undefined, rows: readonly SessionMessage
   ].join('\n')
 }
 
-const isHumanOrigin = (origin: PromptOrigin) => origin.kind === 'composer' || origin.kind === 'bridge' || origin.kind === 'sdk'
-export function resetUserWorkflow(current: ClmWorkflow, origin: PromptOrigin): ClmWorkflow {
-  if (!isHumanOrigin(origin) || (!current.resumeRequest && current.lastSubmittedTurn === null)) return current
-  return { ...current, resumeRequest: null, lastSubmittedTurn: null }
-}
-
-export type Continuation = { text: string; issue?: string; asUser?: true; source: 'later' | 'resume' }
-export function chooseContinuation(current: ClmWorkflow, turnId: string): { workflow: ClmWorkflow; continuation?: Continuation } {
-  if (current.lastSubmittedTurn === turnId) return { workflow: current }
-  const [laterHead, ...laterRest] = current.later
-  if (laterHead !== undefined) {
-    return {
-      workflow: {
-        ...current, later: laterRest, lastSubmittedTurn: turnId,
-        replayed: laterHead.issue ? { issue: laterHead.issue } : current.replayed,
-      },
-      continuation: { text: laterHead.text, ...(laterHead.issue ? { issue: laterHead.issue } : {}), asUser: true, source: 'later' },
-    }
-  }
-  if (current.resumeRequest) {
-    return {
-      workflow: { ...current, resumeRequest: null, lastSubmittedTurn: turnId },
-      continuation: { text: current.resumeRequest.text, source: 'resume' },
-    }
-  }
-  return { workflow: current }
-}
-
 async function claimContinuation($: EngineInterface, turnId: string): Promise<Continuation | undefined> {
   return changeWorkflow($, current => {
     const selected = chooseContinuation(current, turnId)
@@ -2116,17 +1957,6 @@ async function stampHumanPrompt($: EngineInterface): Promise<number> {
     const promptSeq = Math.max(current.promptSeq, current.focusAppliedSeq) + 1
     return { next: { ...current, promptSeq }, result: promptSeq }
   })
-}
-
-export function restoreFailedContinuation(current: ClmWorkflow, turnId: string, continuation: Continuation): ClmWorkflow {
-  if (current.lastSubmittedTurn !== turnId) return current
-  if (continuation.source === 'later')
-    return {
-      ...current, later: [{ text: continuation.text, ...(continuation.issue ? { issue: continuation.issue } : {}) }, ...current.later],
-      replayed: continuation.issue && current.replayed?.issue === continuation.issue ? null : current.replayed,
-      lastSubmittedTurn: null,
-    }
-  return { ...current, resumeRequest: current.resumeRequest ?? { text: continuation.text }, lastSubmittedTurn: null }
 }
 
 async function reconcileReplay($: EngineInterface): Promise<void> {
@@ -2205,7 +2035,7 @@ async function arbitrateContinuation($: EngineInterface, turnId: string): Promis
 // clm-prompt
 const GUIDE = [
   'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
-  'That row is a Haiku summary: the goal, the user\'s instructions verbatim, what was done, what is left, open questions and key facts, each done step and key fact citing a quote from the user or a tool result. The turns it replaced are gone.',
+  'That row is a Haiku summary: the goal, the user\'s instructions verbatim, what was done, what is left, open questions and key facts, each completed task and key fact citing a quote from the user or a tool result. The turns it replaced are gone.',
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
 ].join('\n')
@@ -2252,6 +2082,22 @@ export const register: Register = (on, options) => {
     } catch (err) {
       $.ui.log(`clm: clm_recall registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
     }
+    try {
+      await $.tool.register({
+        name: 'clm_task',
+        description: 'Update a task you are working on: mark it doing when you start, done when a tool result shows it finished (cite that row and a verbatim quote), uncertain when you cannot verify it, dropped when the user abandons it. Create a child task for a sub-step you will do yourself.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' }, title: { type: 'string' }, status: { type: 'string', enum: ['doing', 'done', 'uncertain', 'dropped'] },
+            note: { type: 'string' }, evidence: { type: 'object', properties: { ref: { type: 'string' }, quote: { type: 'string' } }, required: ['ref', 'quote'], additionalProperties: false },
+          },
+          required: ['status'], additionalProperties: false,
+        },
+      })
+    } catch (err) {
+      $.ui.log(`clm: clm_task registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
+    }
     await $.command.register({
       name: 'clm',
       description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session (shown to you only).',
@@ -2261,12 +2107,12 @@ export const register: Register = (on, options) => {
   })
 
   on('classic.SessionStart', async ($, e, next) => {
-    if (e.transcript_path) transcriptPaths.set(e.session_id ?? await sid($), e.transcript_path)
+    if (e.transcript_path) await rememberTranscriptPath($, e.session_id ?? await sid($), e.transcript_path)
     return next(e)
   })
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
-    if (e.transcript_path) transcriptPaths.set(e.session_id ?? await sid($), e.transcript_path)
+    if (e.transcript_path) await rememberTranscriptPath($, e.session_id ?? await sid($), e.transcript_path)
     return next(e)
   })
 
@@ -2357,8 +2203,9 @@ export const register: Register = (on, options) => {
 
   // The engine and the turn-end check share one per-transcript job.
   on('session.compact', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
-    if (!Array.isArray(e.messages)) return { messages: [] }
+    if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
     const compactStartedAt = await $.clock.now()
     const all = e.messages
     const meta = await readMeta($)
@@ -2372,9 +2219,7 @@ export const register: Register = (on, options) => {
     let job = existing
     if (!job || job.state === 'idle') job = await startFoldJob($, opts, workingRows, meta, key, false)
     if (job.state === 'swapping') return job.promise
-    let plan: Pending | undefined
-    if (job.state === 'summarizing') plan = await job.promise
-    else if (job.state === 'ready') plan = job.plan
+    const plan = job.state === 'summarizing' ? await job.promise : job.state === 'ready' ? job.plan : undefined
     if (!plan) {
       foldJobs.set(key, { state: 'idle' })
       await $.store.delete(await pendingKey($, key))
@@ -2408,29 +2253,37 @@ export const register: Register = (on, options) => {
     return swap
   })
 
-  on('tool.call', async ($, e, next) => {
-    const r = await next(e)
-    if (e.agentId === undefined && next.origin.plugin !== 'clm' && e.tool !== 'TaskCreate' && e.tool !== 'TaskUpdate') {
-      const call = renderCall(e, r)
-      void trackSteps($, call).catch(err => $.ui.log(`clm steps: ${String(err).slice(0, 160)}`, { to: 'debug' }))
-    }
-    return r
-  })
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => {
-    const input = e as unknown as { address?: unknown }
-    if (typeof input.address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d or @first..@last.' }
-    const path = transcriptPaths.get(await sid($))
+    if (typeof e.address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d or @first..@last.' }
+    const session = await sid($)
+    const storedPath = await $.store.get(transcriptPathKey(session))
+    const path = transcriptPaths.get(session) ?? (typeof storedPath === 'string' ? storedPath : undefined)
     if (!path) return { result: 'The transcript path is unavailable for this session.', isError: true, isReadOnly: true }
     try {
       const source = await readText($, path)
       if (source === undefined) return { result: 'The transcript file is unavailable.', isError: true, isReadOnly: true }
-      const recalled = recallTranscriptAddress(source, input.address)
+      const recalled = recallTranscriptAddress(source, e.address)
       if (recalled.error) return { result: recalled.error, isError: true, isReadOnly: true }
       return { result: recalled.text ?? '', isReadOnly: true }
     } catch (err) {
       $.ui.log(`clm_recall: transcript read failed (${String(err).slice(0, 120)})`, { to: 'debug' })
       return { result: 'The transcript could not be read.', isError: true, isReadOnly: true }
     }
+  })
+  on('agent.spawn', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const origin = await captureOrigin($)
+    const parent = focusOf(await readAll($), origin.session).stack.at(-1)
+    const spawned = await next(e)
+    if (!spawned.agentId || !parent) return spawned
+    const roots = await assignedTaskRoots($, origin.session)
+    roots[spawned.agentId] = parent
+    await $.store.set(agentTaskRootsKey(origin.session), roots)
+    return spawned
+  })
+  on('tool.call', { tool: TASK_TOOL }, async ($, e) => {
+    if (!isClmTaskInput(e)) return { deny: 'clm_task requires status and either an issue id or a new task title.' }
+    return runClmTask($, e, e.agentId)
   })
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyModelTask($, e)))
   on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyModelTask($, e)))

@@ -1,4 +1,5 @@
 import { isOpen, type FocusState as TrackerFocusState, type Intent, type Issue, type Payload } from './tracker'
+import { checkEvidence, type Source } from './evidence'
 
 export type FocusState = TrackerFocusState
 
@@ -16,6 +17,57 @@ export type FocusClassification = Pick<Classified, 'intent' | 'target' | 'title'
 export type RequestResolution = { id: string; how: 'answered' | 'declined' | 'skipped'; quote?: string }
 export type RaisedRequest = { text: string; quote: string }
 export type RequestClassification = { raised: RaisedRequest[]; resolved: RequestResolution[] }
+export type RequestRecord = {
+  id: string
+  text: string
+  quote: string
+  status: 'open' | 'answered' | 'declined' | 'skipped'
+  resolution?: { how: 'answered' | 'declined' | 'skipped'; quote?: string }
+}
+
+export function isRequestRecord(value: unknown): value is RequestRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  if (!('id' in value) || typeof value.id !== 'string' || !('text' in value) || typeof value.text !== 'string'
+    || !('quote' in value) || typeof value.quote !== 'string' || !('status' in value)
+    || !['open', 'answered', 'declined', 'skipped'].includes(String(value.status))) return false
+  if (!('resolution' in value) || value.resolution === undefined) return value.status === 'open'
+  return typeof value.resolution === 'object' && value.resolution !== null && !Array.isArray(value.resolution)
+    && 'how' in value.resolution && ['answered', 'declined', 'skipped'].includes(String(value.resolution.how))
+    && (!('quote' in value.resolution) || value.resolution.quote === undefined || typeof value.resolution.quote === 'string')
+}
+
+export function supportedRequestQuote(quote: string, sourceText: string, kind: Source['kind']): boolean {
+  const source: Source = { kind, text: sourceText }
+  return checkEvidence([{ ref: 'evidence', quote }], new Map([['evidence', source]]), [kind]).held.length > 0
+}
+
+export function laterSupported(item: string, prompt: string): boolean {
+  const grams = (text: string) => {
+    const chars = [...text.replace(/\s/gu, '').toLocaleLowerCase()]
+    const counts = new Map<string, number>()
+    for (let i = 0; i + 1 < chars.length; i++) {
+      const first = chars[i], second = chars[i + 1]
+      if (first === undefined || second === undefined) continue
+      const gram = first + second
+      counts.set(gram, (counts.get(gram) ?? 0) + 1)
+    }
+    return counts
+  }
+  const itemGrams = grams(item), promptGrams = grams(prompt)
+  if (!itemGrams.size) return prompt.replace(/\s/gu, '').toLocaleLowerCase().includes(item.replace(/\s/gu, '').toLocaleLowerCase())
+  let matched = 0
+  let total = 0
+  for (const [gram, count] of itemGrams) {
+    total += count
+    matched += Math.min(count, promptGrams.get(gram) ?? 0)
+  }
+  return matched / total >= 0.5
+}
+
+export function supportedLaterDrop(drop: number[] | 'all', prompt: string): number[] | 'all' {
+  if (drop === 'all') return /later|나중|큐|queue/i.test(prompt) ? 'all' : []
+  return drop.filter(index => new RegExp(`(?:^|[^\\p{N}])${index}(?:$|[^\\p{N}])`, 'u').test(prompt))
+}
 const isRaisedRequest = (value: unknown): value is RaisedRequest => isRecord(value)
   && typeof value.text === 'string' && value.text.trim() === value.text && value.text.length > 0 && [...value.text].length <= 500
   && typeof value.quote === 'string' && value.quote.trim() === value.quote && value.quote.length > 0 && [...value.quote].length <= 500
@@ -128,10 +180,6 @@ export function parseFocus(raw: string, knownIds: ReadonlySet<string>): FocusCla
   if (value.intent === 'continue' && target !== null && title !== null) throw new Error('continue cannot set both target and title')
   if (value.intent === 'continue' && title !== null) throw new Error('continue must name an existing target or null')
   return { intent: value.intent, target, title, rule }
-}
-
-export function parseClassified(raw: string, knownIds: ReadonlySet<string>): Classified {
-  return { ...parseFocus(raw, knownIds), ...parseLater(raw) }
 }
 
 type Target = { id: string }

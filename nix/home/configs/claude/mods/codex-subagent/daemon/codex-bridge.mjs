@@ -26,6 +26,7 @@ import assert from 'node:assert/strict'
 
 const textInput = text => [{ type: 'text', text, text_elements: [] }]
 const WORKSPACE_WRITE_PROFILE = 'codex-subagent-workspace-write'
+export const latestUsage = (current, tokenUsage) => tokenUsage?.last ?? current
 
 export function gitMetadataPermissions(writableRoots) {
   const filesystem = {}
@@ -73,6 +74,12 @@ if (process.argv[2] === '--selftest') {
   assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: null, sandbox: 'read-only', writableRoots }, 'work'), {
     threadId: 'thread-1', effort: null, input: textInput('work'),
   })
+  const usageSession = { usage: null }
+  const firstLast = { inputTokens: 100, cachedInputTokens: 20, cacheWriteInputTokens: 0, outputTokens: 10, reasoningOutputTokens: 4, totalTokens: 110 }
+  const secondLast = { inputTokens: 240, cachedInputTokens: 160, cacheWriteInputTokens: 8, outputTokens: 30, reasoningOutputTokens: 12, totalTokens: 270 }
+  usageSession.usage = latestUsage(usageSession.usage, { last: firstLast })
+  usageSession.usage = latestUsage(usageSession.usage, { last: secondLast })
+  assert.deepEqual(usageSession.usage, secondLast, 'subagent_tokens must be the latest codex context size, not a sum of responses')
   assert.deepEqual(gitMetadataPermissions([path.join(os.tmpdir(), 'codex-bridge-selftest-non-git')]), {})
   const available = spawnSync('codex', ['--version'], { encoding: 'utf8' })
   if (available.error?.code === 'ENOENT') { process.stdout.write('sandbox probe skipped: codex not found\ncodex bridge self-check passed\n'); process.exit(0) }
@@ -377,6 +384,9 @@ function onMessage(m) {
       })
     }
   }
+  else if (m.method === 'thread/tokenUsage/updated') {
+    s.usage = latestUsage(s.usage, p.tokenUsage)
+  }
   else if (m.method === 'item/completed' && p.item?.type === 'agentMessage') s.messages.push(p.item.text)
   else if (m.method === 'error') s.errors.push(JSON.stringify(p))
   else if (m.method === 'turn/completed') {
@@ -634,7 +644,7 @@ async function open(b) {
     }
   }
   const interruptRequested = pendingInterrupts.delete(b.key)
-  s = { key: b.key, agentType: b.agentType, cwd: b.cwd, writableRoots, sandbox: b.sandbox ?? 'read-only', threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, interruptRequested, interrupting: interruptRequested, held: new Map(), messages: [], errors: [] }
+  s = { key: b.key, agentType: b.agentType, cwd: b.cwd, writableRoots, sandbox: b.sandbox ?? 'read-only', threadId: r.thread.id, model: r.model, resumed: !!b.threadId, turnId: null, active: false, interruptRequested, interrupting: interruptRequested, held: new Map(), messages: [], errors: [], usage: null }
   sessions.set(b.key, s); byThread.set(s.threadId, s)
   persisted.agents[b.key] = { type: s.agentType, cwd: s.cwd, writableRoots: s.writableRoots, threadId: s.threadId }
   saveState()
@@ -701,7 +711,8 @@ function step(b) {
 
 function decorate(key, ev) {
   const s = sessions.get(key)
-  return { ...ev, threadId: s?.threadId, model: s?.model, resumed: s?.resumed, bridgePid: process.pid, codexPid: codex.pid }
+  const usage = s?.usage ?? null
+  return { ...ev, threadId: s?.threadId, model: s?.model, resumed: s?.resumed, bridgePid: process.pid, codexPid: codex.pid, usage }
 }
 
 async function wait({ key }, res) {

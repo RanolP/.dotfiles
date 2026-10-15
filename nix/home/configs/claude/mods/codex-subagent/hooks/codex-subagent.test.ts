@@ -417,6 +417,92 @@ test('an unmapped Codex tool call is answered with a failed toolResult', async (
   expect(r.value.toolUses.map(t => t.name)).toEqual(['SubagentHandback'])
 })
 
+// Regression: codex workers reported ~300 tokens to Claude because bridge usage was discarded.
+test('a codex step reports the bridge usage on its stop chunk and result', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-usage'
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const usage = { input_tokens: 260, output_tokens: 80, cache_read_input_tokens: 900, cache_creation_input_tokens: 40, model: 'gpt-6-luna' }
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') return json({ pending: true })
+    if (route === '/wait') return json({
+      threadId: 'thread-usage', model: 'gpt-6-luna', resumed: false, bridgePid: 1, codexPid: 2,
+      usage: { inputTokens: 1200, cachedInputTokens: 900, cacheWriteInputTokens: 40, outputTokens: 80, reasoningOutputTokens: 50, totalTokens: 1280 },
+      final: { text: 'done', status: 'completed', errors: [] },
+    })
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-usage', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
+  const chunks: unknown[] = []
+  let r = await stream.next()
+  while (!r.done) { chunks.push(r.value); r = await stream.next() }
+  expect(chunks.at(-1)).toEqual({ kind: 'stop', stopReason: 'tool_use', usage })
+  expect(r.value.usage).toEqual(usage)
+})
+
+// Regression: subagent_tokens multiplied the context size by every hidden retry.
+test('a codex step that loops over an unrelayed tool reports the latest usage, not a sum', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-unrelayed-usage'
+  const api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const steps: Record<string, unknown>[] = []
+  const usage = { input_tokens: 260, output_tokens: 80, cache_read_input_tokens: 900, cache_creation_input_tokens: 40, model: 'gpt-6-luna' }
+  const replies: unknown[] = [
+    {
+      threadId: 'thread-unrelayed-usage', model: 'gpt-6-luna', resumed: false, bridgePid: 1, codexPid: 2,
+      usage: { inputTokens: 500, cachedInputTokens: 100, cacheWriteInputTokens: 0, outputTokens: 20, reasoningOutputTokens: 0, totalTokens: 520 },
+      toolCall: { callId: 'c1', tool: 'not_relayed', arguments: {} },
+    },
+    {
+      threadId: 'thread-unrelayed-usage', model: 'gpt-6-luna', resumed: false, bridgePid: 1, codexPid: 2,
+      usage: { inputTokens: 1200, cachedInputTokens: 900, cacheWriteInputTokens: 40, outputTokens: 80, reasoningOutputTokens: 50, totalTokens: 1280 },
+      final: { text: 'done', status: 'completed', errors: [] },
+    },
+  ]
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
+    if (route === '/wait') return json(replies[steps.length - 1])
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-unrelayed-usage', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
+  const chunks: unknown[] = []
+  let r = await stream.next()
+  while (!r.done) { chunks.push(r.value); r = await stream.next() }
+  expect(steps[1]?.toolResult).toEqual({ callId: 'c1', contentItems: [{ type: 'inputText', text: 'tool not relayed: not_relayed' }], success: false })
+  expect(chunks.at(-1)).toEqual({ kind: 'stop', stopReason: 'tool_use', usage })
+  expect(r.value.usage).toEqual(usage)
+})
+
 // Incident: a codex worker ended its run with SubagentHandback, the harness
 // ran no further step, and the mod kept that handback pending in memory. The
 // next SendMessage (a 13-item review, ~4 KB) was answered "(report delivered

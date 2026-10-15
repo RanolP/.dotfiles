@@ -1,4 +1,4 @@
-import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, TimerCall, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, TimerCall, TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
 
 // codex-subagent: pinned GPT agent types, served by codex app-server.
 //
@@ -202,9 +202,18 @@ The Claude session's context for this agent follows.`
 const HANDBACK = 'SubagentHandback'
 type Agent = { type: TypeName; cwd: string; writableRoots: string[]; threadId?: string; waiting?: { toolUseId: string; callId: string }; relay?: Relay; handback?: { toolUseId: string; text: string } }
 export type StepMeta = { threadId: string; model?: string; resumed: boolean; bridgePid: number; codexPid: number }
-type StepResult = StepMeta & ({ toolCall: { callId: string; tool: string; arguments: unknown } } | { final: { text: string; status?: string; errors: string[] } })
+type CodexUsage = { inputTokens: number; cachedInputTokens: number; cacheWriteInputTokens?: number; outputTokens: number; reasoningOutputTokens: number; totalTokens: number }
+type StepResult = StepMeta & { usage?: CodexUsage | null } & ({ toolCall: { callId: string; tool: string; arguments: unknown } } | { final: { text: string; status?: string; errors: string[] } })
 type StepEvent = StepResult | (StepMeta & { error: string })
 export type StepReply = { pending: true } | StepEvent | { error: string }
+
+const claudeUsage = (usage: CodexUsage | null | undefined, model: string): TurnUsage | null => usage ? {
+  input_tokens: Math.max(0, usage.inputTokens - usage.cachedInputTokens - (usage.cacheWriteInputTokens ?? 0)),
+  output_tokens: usage.outputTokens,
+  cache_read_input_tokens: usage.cachedInputTokens,
+  cache_creation_input_tokens: usage.cacheWriteInputTokens ?? 0,
+  model,
+} : null
 
 type ApiBlock = { type: string; id?: string; name?: string; text?: string; input?: { message?: unknown }; tool_use_id?: string; content?: unknown; is_error?: boolean; toolDenialKind?: string }
 
@@ -760,6 +769,7 @@ export const register: Register = (on) => {
       bridgeReady ??= startBridge($, sock, dropFailedBridge)
       let reply = yield* keepalive(step(body), next.signal, () => { block = 1; used(0) }, (ms, fn) => $.clock.after(ms, fn))
       agent.threadId = reply.threadId
+      let usage = claudeUsage(reply.usage, reply.model ?? type.model)
 
       for (;;) {
         if (!('toolCall' in reply)) break
@@ -769,6 +779,7 @@ export const register: Register = (on) => {
           const failed: Record<string, unknown> = { key: agentId, agentType: agent.type, threadId: agent.threadId, cwd: agent.cwd, writableRoots: agent.writableRoots, model: type.model, effort: type.effort, sandbox: type.sandbox, toolResult: { callId, contentItems: [{ type: 'inputText', text: `tool not relayed: ${tool}` }], success: false } }
           reply = yield* keepalive(step(failed), next.signal, () => { block = 1; used(0) }, (ms, fn) => $.clock.after(ms, fn))
           agent.threadId = reply.threadId
+          usage = claudeUsage(reply.usage, reply.model ?? type.model) ?? usage
           continue
         }
         const toolUseId = `toolu_codex_${callId.replace(/[^A-Za-z0-9_-]/g, '_')}`
@@ -777,10 +788,10 @@ export const register: Register = (on) => {
         const chunks: TurnStepChunk[] = [
           { kind: 'tool', index: block, id: toolUseId, name },
           { kind: 'input', index: block, json: JSON.stringify(input ?? {}) },
-          { kind: 'stop', stopReason: 'tool_use', usage: null },
+          { kind: 'stop', stopReason: 'tool_use', usage },
         ]
         for (const c of chunks) yield c
-        return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
+        return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name, input }], stopReason: 'tool_use', usage } satisfies TurnStepResult
       }
 
       const f = 'final' in reply ? reply.final : { text: '', status: undefined, errors: ['bridge reply had neither toolCall nor final'] }
@@ -793,8 +804,8 @@ export const register: Register = (on) => {
       used(block)
       yield { kind: 'tool', index: block, id: toolUseId, name: HANDBACK }
       yield { kind: 'input', index: block, json: JSON.stringify(input) }
-      yield { kind: 'stop', stopReason: 'tool_use', usage: null }
-      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: HANDBACK, input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
+      yield { kind: 'stop', stopReason: 'tool_use', usage }
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: HANDBACK, input }], stopReason: 'tool_use', usage } satisfies TurnStepResult
     } finally {
       next.signal.removeEventListener('abort', onAbort)
     }

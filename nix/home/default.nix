@@ -162,6 +162,7 @@ let
   localSkill = name: ./configs/.agents/skills + "/${name}";
   skills = {
     git-master = localSkill "git-master";
+    copy-sync = localSkill "copy-sync";
     ship = localSkill "ship";
     update = localSkill "update";
     github-master = localSkill "github-master";
@@ -502,6 +503,11 @@ in
       # no file contents leaving the machine.
       ".local/bin/fast-apply" = {
         source = ./configs/bin/fast-apply;
+        executable = true;
+      };
+      # Checks hand-synced copies across repos that deliberately share no package.
+      ".local/bin/copy-sync-check" = {
+        source = ./configs/bin/copy-sync-check;
         executable = true;
       };
       # Agent descriptions always load into the system prompt -- there is no

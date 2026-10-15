@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Check hand-synced files across repository roots after normalization."""
+
+import difflib
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import tomllib
+
+USAGE = "usage: copy-sync-check <manifest> [name=path ...]"
+PLACEHOLDER = re.compile(r"\{file\}|\{root:([^{}]+)\}")
+
+
+class ManifestError(Exception):
+    pass
+
+
+def manifest_path(value):
+    path = Path(value).expanduser()
+    if path.suffix == ".toml":
+        return path
+    if "/" in value or "\\" in value:
+        raise ManifestError("manifest path must end in .toml")
+    config_home = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+    return Path(config_home).expanduser() / "copy-sync" / (value + ".toml")
+
+
+def read_manifest(path):
+    try:
+        with path.open("rb") as stream:
+            data = tomllib.load(stream)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ManifestError(f"{path}: {exc}") from exc
+
+    unknown = set(data) - {"roots", "files", "normalize", "ignore_blank_lines"}
+    if unknown:
+        raise ManifestError("unknown manifest keys: " + ", ".join(sorted(unknown)))
+
+    raw_roots = data.get("roots")
+    if not isinstance(raw_roots, dict):
+        raise ManifestError("roots must contain at least two named paths")
+    root_values = dict(raw_roots)
+    options = {}
+    for key in ("files", "normalize", "ignore_blank_lines"):
+        if key in data and key in root_values:
+            raise ManifestError(f"{key} must be defined once")
+        if key in data:
+            options[key] = data[key]
+        elif key in root_values:
+            options[key] = root_values.pop(key)
+
+    if len(root_values) < 2:
+        raise ManifestError("roots must contain at least two named paths")
+    resolved_roots = {}
+    for name, value in root_values.items():
+        if not isinstance(name, str) or not name or not isinstance(value, str) or not value:
+            raise ManifestError("each root must have a non-empty name and path")
+        resolved_roots[name] = Path(value).expanduser().resolve()
+
+    files = options.get("files")
+    if not isinstance(files, list) or not files or any(not isinstance(item, str) or not item for item in files):
+        raise ManifestError("files must be a non-empty list of relative paths")
+    if len(set(files)) != len(files):
+        raise ManifestError("files must not contain duplicate paths")
+    if any(Path(item).is_absolute() for item in files):
+        raise ManifestError("files must be relative paths")
+
+    normalize = options.get("normalize")
+    if normalize is not None and (
+        not isinstance(normalize, list)
+        or not normalize
+        or any(not isinstance(arg, str) for arg in normalize)
+    ):
+        raise ManifestError("normalize must be a non-empty list of command arguments")
+    if normalize:
+        for arg in normalize:
+            for match in PLACEHOLDER.finditer(arg):
+                name = match.group(1)
+                if name and name not in resolved_roots:
+                    raise ManifestError(f"normalizer refers to unknown root {name!r}")
+
+    ignore_blank_lines = options.get("ignore_blank_lines", False)
+    if not isinstance(ignore_blank_lines, bool):
+        raise ManifestError("ignore_blank_lines must be true or false")
+
+    return resolved_roots, files, normalize, ignore_blank_lines
+
+
+def apply_overrides(roots, arguments):
+    resolved = dict(roots)
+    for argument in arguments:
+        if "=" not in argument:
+            raise ManifestError(f"expected name=path override, got {argument!r}")
+        name, value = argument.split("=", 1)
+        if name not in roots:
+            raise ManifestError(
+                f"unknown root {name!r}; valid roots: {', '.join(roots)}"
+            )
+        if not value:
+            raise ManifestError(f"override for {name!r} has an empty path")
+        resolved[name] = Path(value).expanduser().resolve()
+    return resolved
+
+
+def normalized_text(path, root_name, relative_path, normalize, roots):
+    if normalize is None:
+        try:
+            with path.open("r", encoding="utf-8", newline="") as stream:
+                return stream.read(), None
+        except (OSError, UnicodeError) as exc:
+            return None, f"copy-sync: cannot read {root_name}/{relative_path}: {exc}"
+
+    absolute_file = str(path.resolve())
+    command = []
+    for argument in normalize:
+        command.append(PLACEHOLDER.sub(
+            lambda match: absolute_file if match.group(0) == "{file}"
+            else str(roots[match.group(1)]),
+            argument,
+        ))
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return None, (
+            f"copy-sync: cannot run normalizer for {root_name}/{relative_path}: "
+            f"{shlex.join(command)}: {exc}"
+        )
+    if result.returncode:
+        details = (
+            f"copy-sync: normalizer failed for {root_name}/{relative_path}: "
+            f"{shlex.join(command)} exited {result.returncode}"
+        )
+        if result.stderr:
+            details += f"\n{result.stderr.rstrip()}"
+        return None, details
+    return result.stdout, None
+
+
+def comparable(text, ignore_blank_lines):
+    if not ignore_blank_lines:
+        return text
+    return "".join(line for line in text.splitlines(keepends=True) if line.strip())
+
+
+def check(manifest_name, roots, files, normalize, ignore_blank_lines):
+    names = list(roots)
+    reference = names[0]
+    differing = set()
+
+    for relative_path in files:
+        contents = {}
+        for name in names:
+            path = roots[name] / relative_path
+            if not path.is_file():
+                print(f"copy-sync: missing file in {name}: {path}", file=sys.stderr)
+                differing.add(relative_path)
+                continue
+            content, error = normalized_text(path, name, relative_path, normalize, roots)
+            if error:
+                print(error, file=sys.stderr)
+                differing.add(relative_path)
+            else:
+                contents[name] = comparable(content, ignore_blank_lines)
+
+        if reference not in contents:
+            continue
+        for name in names[1:]:
+            if name not in contents or contents[reference] == contents[name]:
+                continue
+            differing.add(relative_path)
+            print(f"copy-sync: {relative_path}: {reference} vs {name}")
+            diff = "".join(difflib.unified_diff(
+                contents[reference].splitlines(keepends=True),
+                contents[name].splitlines(keepends=True),
+                fromfile=f"{reference}/{relative_path}",
+                tofile=f"{name}/{relative_path}",
+            ))
+            sys.stdout.write(diff)
+            if diff and not diff.endswith("\n"):
+                sys.stdout.write("\n")
+
+    if differing:
+        print(
+            f"copy-sync: {manifest_name}: {len(differing)} of {len(files)} files "
+            f"differ: {', '.join(path for path in files if path in differing)}"
+        )
+        return 1
+    print(f"copy-sync: {manifest_name}: {len(files)} files match across {', '.join(roots)}")
+    return 0
+
+
+def main(arguments):
+    if not arguments:
+        print(USAGE, file=sys.stderr)
+        return 2
+    if arguments[0] in {"-h", "--help"}:
+        print(USAGE)
+        return 0
+
+    try:
+        path = manifest_path(arguments[0])
+        roots, files, normalize, ignore_blank_lines = read_manifest(path)
+        roots = apply_overrides(roots, arguments[1:])
+    except ManifestError as exc:
+        print(f"{USAGE}\ncopy-sync: {exc}", file=sys.stderr)
+        return 2
+
+    return check(path.stem, roots, files, normalize, ignore_blank_lines)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

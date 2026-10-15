@@ -185,7 +185,7 @@ function clmStatusRows({ Box, Text }: Elements, status: ClmStatus, current: numb
       <Text>Later queue:</Text>
       {status.later.length === 0
         ? <Text dimColor>none</Text>
-        : status.later.map((item, index) => <Text key={`later-${index}`}>{`${index + 1}. ${item}`}</Text>)}
+        : status.later.map((item, index) => <Text key={`later-${index}`}>{`${index + 1}. ${item.text}`}</Text>)}
       <Text>{`Pending resume: ${status.resumeRequest?.text ?? 'none'}`}</Text>
       <Text>{`Last fold: ${status.lastFoldAt === null ? 'never' : `${durationLabel(Math.max(0, current - status.lastFoldAt))} ago`}`}</Text>
       <Text>{`Open issues: ${status.openIssues}`}</Text>

@@ -11,6 +11,9 @@ export type Classified = {
   laterDrop: number[] | 'all'
 }
 
+export type LaterClassification = { later: string[]; laterDrop: number[] | 'all' }
+export type FocusClassification = Pick<Classified, 'intent' | 'target' | 'title' | 'rule'>
+
 const INTENTS: readonly string[] = ['continue', 'handoff', 'interleave', 'pending', 'question']
 const isIntent = (value: unknown): value is Intent => typeof value === 'string' && INTENTS.includes(value)
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -39,7 +42,7 @@ type IntentContext = {
   issues: readonly Issue[]
   lastAssistantReply: string
   userPrompt: string
-  later: readonly string[]
+  later: readonly { text: string }[]
 }
 
 export const xmlText = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
@@ -54,34 +57,45 @@ export function intentPrompt({ state, issues, lastAssistantReply, userPrompt, la
   return [
     tag('focus_stack', list(state.stack.map(show))),
     tag('pending', list(state.pending.map(show))),
-    tag('later_queue', list(later.map((item, index) => `${index + 1}. ${item}`))),
+    tag('later_queue', list(later.map((item, index) => `${index + 1}. ${item.text}`))),
     tag('open_issues', list(otherOpen)),
     tag('last_assistant_reply', lastAssistantReply.slice(-1500)),
     tag('user_prompt', userPrompt.slice(0, 4000)),
   ].join('\n\n')
 }
 
-export function parseClassified(raw: string, knownIds: ReadonlySet<string>): Classified {
+function parseObject(raw: string): Record<string, unknown> {
   let value: unknown
   try {
     value = JSON.parse(raw)
   } catch (err) {
     throw new Error(`reply is not JSON (${String(err).slice(0, 100)})`)
   }
-  if (!isRecord(value) || !('intent' in value)) throw new Error('reply is not an object')
+  if (!isRecord(value)) throw new Error('reply is not an object')
+  return value
+}
+
+export function parseLater(raw: string): LaterClassification {
+  const value = parseObject(raw)
+  const later = value.later
+  if (!Array.isArray(later) || later.length > 5
+    || !later.every(item => typeof item === 'string' && item.length > 0 && item.trim() === item && [...item].length <= 500))
+    throw new Error('later must be up to five trimmed, non-empty strings of at most 500 characters')
+  const laterDrop = value.laterDrop
+  if (laterDrop !== 'all' && (!Array.isArray(laterDrop) || !laterDrop.every(index => Number.isInteger(index) && index > 0)))
+    throw new Error('laterDrop must be "all" or an array of positive queue numbers')
+  return { later, laterDrop }
+}
+
+export function parseFocus(raw: string, knownIds: ReadonlySet<string>): FocusClassification {
+  const value = parseObject(raw)
+  if (!('intent' in value)) throw new Error('reply is not an object')
   if (!isIntent(value.intent)) throw new Error(`unknown intent ${String(value.intent)}`)
   const v = value
   const target = v.target === null ? null : typeof v.target === 'string' && v.target.trim() ? v.target : undefined
   const title = v.title === null ? null : typeof v.title === 'string' && v.title.trim() ? v.title : undefined
   const rule = v.rule === null ? null : typeof v.rule === 'string' ? v.rule : undefined
   if (target === undefined || title === undefined || rule === undefined) throw new Error('target, title, or rule has an invalid value')
-  const later = v.later
-  if (!Array.isArray(later) || later.length > 5
-    || !later.every(item => typeof item === 'string' && item.length > 0 && item.trim() === item && [...item].length <= 500))
-    throw new Error('later must be up to five trimmed, non-empty strings of at most 500 characters')
-  const laterDrop = v.laterDrop
-  if (laterDrop !== 'all' && (!Array.isArray(laterDrop) || !laterDrop.every(index => Number.isInteger(index) && index > 0)))
-    throw new Error('laterDrop must be "all" or an array of positive queue numbers')
   if (target !== null && !knownIds.has(target)) throw new Error(`unknown target id ${target}`)
   if (title !== null && ([...title].length > 60 || title.trim() !== title)) throw new Error('title must be a trimmed string of at most 60 characters')
   if (value.intent === 'question' && (target !== null || title !== null)) throw new Error('question must not name a target or title')
@@ -89,7 +103,11 @@ export function parseClassified(raw: string, knownIds: ReadonlySet<string>): Cla
     throw new Error(`${value.intent} must set exactly one of target or title`)
   if (value.intent === 'continue' && target !== null && title !== null) throw new Error('continue cannot set both target and title')
   if (value.intent === 'continue' && title !== null) throw new Error('continue must name an existing target or null')
-  return { intent: value.intent, target, title, rule, later, laterDrop }
+  return { intent: value.intent, target, title, rule }
+}
+
+export function parseClassified(raw: string, knownIds: ReadonlySet<string>): Classified {
+  return { ...parseFocus(raw, knownIds), ...parseLater(raw) }
 }
 
 type Target = { id: string }

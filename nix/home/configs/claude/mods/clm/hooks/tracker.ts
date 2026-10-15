@@ -8,7 +8,7 @@
 
 import { readEvidence, type Evidence } from './evidence'
 
-export const STATUSES = ['todo', 'doing', 'done', 'question', 'dropped'] as const
+export const STATUSES = ['todo', 'doing', 'done', 'question', 'uncertain', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
 export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' && (STATUSES as readonly string[]).includes(v)
 
@@ -144,7 +144,7 @@ export function focusOf(events: readonly TrackerEvent[], session: string): Focus
   return latest?.op === 'focus' ? { stack: [...latest.stack], pending: [...latest.pending] } : { stack: [], pending: [] }
 }
 
-export const isOpen = (i: Issue) => i.status === 'todo' || i.status === 'doing' || i.status === 'question'
+export const isOpen = (i: Issue) => i.status === 'todo' || i.status === 'doing' || i.status === 'question' || i.status === 'uncertain'
 
 // The ledger's 한 일 and the task panel show only a session's newest
 // completions; the tracker log keeps every issue as the searchable history.
@@ -183,7 +183,7 @@ export function normalizeRemote(url: string): string {
 // --- fold ops and ledger sections ------------------------------------------
 
 /** Ledger section -> the statuses it lists; these sections are rendered, never merged. */
-export const TRACKER_SECTIONS: Record<string, readonly IssueStatus[]> = { '한 일': ['done'], '할 일': ['doing', 'todo'], '미결 질문': ['question'] }
+export const TRACKER_SECTIONS: Record<string, readonly IssueStatus[]> = { '한 일': ['done'], '할 일': ['doing', 'todo'], '미결 질문': ['question'], 'uncertain': ['uncertain'] }
 export const isTrackerSection = (s: string) => s in TRACKER_SECTIONS
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
@@ -239,7 +239,7 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
 }
 
 const statusText: Record<IssueStatus, string> = {
-  doing: '착수', done: '완수', todo: '대기', question: '질문 대기', dropped: '중단',
+  doing: '착수', done: '완수', todo: '대기', question: '질문 대기', uncertain: '불확실', dropped: '중단',
 }
 
 /** Describes the notices caused by one append, using the state before it. */

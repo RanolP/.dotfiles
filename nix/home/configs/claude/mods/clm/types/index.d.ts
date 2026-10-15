@@ -27,15 +27,23 @@ export type ClmIssueQuery = {
   status?: ClmIssueStatus
 }
 
+export type ClmLaterItem = {
+  text: string
+  issue?: string
+}
+
 export type ClmWorkflow = {
-  later: string[]
+  later: ClmLaterItem[]
   resumeRequest: { text: string } | null
   lastSubmittedTurn: string | null
   activeTurnId: string | null
+  promptSeq: number
+  focusAppliedSeq: number
+  replayed: { issue: string } | null
 }
 
 export type ClmStatus = {
-  later: string[]
+  later: ClmLaterItem[]
   resumeRequest: { text: string } | null
   lastFoldAt: number | null
   ledgerPath: string

@@ -1,4 +1,5 @@
 import { test, expect, mock } from 'claude-code/testing'
+import type { SessionCompactInput, SessionMessage } from 'claude-code'
 
 import { describe, focusOf, injected, parseLog, snapshot, toEvents, type Issue, type TrackerEvent } from './tracker'
 import { compose } from './intent'
@@ -199,7 +200,8 @@ test('another session\'s tracker item does not appear in this session\'s ledger'
 
 // --- a fold through the plugin ------------------------------------------------
 
-const M = (role: 'user' | 'assistant', text: string) => ({ role, text, toolUses: [] }) as any
+const M = (role: 'user' | 'assistant', text: string): SessionMessage => ({ role, text, toolUses: [] } satisfies SessionMessage)
+const compactInput = (trigger: SessionCompactInput['trigger'], messages: readonly SessionMessage[]) => ({ trigger, messages } satisfies SessionCompactInput)
 const BIG = 'x'.repeat(4000)
 const ROWS = [
   M('user', 'start'), M('assistant', BIG), M('user', 'next'), M('assistant', BIG),
@@ -221,7 +223,7 @@ test('a fold with no op for an existing issue keeps it in the ledger', { options
   on('store.delete', (_$: any, e: any) => { delete store[e.key]; return { value: undefined } })
   on('session.id', () => ({ value: 's1' }))
   on('session.messages', () => ({ value: ROWS }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, tokens: 2000 }, rateLimits: [] } }))
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('env.get', () => ({ value: '/home/t' }))
   on('process.run', (_$: any, e: any) => ({ value: { exitCode: 0, stdout: e.argv.includes('get-url') ? 'https://github.com/o/repo.git' : 'main', stderr: '' } }))
@@ -236,9 +238,11 @@ test('a fold with no op for an existing issue keeps it in the ledger', { options
   on('ui.panes', () => ({ value: [] }))
   on('session.compact', () => ({ messages: [M('user', 'ENGINE SUMMARY')] }))
 
-  const r: any = await $.session.compact({ trigger: 'auto', messages: ROWS } as any)
+  const r = await $.session.compact(compactInput('auto', ROWS))
+  if (!('messages' in r)) throw new Error('compaction returned no messages')
   expect(prompts[0]).toContain('s1-1 | todo | migrate the db')
   const row = r.messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
-  expect(row).toMatch(/## 할 일\n- migrate the db \[s1-1\]/)
+  expect(row).toMatch(/## Stack size\n0\n## Pending count\n0/)
+  expect(row).not.toContain('migrate the db')
 })

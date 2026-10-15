@@ -10,7 +10,6 @@ const OVERSIZE_MARK = '출력 과다:'
 const OVERSIZE_KEEP = 5
 const FOLDED_MARK = '요약 없이 접힘:'
 const FOLDED_KEEP = 3
-export const INSTRUCTION_CAP = 4000
 
 // --- ledger text ---------------------------------------------------------
 
@@ -153,18 +152,15 @@ export const isDirective = (text: string) => {
   return t !== '' && !ACKS.has(t.toLowerCase()) && !WRAPPER_ROW.test(t)
 }
 
-export const INSTRUCTION_CLIP = 2000
 export type PreservedInstructions = { notes: string; fullNotes: string }
 /**
  * Owns 사용자 지시: the earlier instructions (`prior`, from the ledger file),
  * plus every prompt in `dropped`, each once by instructionKey. Visible notes
- * omit `withdrawn` instructions; `fullNotes` keeps them marked for the ledger file;
- * `notes` clips a line over INSTRUCTION_CLIP chars and the section over `cap`,
- * each with a pointer to that file.
+ * omit `withdrawn` instructions; `fullNotes` keeps them marked for the ledger file.
  */
 export function preserveInstructions(
-  notes: string, prior: readonly string[], dropped: readonly SessionMessage[], pointer: string,
-  withdrawn: readonly string[] = [], cap = INSTRUCTION_CAP,
+  notes: string, prior: readonly string[], dropped: readonly SessionMessage[], _pointer: string,
+  withdrawn: readonly string[] = [],
 ): PreservedInstructions {
   const gone = new Set(withdrawn.map(instructionKey))
   const seen = new Map<string, { text: string; withdrawn: boolean }>()
@@ -185,22 +181,54 @@ export function preserveInstructions(
   const records = [...seen.values()]
   const visible = records.filter(v => !v.withdrawn).map(v => v.text)
   const full = records.map(v => v.withdrawn ? `- ${WITHDRAWN_PREFIX}${JSON.stringify(v.text)}` : `- ${JSON.stringify(v.text)}`)
-  const shown = visible.map(v => v.length > INSTRUCTION_CLIP
-    ? `- ${JSON.stringify(v.slice(0, INSTRUCTION_CLIP))}…[${v.length - INSTRUCTION_CLIP} chars cut, see ${pointer}]`
-    : `- ${JSON.stringify(v)}`)
-  const available = Math.max(0, cap - `## ${INSTRUCTIONS}\n`.length)
-  let used = 0
-  const newestFirst: string[] = []
-  for (const line of [...shown].reverse()) {
-    const extra = newestFirst.length ? 1 : 0
-    if (used + extra + line.length > available) break
-    newestFirst.push(line)
-    used += extra + line.length
-  }
-  const kept = newestFirst.reverse()
-  const overflow = shown.length > kept.length ? [`- [additional user instructions in ${pointer}]`] : []
   const body = (lines: readonly string[]) => (lines.length ? lines.join('\n') : '- (none yet)')
-  return { notes: withSection(notes, INSTRUCTIONS, body([...overflow, ...kept])), fullNotes: withSection(notes, INSTRUCTIONS, body(full)) }
+  const stored = withSection(notes, INSTRUCTIONS, body(full))
+  return { notes: withSection(notes, INSTRUCTIONS, body(visible.map(v => `- ${JSON.stringify(v)}`))), fullNotes: stored }
+}
+
+export type AgeDecayTopic = { sourceTokens: number; currentTokens: number; floorTokens: number; seq: number }
+
+/** Allocates a fixed ledger budget by topic age while leaving unsqueezed entries untouched. */
+export function ageDecayTargets(topics: readonly AgeDecayTopic[], budget: number): number[] {
+  if (!topics.length) return []
+  const current = topics.map(topic => Math.max(0, topic.currentTokens))
+  if (current.reduce((sum, value) => sum + value, 0) <= budget) return current
+  const floors = topics.map((topic, index) => Math.max(0, Math.min(current[index]!, topic.floorTokens)))
+  const newestSeq = Math.max(...topics.map(topic => topic.seq))
+  const newest = topics.flatMap((topic, index) => topic.seq === newestSeq ? [index] : [])
+  const oldFloors = floors.reduce((sum, value, index) => sum + (newest.includes(index) ? 0 : value), 0)
+  const newestCurrent = newest.reduce((sum, index) => sum + current[index]!, 0)
+  if (oldFloors + newestCurrent > budget) {
+    const room = Math.max(0, budget - oldFloors)
+    const total = newest.reduce((sum, index) => sum + topics[index]!.sourceTokens, 0)
+    return floors.map((floor, index) => newest.includes(index)
+      ? (total > 0 ? Math.floor(room * topics[index]!.sourceTokens / total) : 0)
+      : floor)
+  }
+  const valueAt = (topic: AgeDecayTopic, index: number, d: number) => {
+    const age = topics.filter(other => other.seq > topic.seq).length
+    return Math.max(floors[index]!, Math.min(current[index]!, topic.sourceTokens * (1 + age) ** -d))
+  }
+  const totalAt = (d: number) => {
+    let total = 0
+    topics.forEach((topic, index) => { total += valueAt(topic, index, d) })
+    return total
+  }
+  let low = 0
+  let high = 1
+  while (totalAt(high) > budget && high < 1024) high *= 2
+  if (totalAt(high) > budget) return floors
+  for (let i = 0; i < 64; i++) {
+    const mid = (low + high) / 2
+    if (totalAt(mid) > budget) low = mid
+    else high = mid
+  }
+  return topics.map((topic, index) => Math.floor(valueAt(topic, index, high)))
+}
+
+export function ageDecayPlan(topics: readonly AgeDecayTopic[], budget: number): { targets: number[]; rewrite: number[] } {
+  const targets = ageDecayTargets(topics, budget)
+  return { targets, rewrite: targets.flatMap((target, index) => target < (topics[index]?.currentTokens ?? Infinity) ? [index] : []) }
 }
 
 // Deterministic stand-in when the merge model keeps failing: the notes stay as
@@ -267,7 +295,7 @@ export const LEDGER_COMPACT_SYSTEM = [
   'Return one JSON object with a topics array of {topic, summary, seq} records.',
   'Fit the complete ledger within the supplied token budget. Give recent topics more room and re-summarize older topics more tightly.',
   'Merge recurring topics into one entry. Keep a closed topic as its outcome and key facts.',
-  'Keep distinct topics distinct and preserve their supported facts and outcomes.',
+  'Keep distinct topics distinct and preserve their facts and outcomes.',
   'Use the supplied fold sequence for each topic whose summary you rewrite; retain an earlier sequence for a topic whose summary stays unchanged.',
   'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1}]}.',
 ].join('\n')

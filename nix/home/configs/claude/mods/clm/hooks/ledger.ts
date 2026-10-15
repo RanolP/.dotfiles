@@ -235,13 +235,41 @@ export const MERGE_SYSTEM = [
   'Every id, number and date in one claim comes from the same row and names the same object as that row.',
   'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
-  'Move an existing issue with a status op once the turns show it changed; never re-create it. An issue the turns leave untouched needs no op. Items listed under <legacy> have no issue yet: create one for each that still holds.',
+  'For each existing issue changed by the turns, write an update using its existing id so its history stays attached. Omit an op for each unchanged issue. Items listed under <legacy> have no issue yet: create one for each that still holds.',
   'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
   'When the user resumes a dropped direction, move that dropped issue back to todo or doing by its id; it keeps its id and history that way.',
-  'Steps listed under <finished_earlier> are already recorded; leave them as they are.',
+  'Keep the recorded state of each step listed under <finished_earlier>.',
   'Write `<ops>[]</ops>` when nothing changed.',
-  'Drop small talk and anything later turns replaced. Keep the notes under 300 words.',
+  'Keep session-relevant goals, decisions, facts and work, using the latest state when later turns supersede earlier details. Keep the notes under 300 words.',
   'Write the 목표 notes, every title, note and fact text in Korean, keeping code identifiers, paths and commands verbatim.',
+].join('\n')
+
+// clm-prompt
+export const SPLIT_MERGE_SYSTEM = [
+  MERGE_SYSTEM.split('\n').filter(line =>
+    !line.startsWith('Reply with the updated notes')
+    && !line.startsWith('Then `<ops>`')
+    && !line.startsWith('Write `<ops>[]'),
+  ).join('\n'),
+  'You also receive numbered complete turns with estimated token counts. Return one JSON object with split, notes, ops and topics fields.',
+  'Inside <queue_turns>, cite user rows by their [user mN] ref and tool results by their <- [id] ref in the ops evidence.',
+  'Set split to the 1-based first turn of B. Turns before split form A, and A contains at least one whole turn about a finished topic. Choose a boundary where the turns from split onward form the topic still in progress.',
+  'Summarize only A into notes, ops and topic summaries. The caller keeps B from its numbered turn boundary verbatim.',
+  `Set notes to the required plain-markdown note sections headed ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')}; set ops to the JSON array of changes supported by A.`,
+  'Set topics to an array of {topic, summary} records for A, preserving distinct topics as separate entries and using concise summaries.',
+  'Reply with only JSON: {"split":2,"notes":"## 목표\\n...","ops":[],"topics":[{"topic":"...","summary":"..."}]}.',
+].join('\n')
+
+// clm-prompt
+export const LEDGER_COMPACT_SYSTEM = [
+  'You compact the topic summaries that make up a coding session ledger.',
+  'Each topic record gives its topic, summary, last-written fold sequence, and estimated token count. New summaries also include their token counts.',
+  'Return one JSON object with a topics array of {topic, summary, seq} records.',
+  'Fit the complete ledger within the supplied token budget. Give recent topics more room and re-summarize older topics more tightly.',
+  'Merge recurring topics into one entry. Keep a closed topic as its outcome and key facts.',
+  'Keep distinct topics distinct and preserve their supported facts and outcomes.',
+  'Use the supplied fold sequence for each topic whose summary you rewrite; retain an earlier sequence for a topic whose summary stays unchanged.',
+  'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1}]}.',
 ].join('\n')
 
 export function renderTurns(rows: readonly SessionMessage[], cap = 120_000): string {

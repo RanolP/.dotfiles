@@ -42,7 +42,7 @@ type IntentContext = {
   later: readonly string[]
 }
 
-const xmlText = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+export const xmlText = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 const list = (rows: readonly string[]) => rows.length ? rows.join('\n') : '(none)'
 
 export function intentPrompt({ state, issues, lastAssistantReply, userPrompt, later }: IntentContext): string {

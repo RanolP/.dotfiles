@@ -44,7 +44,7 @@ export const rowRef = (i: number) => `m${i + 1}`
  * ref's text exactly as rendered (clipped), which is what a quote is checked
  * against. Over `cap`, whole oldest rows go, so every kept ref is shown whole.
  */
-export function renderRange(rows: readonly SessionMessage[], cap = 120_000): { text: string; sources: Map<string, Source> } {
+export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refOffset = 0): { text: string; sources: Map<string, Source> } {
   const toolOf = new Map(rows.flatMap(m => m.toolUses.map(u => [u.tool_use_id, u.tool] as const)))
   const rendered = rows.map((m, i) => {
     const sources: [string, Source][] = []
@@ -54,8 +54,8 @@ export function renderRange(rows: readonly SessionMessage[], cap = 120_000): { t
       const { text, full } = clippedSource(shown, TEXT_CLIP)
       if (m.role === 'assistant') head = `[assistant] ${text}`
       else if (isUserTyped(m)) {
-        head = `[user ${rowRef(i)}] ${text}`
-        sources.push([rowRef(i), { kind: 'user', text, ...(full ? { full } : {}) }])
+        head = `[user ${rowRef(i + refOffset)}] ${text}`
+        sources.push([rowRef(i + refOffset), { kind: 'user', text, ...(full ? { full } : {}) }])
       } else head = `[harness] ${text}`
     }
     const parts = [head]

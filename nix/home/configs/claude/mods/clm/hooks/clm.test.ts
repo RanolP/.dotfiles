@@ -8,7 +8,7 @@ import type { Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM } from './ledger'
+import { fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents } from './tracker'
 
 const M = (role: 'user' | 'assistant', text: string, extra: Record<string, unknown> = {}) =>
@@ -36,8 +36,12 @@ const ROWS = [
 const CITE = [{ ref: 'tu_a', quote: 'log: make fails at' }]
 const ledger = (fact: string, ops = '[]', cite = CITE) =>
   `## 목표\n- -\n\n<ops>${JSON.stringify([{ op: 'fact', text: fact, evidence: cite }, ...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))])}</ops>`
+const splitAnswer = (split = 2, topic = 'build', summary = 'build summary', note = 'build summary') => JSON.stringify({
+  split, notes: `## 목표\n- ${note}`, ops: [], topics: [{ topic, summary }],
+})
+const compressedTopics = (topics: { topic: string; summary: string; seq: number }[]) => JSON.stringify({ topics })
 const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as any
-const OPTS = { options: { budget: 2000, tailTarget: 1200, reserve: 100 } }
+const OPTS = { options: { budget: 2000, tailTarget: 1200, reserve: 100, queueTarget: 100000 } }
 const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
 const LOG_FILE = '/home/t/.claude-work/plans/clm-s1.log.jsonl'
 const ids = (m: any) => [...m.toolUses.map((u: any) => u.tool_use_id), ...(m.toolResults ?? []).map((r: any) => r.tool_use_id)]
@@ -45,10 +49,10 @@ const est = (m: any) => Math.ceil((m.text.length + m.toolUses.reduce((k: number,
 const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 const handled = (rows: any[]) => rows.map((m, i) => ({ ...m, handle: `h${i}` }))
 
-type State = { rows: any[]; replies: (string | null | Error)[]; turnReplies?: string[]; intentReplies?: (string | Error)[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[] }
+type State = { rows: any[]; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; stepReplies?: string[]; stepDelay?: number; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[] }
 function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
+  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], stepPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
@@ -90,6 +94,20 @@ function bottoms(on: any, s: State) {
       if (text instanceof Error) throw text
       return { value: { isAnswered: true, text, usage: {} } }
     }
+    if (e.system === SPLIT_MERGE_SYSTEM) {
+      seen.splitPrompts.push(e.prompt)
+      if (s.splitBlock) await s.splitBlock()
+      if (s.splitDelay) await clock.sleep(s.splitDelay)
+      const text = s.splitReplies?.shift() ?? splitAnswer()
+      if (text instanceof Error) throw text
+      return { value: { isAnswered: true, text, usage: {} } }
+    }
+    if (e.system === LEDGER_COMPACT_SYSTEM) {
+      seen.compressionPrompts.push(e.prompt)
+      const text = s.compressionReplies?.shift() ?? compressedTopics([{ topic: 'build', summary: 'build summary', seq: 1 }])
+      if (text instanceof Error) throw text
+      return { value: { isAnswered: true, text, usage: {} } }
+    }
     if (e.system !== MERGE_SYSTEM) {
       seen.turnPrompts.push(e.prompt)
       return { value: { isAnswered: true, text: s.turnReplies?.shift() ?? '<changes></changes>', usage: {} } }
@@ -119,12 +137,16 @@ function bottoms(on: any, s: State) {
   on('session.compact', (_$: any, e: any) => { seen.engineCompactions++; seen.engineInputs.push(e.messages); return { messages: [M('user', 'ENGINE SUMMARY')] } })
   return seen
 }
-// The plugin raises its compaction from turn.complete; the engine answers by
-// running the chain again with the live transcript, which a test raises itself.
+// The test asks the engine for a manual compaction after the turn hook runs.
 async function turnEnds($: any, s: State, seen: { results: SessionCompactResult[] }, answer = '') {
   await $.turn.complete({ ...TURN, answer })
-  seen.results.push(await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) }))
+  seen.results.push(await $.session.compact({ trigger: 'manual', messages: handled(s.rows) }))
 }
+async function waitForPending(seen: { store: Record<string, unknown> }) {
+  for (let i = 0; i < 2000 && !seen.store['pending:s1']; i++) await Promise.resolve()
+  if (!seen.store['pending:s1']) throw new Error('background fold did not write Pending')
+}
+const BG_OPTS = { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }
 const logEvents = (seen: { files: Record<string, string> }) => (seen.files[LOG_FILE] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
 
 // Regression caught: the time-budget noun could not create, update, filter, or reject cross-session tracker issues.
@@ -432,11 +454,10 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
 test('a merged ledger without its 목표 header skips the fold', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: ['## 핵심 사실·경로\n- a heading the merge no longer writes\n\n<ops>[]</ops>'] }
   const seen = bottoms(on, s)
-  await $.turn.complete(TURN)
-  expect(seen.store['pending:s1']).toBeUndefined()
-  expect(seen.files[LEDGER_FILE]).toBeUndefined()
-  expect((seen.store['ledger:s1'] as any).lastSkip).toContain('expected the 1 note sections')
-  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid'])
+  const result: any = await $.session.compact({ trigger: 'manual', messages: handled(ROWS) } as any)
+  expect(result.messages[1].text).toMatch(/^\[clm ledger #1 · /)
+  expect(section(result.messages[1].text, '핵심 사실·경로')).toContain('요약 없이 접힘:')
+  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'fallback', 'clear'])
 })
 
 // Regression caught: after a fold, reads include the pre-boundary transcript so totals double-count rows the model no longer sees; and /clm output lands in the model's transcript.
@@ -450,7 +471,7 @@ test('/clm prints the ledger, a budget line counting only post-boundary rows, an
   expect(r.text).toBeUndefined()
   const text = seen.logs.at(-1)!
   const expected = after.reduce((n: number, m: any) => n + est(m), 0)
-  expect(text.split('\n')[0]).toBe(`clm budget: ${expected}/2000 tokens (${Math.round(expected / 20)}%); folds above 1900, tail target 1200, ratio 1`)
+  expect(text.split('\n')[0]).toBe(`clm budget: ${expected}/2000 tokens (${Math.round(expected / 20)}%); escape at 1900, queue target 100000, tail target 1200, ledger target 300, ratio 1`)
   expect(text).toContain('LEDGER-ONLY-FACT')
   expect(text).toContain('"event":"clear"')
 })
@@ -484,17 +505,96 @@ test('a pending fold keeps both identical tail prompts and the turn between them
   expect(shape(out)).toContain('first continuation')
 })
 
-// Regression caught: a deferred plan used a tail-relative boundary, so one appended turn forced a second merge.
-test('a plan deferred past one appended turn is applied without a second merge', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('planned ledger')] }
+// Regression caught: summary work blocks the turn that crossed queueTarget.
+test('turn end with queue at queueTarget returns before the summary resolves', BG_OPTS, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('assistant', 'done'), M('user', 'finished topic'), M('assistant', 'A'.repeat(6000)), M('user', 'active topic'), M('assistant', 'working')]
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let summaryStarted = false
+  const s: State = { rows, replies: [], splitBlock: () => { summaryStarted = true; return gate } }
+  const seen = bottoms(on, s)
+  let returned = false
+  const turn = $.turn.complete(TURN).then(() => { returned = true })
+  for (let i = 0; i < 50 && !summaryStarted; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  const returnedBeforeSummary = await Promise.race([turn.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 100))])
+  release()
+  await turn
+  await waitForPending(seen)
+  expect(summaryStarted).toBe(true)
+  expect(returnedBeforeSummary).toBe(true)
+  expect(seen.splitPrompts).toHaveLength(1)
+  expect(seen.store['pending:s1']).toBeDefined()
+})
+
+// Regression caught: a changed A row let the swap delete turns the summary never saw.
+test('a background plan whose A rows changed is discarded with rows untouched', BG_OPTS, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
-  expect(seen.store['pending:s1']).toBeDefined()
-  s.rows = [...ROWS, M('user', 'new turn'), M('assistant', 'new result')]
-  const out: any = await $.session.compact({ trigger: 'auto', messages: handled(s.rows) } as any)
-  expect(seen.prompts.length).toBe(1)
-  expect(out.messages[1].text).toContain('planned ledger')
-  expect(out.messages.some((m: any) => m.text === 'new turn')).toBe(true)
+  await waitForPending(seen)
+  s.rows[1] = M('user', 'A changed after summary')
+  const unchanged = handled(s.rows)
+  const result: any = await $.session.compact({ trigger: 'plugin', messages: unchanged } as any)
+  expect(result.messages).toEqual(unchanged)
+  expect(seen.store['pending:s1']).toBeUndefined()
+  expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: a split between topics or a tail that cannot fit still produced a destructive plan.
+test('a mid-topic split or tail overflow is rejected, retried once, then dropped', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(12000)), M('user', 'active B'), M('assistant', 'z'.repeat(6000))]
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(1.5), splitAnswer(2)] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  for (let i = 0; i < 50 && !seen.logs.some(line => line.includes('split summary dropped')); i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(seen.splitPrompts).toHaveLength(2)
+  expect(seen.store['pending:s1']).toBeUndefined()
+  expect(seen.logs.some(line => line.includes('split summary dropped'))).toBe(true)
+})
+
+// Regression caught: applying a precomputed summary changed B after the model selected its split.
+test('the applied background fold is head plus ledger plus B verbatim', BG_OPTS, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'), M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done')]
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'B topic', 'B summary')], compressionReplies: [compressedTopics([{ topic: 'B topic', summary: 'B summary', seq: 1 }])] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  const result: any = await $.session.compact({ trigger: 'plugin', messages: handled(rows) } as any)
+  const expectedTail = rows.slice(5).map(({ handle: _handle, ...message }: any) => message)
+  expect(result.messages[0].text).toBe('protected request')
+  expect(result.messages[1].text).toMatch(/^\[clm ledger #1 · /)
+  expect(result.messages.slice(2)).toEqual(expectedTail)
+  const clear = logEvents(seen).find(event => event.event === 'clear')!
+  expect(typeof clear.summaryMs).toBe('number')
+  expect(typeof clear.durationMs).toBe('number')
+  expect((seen.store['ledger:s1'] as any).foldDurationsMs['1']).toBe(clear.durationMs)
+})
+
+// Regression caught: re-folding kept T1 at its old size or discarded an exact user instruction.
+test('ledger recompression shrinks the old topic and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 200, reserve: 100 } }, async ($, on) => {
+  const instruction = 'Keep the public API stable while changing the parser.'
+  const oldSummary = 'T1 '.repeat(160)
+  const oldLedger = `[clm ledger #1 · 2026-10-14 09:00 KST] Earlier turns of this session were folded into these notes by a Haiku summary (file: ${LEDGER_FILE}).\n\n## 목표\n- T1: ${oldSummary}\n\n## 사용자 지시\n- (none yet)\n\n## 한 일\n- (none yet)\n\n## 할 일\n- (none yet)\n\n## 미결 질문\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
+  const rows = [M('user', 'protected request'), M('user', oldLedger), M('user', instruction), M('assistant', 'A complete'), M('user', 'continue with B'), M('assistant', 'B result')]
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'T2', 'new topic summary')], compressionReplies: [compressedTopics([
+    { topic: 'T1', summary: 'T1 closed outcome', seq: 1 },
+    { topic: 'T2', summary: 'new topic summary', seq: 2 },
+  ])] }
+  const seen = bottoms(on, s)
+  seen.files[LEDGER_FILE] = oldLedger
+  seen.store['ledger:s1'] = { seq: 1, fails: 0 }
+  seen.store['topics:s1'] = [{ topic: 'T1', summary: oldSummary, seq: 1 }]
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  const result: any = await $.session.compact({ trigger: 'plugin', messages: handled(rows) } as any)
+  const ledgerRow = result.messages[1].text
+  expect(seen.compressionPrompts[0]).toContain('"seq":1')
+  expect(seen.compressionPrompts[0]).toContain('200 tokens')
+  expect(ledgerRow).toContain('T1: T1 closed outcome')
+  expect(ledgerRow).not.toContain(oldSummary)
+  expect(est(result.messages[1])).toBeLessThanOrEqual(200)
+  expect(instructionValues(ledgerRow)).toContain(instruction)
 })
 
 // Regression caught (guards 2 and 6): a fold cut the tool result of the newest turn while that command was still in progress.
@@ -536,7 +636,7 @@ test('a fold that would not shrink the context is skipped with both sizes logged
   const rows = [M('user', 'start'), M('user', 'a'), M('assistant', 'A'), M('user', 'b'), M('assistant', 'B'), M('user', 'go'), M('assistant', 'w'.repeat(7600))]
   const s: State = { rows, replies: [ledger('p'.repeat(1700))] }
   const seen = bottoms(on, s)
-  await $.turn.complete(TURN)
+  await $.session.compact({ trigger: 'manual', messages: handled(rows) } as any)
   expect(seen.store['pending:s1']).toBeUndefined()
   const line = seen.logs.find(l => l.includes('would not shrink'))!
   expect(line).toMatch(/\(\d+ -> \d+ est\. tokens\)/)
@@ -544,43 +644,38 @@ test('a fold that would not shrink the context is skipped with both sizes logged
   expect(ev.tokensAfter).toBeGreaterThanOrEqual(ev.tokensBefore)
 })
 
-// Regression caught (guard 4): a merge model that keeps answering badly blocks every fold, and the context grows without bound.
-test('after three failed merges in a row the fold uses a mechanical ledger', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: ['bad', null, 'bad'] }
+// Regression caught: an engine-requested compaction could not shrink the transcript after a malformed merge.
+test('an engine manual compaction uses a mechanical ledger when the merge fails', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: ['bad'] }
   const seen = bottoms(on, s)
-  await $.turn.complete(TURN)
-  await $.turn.complete(TURN)
-  expect(seen.store['pending:s1']).toBeUndefined()
-  expect((seen.store['ledger:s1'] as any).fails).toBe(2)
-  await turnEnds($, s, seen)
-  const row = seen.results[0].messages[1].text
+  const result: any = await $.session.compact({ trigger: 'manual', messages: handled(ROWS) } as any)
+  const row = result.messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
-  expect(row).toContain('- "now fix it"')
-  expect(section(row, '핵심 사실·경로')).toContain('요약 없이 접힘: 1 prompt(s), tools Bash, Edit')
-  expect((seen.store['ledger:s1'] as any).fails).toBe(0)
-  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-timeout', 'merge-invalid', 'fallback', 'clear'])
+  expect(section(row, '핵심 사실·경로')).toContain('요약 없이 접힘:')
+  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'fallback', 'clear'])
 })
 
-// Regression caught: the first fold took observed / (0 overhead + estimate) as the ratio and saturated it at 4.
-test('the first usage reading folds but sets no ratio', OPTS, async ($, on) => {
+// Regression caught: system prompt tokens in usage must not block a queue-triggered background summary.
+test('queueTarget schedules the background fold independently of the usage reading', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 600, reserve: 100 } }, async ($, on) => {
   const rows = ROWS
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
-  const s: State = { rows, replies: [ledger('x')], usage: usage(6000) }
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(6000) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
+  await waitForPending(seen)
   expect((seen.store['ledger:s1'] as { ratio?: number }).ratio).toBeUndefined()
   expect(seen.store['pending:s1']).toBeDefined()
 })
 
-// Regression caught (d): the trigger counted the whole usage reading, so ~35k of system prompt and tool schemas against a 32k budget folded every few calls.
-test('the fold trigger ignores system-prompt tokens in the usage reading', OPTS, async ($, on) => {
-  // ~1260 estimated message tokens under a 1900 trigger; the 6000-token reading is mostly system prompt.
+// Regression caught: system usage alone scheduled a summary while the queue stayed below queueTarget.
+test('a queue below queueTarget does not schedule a summary for a large usage reading', OPTS, async ($, on) => {
+  // The 6000-token reading is mostly system prompt; the message queue stays below the configured 100000-token target.
   const s: State = { rows: ROWS.slice(4), replies: [ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   expect(seen.prompts.length).toBe(0)
   expect(seen.store['pending:s1']).toBeUndefined()
-  // Once a fold has set the baseline, the same overhead is subtracted from later readings.
+  // A later usage baseline does not change the queue-size trigger.
   seen.store['ledger:s1'] = { seq: 1, fails: 0, overhead: 4800, ratio: 1 }
   await $.turn.complete(TURN)
   expect(seen.prompts.length).toBe(0)
@@ -614,18 +709,20 @@ test('every fold writes a JSONL decision line with sizes, kept turns and ratio',
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const clear = logEvents(seen).find(e => e.event === 'clear')
-  expect(Object.keys(clear).sort()).toEqual(['event', 'keptTurns', 'ratio', 'reason', 'tokensAfter', 'tokensBefore', 'ts'])
+  expect(Object.keys(clear).sort()).toEqual(['durationMs', 'event', 'keptTurns', 'ratio', 'reason', 'tokensAfter', 'tokensBefore', 'ts'])
   expect(clear.keptTurns).toBe(2)
   expect(clear.tokensAfter).toBeLessThan(clear.tokensBefore)
 })
 
 // Regression caught (guard 9): a budget under 2000 or a reserve over the budget is silently replaced and the user never learns the setting was ignored.
-test('a bad option is logged with the value actually used', { options: { budget: 100, tailTarget: 50000, reserve: 9999 } }, async ($, on) => {
+test('a bad option is logged with the value actually used', { options: { budget: 100, tailTarget: 50000, queueTarget: 0, ledgerTarget: 2000, reserve: 9999 } }, async ($, on) => {
   const s: State = { rows: [], replies: [] }
   const seen = bottoms(on, s)
   await ($ as any).session.start({ source: 'startup' })
   expect(seen.logs).toContain('clm: option budget=100 must be an integer of at least 2000; using 2000')
   expect(seen.logs).toContain('clm: option tailTarget=50000 must be a positive integer under the budget (2000); using 1000')
+  expect(seen.logs).toContain('clm: option queueTarget=0 must be a positive integer; using 8000')
+  expect(seen.logs).toContain('clm: option ledgerTarget=2000 must be a non-negative integer under tailTarget (1000); using 250')
   expect(seen.logs).toContain('clm: option reserve=9999 must be a positive integer under the budget (2000); using 500')
 })
 
@@ -1271,9 +1368,9 @@ test('a held step create promotes the issue it created, even after a retitle', O
 })
 
 // Regression caught (round 3, finding 6): a step that re-held the same issue between the fold reading the held list and applying it lost its fresh, unreviewed entry, since settling went by key alone.
-test('an entry a step re-holds after the fold read the held list survives the fold', OPTS, async ($, on) => {
+test('an entry a step re-holds after the fold read the held list survives the fold', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
   const open = '<ops>[{"op":"create","title":"빌드 로그 확인","status":"doing"}]</ops>'
-  const s: State = { rows: ROWS, replies: [ledger('fact')], stepReplies: [open], reviewReplies: ['{"verdicts":[{"id":"step1","accept":false,"reason":"no"}]}'] }
+  const s: State = { rows: ROWS, replies: [ledger('fact')], splitReplies: [splitAnswer(2)], stepReplies: [open], reviewReplies: ['{"verdicts":[{"id":"step1","accept":false,"reason":"no"}]}'] }
   const { seen, tracker } = await heldStep($, on, s)
   const id = tracker()[0]!.id
   const done = `<ops>[{"op":"status","issue":"${id}","status":"done","evidence":[{"ref":"tu_make","quote":"make fails at a.ts:12"}]}]</ops>`
@@ -1282,6 +1379,7 @@ test('an entry a step re-holds after the fold read the held list survives the fo
   await seen.clock.settle()
   const first = (seen.store['held:s1'] as any[])[0]
   await $.turn.complete(TURN)
+  await waitForPending(seen)
   expect(seen.store['pending:s1']).toBeDefined()
   s.stepReplies!.push(done)
   await bashCall($, on, 'make')

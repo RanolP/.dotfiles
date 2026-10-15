@@ -2,7 +2,7 @@ import { update, type BuiltinToolInputs, type EngineInterface, type PromptOrigin
 
 import { boardHtml } from './board'
 import {
-  buildCleared, fingerprint, isHarnessText, isLedgerRow, isSystemRow, isUserTyped, kst, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
+  buildCleared, fingerprint, isHarnessText, isLedgerRow, isPrompt, isSystemRow, isUserTyped, kst, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
   type Boundary, type ClearPlan,
 } from './fold'
 import {
@@ -10,35 +10,31 @@ import {
   type Evidence, type Source,
 } from './evidence'
 import {
-  composeLedger, EMPTY_LEDGER, factLines, fallbackLedger, instructionKey, instructionValues, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
+  composeLedger, EMPTY_LEDGER, factLines, fallbackLedger, instructionKey, instructionValues, issueList, legacyItems, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
   parseChanges, parseMerge, parseReview, preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
-  withNotes, WITHDRAWN_PREFIX, type Fact,
+  withNotes, WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, type Fact,
 } from './ledger'
 import {
   archivedDone, describe, injected, isOpen, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
   focusOf, issueId, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
-import { compose, INTENT_SYSTEM, intentPrompt, parseClassified } from './intent'
+import { compose, INTENT_SYSTEM, intentPrompt, parseClassified, xmlText } from './intent'
 import type { ClmStatus, ClmWorkflow } from '../types'
 
-// clm replaces the engine's compaction for the main conversation. When the
-// rows outgrow a token budget, a cheap model folds the turns about to go into a
-// ledger (goal, user instructions, work done, work left, open questions, key
-// facts), and this plugin's `session.compact` hook rewrites the transcript to
-// [first request, ledger row, newest turns]. The engine summarizer never runs:
-// every main-session compaction, /compact and the engine's own threshold
-// included, is answered here, and the ahead-of-time `precompute` is refused.
+// At each main turn end, queueTarget tokens start a background split and summary.
+// The resulting ledger replaces A while the transcript keeps [first request,
+// ledger row, B]. Engine auto/manual compactions without a ready plan use the
+// synchronous fold and escape path; the engine owns subagent compactions.
 //
 // 한 일, 할 일 and 미결 질문 are not merged text: they are rendered from the
 // tracker (tracker.ts), and the merge model only emits ops against it, so an
 // item it forgets to repeat stays where it was.
 //
-// Interactive sessions fold right after the turn that crossed the budget. A
-// headless (-p / SDK) session refuses a plugin-raised compaction, so there the
-// plan waits in the store for the next /compact or engine compaction.
+// The main turn end starts a split-and-summary job when the live queue reaches
+// queueTarget. A completed plan is swapped at a later turn end; engine
+// auto/manual compactions keep the synchronous fold and escape path.
 
 const FAILS_BEFORE_FALLBACK = 3
-const HYSTERESIS_FLOOR = 0.9
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 
 type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value: unknown }> } }
@@ -84,7 +80,7 @@ async function changeWorkflow<T>($: EngineInterface, change: (current: ClmWorkfl
 
 // --- options -------------------------------------------------------------
 
-export type Opts = { budget: number; tailTarget: number; reserve: number; model: string; reviewModel: string }
+export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
 /** Reads userConfig, naming every value it could not use and the value used instead. */
 export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: string[] } {
   const problems: string[] = []
@@ -103,6 +99,17 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
     if (isInt(o.tailTarget) && o.tailTarget > 0 && o.tailTarget < budget) tailTarget = o.tailTarget
     else problems.push(`tailTarget=${JSON.stringify(o.tailTarget)} must be a positive integer under the budget (${budget}); using ${half}`)
   }
+  let queueTarget = 8000
+  if (o.queueTarget !== undefined) {
+    if (isInt(o.queueTarget) && o.queueTarget > 0) queueTarget = o.queueTarget
+    else problems.push(`queueTarget=${JSON.stringify(o.queueTarget)} must be a positive integer; using 8000`)
+  }
+  const defLedgerTarget = Math.floor(tailTarget / 4)
+  let ledgerTarget = defLedgerTarget
+  if (o.ledgerTarget !== undefined) {
+    if (isInt(o.ledgerTarget) && o.ledgerTarget >= 0 && o.ledgerTarget < tailTarget) ledgerTarget = o.ledgerTarget
+    else problems.push(`ledgerTarget=${JSON.stringify(o.ledgerTarget)} must be a non-negative integer under tailTarget (${tailTarget}); using ${defLedgerTarget}`)
+  }
   const defReserve = Math.min(2048, Math.floor(budget / 4))
   let reserve = defReserve
   if (o.reserve !== undefined && o.reserve !== 0) {
@@ -117,7 +124,7 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
     return fallback
   }
   const model = name('model', 'haiku')
-  return { opts: { budget, tailTarget, reserve, model, reviewModel: name('reviewModel', model) }, problems }
+  return { opts: { budget, tailTarget, queueTarget, ledgerTarget, reserve, model, reviewModel: name('reviewModel', model) }, problems }
 }
 
 // --- session state -------------------------------------------------------
@@ -129,9 +136,10 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
 // calls, and stepOnce, for the steps each tool call shows.
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
-  cuts: Record<string, number>; keptTurns: number; fallback: boolean; foldMs?: number
+  cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: Topic[]
   promoted?: Payload[]; hold?: Held[]; settled?: string[]
 }
+type Topic = { topic: string; summary: string; seq: number }
 // `foldTokens` is the usage reading taken when the last fold landed: the
 // engine keeps reporting it until the next API response, so an equal reading
 // describes the transcript before that fold and is ignored.
@@ -139,7 +147,10 @@ export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldD
 const sid = ($: SessionReader) => $.session.id()
 const metaKey = async ($: SessionReader) => `ledger:${await sid($)}`
 const pendingKey = async ($: EngineInterface) => `pending:${await sid($)}`
+const topicsKey = async ($: EngineInterface) => `topics:${await sid($)}`
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isTopic = (v: unknown): v is Topic => isRecord(v) && typeof v.topic === 'string' && v.topic.trim() !== ''
+  && typeof v.summary === 'string' && v.summary.trim() !== '' && typeof v.seq === 'number' && Number.isInteger(v.seq) && v.seq > 0
 const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) && Object.values(v).every(n => typeof n === 'number')
 const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
 const isMeta = (v: unknown): v is Partial<Meta> =>
@@ -148,7 +159,8 @@ const isMeta = (v: unknown): v is Partial<Meta> =>
 const isPending = (v: unknown): v is Pending =>
   isRecord(v) && typeof v.notes === 'string' && typeof v.fullNotes === 'string' && Array.isArray(v.ops) && typeof v.seq === 'number'
   && optional(v.keepFp, 'string') && typeof v.keepFrom === 'number' && Array.isArray(v.dropFps) && v.dropFps.every(f => typeof f === 'string')
-  && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean' && optional(v.foldMs, 'number')
+  && isRecord(v.cuts) && typeof v.keptTurns === 'number' && typeof v.fallback === 'boolean' && optional(v.summaryMs, 'number')
+  && (v.topics === undefined || (Array.isArray(v.topics) && v.topics.every(isTopic)))
   && (v.promoted === undefined || Array.isArray(v.promoted)) && (v.hold === undefined || (Array.isArray(v.hold) && v.hold.every(isHeld)))
   && (v.settled === undefined || (Array.isArray(v.settled) && v.settled.every(k => typeof k === 'string')))
 async function readMeta($: StoreReader): Promise<Meta> {
@@ -167,9 +179,109 @@ async function readText($: EngineInterface, p: string): Promise<string | undefin
   return (await $.fs.exists(p)) ? await $.fs.read(p) : undefined
 }
 
+type TopicDraft = { topic: string; summary: string }
+type SplitAnswer = { split: number; mergeReply: string; topics: TopicDraft[] }
+type PreparedFold = { plan: ClearPlan; mergeReply: string; topics: TopicDraft[] }
+const isTopicDraft = (v: unknown): v is TopicDraft => isRecord(v) && typeof v.topic === 'string' && v.topic.trim() !== '' && typeof v.summary === 'string' && v.summary.trim() !== ''
+
+function parseSplitAnswer(raw: string): SplitAnswer | string {
+  let value: unknown
+  try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `split reply is not JSON (${String(err).slice(0, 80)})` }
+  if (!isRecord(value) || typeof value.split !== 'number' || !Number.isInteger(value.split)) return `split must be an integer turn number (received ${JSON.stringify(isRecord(value) ? value.split : undefined)})`
+  if (typeof value.notes !== 'string' || !Array.isArray(value.ops)) return 'split reply needs notes and ops'
+  const topicDrafts = value.topics
+  if (!Array.isArray(topicDrafts) || !topicDrafts.every(isTopicDraft)) return 'split reply needs topic summaries'
+  return {
+    split: value.split,
+    mergeReply: `${normalizeLedger(value.notes)}\n<ops>${JSON.stringify(value.ops)}</ops>`,
+    topics: topicDrafts.map(topic => ({ topic: topic.topic.trim(), summary: topic.summary.trim() })),
+  }
+}
+
+function isTopicList(value: unknown): value is Topic[] {
+  return Array.isArray(value) && value.every(isTopic) && new Set(value.map(t => instructionKey(t.topic))).size === value.length
+}
+
+async function storedTopics($: EngineInterface, notes: string, seq: number): Promise<Topic[]> {
+  const stored = await $.store.get(await topicsKey($))
+  if (isTopicList(stored)) return stored
+  const goal = /^## 목표\s*\n([\s\S]*?)(?=\n## |$)/m.exec(notes)?.[1]?.trim() ?? ''
+  if (!goal || goal === '- (none yet)') return []
+  return [{ topic: '기존 세션 주제', summary: goal, seq: Math.max(1, seq) }]
+}
+
+function notesWithTopics(notes: string, topics: readonly Topic[]): string {
+  const goal = topics.length ? topics.map(t => `- ${t.topic}: ${t.summary}`).join('\n') : '- (none yet)'
+  return withNotes(notes, `## 목표\n${goal}`)
+}
+
+const topicTokens = (topic: Pick<Topic, 'topic' | 'summary'>) => Math.ceil((topic.topic.length + topic.summary.length) / 4)
+
+function parseTopics(raw: string): Topic[] | string {
+  let value: unknown
+  try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `topic merge is not JSON (${String(err).slice(0, 80)})` }
+  if (!isRecord(value) || !isTopicList(value.topics)) return 'topic merge needs distinct {topic, summary, seq} records'
+  return value.topics
+}
+
+async function compressTopics(
+  $: EngineInterface, opts: Opts, input: readonly Topic[], seq: number, notes: string, issues: readonly Issue[],
+): Promise<{ topics: Topic[]; ledgerTokens: number }> {
+  const old = new Map(input.map(topic => [instructionKey(topic.topic), topic]))
+  const fixedNotes = notes.replace(/^## 목표\n[\s\S]*?(?=\n## |$)/m, '## 목표\n')
+  const fixedLedger = composeLedger(fixedNotes, issues)
+  const fixedTokens = Math.ceil(fixedLedger.length / 4)
+  const pointer = await ledgerPath($)
+  let retryReason = ''
+  let latest = [...input]
+  let latestTokens = 0
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await $.model.complete({
+        model: opts.model,
+        system: LEDGER_COMPACT_SYSTEM,
+        prompt: [
+          `<budget>\n${opts.ledgerTarget} tokens for the complete ledger; fixed sections use about ${fixedTokens} tokens.</budget>`,
+          `<fixed_sections>\n${xmlText(fixedLedger)}\n</fixed_sections>`,
+          `<topic_entries>\n${input.map(topic => JSON.stringify({ ...topic, tokens: topicTokens(topic) })).join('\n') || '(none)'}\n</topic_entries>`,
+          `<new_summary>\n${input.filter(topic => topic.seq === seq).map(topic => JSON.stringify({ ...topic, tokens: topicTokens(topic) })).join('\n') || '(none)'}\n</new_summary>`,
+          retryReason ? `<retry_rule>\n${retryReason}\n</retry_rule>` : '',
+        ].filter(Boolean).join('\n\n'),
+        maxTokens: Math.max(1024, Math.min(8192, opts.ledgerTarget * 2)),
+        timeoutMs: 60_000,
+      })
+      const parsed = response.isAnswered ? parseTopics(response.text) : `topic merge gave no text (${response.reason})`
+      if (typeof parsed === 'string') {
+        retryReason = `The previous reply failed: ${parsed}. Return the required JSON object with a topics array.`
+        if (attempt === 1) $.ui.log(`clm: topic merge failed (${parsed}); keeping the summaries as written`, { to: 'debug' })
+        continue
+      }
+      latest = parsed.map(topic => {
+        const previous = old.get(instructionKey(topic.topic))
+        return { ...topic, seq: previous?.summary === topic.summary ? previous.seq : seq }
+      })
+      const row: SessionMessage = { role: 'user', text: ledgerRowText(seq, kst(), pointer, composeLedger(notesWithTopics(notes, latest), issues)), toolUses: [] }
+      latestTokens = sum([row])
+      if (latestTokens <= opts.ledgerTarget) return { topics: latest, ledgerTokens: latestTokens }
+      retryReason = `The previous ledger used ${latestTokens} tokens, exceeding ${opts.ledgerTarget} by ${latestTokens - opts.ledgerTarget}. Re-summarize older topics more tightly and return the full topics array.`
+    } catch (err) {
+      retryReason = `The previous topic merge failed: ${String(err).slice(0, 120)}. Return the required JSON object.`
+      if (attempt === 1) $.ui.log(`clm: topic merge failed (${String(err).slice(0, 120)}); keeping the summaries as written`, { to: 'debug' })
+    }
+  }
+  const fallbackRow: SessionMessage = { role: 'user', text: ledgerRowText(seq, kst(), pointer, composeLedger(notesWithTopics(notes, latest), issues)), toolUses: [] }
+  latestTokens = sum([fallbackRow])
+  if (latestTokens > opts.ledgerTarget) {
+    const over = latestTokens - opts.ledgerTarget
+    $.ui.log(`clm: ledger over budget by ${over}`, { to: 'debug' })
+    await logEvent($, 'ledger-over-budget', { reason: `ledger over budget by ${over}` })
+  }
+  return { topics: latest, ledgerTokens: latestTokens }
+}
+
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
-  | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost'
-type LogFields = { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; reason?: string }
+  | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost' | 'ledger-over-budget'
+type LogFields = { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; durationMs?: number; summaryMs?: number; reason?: string }
 const LOG_KEEP = 200
 async function logEvent($: EngineInterface, event: LogEvent, f: LogFields) {
   try {
@@ -211,11 +323,6 @@ export const messageTokens = (rows: readonly SessionMessage[], observed: number 
   return observed === undefined || meta.overhead === undefined ? estimated : Math.max(estimated, observed - meta.overhead)
 }
 const clampRatio = (n: number) => Math.round(Math.min(RATIO_MAX, Math.max(RATIO_MIN, n)) * 1000) / 1000
-
-async function skip($: EngineInterface, why: string) {
-  $.ui.log(`clm: fold skipped, ${why}`, { to: 'debug' })
-  await writeMeta($, { ...(await readMeta($)), lastSkip: why })
-}
 
 // --- tracker I/O -----------------------------------------------------------
 
@@ -579,7 +686,7 @@ type TrackerView = { issues: Issue[]; dropped: Issue[]; finished: Issue[]; doneT
 const DROPPED_SHOWN = 5
 /** The issues the step and merge models see and may name by id. */
 const modelIssues = (view: TrackerView) => [...view.issues, ...view.dropped]
-type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[] }
+type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: Topic[]; tailTokens: number }
 
 // The issues one session's ledger shows, with `ops` previewed on top when the
 // fold has not appended them yet; ids then match what append assigns.
@@ -774,7 +881,7 @@ async function reviewFold($: EngineInterface, opts: Opts, input: ReviewInput): P
  */
 // `calibrate` is false on the escape retry, whose usage reading predates the
 // withheld rows and so would inflate the ratio and overhead.
-async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number, calibrate = true): Promise<Fold | string> {
+async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number, calibrate = true, prepared?: PreparedFold): Promise<Fold | string> {
   const observed = freshReal(reading ?? await usageReading($), meta)
   const calib = calibrate ? observed : undefined
   const estimated = sum(rows)
@@ -788,7 +895,7 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   }
   const prev = (await readText($, await ledgerPath($))) ?? EMPTY_LEDGER
   // tailTarget counts message tokens, as the budget does; the system prompt and tool schemas are outside it.
-  const plan = planClear(rows, Math.max(0, opts.tailTarget / ratio), Math.ceil(prev.length / 4) + 60)
+  const plan = prepared?.plan ?? planClear(rows, Math.max(0, opts.tailTarget / ratio), Math.ceil(prev.length / 4) + 60)
   if (!plan) return 'nothing left to fold'
 
   const here = await captureOrigin($)
@@ -810,23 +917,26 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   let hold: Held[] = []
   const held = heldClaims(await readHeld($), view.issues, here.session)
   let settled = held.settled
+  let topics: Topic[] | undefined
   if (plan.dropped.length > 0) {
     const legacy = legacyItems(prev)
-    const r = await $.model.complete({
-      model: opts.model,
-      system: MERGE_SYSTEM,
-      prompt: [
-        `<notes>\n${mergeableNotes(notes)}\n</notes>`,
-        `<instructions>\n${instructions.map(i => JSON.stringify(i)).join('\n') || '(none)'}\n</instructions>`,
-        `<facts>\n${priorFacts.join('\n') || '(none)'}\n</facts>`,
-        `<issues>\n${issueList(modelIssues(view))}\n</issues>`,
-        ...(view.finished.length ? [`<finished_earlier>\n${view.finished.map(i => `- ${i.title}`).join('\n')}\n</finished_earlier>`] : []),
-        ...(legacy.length ? [`<legacy>\n${legacy.join('\n')}\n</legacy>`] : []),
-        `<removed_turns>\n${range.text}\n</removed_turns>`,
-      ].join('\n\n'),
-      maxTokens: 4096,
-      timeoutMs: 120_000,
-    })
+    const r = prepared
+      ? { isAnswered: true, text: prepared.mergeReply, reason: '' }
+      : await $.model.complete({
+        model: opts.model,
+        system: MERGE_SYSTEM,
+        prompt: [
+          `<notes>\n${mergeableNotes(notes)}\n</notes>`,
+          `<instructions>\n${instructions.map(i => JSON.stringify(i)).join('\n') || '(none)'}\n</instructions>`,
+          `<facts>\n${priorFacts.join('\n') || '(none)'}\n</facts>`,
+          `<issues>\n${issueList(modelIssues(view))}\n</issues>`,
+          ...(view.finished.length ? [`<finished_earlier>\n${view.finished.map(i => `- ${i.title}`).join('\n')}\n</finished_earlier>`] : []),
+          ...(legacy.length ? [`<legacy>\n${legacy.join('\n')}\n</legacy>`] : []),
+          `<removed_turns>\n${range.text}\n</removed_turns>`,
+        ].join('\n\n'),
+        maxTokens: 4096,
+        timeoutMs: 120_000,
+      })
     const withdrawable = [...instructions, ...plan.dropped.filter(isUserTyped).map(m => stripReminders(m.text))]
     const merged = r.isAnswered ? parseMerge(r.text, new Set(modelIssues(view).map(i => i.id)), Math.max(500, Math.floor(opts.budget / 4)), withdrawable, priorFacts) : 'merge model gave no text (' + r.reason + ')'
     const bad = typeof merged === 'string' ? merged : undefined
@@ -866,14 +976,23 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   notes = rememberFacts(notes, facts, retracted)
   const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await ledgerPath($), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
-  const fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
+  let fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
 
   const seq = meta.seq + 1
   const currentView = await trackerView($, here, [...ops, ...promoted])
+  if (prepared) {
+    const previousTopics = await storedTopics($, notesOf(prev), meta.seq)
+    const freshTopics = prepared.topics.map(t => ({ ...t, seq }))
+    const compacted = await compressTopics($, opts, [...previousTopics, ...freshTopics], seq, notes, currentView.issues)
+    notes = notesWithTopics(notes, compacted.topics)
+    fullNotes = notesWithTopics(fullNotes, compacted.topics)
+    topics = compacted.topics
+  }
   const text = ledgerRowText(seq, kst(), await ledgerPath($), composeLedger(notes, currentView.issues))
   const tokensBefore = messageTokens(rows, observed, meta)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
-  if (tokensAfter >= tokensBefore) {
+  const tailTokens = sum([{ role: 'user', text, toolUses: [] }, ...plan.tail.filter(m => !isLedgerRow(m) && !isSystemRow(m))])
+  if (tokensAfter >= tokensBefore && (!prepared || tailTokens <= opts.tailTarget)) {
     const why = `the fold would not shrink the context (${tokensBefore} -> ${tokensAfter} est. tokens)`
     $.ui.log(`clm: ${why}`)
     await logEvent($, 'skip-not-shrinking', { tokensBefore, tokensAfter, keptTurns: plan.keptTurns, ratio, reason: why })
@@ -882,39 +1001,139 @@ async function fold($: EngineInterface, opts: Opts, rows: readonly SessionMessag
   if (Object.keys(plan.cuts).length)
     await logEvent($, 'truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
   if (calib !== undefined) meta.overhead = Math.max(0, calib - estimated)
-  return { plan, notes, fullNotes, ops, seq, fallback, promoted, hold, settled }
+  return {
+    plan, notes, fullNotes, ops, seq, fallback, promoted, hold, settled, topics,
+    tailTokens,
+  }
 }
 
-async function maybeClear($: EngineInterface, opts: Opts) {
+type QueueTurn = { number: number; start: number; rows: readonly SessionMessage[] }
+const inFlightFolds = new Map<string, Promise<void>>()
+
+function queueTurns(rows: readonly SessionMessage[], first: number): QueueTurn[] {
+  const start = first + 1
+  const queue = rows.slice(start)
+  const prompts = queue.flatMap((m, index) => isPrompt(m) ? [index] : [])
+  return prompts.map((prompt, i) => {
+    const from = i === 0 ? 0 : prompt
+    const to = prompts[i + 1] ?? queue.length
+    return { number: i + 1, start: start + prompt, rows: queue.slice(from, to).filter(m => !isLedgerRow(m)) }
+  })
+}
+
+function splitPrompt(prev: string, turns: readonly QueueTurn[], retryRule: string): string {
+  let refOffset = 0
+  const numbered = turns.map(turn => {
+    const citable = turn.rows.filter(m => !isSystemRow(m) && !isLedgerRow(m))
+    const rendered = renderRange(citable, 120_000, refOffset).text
+    refOffset += citable.length
+    return `<turn number="${turn.number}" tokens="${sum(turn.rows)}">\n${xmlText(rendered)}\n</turn>`
+  }).join('\n')
+  return [
+    `<current_ledger>\n${xmlText(prev)}\n</current_ledger>`,
+    `<queue_turns>\n${numbered}\n</queue_turns>`,
+    retryRule ? `<retry_rule>\n${xmlText(retryRule)}\n</retry_rule>` : '',
+  ].filter(Boolean).join('\n\n')
+}
+
+async function prepareBackgroundFold($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], meta: Meta, first: number, turns: readonly QueueTurn[]): Promise<void> {
+  const session = await sid($)
+  const startedAt = await $.clock.now()
+  const previous = (await readText($, await ledgerPath($))) ?? EMPTY_LEDGER
+  const here = await captureOrigin($)
+  const view = await trackerView($, here)
+  const known = new Set([...view.issues, ...view.dropped].map(issue => issue.id))
+  let retryRule = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await $.model.complete({
+      model: opts.model,
+      system: SPLIT_MERGE_SYSTEM,
+      prompt: splitPrompt(previous, turns, retryRule),
+      maxTokens: 8192,
+      timeoutMs: 120_000,
+    })
+    const answer = response.isAnswered ? parseSplitAnswer(response.text) : `split model gave no text (${response.reason})`
+    if (typeof answer === 'string') {
+      retryRule = `The previous reply failed: ${answer}. Return the required JSON object and choose a whole-turn split.`
+      if (attempt === 1) $.ui.log(`clm: split summary failed (${answer}); the next turn end may retry`, { to: 'debug' })
+      continue
+    }
+    const boundary = turns[answer.split - 1]
+    if (answer.split < 2 || !boundary || !turns.slice(0, answer.split - 1).some(turn => turn.rows.length)) {
+      retryRule = `The previous split=${answer.split} did not leave a non-empty A and a B starting at a prompt row. Choose split from 2 through ${turns.length}.`
+      if (attempt === 1) $.ui.log(`clm: split summary rejected (${retryRule}); the next turn end may retry`, { to: 'debug' })
+      continue
+    }
+    const keepFrom = boundary.start
+    const plan: ClearPlan = {
+      head: rows.slice(0, first + 1),
+      dropped: rows.slice(first + 1, keepFrom).filter(m => !isLedgerRow(m) && !isSystemRow(m)),
+      tail: rows.slice(keepFrom),
+      keptTurns: turns.length - answer.split + 1,
+      cuts: {},
+    }
+    if (plan.dropped.length === 0) {
+      retryRule = `The previous split=${answer.split} left A empty. Choose split from 2 through ${turns.length}.`
+      if (attempt === 1) $.ui.log(`clm: split summary rejected (${retryRule}); the next turn end may retry`, { to: 'debug' })
+      continue
+    }
+    const merge = parseMerge(answer.mergeReply, known, Math.max(500, Math.floor(opts.budget / 4)), instructionValues(notesOf(previous)), factLines(notesOf(previous)))
+    if (typeof merge === 'string') {
+      retryRule = `The previous summary failed validation: ${merge}. Return valid note sections and ops in the required JSON object.`
+      if (attempt === 1) $.ui.log(`clm: split summary rejected (${merge}); the next turn end may retry`, { to: 'debug' })
+      continue
+    }
+    const prepared: PreparedFold = { plan, mergeReply: answer.mergeReply, topics: answer.topics }
+    const folded = await fold($, opts, rows, meta, false, undefined, true, prepared)
+    if (typeof folded === 'string') {
+      await writeMeta($, meta)
+      $.ui.log(`clm: background fold skipped (${folded})`, { to: 'debug' })
+      return
+    }
+    if (folded.tailTokens > opts.tailTarget) {
+      retryRule = `The previous split=${answer.split} produced ${folded.tailTokens} tokens for the new ledger plus B, above tailTarget=${opts.tailTarget}; choose an earlier whole-topic boundary or shorter summaries.`
+      if (attempt === 1) {
+        $.ui.log(`clm: split summary dropped (${retryRule}); the next turn end may retry`, { to: 'debug' })
+        return
+      }
+      continue
+    }
+    await writeMeta($, meta)
+    const summaryMs = Math.max(0, (await $.clock.now()) - startedAt)
+    const pending: Pending = {
+      notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, seq: folded.seq,
+      keepFp: folded.plan.tail[0] && fingerprint(folded.plan.tail[0]), keepFrom: rows.length - folded.plan.tail.length,
+      dropFps: folded.plan.dropped.filter(m => !isLedgerRow(m) && !isSystemRow(m)).map(fingerprint),
+      cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback,
+      summaryMs, topics: folded.topics, promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
+    }
+    await $.store.set(await pendingKey($), pending)
+    return
+  }
+  $.ui.log(`clm: background fold gave up for ${session}`, { to: 'debug' })
+}
+
+async function maybeClear($: EngineInterface, opts: Opts): Promise<void> {
+  const session = await sid($)
+  const key = await pendingKey($)
+  const stored = await $.store.get(key)
+  if (isPending(stored)) {
+    try { await $.session.compact({}) }
+    catch (err) { $.ui.log(`clm: fold deferred to the next turn end (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+    return
+  }
+  if (inFlightFolds.has(session)) return
   const meta = await readMeta($)
   const rows = liveRows(await $.session.messages(), meta.boundary)
-  const reading = await usageReading($)
-  const observed = freshReal(reading, meta)
-  // Before any fold has set the overhead baseline, a reading's excess over the
-  // rows' estimate is taken as system prompt and tool schemas.
-  const used = messageTokens(rows, observed, { overhead: meta.overhead ?? (observed === undefined ? undefined : Math.max(0, observed - sum(rows))) })
-  // The tail target is the lower post-fold bound; wait until the context is
-  // near the ceiling before folding again, so suffix-cache busts stay rare.
-  const trigger = Math.max(opts.budget - opts.reserve, Math.floor(opts.budget * HYSTERESIS_FLOOR))
-  if (used <= trigger) return
-  const startedAt = await $.clock.now()
-  const f = await fold($, opts, rows, meta, false, reading)
-  const foldMs = Math.max(0, (await $.clock.now()) - startedAt)
-  await writeMeta($, meta)
-  if (typeof f === 'string') return skip($, f)
-  const pending: Pending = {
-    notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, keepFp: f.plan.tail[0] && fingerprint(f.plan.tail[0]),
-    keepFrom: rows.length - f.plan.tail.length, dropFps: f.plan.dropped.map(fingerprint),
-    cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, foldMs, promoted: f.promoted, hold: f.hold, settled: f.settled,
-  }
-  await $.store.set(await pendingKey($), pending)
-  try {
-    // Answered by this plugin's own session.compact hook below, which applies
-    // the pending plan; the engine summarizer is never reached.
-    await $.session.compact({})
-  } catch (err) {
-    $.ui.log(`clm: fold deferred to the next compaction (${String(err).slice(0, 160)})`, { to: 'debug' })
-  }
+  const first = protectedIndex(rows)
+  const queue = rows.slice(first + 1)
+  if (sum(queue) < opts.queueTarget) return
+  const turns = queueTurns(rows, first)
+  if (turns.length < 2) return
+  const job = prepareBackgroundFold($, opts, rows, meta, first, turns)
+    .catch(err => $.ui.log(`clm: background fold failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
+    .finally(() => { if (inFlightFolds.get(session) === job) inFlightFolds.delete(session) })
+  inFlightFolds.set(session, job)
 }
 
 async function showTurnChanges($: EngineInterface, e: { answer: string }) {
@@ -1137,7 +1356,7 @@ async function withholdOldestResults($: EngineInterface, rows: readonly SessionM
 export function report(ledger: string | undefined, rows: readonly SessionMessage[], opts: Opts, meta: Meta, logTail: readonly string[]): string {
   const used = Math.round(visibleTokens(rows) * (meta.ratio ?? 1))
   return [
-    `clm budget: ${used}/${opts.budget} tokens (${Math.round((used / opts.budget) * 100)}%); folds above ${opts.budget - opts.reserve}, tail target ${opts.tailTarget}, ratio ${meta.ratio ?? 1}`,
+    `clm budget: ${used}/${opts.budget} tokens (${Math.round((used / opts.budget) * 100)}%); escape at ${opts.budget - opts.reserve}, queue target ${opts.queueTarget}, tail target ${opts.tailTarget}, ledger target ${opts.ledgerTarget}, ratio ${meta.ratio ?? 1}`,
     `rows: ${rows.filter(m => !isSystemRow(m)).length} kept, ${rows.filter(isSystemRow).length} hidden system rows`,
     `last fold: ${meta.lastClear ?? 'never'} (ledger #${meta.seq})${meta.lastSkip ? `; last skip: ${meta.lastSkip}` : ''}`,
     '',
@@ -1365,9 +1584,8 @@ export const register: Register = (on, options) => {
     return res
   })
 
-  // The main conversation's every compaction ends here and never reaches
-  // next(e), the engine summarizer: a pending plan is applied, otherwise the
-  // fold is planned and merged on the spot. Subagents keep the engine's.
+  // Plugin-triggered compaction applies a background plan; engine auto/manual
+  // compaction uses the synchronous fold and escape path.
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
@@ -1394,6 +1612,10 @@ export const register: Register = (on, options) => {
         ? keepFrom === workingRows.length
         : row !== undefined && fingerprint(row) === pending.keepFp
       if (keepFrom >= first + 1 && keepFrom <= workingRows.length && sameKept && sameDropped) use = { ...pending, keepFrom }
+    }
+    if (e.trigger === 'plugin' && !use) {
+      if (pending) $.ui.log('clm: background fold discarded because its summarized rows changed', { to: 'debug' })
+      return { messages: all }
     }
     let escaped = false
     if (!use) {
@@ -1428,7 +1650,7 @@ export const register: Register = (on, options) => {
         $.ui.log(`clm: ${e.trigger} compaction left the conversation as it is: ${f}`)
         return { messages: all }
       }
-      use = { notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: workingRows.length - f.plan.tail.length, foldMs: 0, promoted: f.promoted, hold: f.hold, settled: f.settled }
+      use = { notes: f.notes, fullNotes: f.fullNotes, ops: f.ops, seq: f.seq, cuts: f.plan.cuts, keptTurns: f.plan.keptTurns, fallback: f.fallback, keepFrom: workingRows.length - f.plan.tail.length, promoted: f.promoted, hold: f.hold, settled: f.settled }
     }
 
     const here = await captureOrigin($)
@@ -1445,6 +1667,8 @@ export const register: Register = (on, options) => {
     const tokensBefore = sum(workingRows)
     const tokensAfter = sum(messages)
     await $.fs.write(await ledgerPath($), fileLedger + '\n')
+    if (use.topics) await $.store.set(await topicsKey($), use.topics)
+    else await $.store.delete(await topicsKey($))
     // On the escape path the pre-fold rows still name every withheld file;
     // otherwise a file named by neither a kept row nor the ledger is unreachable.
     await pruneWithheld($, escaped ? workingRows : messages, fileLedger)
@@ -1452,10 +1676,14 @@ export const register: Register = (on, options) => {
     const foldedAt = await $.clock.now()
     await writeMeta($, {
       ...meta, seq: use.seq, lastClear: kst(), lastFoldAt: foldedAt,
-      foldDurationsMs: { ...meta.foldDurationsMs, [String(use.seq)]: (use.foldMs ?? 0) + Math.max(0, foldedAt - compactStartedAt) },
+      foldDurationsMs: { ...meta.foldDurationsMs, [String(use.seq)]: Math.max(0, foldedAt - compactStartedAt) },
       foldTokens: await usageReading($), lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset },
     })
-    await logEvent($, 'clear', { tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1, reason: `${e.trigger}${use.fallback ? ', fallback ledger' : ''}` })
+    await logEvent($, 'clear', {
+      tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1,
+      durationMs: Math.max(0, foldedAt - compactStartedAt), ...(use.summaryMs === undefined ? {} : { summaryMs: use.summaryMs }),
+      reason: `${e.trigger}${use.fallback ? ', fallback ledger' : ''}`,
+    })
     await projectPanel($, here, appended)
     return { messages, tokensBefore, tokensAfter }
   })

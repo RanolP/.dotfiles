@@ -3,13 +3,13 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallTranscriptAddress, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
-import { parseTranscriptRows, sentAtOf } from './address'
+import { recordPrompt, sentAtOf, stampMessages } from './address'
 import { renderRange } from './evidence'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
@@ -51,39 +51,29 @@ test('instruction preservation has no character cap', async () => {
   expect(out.notes).toContain(JSON.stringify(old[11]))
 })
 
-// Regression caught: a Haiku timeout left a preserved instruction without an address index, so it vanished from the next folded ledger.
-test('a global prohibition stays indexed after classifier failure and its address recalls the full transcript row', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
+// Regression caught: a session whose transcript exceeds the fs size cap lost every instruction address, so preserved instructions showed @unknown.
+test('an instruction given in a session whose transcript exceeds the fs size cap still gets a real address', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
   const full = 'Do not change generated files. Keep every existing lockfile byte-for-byte stable, including all metadata and ordering.'
-  const address = 'c130a62d-1111-4111-8111-111111111111'
   const rows = [M('user', 'Begin project'), M('assistant', 'I will inspect it.'), M('user', full), M('assistant', 'A'.repeat(6000)), M('user', 'Fix the unrelated parser task.'), M('assistant', 'Done.')]
-  const rawRows = [
-    JSON.stringify({ uuid: 'a010a62d-0000-4000-8000-000000000000', type: 'user', message: { role: 'user', content: 'Begin project' } }),
-    JSON.stringify({ uuid: 'b120b7ef-1111-4111-8111-111111111111', parentUuid: 'a010a62d-0000-4000-8000-000000000000', type: 'assistant', message: { role: 'assistant', content: 'I will inspect it.' } }),
-    JSON.stringify({ uuid: address, parentUuid: 'b120b7ef-1111-4111-8111-111111111111', type: 'user', message: { role: 'user', content: full } }),
-    JSON.stringify({ uuid: 'd230b7ef-2222-4222-8222-222222222222', parentUuid: address, type: 'assistant', message: { role: 'assistant', content: 'Understood.' } }),
-    JSON.stringify({ uuid: 'e330c1ab-3333-4333-8333-333333333333', parentUuid: 'd230b7ef-2222-4222-8222-222222222222', type: 'user', message: { role: 'user', content: 'Fix the unrelated parser task.' } }),
-    JSON.stringify({ uuid: 'f430c1ab-4444-4444-8444-444444444444', parentUuid: 'e330c1ab-3333-4333-8333-333333333333', type: 'assistant', message: { role: 'assistant', content: 'Done.' } }),
-  ]
-  const s: State = { rows, replies: [], intentReplies: [new Error('Haiku timeout')], splitReplies: [splitAnswer(2, 'parser', 'parser outcome')] }
+  const s: State = { rows, replies: [], intentReplies: [new Error('Haiku timeout'), new Error('Haiku timeout')], splitReplies: [splitAnswer(2, 'parser', 'parser outcome')] }
+  // No transcript file exists anywhere in this test; the address comes from clm's own index.
   const seen = bottoms(on, s)
-  const transcript = '/home/t/.claude/projects/s1.jsonl'
-  seen.files[transcript] = rawRows.join('\n')
-  on('classic.SessionStart', () => ({}))
-  await $.classic.SessionStart({ source: 'startup', session_id: 's1', transcript_path: transcript })
-  expect(seen.store['transcript-path:s1']).toBe(transcript)
   await $.prompt.submit(promptInput(full))
-  for (let i = 0; i < 50 && !seen.logs.some(line => line.includes('classification failed')); i++) await new Promise(resolve => setTimeout(resolve, 2))
-  expect(seen.logs.some(line => line.includes('classification failed'))).toBe(true)
+  await $.prompt.submit(promptInput('Fix the unrelated parser task.'))
+  for (let i = 0; i < 50 && seen.logs.filter(line => line.includes('classification failed')).length < 2; i++) await new Promise(resolve => setTimeout(resolve, 2))
   await $.turn.complete(TURN)
   await waitForPending(seen)
+  const indexed = (seen.store['address-index:s1:main'] as { rows: { address: string; text: string }[] }).rows
+  const address = indexed.find(row => row.text === full)?.address ?? ''
+  expect(address).toMatch(/^@[\da-f]{8}$/)
   const folded = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
   const ledgerRow = folded.find(row => row.text.startsWith('[clm ledger #'))
   if (!ledgerRow) throw new Error('fold omitted the ledger row')
-  expect(ledgerRow.text).toContain(`${[...full].slice(0, 80).join('')} @c130a62d`)
+  expect(ledgerRow.text).toContain(`${[...full].slice(0, 80).join('')} ${address}`)
   expect(ledgerRow.text).not.toContain(full)
-  expect(seen.store['instruction-index:s1:main']).toContainEqual({ address: '@c130a62d', issue: null, text: full })
-  expect(recallTranscriptAddress(seen.files[transcript] ?? '', '@c130a62d')).toEqual({ text: rawRows[2] })
-  expect(recallTranscriptAddress(seen.files[transcript] ?? '', '@c130a62d..@e330c1ab')).toEqual({ text: rawRows.slice(2, 5).join('\n') })
+  expect(seen.store['instruction-index:s1:main']).toContainEqual({ address, issue: null, text: full })
+  expect(recallRows(indexed as any, address).text).toContain(full)
+  expect(recallRows(indexed as any, `${address}..${indexed[1]?.address}`).text?.split('\n').length).toBe(2)
 })
 
 // Regression caught: the compact row exposed every task instead of the six scoped sections.
@@ -399,18 +389,18 @@ test('a fold over an older fold drops the /clear row and the stale ledger', OPTS
 
 // Regression caught: rendered turns lost each message's own send time, so a fold could not resolve "내일" against the day it was said.
 test('renderTurns and renderRange stamp each message with its own KST send time and leave an unknown one unstamped', async () => {
-  const jsonl = [
-    { uuid: 'u1', type: 'user', timestamp: '2026-10-15T05:03:00.000Z', message: { role: 'user', content: '내일 배포하자' } },
-    { uuid: 'a1', type: 'assistant', timestamp: '2026-10-15T05:04:00.000Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } },
-  ].map(row => JSON.stringify(row)).join('\n')
-  const sentAt = sentAtOf(parseTranscriptRows(jsonl))
+  const store: Record<string, unknown> = {}
+  const io = { get: async (key: string) => store[key], set: async (key: string, value: unknown) => { store[key] = value } }
   const rows: SessionMessage[] = [
     { role: 'user', text: '내일 배포하자', toolUses: [] },
     { role: 'assistant', text: '', toolUses: [{ tool: 'Bash', tool_use_id: 't1', input: {} } as SessionMessage['toolUses'][number]] },
-    { role: 'user', text: 'never in the transcript', toolUses: [] },
+    { role: 'user', text: 'never seen by a hook', toolUses: [] },
   ]
+  await recordPrompt(io, 's1:main', '내일 배포하자', '2026-10-15T05:03:00.000Z')
+  await stampMessages(io, 's1:main', rows.slice(0, 2), '2026-10-15T05:04:00.000Z')
+  const sentAt = await sentAtOf(io, 's1:main')
   expect(renderTurns(rows, 120_000, sentAt).split('\n').filter(line => line.startsWith('['))).toEqual([
-    '[user 2026-10-15 14:03 KST] 내일 배포하자', '[assistant 2026-10-15 14:04 KST]', '[user] never in the transcript',
+    '[user 2026-10-15 14:03 KST] 내일 배포하자', '[assistant 2026-10-15 14:04 KST]', '[user] never seen by a hook',
   ])
   expect(renderRange(rows, 120_000, 0, sentAt).text).toContain('[user m1 2026-10-15 14:03 KST] 내일 배포하자')
 })

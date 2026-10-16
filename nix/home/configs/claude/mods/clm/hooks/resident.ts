@@ -24,7 +24,7 @@ export type ResidentLedgerSections = {
 export type ResidentIo = {
   get: (key: string) => Promise<unknown>
   set: (key: string, value: unknown) => Promise<void>
-  transcriptRows: () => Promise<{ uuid: string; role?: string; text: string }[]>
+  addressRows: (key: string) => Promise<{ address: string; text: string }[]>
   readLedger: () => Promise<string | undefined>
   readMeta: () => Promise<{ seq: number }>
   storedTopics: (notes: string, seq: number, key: string) => Promise<Topic[]>
@@ -43,14 +43,14 @@ export async function ensureInstructionIndex(io: ResidentIo, key: string, notes:
   const raw = await io.get(instructionIndexKey(key))
   const index = Array.isArray(raw) ? raw.filter(isInstructionIndex) : []
   const indexed = new Set(index.map(item => instructionKey(item.text)))
-  const rows = await io.transcriptRows()
+  const rows = await io.addressRows(key)
   let changed = false
   for (const text of instructionValues(notes)) {
     if (text.startsWith(WITHDRAWN_PREFIX)) continue
     const normalized = instructionKey(text)
     if (!normalized || indexed.has(normalized)) continue
-    const source = [...rows].reverse().find(row => row.role === 'user' && instructionKey(stripReminders(row.text)) === normalized)
-    index.push({ address: source ? `@${source.uuid.slice(0, 8)}` : '@unknown', issue: null, text })
+    const source = [...rows].reverse().find(row => instructionKey(stripReminders(row.text)) === normalized)
+    index.push({ address: source?.address ?? '@unknown', issue: null, text })
     indexed.add(normalized)
     changed = true
   }
@@ -62,14 +62,14 @@ export async function residentLedger(
 ): Promise<string> {
   const rawIndex = await io.get(instructionIndexKey(key))
   const index = Array.isArray(rawIndex) ? rawIndex.filter(isInstructionIndex) : []
-  const rows = await io.transcriptRows()
+  const rows = await io.addressRows(key)
   const seen = new Set(index.map(item => `${item.address}\0${item.issue}`))
   for (const event of events) {
     const rule = event.op === 'focus' ? event.rule?.trim() : undefined
     if (event.op !== 'focus' || event.issue !== event.origin.session || !rule) continue
-    const source = [...rows].reverse().find(row => row.role === 'user' && instructionKey(row.text).includes(instructionKey(rule)))
+    const source = [...rows].reverse().find(row => instructionKey(row.text).includes(instructionKey(rule)))
     if (!source) continue
-    const address = `@${source.uuid.slice(0, 8)}`
+    const { address } = source
     if (!seen.has(`${address}\0null`)) index.push({ address, issue: null, text: source.text })
   }
   const shownIssues = preview.issues ?? [...issues]

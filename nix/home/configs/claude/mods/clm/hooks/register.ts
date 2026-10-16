@@ -23,13 +23,13 @@ import {
 import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
-import { recallAddress, recallIo as makeRecallIo, rememberTranscriptPath as rememberAddressTranscriptPath, transcriptRows as readAddressRows, sentAtOf, type AddressRuntimeIo, type SentAt } from './address'
+import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { clearFoldJob, foldJobDropFps, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
 
-export { recallTranscriptAddress } from './address'
+export { recallRows } from './address'
 export { residentLedgerText } from './resident'
 export { chooseContinuation, removeQueueSnapshotTargets, resetUserWorkflow, restoreFailedContinuation } from './workflow'
 export { messageTokens, type Meta, type Opts }
@@ -242,15 +242,9 @@ const fold = ($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], m
 const trackerView = ($: EngineInterface, origin: Origin, ops: readonly Payload[] = []) =>
   trackerViewDomain({ readAll: () => readAll($) }, origin, ops)
 
-const addressRuntimeIo = ($: EngineInterface): AddressRuntimeIo => ({
-  sessionId: () => $.session.id(), get: key => $.store.get(key), set: (key, value) => $.store.set(key, value),
-  read: async path => (await $.fs.exists(path)) ? $.fs.read(path) : undefined,
-  log: (text, options) => $.ui.log(text, options),
-})
-const transcriptRows = ($: EngineInterface) => readAddressRows(addressRuntimeIo($))
-const sentAt = async ($: EngineInterface): Promise<SentAt> => sentAtOf(await transcriptRows($))
-const rememberTranscriptPath = ($: EngineInterface, session: string, path: string) => rememberAddressTranscriptPath(addressRuntimeIo($), session, path)
-const addressIo = ($: EngineInterface) => makeRecallIo(addressRuntimeIo($))
+const addressIo = ($: EngineInterface): AddressIo => ({ get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) })
+const sentAt = async ($: EngineInterface): Promise<SentAt> => sentAtOf(addressIo($), transcriptKey(await sid($)))
+const nowIso = async ($: EngineInterface) => new Date(await $.clock.now()).toISOString()
 
 async function readRequests($: EngineInterface, key: string): Promise<RequestRecord[]> {
   const value = await $.store.get(requestsKey(key))
@@ -265,7 +259,7 @@ async function storedTopics($: EngineInterface, notes: string, seq: number, key?
 const residentIo = ($: EngineInterface): ResidentIo => ({
   get: key => $.store.get(key),
   set: (key, value) => $.store.set(key, value),
-  transcriptRows: () => transcriptRows($),
+  addressRows: key => addressRows(addressIo($), key),
   readLedger: async () => readText($, await ledgerPath($)),
   readMeta: () => readMeta($),
   storedTopics: (notes, seq, key) => storedTopics($, notes, seq, key),
@@ -285,12 +279,11 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   get: key => $.store.get(key),
   set: (key, value) => $.store.set(key, value),
   writeEvents: (payloads, origin) => writeEvents($, payloads, origin),
-  transcriptRows: () => transcriptRows($),
   serialize: (session, run) => serialized(session, run),
   syncPanel: (origin, events) => syncPanelSafely($, origin, events),
   log: (text, options) => $.ui.log(text, options),
 })
-const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number) => classifyPrompt(intentIo($), text, promptSeq)
+const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number, address?: string) => classifyPrompt(intentIo($), text, promptSeq, address)
 
 /** The engine's live context tokens, when it has a reading. */
 async function usageReading($: EngineInterface): Promise<number | undefined> {
@@ -462,16 +455,6 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('classic.SessionStart', async ($, e, next) => {
-    if (e.transcript_path) await rememberTranscriptPath($, e.session_id ?? await sid($), e.transcript_path)
-    return next(e)
-  })
-
-  on('classic.UserPromptSubmit', async ($, e, next) => {
-    if (e.transcript_path) await rememberTranscriptPath($, e.session_id ?? await sid($), e.transcript_path)
-    return next(e)
-  })
-
   // Printed through ui.log, which the engine draws as a notice and never sends
   // to the model; a command's `text` is a transcript row and may be.
   on('command.run', { command: 'clm' }, async ($, e) => {
@@ -505,6 +488,8 @@ export const register: Register = (on, options) => {
       }
     }
     const res = await next(e)
+    try { await stampMessages(addressIo($), transcriptKey(await sid($)), await $.session.messages(), await nowIso($)) }
+    catch (err) { $.ui.log(`clm: could not stamp turn rows (${String(err).slice(0, 160)})`, { to: 'debug' }) }
     await completeMainTurn(mainTurnCompletionIo($, opts), e.turnId, e.isAborted, e.answer)
     return res
   })
@@ -524,7 +509,7 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('tool.call', { tool: RECALL_TOOL }, async ($, e) => recallAddress(addressIo($), e.address))
+  on('tool.call', { tool: RECALL_TOOL }, async ($, e) => recallAddress(addressIo($), transcriptKey(await sid($)), e.address))
 
   on('agent.spawn', async ($, e, next) => {
     const io = panelIo($)
@@ -586,9 +571,11 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     let promptSeq: number | undefined
+    let address: string | undefined
     if (isHumanOrigin(e.origin)) {
       try {
         const key = transcriptKey(await sid($))
+        address = await recordPrompt(addressIo($), key, e.text, await nowIso($))
         await observeTranscript(rewindIo($), key, await $.session.messages())
         await changeWorkflow($, current => ({ next: resetUserWorkflow(current, e.origin), result: undefined }))
         promptSeq = await stampHumanPrompt($)
@@ -598,7 +585,7 @@ export const register: Register = (on, options) => {
       }
     }
     const submitted = await next(e)
-    if (promptSeq !== undefined) void recordPromptIntent($, e.text, promptSeq)
+    if (promptSeq !== undefined) void recordPromptIntent($, e.text, promptSeq, address)
     return submitted
   })
 }

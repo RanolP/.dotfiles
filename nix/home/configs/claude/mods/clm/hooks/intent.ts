@@ -3,7 +3,6 @@ import { checkEvidence, type Source } from './evidence'
 import { isHarnessText, stripReminders } from './fold'
 import { removeQueueSnapshotTargets } from './workflow'
 import type { ClmWorkflow } from '../types'
-import type { AddressRow } from './address'
 import { describe, focusOf, issueId, snapshot, type Origin, type TrackerEvent } from './tracker'
 import { instructionKey, isDirective } from './ledger'
 import { instructionIndexKey, issueAddressKey, isInstructionIndex } from './resident'
@@ -303,7 +302,6 @@ export type PromptIntentIo = {
   get: (key: string) => Promise<unknown>
   set: (key: string, value: unknown) => Promise<void>
   writeEvents: (payloads: readonly Payload[], origin: Origin) => Promise<TrackerEvent[]>
-  transcriptRows: () => Promise<AddressRow[]>
   serialize: <T>(session: string, run: () => Promise<T>) => Promise<T>
   syncPanel: (origin: Origin, events: readonly TrackerEvent[]) => Promise<void>
   log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
@@ -398,13 +396,8 @@ async function parseAndApplyLater(io: PromptIntentIo, raw: string, prompt: strin
   }
 }
 
-function promptAddress(rows: readonly AddressRow[], prompt: string): string | undefined {
-  const normalized = instructionKey(stripReminders(prompt))
-  const row = [...rows].reverse().find(candidate => candidate.role === 'user' && instructionKey(stripReminders(candidate.text)) === normalized)
-  return row ? `@${row.uuid.slice(0, 8)}` : undefined
-}
-
-export async function recordPromptIntent(io: PromptIntentIo, text: string, promptSeq: number): Promise<void> {
+/** `address` is the one clm coined for this prompt at prompt.submit, absent when recording it failed. */
+export async function recordPromptIntent(io: PromptIntentIo, text: string, promptSeq: number, address?: string): Promise<void> {
   const userPrompt = stripReminders(text)
   if (!userPrompt || isHarnessText(userPrompt)) return
   try {
@@ -459,8 +452,6 @@ export async function recordPromptIntent(io: PromptIntentIo, text: string, promp
         ], origin)
         try { for (const line of describe(written, allIssues)) io.log(line) }
         catch { /* display notices never block tracker writes */ }
-        const sourceRows = await io.transcriptRows()
-        const address = promptAddress(sourceRows, userPrompt)
         if (address) {
           const createdId = payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue
           const scopeIssue = classification.rule !== null ? null : currentState.stack.at(-1) ?? classification.target ?? createdId ?? next.stack.at(-1) ?? null
@@ -469,11 +460,8 @@ export async function recordPromptIntent(io: PromptIntentIo, text: string, promp
             const rawIndex = await io.get(indexKey)
             const index = Array.isArray(rawIndex) ? rawIndex.filter(isInstructionIndex) : []
             if (!index.some(item => item.address === address && item.issue === scopeIssue)) {
-              const source = sourceRows.find(row => `@${row.uuid.slice(0, 8)}` === address)
-              if (source) {
-                index.push({ address, issue: scopeIssue, text: source.text })
-                await io.set(indexKey, index)
-              }
+              index.push({ address, issue: scopeIssue, text: userPrompt })
+              await io.set(indexKey, index)
             }
           }
           const addressesKey = issueAddressKey(key)

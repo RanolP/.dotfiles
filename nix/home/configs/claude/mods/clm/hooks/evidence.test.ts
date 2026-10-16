@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallTranscriptAddress, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -55,7 +55,7 @@ test('a close the assistant only recommended, with the PR still OPEN, ends not d
   expect(section(row, 'uncertain')).toContain('PR #<pr> 닫기')
   expect(section(row, 'uncertain')).toContain('PR #<pr> 정리')
   expect(seen.reviewPrompts[0]).toContain('"quote":"PR <pr> state: OPEN"')
-  expect(seen.reviewPrompts[0]).toContain('[assistant] I recommend closing PR #<pr>; closed it.')
+  expect(seen.reviewPrompts[0]).toContain('[assistant 2026-10-06 09:00 KST] I recommend closing PR #<pr>; closed it.')
   const events = logEvents(seen)
   expect(events.find(e => e.event === 'evidence-rejected')?.reason).toContain('PR #<pr> 정리" as done: done moved to uncertain (quote "I recommend closing PR #<pr>; closed it" is not in tu_pr)')
   expect(events.find(e => e.event === 'review-rejected')?.reason).toContain('done moved to uncertain')
@@ -221,7 +221,7 @@ test('a subagent hand-back is neither a user ref nor an instruction', OPTS, asyn
   const row = seen.results[0].messages[1].text
   expect(row).not.toContain('deploy approved')
   expect(row).not.toContain('right away')
-  expect(seen.prompts[0]).toContain('[harness] Another Claude session sent a message:')
+  expect(seen.prompts[0]).toContain('[harness 2026-10-06 09:00 KST] Another Claude session sent a message:')
   expect(seen.prompts[0]).not.toContain('[user m4]')
 })
 
@@ -287,7 +287,7 @@ test('a hand-back that opens with a system-reminder is neither a user ref nor an
   const row = seen.results[0].messages[1].text
   expect(row).not.toContain('deploy approved')
   expect(row).not.toContain('right away')
-  expect(seen.prompts[0]).toContain('[harness] Another Claude session sent a message:')
+  expect(seen.prompts[0]).toContain('[harness 2026-10-06 09:00 KST] Another Claude session sent a message:')
   expect(seen.prompts[0]).not.toContain('[user m4]')
 })
 

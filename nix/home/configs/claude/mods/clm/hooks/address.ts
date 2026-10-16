@@ -1,166 +1,118 @@
 import type { SessionMessage } from 'claude-code'
 
+import { fingerprint, stripReminders } from './fold'
 import { isRecord } from './tracker'
 
-type AddressRow = { raw: string; uuid: string; parentUuid?: string; role?: string; text: string; timestamp?: string; toolIds?: string[] }
+// clm builds its own address index from the hooks it receives and never reads
+// the transcript file: the engine refuses large reads, and a long session is
+// exactly the one whose instructions need addresses. A session indexed only
+// from some point on resolves older rows to @unknown.
 
-function transcriptRowText(value: Record<string, unknown>): string {
-  const message = isRecord(value.message) ? value.message : value
-  const content = message.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content.flatMap(block => {
-    if (!isRecord(block)) return []
-    if (block.type === 'text' && typeof block.text === 'string') return [block.text]
-    if (block.type === 'tool_use' && typeof block.name === 'string') return [`${block.name} ${JSON.stringify(block.input ?? {})}`]
-    if (block.type === 'tool_result' && typeof block.content === 'string') return [block.content]
-    return []
-  }).join('\n')
+/** A human prompt as clm saw it at prompt.submit, with the address clm coined for it. */
+type AddressRow = { address: string; text: string; at: string }
+/** First-seen time of a message fingerprint; `at` is null once two sends share it. */
+type Stamp = { at: string | null; n: number }
+type AddressIndex = { rows: AddressRow[]; stamps: Record<string, Stamp> }
+
+const MAX_ROWS = 1000
+const MAX_STAMPS = 4000
+
+export type AddressIo = {
+  get: (key: string) => Promise<unknown>
+  set: (key: string, value: unknown) => Promise<void>
 }
 
-export function parseTranscriptRows(text: string): AddressRow[] {
-  return text.split('\n').flatMap(raw => {
-    if (!raw.trim()) return []
-    try {
-      const value: unknown = JSON.parse(raw)
-      if (!isRecord(value) || typeof value.uuid !== 'string' || !value.uuid) return []
-      const message = isRecord(value.message) ? value.message : value
-      const role = typeof message.role === 'string' ? message.role : typeof value.type === 'string' ? value.type : undefined
-      const toolIds = Array.isArray(message.content)
-        ? message.content.flatMap(block => !isRecord(block) ? [] : typeof block.id === 'string' ? [block.id] : typeof block.tool_use_id === 'string' ? [block.tool_use_id] : [])
-        : []
-      return [{
-        raw, uuid: value.uuid, ...(typeof value.parentUuid === 'string' ? { parentUuid: value.parentUuid } : {}), role, text: transcriptRowText(value),
-        ...(typeof value.timestamp === 'string' ? { timestamp: value.timestamp } : {}), ...(toolIds.length ? { toolIds } : {}),
-      }]
-    } catch { return [] }
-  })
+const addressIndexKey = (key: string) => `address-index:${key}`
+const isRow = (value: unknown): value is AddressRow =>
+  isRecord(value) && typeof value.address === 'string' && typeof value.text === 'string' && typeof value.at === 'string'
+const isStamp = (value: unknown): value is Stamp =>
+  isRecord(value) && (typeof value.at === 'string' || value.at === null) && typeof value.n === 'number'
+
+async function readIndex(io: AddressIo, key: string): Promise<AddressIndex> {
+  const raw = await io.get(addressIndexKey(key))
+  if (!isRecord(raw)) return { rows: [], stamps: {} }
+  const rows = Array.isArray(raw.rows) ? raw.rows.filter(isRow) : []
+  const stamps = isRecord(raw.stamps) ? Object.fromEntries(Object.entries(raw.stamps).filter(([, stamp]) => isStamp(stamp))) as Record<string, Stamp> : {}
+  return { rows, stamps }
 }
 
-/** When a message was sent, as the transcript's ISO time, or undefined when unknown. */
+// FNV-1a, so an address is stable for its input and needs no randomness.
+function coin(seed: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 0x01000193) >>> 0
+  return `@${h.toString(16).padStart(8, '0')}`
+}
+
+export async function addressRows(io: AddressIo, key: string): Promise<AddressRow[]> {
+  return (await readIndex(io, key)).rows
+}
+
+/** Records a human prompt and returns the address coined for it. */
+export async function recordPrompt(io: AddressIo, key: string, text: string, at: string): Promise<string> {
+  const index = await readIndex(io, key)
+  const taken = new Set(index.rows.map(row => row.address))
+  let address = coin(`${key}\0${index.rows.length}\0${at}\0${text}`)
+  for (let salt = 1; taken.has(address); salt++) address = coin(`${key}\0${index.rows.length}\0${at}\0${text}\0${salt}`)
+  await io.set(addressIndexKey(key), { ...index, rows: [...index.rows, { address, text, at }].slice(-MAX_ROWS) })
+  return address
+}
+
+/** Stamps every message not seen before with `at`, the time this hook observed it. */
+export async function stampMessages(io: AddressIo, key: string, messages: readonly SessionMessage[], at: string): Promise<void> {
+  const index = await readIndex(io, key)
+  const counts = new Map<string, number>()
+  for (const m of messages) { const fp = fingerprint(m); counts.set(fp, (counts.get(fp) ?? 0) + 1) }
+  let changed = false
+  const stamps = { ...index.stamps }
+  for (const [fp, n] of counts) {
+    const stamp = stamps[fp]
+    if (!stamp) stamps[fp] = { at, n }
+    else if (n > stamp.n) stamps[fp] = { at: null, n }
+    else continue
+    changed = true
+  }
+  if (changed) await io.set(addressIndexKey(key), { ...index, stamps: Object.fromEntries(Object.entries(stamps).slice(-MAX_STAMPS)) })
+}
+
+/** When a message was sent, as an ISO time, or undefined when unknown. */
 export type SentAt = (m: SessionMessage) => string | undefined
 
 /**
- * Joins messages to transcript rows for their send time. SessionMessage carries
- * no time or uuid, so a tool use or result joins by its tool_use_id and any other
- * row by its exact role and text; text sent at two different times is ambiguous
- * and stays unstamped.
+ * A typed prompt takes its prompt.submit time; any other row takes the time a
+ * hook first saw its fingerprint. Text sent at two different times is
+ * ambiguous and stays unstamped.
  */
-export function sentAtOf(rows: readonly AddressRow[]): SentAt {
-  const byId = new Map<string, string>()
+export async function sentAtOf(io: AddressIo, key: string): Promise<SentAt> {
+  const { rows, stamps } = await readIndex(io, key)
   const byText = new Map<string, string | undefined>()
   for (const row of rows) {
-    if (!row.timestamp) continue
-    for (const id of row.toolIds ?? []) byId.set(`${row.role}\0${id}`, row.timestamp)
-    if (!row.text) continue
-    const key = `${row.role}\0${row.text}`
-    byText.set(key, byText.has(key) && byText.get(key) !== row.timestamp ? undefined : row.timestamp)
+    const text = stripReminders(row.text)
+    byText.set(text, byText.has(text) && byText.get(text) !== row.at ? undefined : row.at)
   }
   return m => {
-    const ids = m.role === 'assistant' ? m.toolUses.map(u => u.tool_use_id) : (m.toolResults ?? []).map(r => r.tool_use_id)
-    for (const id of ids) {
-      const at = byId.get(`${m.role}\0${id}`)
-      if (at) return at
-    }
-    return m.text ? byText.get(`${m.role}\0${m.text}`) : undefined
+    const text = m.role === 'user' && m.text ? stripReminders(m.text) : undefined
+    if (text !== undefined && byText.has(text)) return byText.get(text)
+    return stamps[fingerprint(m)]?.at ?? undefined
   }
 }
 
-export function recallTranscriptAddress(text: string, address: string): { text?: string; error?: string } {
-  const match = /^@([\da-f]{8})(?:\.\.@([\da-f]{8}))?$/i.exec(address.trim())
-  if (!match) return { error: 'address must be @xxxxxxxx or @first..@last' }
-  const rows = parseTranscriptRows(text)
-  const byAddress = (short: string) => rows.filter(row => row.uuid.slice(0, 8).toLowerCase() === short.toLowerCase())
-  const firstAddress = match[1]
-  if (!firstAddress) return { error: 'address must be @xxxxxxxx or @first..@last' }
-  const firstMatches = byAddress(firstAddress)
-  if (firstMatches.length !== 1) return { error: firstMatches.length ? `address @${firstAddress} is ambiguous` : `address @${firstAddress} was not found` }
-  const first = firstMatches[0]
-  if (!first) return { error: `address @${firstAddress} was not found` }
-  const lastAddress = match[2]
-  if (!lastAddress) return { text: first.raw }
-  const lastMatches = byAddress(lastAddress)
-  if (lastMatches.length !== 1) return { error: lastMatches.length ? `address @${lastAddress} is ambiguous` : `address @${lastAddress} was not found` }
-  const last = lastMatches[0]
-  if (!last) return { error: `address @${lastAddress} was not found` }
-  const byUuid = new Map(rows.map(row => [row.uuid, row]))
-  const reverse = [last]
-  while (reverse.at(-1)?.uuid !== first.uuid) {
-    const current = reverse.at(-1)
-    const parent = current?.parentUuid
-    const row = parent ? byUuid.get(parent) : undefined
-    if (!row || reverse.some(item => item.uuid === row.uuid)) return { error: `@${firstAddress} is not an ancestor of @${lastAddress}` }
-    reverse.push(row)
-  }
-  return { text: reverse.reverse().map(row => row.raw).join('\n') }
+export function recallRows(rows: readonly AddressRow[], address: string): { text?: string; error?: string } {
+  const match = /^(@[\da-f]{8})(?:\.\.(@[\da-f]{8}))?$/i.exec(address.trim())
+  if (!match?.[1]) return { error: 'address must be @xxxxxxxx or @first..@last' }
+  const indexOf = (wanted: string) => rows.findIndex(row => row.address.toLowerCase() === wanted.toLowerCase())
+  const first = indexOf(match[1])
+  if (first < 0) return { error: `address ${match[1]} was not found` }
+  const last = match[2] ? indexOf(match[2]) : first
+  if (last < 0) return { error: `address ${match[2]} was not found` }
+  if (last < first) return { error: `${match[1]} comes after ${match[2]}` }
+  return { text: rows.slice(first, last + 1).map(row => `[user ${row.address} ${row.at}] ${row.text}`).join('\n') }
 }
 
-export type AddressIo = {
-  transcriptPath: () => Promise<string | undefined>
-  read: (path: string) => Promise<string | undefined>
-  log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
-}
-
-export type AddressRuntimeIo = {
-  sessionId: () => Promise<string>
-  get: (key: string) => Promise<unknown>
-  set: (key: string, value: unknown) => Promise<void>
-  read: (path: string) => Promise<string | undefined>
-  log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
-}
-
-const transcriptPaths = new Map<string, string>()
-const transcriptPathKey = (session: string) => `transcript-path:${session}`
-
-export async function transcriptPath(io: AddressRuntimeIo, session: string): Promise<string | undefined> {
-  const stored = await io.get(transcriptPathKey(session))
-  const path = transcriptPaths.get(session) ?? (typeof stored === 'string' ? stored : undefined)
-  if (path) transcriptPaths.set(session, path)
-  return path
-}
-
-export async function transcriptRows(io: AddressRuntimeIo): Promise<AddressRow[]> {
-  let path: string | undefined
-  // A transcript past the engine's read cap never shrinks, so a throw here would stop every later fold.
-  try {
-    const session = await io.sessionId()
-    path = await transcriptPath(io, session)
-    if (!path) return []
-    const source = await io.read(path)
-    return source === undefined ? [] : parseTranscriptRows(source)
-  } catch (err) {
-    io.log(`clm: transcript rows unavailable${path ? ` for ${path}` : ''} (${String(err)})`, { to: 'debug' })
-    return []
-  }
-}
-
-export async function rememberTranscriptPath(io: AddressRuntimeIo, session: string, path: string): Promise<void> {
-  transcriptPaths.set(session, path)
-  await io.set(transcriptPathKey(session), path)
-}
-
-export function recallIo(io: AddressRuntimeIo): AddressIo {
-  return {
-    transcriptPath: async () => transcriptPath(io, await io.sessionId()),
-    read: io.read,
-    log: io.log,
-  }
-}
-
-export async function recallAddress(io: AddressIo, address: unknown) {
+export async function recallAddress(io: AddressIo, key: string, address: unknown) {
   if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d or @first..@last.' }
-  const path = await io.transcriptPath()
-  if (!path) return { result: 'The transcript path is unavailable for this session.', isError: true, isReadOnly: true }
-  try {
-    const source = await io.read(path)
-    if (source === undefined) return { result: 'The transcript file is unavailable.', isError: true, isReadOnly: true }
-    const recalled = recallTranscriptAddress(source, address)
-    if (recalled.error) return { result: recalled.error, isError: true, isReadOnly: true }
-    return { result: recalled.text ?? '', isReadOnly: true }
-  } catch (err) {
-    io.log(`clm_recall: transcript read failed (${String(err).slice(0, 120)})`, { to: 'debug' })
-    return { result: 'The transcript could not be read.', isError: true, isReadOnly: true }
-  }
+  const recalled = recallRows(await addressRows(io, key), address)
+  if (recalled.error) return { result: recalled.error, isError: true, isReadOnly: true }
+  return { result: recalled.text ?? '', isReadOnly: true }
 }
 
 export type { AddressRow }

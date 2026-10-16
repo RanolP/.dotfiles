@@ -115,8 +115,44 @@ function quoteIn(quote: string, source: Source): boolean {
  * when it holds. `forDone` also refuses a failed tool result and a subagent's
  * or relay's report, which show no step of this session executing.
  */
+// The merge model often cites a ref the way the range renders it
+// (`<- [toolu_…]`, `[user m4 2026-10-15 14:03 KST]`), drops or upcases the
+// `m`, or changes a tool id's case; each such spelling names one row. A ref
+// that only mentions a row (`[assistant after m4]`) also resolves to it, and
+// the quote check then refuses the assistant prose it actually quotes.
+const STAMP = /\d{4}-\d\d-\d\d \d\d:\d\d(?: KST)?/g
+/** The source key `ref` names, or undefined when it names no citable row. */
+export function resolveRef(ref: string, sources: Sources): string | undefined {
+  if (sources.has(ref)) return ref
+  const tokensOf = (value: string) => value.replace(STAMP, ' ').replace(/\bm\s+(\d+)\b/gi, 'm$1').match(/[\p{L}\p{N}_]+/gu) ?? []
+  const tokens = tokensOf(ref)
+  const lower = new Map<string, Set<string>>()
+  for (const key of sources.keys()) for (const token of tokensOf(key)) {
+    const normalized = token.toLowerCase()
+    const keys = lower.get(normalized) ?? new Set<string>()
+    keys.add(key)
+    lower.set(normalized, keys)
+    const row = /^m?(\d+)$/i.exec(token)
+    if (row) {
+      const rowKeys = lower.get(`m${row[1]}`) ?? new Set<string>()
+      rowKeys.add(key)
+      lower.set(`m${row[1]}`, rowKeys)
+    }
+  }
+  const matches = new Set<string>()
+  for (const t of tokens) {
+    for (const key of lower.get(t.toLowerCase()) ?? []) matches.add(key)
+    const row = /^m?(\d+)$/i.exec(t)
+    if (row && (tokens.length === 1 || /^m/i.test(t))) {
+      for (const key of lower.get(`m${row[1]}`) ?? []) matches.add(key)
+    }
+  }
+  return matches.size === 1 ? [...matches][0] : undefined
+}
+
 export function evidenceProblem(e: Evidence, sources: Sources, admissible: readonly SourceKind[], forDone = false): string | undefined {
-  const source = sources.get(e.ref)
+  const key = resolveRef(e.ref, sources)
+  const source = key === undefined ? undefined : sources.get(key)
   if (!source) return `ref ${e.ref} is not a citable row of the folded range`
   if (!admissible.includes(source.kind)) return `ref ${e.ref} is a ${source.kind}, not ${admissible.join(' or ')}`
   if (forDone && source.isError) return `ref ${e.ref} is a failed tool result, which proves no done`
@@ -133,7 +169,7 @@ export function checkEvidence(list: readonly Evidence[], sources: Sources, admis
   for (const e of list) {
     const p = evidenceProblem(e, sources, admissible, forDone)
     if (p) problems.push(p)
-    else held.push(e)
+    else held.push({ ...e, ref: resolveRef(e.ref, sources)! })
   }
   return { held, problems }
 }

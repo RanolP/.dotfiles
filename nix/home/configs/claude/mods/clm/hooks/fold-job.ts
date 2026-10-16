@@ -207,7 +207,7 @@ async function prepareSingleFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
   const startedAt = await io.now()
   let folded: Fold | string
   try { folded = await io.fold(opts, rows, meta, true, undefined, true, undefined, key) }
-  catch (err) { folded = `fold failed: ${String(err).slice(0, 160)}` }
+  catch (err) { folded = `fold failed: ${String(err)}` }
   if (typeof folded === 'string') {
     io.log(`clm: background fold skipped (${folded})`, { to: 'debug' })
     return undefined
@@ -221,13 +221,13 @@ async function prepareEngineFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
   let working = rows
   let folded: Fold | string
   try { folded = await io.fold(opts, working, meta, false, undefined, true, undefined, key) }
-  catch (err) { folded = `fold failed: ${String(err).slice(0, 160)}` }
+  catch (err) { folded = `fold failed: ${String(err)}` }
   if (typeof folded === 'string') {
     const escaped = await withholdOldestResults(io, working, opts)
     if (escaped) {
       working = escaped
       try { folded = await io.fold(opts, working, meta, true, undefined, false, undefined, key) }
-      catch (err) { folded = `escape retry failed: ${String(err).slice(0, 160)}` }
+      catch (err) { folded = `escape retry failed: ${String(err)}` }
     }
   }
   if (typeof folded === 'string') {
@@ -295,7 +295,7 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
     if (foldJobs.get(key) !== job) return
     foldJobs.delete(key)
     void io.pendingKey(key).then(pending => io.storeDelete(pending))
-    io.log(`clm: background fold failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' })
   })
   return job
 }
@@ -305,7 +305,7 @@ async function applyReadyIfAtThreshold(io: FoldJobIo, opts: Opts, key: string): 
   if (job?.state !== 'ready') return false
   if (!job.plan.rewindOnly && (await io.usageReading() ?? 0) < opts.budget - opts.reserve) return false
   try { await io.sessionCompact() }
-  catch (err) { io.log(`clm: ready fold swap deferred (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+  catch (err) { io.log(`clm: ready fold swap deferred (${String(err)})`, { to: 'debug' }) }
   return true
 }
 
@@ -322,7 +322,7 @@ export async function maybeClear(io: FoldJobIo, opts: Opts): Promise<void> {
   const first = protectedIndex(rows)
   const queue = rows.slice(first + 1)
   if (sum(queue) < opts.queueTarget) return
-  void startFoldJob(io, opts, rows, meta, key, true).catch(err => io.log(`clm: background fold failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
+  void startFoldJob(io, opts, rows, meta, key, true).catch(err => io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' }))
 }
 
 async function applyFoldPlan(
@@ -420,7 +420,7 @@ export async function showTurnChanges(io: FoldJobIo, answer: string): Promise<vo
       io.log('맥락 갱신: ' + line)
     }
   } catch (err) {
-    io.log(`clm: turn context refresh failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    io.log(`clm: turn context refresh failed (${String(err)})`, { to: 'debug' })
   }
 }
 
@@ -505,7 +505,7 @@ async function keepEscapedInstructions(io: FoldJobIo, rows: readonly SessionMess
     const view = await io.trackerView(await io.captureOrigin())
     await io.writeFile(path, composeLedger(preserved.fullNotes, view.issues) + '\n')
   } catch (err) {
-    await io.logEvent('escape-instructions-lost', { reason: String(err).slice(0, 160) })
+    await io.logEvent('escape-instructions-lost', { reason: String(err) })
   }
 }
 
@@ -519,9 +519,9 @@ async function pruneWithheld(io: FoldJobIo, live: readonly SessionMessage[], led
     const stale = (await io.fileList(dir)).filter(file => file.kind === 'file' && file.name.startsWith(prefix) && !pointed.includes(`${dir}/${file.name}`)).map(file => `${dir}/${file.name}`)
     if (stale.length === 0) return
     const result = await io.run(['rm', '-f', '--', ...stale], { timeoutMs: 5000 })
-    if (result.exitCode !== 0) io.log(`clm escape: could not remove ${stale.length} withheld file(s) (exit ${result.exitCode}: ${result.stderr.slice(0, 160)})`, { to: 'debug' })
+    if (result.exitCode !== 0) io.log(`clm escape: could not remove ${stale.length} withheld file(s) (exit ${result.exitCode}: ${result.stderr})`, { to: 'debug' })
   } catch (err) {
-    io.log(`clm escape: withheld-file cleanup failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    io.log(`clm escape: withheld-file cleanup failed (${String(err)})`, { to: 'debug' })
   }
 }
 
@@ -540,7 +540,7 @@ async function withholdOldestResults(io: FoldJobIo, rows: readonly SessionMessag
       const path = `${base}${WITHHELD}${index}-${result.tool_use_id.replace(/[^a-zA-Z0-9_.-]/g, '_')}.txt`
       try { await io.writeFile(path, result.text) }
       catch (err) {
-        io.log(`clm escape: could not preserve tool result at ${path} (${String(err).slice(0, 160)})`, { to: 'debug' })
+        io.log(`clm escape: could not preserve tool result at ${path} (${String(err)})`, { to: 'debug' })
         continue
       }
       updated = {

@@ -11,9 +11,30 @@ import type { ClmWorkflow } from '../types'
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
+import { checkEvidence } from './evidence'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 // --- evidence gate and review ------------------------------------------------
+
+// Regression caught: refs copied as rendered (`<- [toolu_…]`, `[user m4 … KST]`) or with the `m` dropped or case changed missed their source row, so every done they backed was downgraded.
+test('a ref spelled the way the range renders it resolves to its row, and an assistant ref still fails', () => {
+  const user = { kind: 'user' as const, text: 'please investigate the build' }
+  const tool = { kind: 'tool_result' as const, text: 'log: make fails at' }
+  const sources = new Map([['m4', user], ['toolu_01AbC', tool], ['abcd1234', user], ['@beef5678', user]])
+  const evidence = [
+    { ref: ' [user m4 2026-10-15 14:03 KST] ', quote: user.text },
+    { ref: '<- [toolu_01AbC]', quote: tool.text },
+    { ref: 'TOOLU_01ABC', quote: tool.text },
+    { ref: 'M4', quote: user.text },
+    { ref: '4', quote: user.text },
+    { ref: '[assistant 2026-10-15 14:04 KST]', quote: user.text },
+    { ref: '@ABCD1234', quote: user.text },
+    { ref: 'BEEF5678', quote: user.text },
+  ]
+  const checked = checkEvidence(evidence, sources)
+  expect(checked.held.map(item => item.ref)).toEqual(['m4', 'toolu_01AbC', 'toolu_01AbC', 'm4', 'm4', 'abcd1234', '@beef5678'])
+  expect(checked.problems).toEqual(['ref [assistant 2026-10-15 14:04 KST] is not a citable row of the folded range'])
+})
 
 // Regression caught (a): a done step resting on the assistant's own recommendation, or on a tool result that shows the opposite, reached 한 일.
 test('a close the assistant only recommended, with the PR still OPEN, ends not done', OPTS, async ($, on) => {
@@ -313,4 +334,3 @@ test('a drop lands only on a user quote, and a failed review holds it for the ne
   expect(tracker().map(i => [i.title, i.status])).toEqual([['login work', 'todo'], ['build work', 'dropped']])
   expect(seen.store['held:s1']).toBeUndefined()
 })
-

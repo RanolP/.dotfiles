@@ -260,7 +260,7 @@ const EVIDENCE_FIELD = '"evidence":[{"ref":"<ref>","quote":"<text copied exactly
 export const MERGE_SYSTEM = [
   'You keep the working ledger of a coding session whose oldest turns are about to be deleted.',
   'You receive the goal notes, the user\'s standing instructions, the recorded key facts, the open issues of this session\'s tracker, and the turns being removed.',
-  'In <removed_turns> a user message is headed `[user mN]` and a tool result `<- [id]`; mN and id are refs you cite. Assistant rows carry no ref: they show what the assistant said or proposed, and the tool results and the user\'s words show what actually happened.',
+  'In <removed_turns> a user message is headed `[user mN]` and a tool result `<- [id]`; mN and id are refs you cite. Write a ref as that bare key and nothing else: `m4` for the row headed `[user m4 2026-10-15 14:03 KST]`, `toolu_01AbC` for the row headed `<- [toolu_01AbC]`. Assistant rows carry no ref: they show what the assistant said or proposed, and the tool results and the user\'s words show what actually happened.',
   'A row whose send time is known carries it in its header after the role and ref, as `YYYY-MM-DD HH:MM KST`.',
   'When a message you cite or summarize uses a relative time expression (내일, 어제 밤, 2시간 뒤), write the absolute KST date right after the original words as `<original>(=YYYY-MM-DD)`, computed from that message\'s own header time; for a sub-day expression write `<original>(=YYYY-MM-DD HH:MM)`. Keep the expression as written when its message carries no time.',
   `Reply with the updated notes and then \`<ops>\`, starting directly with the heading ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')} and writing the notes as plain markdown.`,
@@ -298,7 +298,7 @@ export const SPLIT_MERGE_SYSTEM = [
     && !line.startsWith('Write `<ops>[]'),
   ).join('\n'),
   'You also receive numbered complete turns with estimated token counts. Return one JSON object with split, notes, ops and topics fields.',
-  'Inside <queue_turns>, cite user rows by their [user mN] ref and tool results by their <- [id] ref in the ops evidence.',
+  'Inside <queue_turns>, cite a user row by its bare mN key (`m4`) and a tool result by its bare id (`toolu_01AbC`) in the ops evidence, the same ref format as in <removed_turns>.',
   'Set split to the 1-based first turn of B. Turns before split form A, and A contains at least one whole turn about a finished topic. Choose a boundary where the turns from split onward form the topic still in progress.',
   'Summarize only A into notes, ops and topic summaries. The caller keeps B from its numbered turn boundary verbatim.',
   `Set notes to the required plain-markdown note sections headed ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')}; set ops to the JSON array of changes supported by A.`,
@@ -382,7 +382,7 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
 // clm-prompt
 export const REVIEW_SYSTEM = [
   'You audit a ledger update before it replaces the conversation turns it summarizes. Treat each claim as unproven until its cited quote proves it.',
-  'You receive <claims>, one JSON object per line with an id, the claim, the evidence it cites (a ref and a quote) and, where the cited row lies outside the range, that row\'s text as `source`; and <folded_range>, the turns, where a user message is headed `[user mN]`, a tool result `<- [id]`, and assistant rows carry no ref; a row whose send time is known carries it in its header after the role and ref.',
+  'You receive <claims>, one JSON object per line with an id, the claim, the evidence it cites (a ref and a quote) and, where the cited row lies outside the range, that row\'s text as `source`; and <folded_range>, the turns, where a user message is headed `[user mN]`, a tool result `<- [id]`, and assistant rows carry no ref; a claim cites the bare key, `mN` or the id; a row whose send time is known carries it in its header after the role and ref.',
   'Judge each claim against the row its ref names, in <folded_range> or in its `source`:',
   '- A claim that a step is done stands only when a cited row shows the state-changing action executed: a tool result with its outcome, or the user saying it happened. A proposal, a recommendation, a plan, or a read-only look at the current state (a PR shown OPEN, a status printed) supports todo or question, so reject the done.',
   '- Every id, number and date in the claim appears in the cited row for the same object; a date or number belonging to another PR, branch, ticket or file is a reject. A date written as `(=...)` beside a relative time expression stands when it equals the cited row\'s header time (`YYYY-MM-DD HH:MM KST`) plus that expression.',

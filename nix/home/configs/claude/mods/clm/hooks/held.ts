@@ -1,4 +1,4 @@
-import { checkEvidence, describeOp, downgrade, gateOps, isDoneClaim, isDropClaim, isReopenClaim, type Evidence, type Source } from './evidence'
+import { checkEvidence, describeOp, downgrade, gateOps, isDoneClaim, isDropClaim, isReopenClaim, resolveRef, type Evidence, type Source } from './evidence'
 import { instructionKey, parseReview, REVIEW_SYSTEM, type Fact } from './ledger'
 import { isRecord, type Payload } from './tracker'
 
@@ -38,7 +38,7 @@ const landsUnreviewed = (op: Payload, dropped: ReadonlySet<string>) =>
   op.op === 'create' || op.op === 'progress' || op.op === 'task' || op.op === 'link'
   || (op.op === 'status' && op.status !== 'dropped' && op.status !== 'question' && !isReopenClaim(op, dropped))
 const citedSources = (evidence: readonly Evidence[], sources: ReadonlyMap<string, Source>) =>
-  Object.fromEntries(evidence.flatMap(item => { const source = sources.get(item.ref); return source ? [[item.ref, source]] : [] }))
+  Object.fromEntries(evidence.flatMap(item => { const key = resolveRef(item.ref, sources); return key ? [[item.ref, sources.get(key)!]] : [] }))
 
 export async function readHeld(io: Pick<HeldIo, 'get'>, session: string): Promise<Held[]> {
   const value = await io.get(heldKey(session))

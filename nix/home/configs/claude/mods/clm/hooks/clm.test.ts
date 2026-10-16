@@ -99,6 +99,15 @@ test('the clm status noun reports its read-only session view', async () => {
   })
 })
 
+// Regression caught: haiku fenced its JSON reply in ```json, and no session ever got a focus event.
+test('a fenced intent reply still sets the main focus', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [], intentReplies: ['```json\n' + intentReply({ intent: 'handoff', title: 'Main task' }) + '\n```'] })
+  await $.prompt.submit(promptInput('Start the main task'))
+  await waitForLog(seen, '주 작업 초점 갱신 (handoff)')
+  const events = parseLog(seen.files[TRACKER] ?? '')
+  expect(snapshot(events).find(issue => issue.id === focusOf(events, 's1').stack.at(-1))?.title).toBe('Main task')
+})
+
 // Regression caught: clm status omitted the main focus stack, pending work, and live subagent roots.
 test('clm status names the focus top, stack depth, pending and live subagent tasks', OPTS, async ($, on) => {
   const seen = bottoms(on, {

@@ -4,7 +4,7 @@ import { isHarnessText, stripReminders } from './fold'
 import { removeQueueSnapshotTargets } from './workflow'
 import type { ClmWorkflow } from '../types'
 import { describe, focusOf, issueId, snapshot, type Origin, type TrackerEvent } from './tracker'
-import { instructionKey, isDirective } from './ledger'
+import { instructionKey, isDirective, normalizeLedger } from './ledger'
 import { instructionIndexKey, issueAddressKey, isInstructionIndex } from './resident'
 
 export type FocusState = TrackerFocusState
@@ -136,7 +136,7 @@ export function intentPrompt({ state, issues, lastAssistantReply, userPrompt, la
 function parseObject(raw: string): Record<string, unknown> {
   let value: unknown
   try {
-    value = JSON.parse(raw)
+    value = JSON.parse(normalizeLedger(raw))
   } catch (err) {
     throw new Error(`reply is not JSON (${String(err).slice(0, 100)})`)
   }

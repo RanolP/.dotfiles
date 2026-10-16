@@ -1,6 +1,6 @@
 import type { SessionMessage, SessionCompactResult } from 'claude-code'
 import {
-  buildCleared, fingerprint, isHarnessText, isLedgerRow, isPrompt, isSystemRow, kst, ledgerRowText, liveRows, planClear,
+  buildCleared, foldedRows, fingerprint, markPinned, PINNED_TYPES, pinnedRows, pinnedKey, pinnedTexts, type PinnedStore, isHarnessText, isLedgerRow, isPrompt, isSystemRow, kst, ledgerRowText, liveRows, planClear,
   protectedIndex, sum, visibleTokens, type ClearPlan,
 } from './fold'
 import { renderRange } from './evidence'
@@ -45,6 +45,7 @@ export type FoldJobIo = {
   fileExists(path: string): Promise<boolean>
   fileList(path: string): Promise<{ name: string; kind: string }[]>
   run(args: string[], options: { timeoutMs: number }): Promise<{ exitCode: number; stderr: string }>
+  storeGet(key: string): Promise<unknown>
   storeSet(key: string, value: unknown): Promise<void>
   storeDelete(key: string): Promise<void>
   pendingKey(key: string): Promise<string>
@@ -96,7 +97,8 @@ function queueTurns(rows: readonly SessionMessage[], first: number): QueueTurn[]
   return prompts.map((prompt, index) => {
     const from = index === 0 ? 0 : prompt
     const to = prompts[index + 1] ?? queue.length
-    return { number: index + 1, start: start + prompt, rows: queue.slice(from, to).filter(message => !isLedgerRow(message)) }
+    const orphans = index === 0 ? rows.slice(0, Math.max(first, 0)).filter(message => !isSystemRow(message)) : []
+    return { number: index + 1, start: start + prompt, rows: [...orphans, ...queue.slice(from, to)].filter(message => !isLedgerRow(message)) }
   })
 }
 
@@ -140,7 +142,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
     const keepFrom = boundary.start
     const plan: ClearPlan = {
       head: rows.slice(0, first + 1),
-      dropped: rows.slice(first + 1, keepFrom).filter(message => !isLedgerRow(message) && !isSystemRow(message)),
+      dropped: foldedRows(rows, first, keepFrom),
       tail: rows.slice(keepFrom), keptTurns: turns.length - answer.split + 1, cuts: {},
     }
     if (plan.dropped.length === 0) {
@@ -272,6 +274,8 @@ export async function maybeClear(io: FoldJobIo, opts: Opts): Promise<void> {
   if (sum(queue) < opts.queueTarget) return
   const turns = queueTurns(rows, first)
   if (turns.length < 2) return
+  const used = await io.usageReading()
+  if (used !== undefined && used < opts.budget - opts.reserve) return
   void startFoldJob(io, opts, rows, meta, key, true).catch(err => io.log(`clm: background fold failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
 }
 
@@ -292,7 +296,13 @@ async function applyFoldPlan(
   const fileLedger = composeLedger(use.fullNotes, currentView.issues)
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
-  const messages = buildCleared({ head: workingRows.slice(0, first + 1), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow)
+  const pinnedStore = await io.storeGet(pinnedKey(key))
+  const pinned = pinnedRows(workingRows, workingRows.length, pinnedTexts(pinnedStore))
+  // Session rows carry no attachment type, so a session whose attachments fired before clm captured them shows here as a missing type.
+  const uncaptured = [...PINNED_TYPES].filter(type => !(pinnedStore as PinnedStore | undefined)?.[type]?.text)
+  if (uncaptured.length) io.log(`clm: fold carries no captured text for ${uncaptured.join(', ')}; that context is not pinned ahead of the ledger`, { to: 'debug' })
+  const messages = buildCleared({ head: workingRows.slice(0, first + 1), pinned, tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow)
+  await io.storeSet(pinnedKey(key), markPinned(pinnedStore))
   const tokensBefore = sum(workingRows)
   const tokensAfter = sum(messages)
   await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
@@ -398,7 +408,7 @@ export async function handleSessionCompact(
   if (!plan.rewindOnly && (await io.usageReading() ?? 0) < opts.budget - opts.reserve) return { messages: [...all] }
   const keepFrom = plan.keepFrom
   const row = keepFrom < workingRows.length ? workingRows[keepFrom] : undefined
-  const expectedDropped = workingRows.slice(first + 1, keepFrom).filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint)
+  const expectedDropped = foldedRows(workingRows, first, keepFrom).map(fingerprint)
   const sameDropped = expectedDropped.length === plan.dropFps.length && expectedDropped.every((fp, index) => fp === plan.dropFps[index])
   const sameKept = plan.keepFp === undefined ? keepFrom === workingRows.length : row !== undefined && fingerprint(row) === plan.keepFp
   if (keepFrom < first + 1 || keepFrom > workingRows.length || !sameKept || !sameDropped) {

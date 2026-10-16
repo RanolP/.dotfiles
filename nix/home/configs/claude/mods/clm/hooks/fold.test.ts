@@ -180,10 +180,11 @@ test('the applied background fold is head plus ledger plus B verbatim', BG_OPTS,
 test('a ready fold waits below the escape threshold and swaps on the first crossing compaction', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
-  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(4800) }
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(4900) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   await waitForPending(seen)
+  s.usage = usage(4800)
   const belowThreshold = compactedMessages(await $.session.compact(compactInput('manual', handled(rows))))
   expect(belowThreshold).toEqual(handled(rows))
   expect(seen.store['pending:s1']).toBeDefined()
@@ -423,3 +424,68 @@ test('a non-shrinking auto job leaves the transcript unchanged after its escape 
   expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
 })
 
+
+const FOLD_ROWS = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
+const attach = ($: any, type: string, text: string) => $.prompt.attachment({ type, text, origin: { kind: 'engine' } })
+
+// Regression caught: a fold summarised or dropped CLAUDE.md and the tool listings, so the engine re-injected them after every ledger.
+test('captured CLAUDE.md and tool listings sit verbatim ahead of the ledger and are not re-injected', BG_OPTS, async ($, on) => {
+  const s: State = { rows: FOLD_ROWS, replies: [], splitReplies: [splitAnswer(2)] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$: any, e: any) => ({ text: e.text }))
+  expect((await attach($, 'instructions', 'CLAUDE RULES')).text).toBe('CLAUDE RULES')
+  expect((await attach($, 'deferred_tools_delta', 'TOOL LIST')).text).toBe('TOOL LIST')
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  const out = compactedMessages(await $.session.compact(compactInput('auto', handled(FOLD_ROWS))))
+  expect(out.slice(0, 4).map(m => m.text)).toEqual(['<system-reminder>\nCLAUDE RULES\n</system-reminder>', '<system-reminder>\nTOOL LIST\n</system-reminder>', 'protected request', expect.stringMatching(/^\[clm ledger #1 · /)])
+  expect(out.filter(m => m.text.includes('CLAUDE RULES'))).toHaveLength(1)
+  expect((await attach($, 'instructions', 'CLAUDE RULES')).text).toBeNull()
+  expect((await attach($, 'instructions', 'CLAUDE RULES v2')).text).toBe('CLAUDE RULES v2')
+})
+
+// Regression caught: a session opened by an isMeta peer message kept its whole first turn in the head and re-emitted it after every fold.
+test('rows ahead of the first request are folded, leaving the ledger right after the pinned prefix and request', BG_OPTS, async ($, on) => {
+  const rows = [use('tu_p', 'Read'), res('tu_p', 'peer turn output'), ...FOLD_ROWS]
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  const out = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
+  expect(out[0]?.text).toBe('protected request')
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(out.some(m => m.toolResults?.some(r => r.text === 'peer turn output'))).toBe(false)
+})
+
+// Regression caught: some session.compact trigger fell through to the engine's native summarizer.
+test('no main-agent compaction trigger reaches native compaction', BG_OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: FOLD_ROWS, replies: [] })
+  for (const trigger of ['manual', 'auto', 'plugin', 'precompute'] as const) await $.session.compact(compactInput(trigger, handled(FOLD_ROWS)))
+  expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: a moved or unreadable transcript file threw out of the fold and broke compaction.
+test('a fold still applies when the transcript file cannot be read', BG_OPTS, async ($, on) => {
+  const s: State = { rows: FOLD_ROWS, replies: [], splitReplies: [splitAnswer(2)] }
+  const seen = bottoms(on, s)
+  seen.store['transcript-path:s1'] = '/gone/s1.jsonl'
+  Object.defineProperty(seen.files, '/gone/s1.jsonl', { enumerable: true, get() { throw new Error('ENOENT: moved') } })
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  const out = compactedMessages(await $.session.compact(compactInput('auto', handled(FOLD_ROWS))))
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: the background fold started on queue size alone, far below the 60% point, or never started at it.
+test('an unset budget starts the background fold once usage crosses 60% of the window', { options: { tailTarget: 1200, queueTarget: 1, ledgerTarget: 300 } }, async ($, on) => {
+  const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 10000, tokens } })
+  const s: State = { rows: FOLD_ROWS, replies: [], splitReplies: [splitAnswer(2)], usage: usage(5900) }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  expect(seen.splitPrompts).toHaveLength(0)
+  s.usage = usage(6000)
+  await $.turn.complete({ ...TURN, turnId: 'crossed' })
+  await waitForPending(seen)
+  expect(seen.splitPrompts).toHaveLength(1)
+})

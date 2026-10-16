@@ -27,6 +27,7 @@ import { recallAddress, recallIo as makeRecallIo, rememberTranscriptPath as reme
 import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
+import { PINNED_TYPES, pinnedKey, type PinnedStore } from './fold'
 import { clearFoldJob, foldJobDropFps, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
 
 export { recallTranscriptAddress } from './address'
@@ -68,11 +69,21 @@ const changeWorkflow = <T>($: EngineInterface, change: (current: ClmWorkflow) =>
 // --- options -------------------------------------------------------------
 
 /** Reads userConfig, naming every value it could not use and the value used instead. */
-export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: string[] } {
+// An unset or 0 budget follows the live window: the fold escape point
+// (budget - reserve) sits at `threshold` of it, so the background fold starts
+// there and the targets below scale with it.
+export function readOpts(o: Record<string, unknown>, window?: number): { opts: Opts; problems: string[] } {
   const problems: string[] = []
   const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v)
-  let budget = 32000
-  if (o.budget !== undefined) {
+  let threshold = 0.6
+  if (o.threshold !== undefined && o.threshold !== 0) {
+    if (typeof o.threshold === 'number' && o.threshold > 0 && o.threshold < 1) threshold = o.threshold
+    else problems.push(`threshold=${JSON.stringify(o.threshold)} must be a fraction between 0 and 1; using 0.6`)
+  }
+  const target = typeof window === 'number' && Number.isFinite(window) && window > 0 ? Math.floor(window * threshold) : 0
+  const followsWindow = target >= 2000 && (o.budget === undefined || o.budget === 0)
+  let budget = followsWindow ? target + Math.min(2048, Math.floor(target / 4)) : 32000
+  if (!followsWindow && o.budget !== undefined && o.budget !== 0) {
     if (isInt(o.budget) && o.budget >= 2000) budget = o.budget
     else {
       budget = typeof o.budget === 'number' && Number.isFinite(o.budget) && o.budget > 0 ? Math.max(2000, Math.round(o.budget)) : 32000
@@ -96,7 +107,7 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
     if (isInt(o.ledgerTarget) && o.ledgerTarget >= 0 && o.ledgerTarget < tailTarget) ledgerTarget = o.ledgerTarget
     else problems.push(`ledgerTarget=${JSON.stringify(o.ledgerTarget)} must be a non-negative integer under tailTarget (${tailTarget}); using ${defLedgerTarget}`)
   }
-  const defReserve = Math.min(2048, Math.floor(budget / 4))
+  const defReserve = followsWindow ? budget - target : Math.min(2048, Math.floor(budget / 4))
   let reserve = defReserve
   if (o.reserve !== undefined && o.reserve !== 0) {
     if (isInt(o.reserve) && o.reserve > 0 && o.reserve < budget) reserve = o.reserve
@@ -238,6 +249,14 @@ const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
 })
 const fold = ($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number, calibrate = true, prepared?: PreparedFold, transcript?: string) =>
   runFold(foldRuntimeIo($), opts, rows, meta, mustFold, reading, calibrate, prepared, transcript)
+const transcriptRows = async ($: EngineInterface) => {
+  try {
+    return await readAddressRows(addressRuntimeIo($))
+  } catch (err) {
+    $.ui.log(`clm: transcript unreadable, folding without it (${String(err).slice(0, 160)})`, { to: 'debug' })
+    return []
+  }
+}
 const trackerView = ($: EngineInterface, origin: Origin, ops: readonly Payload[] = []) =>
   trackerViewDomain({ readAll: () => readAll($) }, origin, ops)
 
@@ -246,7 +265,6 @@ const addressRuntimeIo = ($: EngineInterface): AddressRuntimeIo => ({
   read: async path => (await $.fs.exists(path)) ? $.fs.read(path) : undefined,
   log: (text, options) => $.ui.log(text, options),
 })
-const transcriptRows = ($: EngineInterface) => readAddressRows(addressRuntimeIo($))
 const rememberTranscriptPath = ($: EngineInterface, session: string, path: string) => rememberAddressTranscriptPath(addressRuntimeIo($), session, path)
 const addressIo = ($: EngineInterface) => makeRecallIo(addressRuntimeIo($))
 
@@ -290,6 +308,12 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
 })
 const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number) => classifyPrompt(intentIo($), text, promptSeq)
 
+/** Options resolved against the live context window, so the 60% point follows the model in use. */
+async function liveOpts($: EngineInterface, options: Record<string, unknown>): Promise<Opts> {
+  let window: number | undefined
+  try { window = (await $.session.usage()).context.window } catch { window = undefined }
+  return readOpts(options, window).opts
+}
 /** The engine's live context tokens, when it has a reading. */
 async function usageReading($: EngineInterface): Promise<number | undefined> {
   try {
@@ -335,6 +359,7 @@ const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   fileExists: path => $.fs.exists(path),
   fileList: path => $.fs.list(path),
   run: (args, options) => $.process.run(args, options),
+  storeGet: key => $.store.get(key),
   storeSet: (key, value) => $.store.set(key, value),
   storeDelete: key => $.store.delete(key),
   pendingKey: key => pendingKey($, key),
@@ -400,7 +425,8 @@ const GUIDE = [
 ].join('\n')
 
 export const register: Register = (on, options) => {
-  const { opts, problems } = readOpts(options as Record<string, unknown>)
+  const { problems } = readOpts(options as Record<string, unknown>)
+  const userOptions = options as Record<string, unknown>
 
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -482,7 +508,7 @@ export const register: Register = (on, options) => {
     const meta = await readMeta($)
     const rows = liveRows(await $.session.messages(), meta.boundary)
     const log = ((await readText($, await logPath($))) ?? '').split('\n').filter(Boolean).slice(-5)
-    $.ui.log(foldJobReport(await readText($, await ledgerPath($)), rows, opts, meta, log))
+    $.ui.log(foldJobReport(await readText($, await ledgerPath($)), rows, await liveOpts($, userOptions), meta, log))
     return {}
   })
 
@@ -501,7 +527,7 @@ export const register: Register = (on, options) => {
       }
     }
     const res = await next(e)
-    await completeMainTurn(mainTurnCompletionIo($, opts), e.turnId, e.isAborted, e.answer)
+    await completeMainTurn(mainTurnCompletionIo($, await liveOpts($, userOptions)), e.turnId, e.isAborted, e.answer)
     return res
   })
 
@@ -510,7 +536,7 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
     if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
-    return compactFoldJob(foldJobIo($), opts, e.messages, e.trigger)
+    return compactFoldJob(foldJobIo($), await liveOpts($, userOptions), e.messages, e.trigger)
   })
 
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => recallAddress(addressIo($), e.address))
@@ -535,6 +561,18 @@ export const register: Register = (on, options) => {
   on('tool.describe', { tool: 'TaskCreate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('tool.describe', { tool: 'TaskUpdate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('prompt.attachment', { type: 'todo_reminder' }, () => ({ text: null }))
+  // Harness context is captured here and re-placed verbatim ahead of each
+  // ledger (buildCleared's pinned rows); the engine's own re-injection is
+  // dropped only once a fold already carries that exact text.
+  on('prompt.attachment', async ($, e, next) => {
+    if (e.agentId !== undefined || !PINNED_TYPES.has(e.type) || typeof e.text !== 'string') return next(e)
+    const key = pinnedKey(transcriptKey(await sid($)))
+    const store = ((await $.store.get(key)) ?? {}) as PinnedStore
+    const prior = store[e.type]
+    if (prior?.folded === e.text) return { text: null }
+    await $.store.set(key, { ...store, [e.type]: { text: e.text, ...(prior?.text === e.text && prior.folded ? { folded: prior.folded } : {}) } })
+    return next(e)
+  })
 
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     const seq = ledgerRowSeq(e.props.text)

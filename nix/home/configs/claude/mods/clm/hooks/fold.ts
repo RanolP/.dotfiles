@@ -31,6 +31,25 @@ const SYSTEM_ROW = {
 const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
 const isLocalCommand = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.localCommand.test(m.text)
 const isEmptyRow = (m: SessionMessage) => isBare(m) && (m.text.trim() === '' || (m.role === 'assistant' && m.text.trim() === '(no content)'))
+// Fallback for harness context that reached the transcript before clm stored
+// its attachment (pinnedAttachments): the rendered openings of CLAUDE.md and
+// the listings, as the engine frames them in a request.
+const PINNED = /^\s*<system-reminder>\s*(?:As you answer the user's questions, you can use the following context:|Codebase and user instructions are shown below\.|The following deferred tools are now available|The following skills are available for use with the Skill tool|# MCP Server Instructions)/
+export const isPinnedRow = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.remindersOnly.test(m.text) && PINNED.test(m.text)
+export const pinnedRow = (text: string): SessionMessage => ({ role: 'user', text: `<system-reminder>\n${text}\n</system-reminder>`, toolUses: [] })
+/** Stored attachment texts as rows, then fallback rows ahead of `end` that they do not already carry, each text once. */
+export const pinnedRows = (msgs: readonly SessionMessage[], end = msgs.length, stored: readonly string[] = []): SessionMessage[] => {
+  const rows = stored.map(pinnedRow)
+  const seen = new Set(rows.map(m => m.text))
+  for (const m of msgs.slice(0, end)) if (isPinnedRow(m) && !seen.has(m.text) && !stored.some(t => m.text.includes(t))) { seen.add(m.text); rows.push(m) }
+  return rows
+}
+/** Harness context captured from prompt.attachment, by attachment type; `folded` is the text a fold output already carries. */
+export type PinnedStore = Record<string, { text: string; folded?: string }>
+export const PINNED_TYPES = new Set(['instructions', 'nested_memory', 'skill_listing', 'deferred_tools_delta', 'mcp_instructions_delta', 'agent_listing_delta', 'output_style_instructions'])
+export const pinnedKey = (key: string) => `pinned:${key}`
+export const pinnedTexts = (store: unknown): string[] => store && typeof store === 'object' ? Object.values(store as PinnedStore).flatMap(v => typeof v?.text === 'string' && v.text ? [v.text] : []) : []
+export const markPinned = (store: unknown): PinnedStore => Object.fromEntries(Object.entries((store && typeof store === 'object' ? store : {}) as PinnedStore).map(([type, v]) => [type, { text: v.text, folded: v.text }]))
 export const isSystemRow = (m: SessionMessage): boolean => {
   if (!isBare(m)) return false
   if (m.role === 'assistant') return isEmptyRow(m)
@@ -63,6 +82,12 @@ export const protectedIndex = (msgs: readonly SessionMessage[]): number => {
   const i = msgs.findIndex(m => isPrompt(m) || isLedgerRow(m))
   return i < 0 ? 0 : i
 }
+// The rows a fold summarises: the range between the first request and the
+// kept tail, plus conversation rows ahead of the first request. Those open a
+// session whose first turn began on a row the transcript does not hand back
+// (an isMeta peer message); a head that kept them never folded them.
+export const foldedRows = (msgs: readonly SessionMessage[], first: number, keepFrom: number): SessionMessage[] =>
+  [...msgs.slice(0, first), ...msgs.slice(first + 1, keepFrom)].filter(m => !isLedgerRow(m) && !isSystemRow(m))
 export const visibleTokens = (msgs: readonly SessionMessage[]) => msgs.reduce((n, m) => n + (isSystemRow(m) ? 0 : estTokens(m)), 0)
 
 // `$.session.messages()` returns the stored transcript, older chains before a
@@ -85,6 +110,8 @@ const strip = (m: SessionMessage): SessionMessage =>
 
 export type ClearPlan = {
   head: readonly SessionMessage[]
+  /** Harness context rows placed verbatim ahead of the ledger (pinnedRows). */
+  pinned?: readonly SessionMessage[]
   dropped: readonly SessionMessage[]
   tail: readonly SessionMessage[]
   keptTurns: number
@@ -106,7 +133,7 @@ export function planClear(msgs: readonly SessionMessage[], target: number, ledge
   const first = protectedIndex(msgs)
   const starts = msgs.flatMap((m, i) => (i > first && isPrompt(m) ? [i] : []))
   const head = msgs.slice(0, first + 1)
-  const fixed = sum(head) + ledgerTokens
+  const fixed = sum(head.filter(m => isPrompt(m) || isPinnedRow(m))) + ledgerTokens
   let keepFrom = starts.length ? starts[starts.length - 1]! : first + 1
   let keptTurns = starts.length ? 1 : 0
   for (let t = starts.length - 2; t >= 0; t--) {
@@ -119,14 +146,14 @@ export function planClear(msgs: readonly SessionMessage[], target: number, ledge
     keptTurns++
   }
   const tail = msgs.slice(keepFrom)
-  const dropped = msgs.slice(first + 1, keepFrom).filter(m => !isLedgerRow(m) && !isSystemRow(m))
+  const dropped = foldedRows(msgs, first, keepFrom)
   // The newest turn may still be in progress when compaction is requested;
   // preserve its tool results whole so a live command's output is not lost.
   const newestStart = starts.at(-1)
   const cuttable = newestStart === undefined ? tail.length : Math.max(0, newestStart - keepFrom)
   const cuts = fixed + sum(tail) > target ? shareResults(tail, target - fixed, cuttable) : {}
   if (dropped.length === 0 && Object.keys(cuts).length === 0) return undefined
-  return { head, dropped, tail, keptTurns, cuts }
+  return { head, pinned: pinnedRows(msgs), dropped, tail, keptTurns, cuts }
 }
 
 // Each tool result in the tail gets an equal slice of the room left after the
@@ -151,8 +178,16 @@ const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMess
     ? m
     : { ...m, toolResults: m.toolResults.map(r => (cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) })) }
 
-export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage): SessionMessage[] {
-  return [...plan.head.filter(m => !isLedgerRow(m)), ledgerRow, ...plan.tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => strip(applyCuts(m, plan.cuts)))
+// With `pinned`, the output is [pinned context, first request, ledger, tail]:
+// the head's other rows were folded (foldedRows), and a tail row repeating
+// pinned context is dropped so it is carried once. Without it (a rewind) the
+// head stands as it is.
+export function buildCleared(plan: Pick<ClearPlan, 'head' | 'pinned' | 'tail' | 'cuts'>, ledgerRow: SessionMessage): SessionMessage[] {
+  const pinned = plan.pinned
+  const carried = new Set(pinned?.map(m => m.text))
+  const head = pinned ? [...pinned, ...plan.head.filter(isPrompt)] : plan.head.filter(m => !isLedgerRow(m))
+  const tail = pinned ? plan.tail.filter(m => !isPinnedRow(m) && !carried.has(m.text)) : plan.tail
+  return [...head, ledgerRow, ...tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => strip(applyCuts(m, plan.cuts)))
 }
 
 // clm-prompt

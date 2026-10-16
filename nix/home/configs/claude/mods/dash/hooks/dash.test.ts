@@ -192,8 +192,8 @@ test('a paired agent shows its clm title in place of its status; an unpaired age
   await start($)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: /^  ● opus 0m {2}Paired task$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^  ● opus 0m {2}running$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^  ● 0m {2}Paired task$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^  ● 0m {2}running$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /· agent-2/ })).toBeUndefined()
 })
 
@@ -225,7 +225,7 @@ test('the head line falls back to Loading while clm is loading and agents still 
 
   const ui = await mountPane($)
   expect(await ui.find({ type: 'Text', text: '▸ Loading clm status…' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^  ● opus 0m {2}running$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^  ● 0m {2}running$/ })).toBeDefined()
   release()
   await started
 })

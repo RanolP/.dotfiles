@@ -5,6 +5,7 @@ export type UsageSnapshot = {
 export type TrackedAgent = {
   id: string
   type: string
+  description?: string
   status: 'running' | 'done'
   startedAt: number
   startEstimated: boolean

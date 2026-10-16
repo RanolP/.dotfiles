@@ -1,6 +1,20 @@
 import { test, expect } from 'claude-code/testing'
 import type { AgentInfo } from 'claude-code'
-import { reconcileAgents, recordCompletion, recordMessage, withoutStaleDone } from './fleet'
+import { reconcileAgents, recordCompletion, recordMessage, recordSpawn, taskDescription, withoutStaleDone } from './fleet'
+
+test('task description skips codex brief metadata', () => {
+  const description = taskDescription({ prompt: 'Budget: 20 min\nwritable: /repo\nFix the login race\nmore', subagentType: 'codex-subagent:luna' })
+
+  expect(description).toBe('Fix the login race')
+})
+
+// Regression: the task description silently vanished after the first agent message.
+test('a message preserves the task description', () => {
+  const spawned = recordSpawn([], 'agent-1', 'codex-subagent:luna', 'Fix the login race', 10_000)
+  const updated = recordMessage(spawned, 'agent-1', 'Working', 20_000)
+
+  expect(updated[0]?.description).toBe('Fix the login race')
+})
 
 // Regression: a stale listing requested before completion cannot undo the newer turn.complete event.
 test('reconcile keeps a completion newer than the agent.list request', () => {

@@ -1,4 +1,4 @@
-import type { AgentInfo } from 'claude-code'
+import type { AgentInfo, AgentSpawnArgs } from 'claude-code'
 import type { TrackedAgent } from '../types'
 
 const RUNNING_STATUSES = new Set(['running', 'pending', 'queued', 'starting', 'waiting'])
@@ -8,11 +8,18 @@ export function excerpt(text: string, limit = 112): string {
   return flat.length > limit ? `${flat.slice(0, Math.max(0, limit - 1))}…` : flat
 }
 
-export function recordSpawn(agents: TrackedAgent[], id: string, type: string, now: number): TrackedAgent[] {
+export function taskDescription(args: AgentSpawnArgs): string | undefined {
+  const description = args.description?.trim()
+  if (description) return excerpt(description)
+  const line = args.prompt.split(/\r?\n/).map(part => part.trim()).find(part => part && !part.startsWith('Budget:') && !part.startsWith('writable:'))
+  return line ? excerpt(line) : undefined
+}
+
+export function recordSpawn(agents: TrackedAgent[], id: string, type: string, description: string | undefined, now: number): TrackedAgent[] {
   const existing = agents.find(agent => agent.id === id)
   const tracked: TrackedAgent = existing
-    ? { ...existing, type, startedAt: now, startEstimated: false }
-    : { id, type, status: 'running', startedAt: now, startEstimated: false, lastMessage: '' }
+    ? { ...existing, type, description: description ?? existing.description, startedAt: now, startEstimated: false }
+    : { id, type, description, status: 'running', startedAt: now, startEstimated: false, lastMessage: '' }
   return [...agents.filter(agent => agent.id !== id), tracked].sort((a, b) => a.startedAt - b.startedAt)
 }
 
@@ -27,6 +34,7 @@ export function reconcileAgents(agents: TrackedAgent[], listed: readonly AgentIn
     return {
       id: info.id,
       type: info.type || prior?.type || 'agent',
+      description: prior?.description,
       status: isDone ? 'done' as const : 'running' as const,
       startedAt: prior?.startedAt ?? now,
       startEstimated: prior?.startEstimated ?? true,
@@ -47,6 +55,7 @@ export function recordMessage(agents: TrackedAgent[], id: string, text: string, 
     ? {
       id: existing.id,
       type: existing.type,
+      description: existing.description,
       status: 'running',
       startedAt: existing.startedAt,
       startEstimated: existing.startEstimated,

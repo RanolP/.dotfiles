@@ -3,7 +3,7 @@ import type {
   DashDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
 import type { Behind, SystemGeneration, TrackedAgent, UsageSnapshot } from '../types'
-import { reconcileAgents, recordCompletion, recordMessage, recordSpawn, withoutStaleDone } from './fleet'
+import { reconcileAgents, recordCompletion, recordMessage, recordSpawn, taskDescription, withoutStaleDone } from './fleet'
 import { behindFromCount, behindLabel, revisionOf, revisionRange } from './rebuild'
 
 type Elements = ReturnType<EngineInterface['ui']['resolve']>
@@ -258,10 +258,6 @@ function rateLimitSpans(kind: string, limit: UsageSnapshot['rateLimits'][number]
   ]
 }
 
-function typeLabel(type: string): string {
-  return type.startsWith('codex-subagent:') ? `codex:${type.slice('codex-subagent:'.length)}` : type
-}
-
 function statusGlyph(status: string): string {
   if (status === 'running') return '●'
   if (status === 'done' || status === 'completed') return '✓'
@@ -315,7 +311,6 @@ function workRows({ Box, Text }: Elements, state: DashDashboardState, width: num
   const agents = [...paired, ...shown.filter(agent => !titles.has(agent.id))]
   const known = new Set(state.agents.map(agent => agent.id))
   const orphans = (head.status?.agents ?? []).filter(agent => !known.has(agent.agentId))
-  const typeWidth = Math.max(0, ...agents.map(agent => typeLabel(agent.type).length))
   const elapsedWidth = Math.max(0, ...agents.map(agent => elapsedLabel(agent, state.now).length))
   const status = head.status
   return (
@@ -325,7 +320,7 @@ function workRows({ Box, Text }: Elements, state: DashDashboardState, width: num
       {status?.resumeRequest ? <Text>{clip(`  Resume  ${status.resumeRequest.text}`, width)}</Text> : null}
       {agents.map(agent => (
         <Box key={agent.id} flexDirection="column">
-          <Text>{clip(`  ${statusGlyph(agent.status)} ${typeLabel(agent.type).padEnd(typeWidth)} ${elapsedLabel(agent, state.now).padEnd(elapsedWidth)}  ${titles.get(agent.id) ?? agent.status}`, width)}</Text>
+          <Text>{clip(`  ${statusGlyph(agent.status)} ${elapsedLabel(agent, state.now).padEnd(elapsedWidth)}  ${titles.get(agent.id) ?? agent.description ?? agent.status}`, width)}</Text>
           {agent.lastMessage ? <Text dimColor>{clip(`    └ ${agent.lastMessage}`, width)}</Text> : null}
         </Box>
       ))}
@@ -381,7 +376,7 @@ export const register: Register = on => {
       if (startedAt !== undefined) {
         await change($, `track spawned agent ${agentId}`, state => ({
           ...state,
-          agents: recordSpawn(state.agents, agentId, e.subagentType, startedAt),
+          agents: recordSpawn(state.agents, agentId, e.subagentType, taskDescription(e), startedAt),
           now: startedAt,
         }))
       }

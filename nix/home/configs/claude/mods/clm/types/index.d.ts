@@ -1,3 +1,5 @@
+import type { StableAttachmentType } from '../hooks/fold'
+
 export type ClmBoardIssue = {
   id: string
   title: string
@@ -63,6 +65,19 @@ export type ClmTaskInput = {
   evidence?: { ref: string; quote: string }
 }
 
+export type ClmResourceInput = {
+  action: 'list' | 'who' | 'register' | 'unregister' | 'acquire' | 'release' | 'forget'
+  name?: string
+  kind?: 'owned' | 'mutex'
+  aliases?: string[]
+  description?: string
+}
+
+export type ClmStableAttachmentType = StableAttachmentType
+export type ClmStableAttachmentValue = { full?: string; deltas: string[]; carriedAtSeq: number; droppedAtSeq: number }
+export type ClmStableAttachmentSession = Partial<Record<ClmStableAttachmentType, ClmStableAttachmentValue>>
+export type ClmStableAttachmentState = Record<string, ClmStableAttachmentSession>
+
 export type Clm = {
   /** Create an issue in this session, or set an existing issue's status. */
   track(input: ClmTrackInput): Promise<ClmIssue>
@@ -78,10 +93,11 @@ declare module 'claude-code' {
   interface McpToolInputs {
     'mcp__clm__clm_recall': ClmRecallInput
     'mcp__clm__clm_task': ClmTaskInput
+    'mcp__clm__clm_resource': ClmResourceInput
   }
 
   interface PluginState {
-    clm: { workflow: ClmWorkflow }
+    clm: { workflow: ClmWorkflow; stableAttachments: ClmStableAttachmentState }
   }
 
   interface EngineInterface {

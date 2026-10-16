@@ -4,6 +4,7 @@ import {
   WITHDRAWN_PREFIX, type Topic,
 } from './ledger'
 import { stripReminders } from './fold'
+import { resourceLedgerForSession } from './resources'
 
 export type InstructionIndex = { address: string; issue: string | null; text: string }
 export type ResidentLedgerRequest = {
@@ -19,6 +20,7 @@ export type ResidentLedgerSections = {
   constraints?: readonly string[]
   uncertain?: readonly Issue[]
   learned?: readonly string[]
+  resources?: readonly string[]
 }
 
 export type ResidentIo = {
@@ -99,6 +101,7 @@ export async function residentLedger(
   const requests = (await io.readRequests(key)).filter(request => request.status === 'open')
   const constraints = constraintFactLines(rawNotes).map(line => line.replace(/^\[constraint\]\s*/, ''))
   const learned = learnedFactLines(rawNotes)
+  const resources = await resourceLedgerForSession(key.split(':')[0] ?? '')
   const sections: ResidentLedgerSections = {
     where,
     children: shownIssues.filter(issue => topId !== undefined && issue.parent === topId && isOpen(issue)),
@@ -106,6 +109,7 @@ export async function residentLedger(
     constraints,
     uncertain: shownIssues.filter(issue => issue.status === 'uncertain'),
     learned,
+    resources,
   }
   const withdrawn = withdrawnInstructionKeys(rawNotes)
   const visibleIndex = index.filter(item => !withdrawn.has(instructionKey(item.text)))
@@ -135,6 +139,7 @@ export function residentLedgerText(
   const uncertain = (sections.uncertain ?? []).filter(issue => issue.status === 'uncertain')
     .map(issue => `- ${oneLine(issue.title)} — settling check: ${oneLine(issue.notes.at(-1) ?? 'verify the claim')} [${issue.id}]`)
   const learned = (sections.learned ?? []).map(oneLine)
+  const resources = (sections.resources ?? []).map(oneLine)
   const body = (lines: readonly string[]) => lines.length ? lines.join('\n') : '- (none yet)'
   return [
     '## where we are', where.join('\n'),
@@ -143,5 +148,6 @@ export function residentLedgerText(
     '## constraints & preferences', body(constraints),
     '## uncertain', body(uncertain),
     '## learned', body(learned),
+    '## owned resources', body(resources),
   ].join('\n\n')
 }

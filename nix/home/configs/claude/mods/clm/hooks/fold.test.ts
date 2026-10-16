@@ -10,7 +10,8 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint } from './fold'
+import { fingerprint, stableAttachmentRow } from './fold'
+import type { StableAttachmentType } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 // Regression caught: the automatic fold keeps the wrong rows (drops the request, keeps folded turns, or cuts between a tool_use and its tool_result).
@@ -29,6 +30,89 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   expect(seen.prompts[0]).not.toContain('tests pass')
   expect(seen.files[LEDGER_FILE]).toContain('## 핵심 사실·경로')
   expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: the harness moved stable attachments behind the ledger after compact, invalidating the cached prompt prefix.
+test('a mid-session CLAUDE.md edit is carried on the next fold', OPTS, async ($, on) => {
+  const instructions = 'Codebase and user instructions are shown below.\n# Stable instructions\nKeep the exact bytes.'
+  const context = '{"cwd":"/work/repo"}'
+  const coordinator = 'Retain the assigned task and report to the parent.'
+  const sections = 'Stable project context section.'
+  const style = 'Use the selected response style exactly.'
+  const s: State = { rows: ROWS, replies: [ledger('first fold'), ledger('second fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const attachment = (type: StableAttachmentType, text: string, agentId?: string) => ({ type, text, origin: 'dynamic', ...(agentId === undefined ? {} : { agentId }) })
+  await $.prompt.attachment(attachment('instructions', instructions))
+  await $.prompt.attachment(attachment('session_context', context))
+  await $.prompt.attachment(attachment('coordinator_context', coordinator))
+  await $.prompt.attachment(attachment('context_sections', sections))
+  await $.prompt.attachment(attachment('output_style_instructions', style))
+
+  await turnEnds($, s, seen)
+  expect(seen.results).toHaveLength(1)
+  const first = seen.results.at(0)?.messages ?? []
+  expect(first[1]?.text).toBe(stableAttachmentRow('instructions', instructions).text)
+  expect(first[2]?.text).toBe(stableAttachmentRow('session_context', context).text)
+  expect(first[3]?.text).toBe(stableAttachmentRow('coordinator_context', coordinator).text)
+  expect(first[4]?.text).toBe(stableAttachmentRow('context_sections', sections).text)
+  expect(first[5]?.text).toBe(stableAttachmentRow('output_style_instructions', style).text)
+  expect(first[6]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(first.slice(1, 6).every(row => row.handle === undefined)).toBe(true)
+  await $.prompt.attachment(attachment('instructions', 'Subagent-only instructions', 'agent-1'))
+  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
+  await $.prompt.attachment(attachment('instructions', instructions))
+  expect(await $.prompt.attachment(attachment('session_context', context))).toEqual({ text: null })
+  expect(await $.prompt.attachment(attachment('coordinator_context', coordinator))).toEqual({ text: null })
+  expect(await $.prompt.attachment(attachment('context_sections', sections))).toEqual({ text: null })
+  expect(await $.prompt.attachment(attachment('output_style_instructions', style))).toEqual({ text: null })
+
+  const instructionDelta = 'These instruction files changed — each replaces its earlier copy, and the instructions preamble above still applies:\n/work/CLAUDE.md\nNew instruction text.'
+  expect(await $.prompt.attachment(attachment('instructions', instructionDelta))).toEqual({ text: instructionDelta })
+  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+  expect(seen.results).toHaveLength(2)
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second[1]?.text).toBe(first[1]?.text)
+  expect(second[2]?.text).toBe(stableAttachmentRow('instructions', instructionDelta).text)
+  expect(second[3]?.text).toBe(first[2]?.text)
+  expect(second[4]?.text).toBe(first[3]?.text)
+  expect(second[5]?.text).toBe(first[4]?.text)
+  expect(second[6]?.text).toBe(first[5]?.text)
+  expect(second[7]?.text).toMatch(/^\[clm ledger #2 · /)
+  expect(second.filter(row => row.text === first[1]?.text)).toHaveLength(1)
+  expect(second.filter(row => row.text === first[5]?.text)).toHaveLength(1)
+  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
+  await $.prompt.attachment(attachment('instructions', instructions))
+  await $.prompt.attachment(attachment('instructions', 'Instruction files were re-read after an edit; these differ from their earlier copies.\nUpdated instruction text.'))
+})
+
+test('deleting a CLAUDE.md mid-session keeps the original full text carried on the next fold', OPTS, async ($, on) => {
+  const instructions = 'Codebase and user instructions are shown below.\n# Stable instructions\nKeep the exact bytes.'
+  const deletion = 'Instructions no longer present: /w/CLAUDE.md'
+  const s: State = { rows: ROWS, replies: [ledger('first fold'), ledger('second fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const attachment = (text: string) => ({ type: 'instructions' as const, text, origin: 'dynamic' })
+  await $.prompt.attachment(attachment(instructions))
+  await turnEnds($, s, seen)
+  expect(seen.results).toHaveLength(1)
+  const first = seen.results.at(0)?.messages ?? []
+  expect(await $.prompt.attachment(attachment(deletion))).toEqual({ text: deletion })
+  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+  expect(seen.results).toHaveLength(2)
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second[1]?.text).toBe(stableAttachmentRow('instructions', instructions).text)
+  expect(second[2]?.text).toBe(stableAttachmentRow('instructions', deletion).text)
+})
+
+test('an identical attachment is not dropped when the compact boundary has no carried row', OPTS, async ($, on) => {
+  bottoms(on, { rows: [M('user', '[clm ledger #7 · 2026-10-16 12:00 KST]')], replies: [] })
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const input = { type: 'instructions' as const, text: 'Codebase and user instructions are shown below.\n# Stable instructions', origin: 'dynamic' }
+  expect(await $.prompt.attachment(input)).toEqual({ text: input.text })
+  expect(await $.prompt.attachment(input)).toEqual({ text: input.text })
 })
 
 // Regression caught: a lesson the model invented, with evidence quoted from nowhere in the dropped turns, lands in the lessons file as if verified.

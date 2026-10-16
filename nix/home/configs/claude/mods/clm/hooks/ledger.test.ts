@@ -76,8 +76,8 @@ test('an instruction given in a session whose transcript exceeds the fs size cap
   expect(recallRows(indexed as any, `${address}..${indexed[1]?.address}`).text?.split('\n').length).toBe(2)
 })
 
-// Regression caught: the compact row exposed every task instead of the six scoped sections.
-test('the six-section ledger keeps actions under the focused task and requests global', async () => {
+// Regression caught: the compact row exposed every task instead of the scoped sections, including owned resources.
+test('the seven-section ledger keeps actions under the focused task and resources separate', async () => {
   const issue = (id: string, title: string, status: Issue['status'], parent?: string, notes: string[] = []) => ({
     id, title, status, ...(parent ? { parent } : {}), notes, linked: [],
     origin: { session: 's1', repo: 'github.com/o/r', cwd: '/w' }, updated: '2026-10-15T00:00:00Z',
@@ -90,10 +90,10 @@ test('the six-section ledger keeps actions under the focused task and requests g
     where: ['Build verification: tests are next.'], children: [child, unrelated],
     requests: [{ id: 'R1', text: 'Rebuild the package.', quote: 'Please rebuild the package', status: 'open' }],
     constraints: ['- preserve generated outputs — quote: "build tool generated this file" @aabbccdd'],
-    uncertain: [uncertain], learned: ['- the build tool failed once — quote: "exit code 1"'],
+    uncertain: [uncertain], learned: ['- the build tool failed once — quote: "exit code 1"'], resources: ['- metro :8081', '- mutex ipad held'],
   })
   expect([...row.matchAll(/^## (.+)$/gm)].map(match => match[1])).toEqual([
-    'where we are', 'what to do', 'what to request', 'constraints & preferences', 'uncertain', 'learned',
+    'where we are', 'what to do', 'what to request', 'constraints & preferences', 'uncertain', 'learned', 'owned resources',
   ])
   expect(row).toContain('focused build — last build note @e330c1ab')
   expect(row).toContain('Build verification: tests are next.')
@@ -102,6 +102,7 @@ test('the six-section ledger keeps actions under the focused task and requests g
   expect(row).toContain('[R1] Rebuild the package.')
   expect(row).toContain('preserve generated outputs')
   expect(row).toContain('verify package checksum — settling check: check the release digest')
+  expect(row).toContain('## owned resources\n\n- metro :8081\n- mutex ipad held')
   expect(row).toContain('the build tool failed once')
   expect(row).toContain('Stack size\n2\nPending count\n1')
 })

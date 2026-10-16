@@ -50,7 +50,6 @@ LAZY_RULES = """## Delegation threshold: work inline until the task outgrows the
 - WHEN: this session's main model is neither Fable nor Opus (the statusline names it)
 - DO: work inline while main context is small and one thread still holds the task -- a spawn re-sends the whole system prompt and eats its own trace, so a needless spawn costs MORE tokens than it saves
 - DO (spawn): delegate once the task is genuinely too heavy for one thread -- a large multi-file investigation, wide parallel steps, or token-heavy execution whose trace would bloat main context
-- DO (measured flip): delegate every multi-step execution loop once main context passes roughly 100k -- build-test-fix cycles, migrations, repetitive edit batches; each inline tool call re-reads the whole conversation, so a 30-call loop at 150k context costs ~4.5M cache-read tokens while the same loop in a fresh subagent runs at ~50k per call
 - EXCEPT: tiny one-liners, exploratory or uncertain scope, and active dialogue with the user stay inline"""
 
 

@@ -161,7 +161,7 @@ test('a compact whose background summary never finishes folds mechanically at th
   expect((seen.store['ledger-snapshots:s1:main'] as { coveredRows: string[] }[])[0]?.coveredRows).toContain(fingerprint(rows[3]!))
 })
 
-// Regression caught: a background plan finishing after the mechanical swap reused fingerprints from the replaced transcript.
+// Regression caught: a background plan finishing after the mechanical swap rolled meta back, stayed parked as stale pending, and blocked the next pre-summary.
 test('a background plan completed after a mechanical fold is discarded as stale', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
   const rows = [
     M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'),
@@ -181,12 +181,15 @@ test('a background plan completed after a mechanical fold is discarded as stale'
   const mechanical = compactedMessages(await compacting)
   s.rows = [...mechanical]
   release()
-  await waitForPending(seen)
-  const unchanged = handled(s.rows)
-  const current = compactedMessages(await $.session.compact(compactInput('auto', unchanged)))
-  expect(current).toEqual(unchanged)
+  await waitForLog(seen, 'clm: background fold finished after its job was replaced; plan discarded')
+  expect(metaIn(seen).seq).toBe(1)
+  expect(metaIn(seen).boundary).toBeDefined()
   expect(seen.store['pending:s1']).toBeUndefined()
   expect(seen.engineCompactions).toBe(0)
+  s.rows = [...s.rows, M('user', 'next C'), M('assistant', 'C'.repeat(2000))]
+  await $.turn.complete(TURN)
+  for (let i = 0; i < 50 && seen.splitPrompts.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(seen.splitPrompts.length).toBeGreaterThan(1)
 })
 
 // Regression caught: a compact with no prepared job blocked on an unanswered model call past the engine's 10 s budget.

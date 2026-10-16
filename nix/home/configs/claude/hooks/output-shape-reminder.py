@@ -15,8 +15,14 @@ cost grows with the SQUARE of the turn count -- injecting the full spec would
 add hundreds of thousands of tokens to a marathon session. The full spec stays
 in AGENTS.md; this is the check, not a replacement.
 
+A second line carries the machine's load, read fresh on every prompt, so the
+judgment before a heavy job (an emulator, a native build) weighs it without a
+`sysctl` tool call. Cheap work such as edits stays parallel whatever the load.
+It is measured here because a figure read at session start is stale in minutes.
+
 Self-check: `python3 output-shape-reminder.py --selftest`.
 """
+import os
 import sys
 
 REMINDER = (
@@ -28,6 +34,21 @@ REMINDER = (
 # Injection cost grows with turns^2, so a long reminder is a session-wide tax.
 MAX_CHARS = 200
 
+# 1-minute load per core at or above this reads as "high": runnable work
+# already exceeds what the cores clear, so another heavy job queues behind it.
+HIGH_LOAD_PER_CORE = 0.8
+
+
+def load_line():
+    """Return the one-line load reading, or None where the OS exposes none."""
+    try:
+        one, _, _ = os.getloadavg()
+    except OSError:
+        return None
+    cores = os.cpu_count() or 1
+    level = "high" if one / cores >= HIGH_LOAD_PER_CORE else "normal"
+    return f"Load: {one:.1f} on {cores} cores ({level}); weigh it before emulators or native builds."
+
 
 def main():
     try:
@@ -35,6 +56,9 @@ def main():
     except OSError:
         pass
     print(REMINDER)
+    line = load_line()
+    if line:
+        print(line)
     sys.exit(0)
 
 
@@ -42,6 +66,8 @@ def selftest():
     assert len(REMINDER) <= MAX_CHARS, "reminder too long -- cost grows with turns^2"
     for check in ("outcome", "closer", "stop", "choices", "next step"):
         assert check in REMINDER, f"reminder dropped the {check!r} check"
+    line = load_line()
+    assert line is None or (line.startswith("Load: ") and len(line) <= 120), line
     print("output-shape-reminder selftest ok")
 
 

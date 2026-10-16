@@ -14,6 +14,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: estimate how long this unit holds the main thread, then commit to EXACTLY ONE -- (1) SUBAGENT, a background Agent worker while main keeps answering the user; (2) QUICK RETURN, inline because it is read-only and finishes within a couple of tool calls
 - DO: read the session's delegation policy, which the SessionStart `architect-rules.py` hook injects per model, as the answer to which strategy is the default
 - DO: carry the chosen strategy to the end, because starting inline and converting halfway spends the main thread twice
+- DO (load): before starting a heavy job -- an emulator or simulator boot, a native build, a container run, a full test suite -- read the `Load:` line the prompt hook injects; at `high`, run heavy jobs one at a time and reuse a running emulator or build rather than starting another, while cheap work such as edits and reads stays parallel at any load
 - EXCEPT: keep work inline when only the main thread can do it -- the judgement itself, or a diff whose duplication the worker cannot see because the context lives in this session
 
 ## Run a delegated unit as a self-contained brief

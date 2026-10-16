@@ -131,6 +131,102 @@ test('an engine trigger joins the turn-end summary and uses its single result', 
   expect(compacted.slice(2)).toEqual(rows.slice(4))
 })
 
+// Regression caught: compaction waited on a stalled summary past the engine's 10 s budget instead of folding mechanically at the deadline.
+test('a compact whose background summary never finishes folds mechanically at the deadline', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+  const rows = [
+    M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'),
+    M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done'),
+  ]
+  const instruction = 'preserve this instruction exactly'
+  let summaryStarted = false
+  const s: State = { rows, replies: [], splitBlock: () => { summaryStarted = true; return new Promise<void>(() => {}) } }
+  const seen = bottoms(on, s)
+  seen.files[LEDGER_FILE] = `## 목표\n- keep goal\n\n## 사용자 지시\n- ${JSON.stringify(instruction)}\n\n## 한 일\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
+  await $.turn.complete(TURN)
+  for (let i = 0; i < 50 && !summaryStarted; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(summaryStarted).toBe(true)
+
+  const compact = $.session.compact(compactInput('auto', handled(rows)))
+  await seen.clock.advance(7000)
+  const outcome = await Promise.race([
+    compact.then(result => ({ result })),
+    new Promise<{ timeout: true }>(resolve => setTimeout(() => resolve({ timeout: true }), 1000)),
+  ])
+  if ('timeout' in outcome) throw new Error('compact waited past the deadline for the background summary')
+  const result = compactedMessages(outcome.result)
+  expect(result.reduce((total, row) => total + est(row), 0)).toBeLessThan(rows.reduce((total, row) => total + est(row), 0))
+  expect(result[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(result[1]?.text).toContain(instruction)
+  expect(storedLedger(seen)).toContain(JSON.stringify(instruction))
+  expect((seen.store['ledger-snapshots:s1:main'] as { coveredRows: string[] }[])[0]?.coveredRows).toContain(fingerprint(rows[3]!))
+})
+
+// Regression caught: a background plan finishing after the mechanical swap reused fingerprints from the replaced transcript.
+test('a background plan completed after a mechanical fold is discarded as stale', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+  const rows = [
+    M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'),
+    M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done'),
+  ]
+  let release!: () => void
+  let summaryStarted = false
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const s: State = { rows, replies: [], splitBlock: () => { summaryStarted = true; return gate } }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  for (let i = 0; i < 50 && !summaryStarted; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(summaryStarted).toBe(true)
+
+  const compacting = $.session.compact(compactInput('auto', handled(rows)))
+  await seen.clock.advance(7000)
+  const mechanical = compactedMessages(await compacting)
+  s.rows = [...mechanical]
+  release()
+  await waitForPending(seen)
+  const unchanged = handled(s.rows)
+  const current = compactedMessages(await $.session.compact(compactInput('auto', unchanged)))
+  expect(current).toEqual(unchanged)
+  expect(seen.store['pending:s1']).toBeUndefined()
+  expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: a compact with no prepared job blocked on an unanswered model call past the engine's 10 s budget.
+test('a compact with no job and a silent model folds mechanically at the deadline', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: ROWS, replies: [], mergeBlock: () => new Promise<void>(() => {}) })
+  const compact = $.session.compact(compactInput('auto', handled(ROWS)))
+  await seen.clock.advance(7000)
+  const outcome = await Promise.race([
+    compact.then(result => ({ result })),
+    new Promise<{ timeout: true }>(resolve => setTimeout(() => resolve({ timeout: true }), 1000)),
+  ])
+  if ('timeout' in outcome) throw new Error('compact waited past the deadline for the model')
+  const result = compactedMessages(outcome.result)
+  expect(seen.prompts).toHaveLength(1)
+  expect(result.reduce((total, row) => total + est(row), 0)).toBeLessThan(ROWS.reduce((total, row) => total + est(row), 0))
+  expect(result[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: queueTarget was checked only after turn completion, so long turns entered compact without a summary job.
+test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'working')]
+  let release!: () => void
+  let summaryStarted = false
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const seen = bottoms(on, { rows, replies: [], splitBlock: () => { summaryStarted = true; return gate } })
+  on('tool.call', () => ({ result: { success: true } }))
+  const step = $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
+  const returnedBeforeSummary = await Promise.race([
+    step.then(() => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 250)),
+  ])
+  for (let i = 0; i < 50 && !summaryStarted; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(returnedBeforeSummary).toBe(true)
+  expect(summaryStarted).toBe(true)
+  expect(seen.splitPrompts).toHaveLength(1)
+  release()
+  await step
+  await waitForPending(seen)
+})
+
 // Regression caught: a changed A row let the swap delete turns the summary never saw.
 test('a background plan whose A rows changed is discarded with rows untouched', BG_OPTS, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
@@ -422,4 +518,3 @@ test('a non-shrinking auto job leaves the transcript unchanged after its escape 
   expect(seen.engineCompactions).toBe(0)
   expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
 })
-

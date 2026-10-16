@@ -6,7 +6,8 @@ import {
 import { renderRange } from './evidence'
 import {
   composeLedger, EMPTY_LEDGER, factLines, instructionValues, mergeableNotes, notesOf, parseChanges, parseMerge,
-  preserveInstructions, renderTurns, SPLIT_MERGE_SYSTEM, withheldPointer,
+  fallbackLedger, oversizeLines, preserveInstructions, preservedLines, rememberOversize, rememberPreserved, renderTurns,
+  SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
 } from './ledger'
 import { focusOf, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held } from './held'
@@ -22,11 +23,10 @@ type Pending = {
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: TopicState[]
   rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]; coveredRows?: string[]
 }
-type FoldJob =
-  | { state: 'idle' }
-  | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[]; turnEnd: boolean }
-  | { state: 'ready'; plan: Pending; fingerprints: string[]; turnEnd: boolean }
-  | { state: 'swapping'; promise: Promise<SessionCompactResult> }
+type PendingJob =
+  | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[] }
+  | { state: 'ready'; plan: Pending; fingerprints: string[] }
+type FoldJob = { state: 'idle' } | PendingJob | { state: 'swapping'; promise: Promise<SessionCompactResult>; background?: PendingJob }
 type QueueTurn = { number: number; start: number; rows: readonly SessionMessage[] }
 const TURN_CHANGE_SYSTEM = 'Summarize only concrete non-task context changes from the finished coding turn. Reply with <changes>, at most three short Korean lines, or <changes></changes> when nothing changed.'
 
@@ -35,6 +35,7 @@ export type FoldJobIo = {
   sessionMessages(): Promise<SessionMessage[]>
   sessionCompact(): Promise<SessionCompactResult>
   now(): Promise<number>
+  after(ms: number, fn: () => void): { cancel(): void }
   usageReading(): Promise<number | undefined>
   sentAt(): Promise<SentAt>
   readMeta(): Promise<Meta>
@@ -70,6 +71,8 @@ export type FoldJobIo = {
 const foldJobs = new Map<string, FoldJob>()
 export const transcriptKey = (session: string, agentId?: string) => `${session}:${agentId ?? 'main'}`
 const WITHHELD = '.withheld-'
+// The engine kills session.compact at 10 s; the rest leaves room for the swap after the deadline.
+const COMPACT_DEADLINE_MS = 7000
 const shownChanges = new Map<string, Set<string>>()
 const changeHash = (line: string): string => {
   let h = 2166136261
@@ -88,7 +91,7 @@ export function clearFoldJob(key: string): void {
 }
 
 export function setRewindFoldJob(key: string, plan: RewindPlan, fingerprints: string[]): void {
-  foldJobs.set(key, { state: 'ready', plan, fingerprints, turnEnd: false })
+  foldJobs.set(key, { state: 'ready', plan, fingerprints })
 }
 
 function queueTurns(rows: readonly SessionMessage[], first: number): QueueTurn[] {
@@ -199,6 +202,19 @@ function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryM
   }
 }
 
+async function prepareSingleFold(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string): Promise<Pending | undefined> {
+  const startedAt = await io.now()
+  let folded: Fold | string
+  try { folded = await io.fold(opts, rows, meta, true, undefined, true, undefined, key) }
+  catch (err) { folded = `fold failed: ${String(err).slice(0, 160)}` }
+  if (typeof folded === 'string') {
+    io.log(`clm: background fold skipped (${folded})`, { to: 'debug' })
+    return undefined
+  }
+  await io.writeMeta(meta)
+  return pendingFromFold(folded, rows, Math.max(0, (await io.now()) - startedAt))
+}
+
 async function prepareEngineFold(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string): Promise<Pending | undefined> {
   const startedAt = await io.now()
   let working = rows
@@ -222,30 +238,58 @@ async function prepareEngineFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
   return pendingFromFold(folded, working, Math.max(0, (await io.now()) - startedAt))
 }
 
+async function prepareMechanicalFold(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string): Promise<Pending | undefined> {
+  const previous = (await io.readLedger()) ?? EMPTY_LEDGER
+  const notes = notesOf(previous)
+  const plan = planClear(rows, Math.max(0, opts.tailTarget / (meta.ratio ?? 1)), Math.ceil(notes.length / 4) + 60)
+  if (!plan) return undefined
+  const kept = [...preservedLines(notes), ...withheldLines(plan.dropped)]
+  const preserved = preserveInstructions(fallbackLedger(notes, plan.dropped), instructionValues(notes), plan.dropped, await io.ledgerPath())
+  const notesAfterFold = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
+  const fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
+  const keepFrom = rows.length - plan.tail.length
+  const topicSnapshot = (await readLedgerSnapshots(io.readRewindIo(), key)).at(-1)
+  return {
+    notes: notesAfterFold, fullNotes, ops: [], seq: meta.seq + 1,
+    ...(plan.tail[0] ? { keepFp: fingerprint(plan.tail[0]) } : {}), keepFrom,
+    dropFps: plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
+    cuts: plan.cuts, keptTurns: plan.keptTurns, fallback: true, ...(topicSnapshot?.topics ? { topics: topicSnapshot.topics } : {}),
+  }
+}
+
 async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string, turnEnd: boolean): Promise<FoldJob> {
   const current = foldJobs.get(key)
   if (current && current.state !== 'idle') return current
   const first = protectedIndex(rows)
   const turns = queueTurns(rows, first)
-  const work = turnEnd
-    ? prepareBackgroundFold(io, opts, rows, meta, first, turns, key)
-    : prepareEngineFold(io, opts, rows, meta, key)
-  const job: Extract<FoldJob, { state: 'summarizing' }> = { state: 'summarizing', promise: work, fingerprints: rows.map(fingerprint), turnEnd }
+  const work = !turnEnd
+    ? prepareEngineFold(io, opts, rows, meta, key)
+    : turns.length >= 2
+      ? prepareBackgroundFold(io, opts, rows, meta, first, turns, key)
+      : prepareSingleFold(io, opts, rows, meta, key)
+  const job: Extract<FoldJob, { state: 'summarizing' }> = { state: 'summarizing', promise: work, fingerprints: rows.map(fingerprint) }
   foldJobs.set(key, job)
   void job.promise.then(plan => {
-    if (foldJobs.get(key) === job) {
-      foldJobs.set(key, plan ? { state: 'ready', plan, fingerprints: job.fingerprints, turnEnd: job.turnEnd } : { state: 'idle' })
-      void (async () => {
-        const pending = await io.pendingKey(key)
-        if (plan) await io.storeSet(pending, plan)
-        else await io.storeDelete(pending)
-      })()
-    }
+    const current = foldJobs.get(key)
+    const ready = plan ? { state: 'ready' as const, plan, fingerprints: job.fingerprints } : undefined
+    if (current === job) foldJobs.set(key, ready ?? { state: 'idle' })
+    else if (current?.state === 'swapping' && current.background === job) {
+      const { background: _background, ...swapping } = current
+      foldJobs.set(key, ready ? { ...swapping, background: ready } : swapping)
+    } else return
+    void (async () => {
+      const pending = await io.pendingKey(key)
+      if (plan) await io.storeSet(pending, plan)
+      else await io.storeDelete(pending)
+    })()
   }, err => {
-    if (foldJobs.get(key) === job) {
-      foldJobs.delete(key)
-      void io.pendingKey(key).then(pending => io.storeDelete(pending))
-    }
+    const current = foldJobs.get(key)
+    if (current === job) foldJobs.delete(key)
+    else if (current?.state === 'swapping' && current.background === job) {
+      const { background: _background, ...swapping } = current
+      foldJobs.set(key, swapping)
+    } else return
+    void io.pendingKey(key).then(pending => io.storeDelete(pending))
     io.log(`clm: background fold failed (${String(err).slice(0, 160)})`, { to: 'debug' })
   })
   return job
@@ -273,8 +317,6 @@ export async function maybeClear(io: FoldJobIo, opts: Opts): Promise<void> {
   const first = protectedIndex(rows)
   const queue = rows.slice(first + 1)
   if (sum(queue) < opts.queueTarget) return
-  const turns = queueTurns(rows, first)
-  if (turns.length < 2) return
   void startFoldJob(io, opts, rows, meta, key, true).catch(err => io.log(`clm: background fold failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
 }
 
@@ -387,18 +429,35 @@ export async function handleSessionCompact(
   const key = transcriptKey(await io.sessionId())
   await io.observeTranscript(key, all)
   const existing = foldJobs.get(key)
-  if (existing?.state === 'summarizing') await existing.promise
+  if (existing?.state === 'swapping') return existing.promise
   if (trigger === 'plugin' && (!existing || existing.state === 'idle')) return { messages: [...all] }
-  let job = existing
-  if (!job || job.state === 'idle') job = await startFoldJob(io, opts, workingRows, meta, key, false)
+  const job = !existing || existing.state === 'idle' ? await startFoldJob(io, opts, workingRows, meta, key, false) : existing
   if (job.state === 'swapping') return job.promise
-  const plan = job.state === 'summarizing' ? await job.promise : job.state === 'ready' ? job.plan : undefined
-  if (!plan) {
-    foldJobs.set(key, { state: 'idle' })
-    await io.storeDelete(await io.pendingKey(key))
-    return { messages: [...all] }
+  let plan: Pending | undefined
+  if (job.state === 'ready') plan = job.plan
+  else if (job.state === 'summarizing') {
+    let timer: { cancel(): void } | undefined
+    const late = Symbol('late')
+    const raced = await Promise.race([
+      job.promise.catch(() => late),
+      new Promise<typeof late>(resolve => { timer = io.after(COMPACT_DEADLINE_MS, () => resolve(late)) }),
+    ]).finally(() => timer?.cancel())
+    if (raced === late) {
+      io.log(`clm: compaction summary not ready within ${COMPACT_DEADLINE_MS}ms; folding mechanically`, { to: 'debug' })
+      plan = await prepareMechanicalFold(io, opts, workingRows, meta, key)
+      if (!plan) return { messages: [...all] }
+    } else if (!raced) {
+      foldJobs.set(key, { state: 'idle' })
+      await io.storeDelete(await io.pendingKey(key))
+      return { messages: [...all] }
+    } else plan = raced
   }
-  if (!plan.rewindOnly && (await io.usageReading() ?? 0) < opts.budget - opts.reserve) return { messages: [...all] }
+  if (!plan) return { messages: [...all] }
+  const reading = plan.rewindOnly ? undefined : await io.usageReading()
+  const current = foldJobs.get(key)
+  if (current?.state === 'swapping') return current.promise
+  if (current?.state === 'ready' && current !== existing) plan = current.plan
+  if (!plan.rewindOnly && (reading ?? 0) < opts.budget - opts.reserve) return { messages: [...all] }
   const keepFrom = plan.keepFrom
   const row = keepFrom < workingRows.length ? workingRows[keepFrom] : undefined
   const expectedDropped = workingRows.slice(first + 1, keepFrom).filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint)
@@ -411,17 +470,20 @@ export async function handleSessionCompact(
     return { messages: [...all] }
   }
   const use = { ...plan, keepFrom }
-  const swap = (async (): Promise<SessionCompactResult> => {
+  const background = current?.state === 'summarizing' ? current : undefined
+  let swap!: Promise<SessionCompactResult>
+  swap = Promise.resolve().then(async (): Promise<SessionCompactResult> => {
     try {
       return use.rewindOnly
         ? await applyRewindPlan(io, workingRows, meta, first, use, key)
         : await applyFoldPlan(io, workingRows, meta, first, use, false, compactStartedAt, key)
     } finally {
-      foldJobs.set(key, { state: 'idle' })
+      const latest = foldJobs.get(key)
+      if (latest?.state === 'swapping' && latest.promise === swap) foldJobs.set(key, latest.background ?? { state: 'idle' })
       await io.storeDelete(await io.pendingKey(key))
     }
-  })()
-  foldJobs.set(key, { state: 'swapping', promise: swap })
+  })
+  foldJobs.set(key, { state: 'swapping', promise: swap, ...(background ? { background } : {}) })
   return swap
 }
 

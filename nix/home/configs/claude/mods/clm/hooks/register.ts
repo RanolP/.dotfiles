@@ -334,6 +334,7 @@ const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   sessionMessages: () => $.session.messages(),
   sessionCompact: () => $.session.compact({}),
   now: () => $.clock.now(),
+  after: (ms, fn) => $.clock.after(ms, fn),
   usageReading: () => usageReading($),
   sentAt: () => sentAt($),
   readMeta: () => readMeta($),
@@ -522,6 +523,13 @@ export const register: Register = (on, options) => {
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
     if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
     return compactFoldJob(foldJobIo($), opts, e.messages, e.trigger)
+  })
+
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      void maybeClearFoldJob(foldJobIo($), opts).catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
+    }
+    return next(e)
   })
 
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => recallAddress(addressIo($), e.address))

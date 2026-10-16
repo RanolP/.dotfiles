@@ -34,6 +34,13 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO (worker): escalate from where the evidence sits rather than deferring the question to whoever reads your report, because the context that makes it answerable is yours and expires with your turn
 - WHY: the advisor tool double-counts context and force-compacts the session early; a subagent does not -- [[advisor-inflates-autocompact-threshold]]
 
+## An Artifact page is written apart from the session that researched it
+- WHEN: about to publish an Artifact page that Claude writes
+- WHY: the session holds the whole process history and its chat reply speaks to the commissioner, so a page it writes directly mixes in that report -- a published page once told outside readers, in chat register, which titles were dropped for missing store data
+- DO: spawn `artifact-writer` with `page_facts` (subject content only), `reader`, `purpose` and `path`; put every gap, exclusion, failed lookup, data-coverage note and tool detail into the chat reply, along with the writer's `returned_to_chat` items
+- DO: then spawn `artifact-coldread` with only the page path, `SendMessage` its findings to the same writer, and repeat until coldread returns `clean: true`
+- DO: publish once coldread is clean; after 3 rounds, stop and report the remaining findings to the user instead
+
 ## Plan mode -- present the plan before the first mutation
 - NOTE: the `clm` plugin folds older turns into a ledger (done, to do, key facts, open questions) at every turn end, so context stays bounded with no manual step from you, and it alone writes the task list panel from the steps your replies state
 - WHEN (think): the shared "Plan after research, then act" rule's non-trivial bar is met, and the task's FIRST mutation has not happened yet

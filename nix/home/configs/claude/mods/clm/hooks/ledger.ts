@@ -320,6 +320,20 @@ export const LEDGER_COMPACT_SYSTEM = [
   'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1,"focusIssue":null}]}.',
 ].join('\n')
 
+// clm-prompt
+export const LESSON_SYSTEM = [
+  'You extract durable lessons from coding-session turns that are about to be deleted, so a future session can reuse them.',
+  'You receive <known_lessons>, lessons already recorded, and <dropped_turns>, the deleted turns rendered as `[user]`, `[assistant]`, `  -> tool input` and `  <- tool result` lines.',
+  'Record a lesson of one of three kinds:',
+  '- correction: the user corrected the assistant\'s behavior or assumption; state the behavior the user asked for.',
+  '- failed-approach: an approach failed and a later step fixed it; state what failed and what worked.',
+  '- fact: a verified, non-obvious fact about a tool, repository, or environment, confirmed by a tool result.',
+  'Write each lesson as one self-contained English sentence that reads correctly without the turns.',
+  'Set evidence to a verbatim substring copied character for character from one line of <dropped_turns>: the user\'s sentence for a correction, the tool result or user sentence that proves a failed-approach or fact. Copy the text after the line\'s header, and keep it short enough to stay inside that one line.',
+  'Record only lessons that are new relative to <known_lessons>. Most turns teach nothing durable; reply with an empty lessons array for them.',
+  'Reply with only JSON: {"lessons":[{"kind":"correction","lesson":"...","evidence":"..."}]}.',
+].join('\n')
+
 export function renderTurns(rows: readonly SessionMessage[], cap = 120_000, sentAt?: SentAt): string {
   const out = rows.map(m => {
     const head = `[${m.role}${sentStamp(m, sentAt)}]`

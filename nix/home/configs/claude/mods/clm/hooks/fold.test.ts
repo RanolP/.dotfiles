@@ -31,6 +31,23 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   expect(seen.engineCompactions).toBe(0)
 })
 
+// Regression caught: a lesson the model invented, with evidence quoted from nowhere in the dropped turns, lands in the lessons file as if verified.
+test('a lesson whose evidence is not in the dropped turns is never written to the lessons file', OPTS, async ($, on) => {
+  const lessons = [
+    { kind: 'fact', lesson: 'make fails at a.ts:12 until the bad import is fixed.', evidence: 'log: make fails at a.ts:12' },
+    { kind: 'correction', lesson: 'The user wants pnpm instead of npm.', evidence: 'use pnpm, not npm' },
+  ]
+  const s: State = { rows: ROWS, replies: [ledger('a.ts:12 is the bad import')], lessonReplies: [JSON.stringify({ lessons })] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const path = '/home/t/.dotfiles/.lessons/lessons.jsonl'
+  for (let i = 0; i < 500 && !seen.files[path]; i++) await new Promise(resolve => setTimeout(resolve, 1))
+  const written = (seen.files[path] ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  expect(seen.lessonPrompts).toHaveLength(1)
+  expect(written.map(record => record.evidence)).toEqual(['log: make fails at a.ts:12'])
+  expect(written[0]._sentinel).toContain('LESSON-CONFIDENTIAL')
+})
+
 // Regression caught: a second fold loses the first ledger (not fed back from the file) or stacks a second ledger row beside the first.
 test('the ledger round-trips through its file and survives a second fold', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('FIRST-FACT'), ledger('SECOND-FACT', '[]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }])] }

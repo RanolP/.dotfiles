@@ -329,6 +329,11 @@ const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   basePath: () => basePath($),
   readFile: async path => readText($, path),
   writeFile: (path, text) => $.fs.write(path, text),
+  appendFile: async (path, text) => {
+    await $.process.run(['mkdir', '-p', '--', path.slice(0, path.lastIndexOf('/'))], { timeoutMs: 5000 })
+    await $.fs.write(path, ((await readText($, path)) ?? '') + text)
+  },
+  lessonsPath: async () => `${(await $.env.get('HOME')) ?? '.'}/.dotfiles/.lessons/lessons.jsonl`,
   fileExists: path => $.fs.exists(path),
   fileList: path => $.fs.list(path),
   run: (args, options) => $.process.run(args, options),

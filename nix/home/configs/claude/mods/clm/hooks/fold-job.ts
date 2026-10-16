@@ -7,7 +7,7 @@ import { renderRange } from './evidence'
 import {
   composeLedger, EMPTY_LEDGER, factLines, instructionValues, mergeableNotes, notesOf, parseChanges, parseMerge,
   fallbackLedger, oversizeLines, preserveInstructions, preservedLines, rememberOversize, rememberPreserved, renderTurns,
-  SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
+  LESSON_SYSTEM, SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
 } from './ledger'
 import { focusOf, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held } from './held'
@@ -46,6 +46,8 @@ export type FoldJobIo = {
   basePath(): Promise<string>
   readFile(path: string): Promise<string | undefined>
   writeFile(path: string, text: string): Promise<void>
+  appendFile(path: string, text: string): Promise<void>
+  lessonsPath(): Promise<string>
   fileExists(path: string): Promise<boolean>
   fileList(path: string): Promise<{ name: string; kind: string }[]>
   run(args: string[], options: { timeoutMs: number }): Promise<{ exitCode: number; stderr: string }>
@@ -121,6 +123,36 @@ function splitPrompt(previous: string, turns: readonly QueueTurn[], retryRule: s
   ].filter(Boolean).join('\n\n')
 }
 
+const LESSON_KINDS = new Set(['correction', 'failed-approach', 'fact'])
+const LESSON_SENTINEL = 'LESSON-CONFIDENTIAL / 교훈: 외부 채널 반출 금지'
+
+// Fire-and-forget: a lesson never delays or fails the fold that dropped its turns.
+function extractLessons(io: FoldJobIo, dropped: readonly SessionMessage[], seq: number): void {
+  void (async () => {
+    const path = await io.lessonsPath()
+    const known = ((await io.readFile(path)) ?? '').split('\n').filter(Boolean).slice(-30).flatMap(line => {
+      try { const lesson: unknown = JSON.parse(line).lesson; return typeof lesson === 'string' ? [lesson] : [] } catch { return [] }
+    })
+    const rendered = renderTurns(dropped, 120_000, await io.sentAt())
+    const prompt = `<known_lessons>\n${known.map(line => `- ${line}`).join('\n')}\n</known_lessons>\n<dropped_turns>\n${rendered}\n</dropped_turns>`
+    const response = await io.complete({ model: 'haiku', system: LESSON_SYSTEM, prompt, maxTokens: 2048, timeoutMs: 60_000 })
+    if (!response.isAnswered) throw new Error(`model gave no text (${response.reason})`)
+    const reply: unknown = JSON.parse(response.text.trim().replace(/^```[a-z]*\n([\s\S]*?)\n```$/, '$1'))
+    const lessons = typeof reply === 'object' && reply !== null && 'lessons' in reply && Array.isArray(reply.lessons) ? reply.lessons as unknown[] : []
+    const valid = lessons.flatMap(item => {
+      if (typeof item !== 'object' || item === null) return []
+      const { kind, lesson, evidence } = item as Record<string, unknown>
+      return typeof kind === 'string' && LESSON_KINDS.has(kind) && typeof lesson === 'string' && lesson.trim() && !known.includes(lesson)
+        && typeof evidence === 'string' && evidence.trim() && rendered.includes(evidence) ? [{ kind, lesson, evidence }] : []
+    })
+    if (lessons.length > valid.length) io.log(`clm: lesson extraction dropped ${lessons.length - valid.length} of ${lessons.length} lesson(s) without verbatim evidence or a known kind`, { to: 'debug' })
+    if (valid.length === 0) return
+    const { session, cwd } = await io.captureOrigin()
+    const at = kst()
+    await io.appendFile(path, valid.map(lesson => JSON.stringify({ _sentinel: LESSON_SENTINEL, at, session, cwd, seq, ...lesson }) + '\n').join(''))
+  })().catch(err => io.log(`clm: lesson extraction failed (${String(err)})`, { to: 'debug' }))
+}
+
 async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, first: number, turns: readonly QueueTurn[], key: string, saveMeta: SaveMeta): Promise<Pending | undefined> {
   const session = await io.sessionId()
   const startedAt = await io.now()
@@ -177,6 +209,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       continue
     }
     await saveMeta(meta)
+    extractLessons(io, folded.plan.dropped, folded.seq)
     const summaryMs = Math.max(0, (await io.now()) - startedAt)
     return {
       notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, seq: folded.seq,
@@ -213,6 +246,7 @@ async function prepareSingleFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
     return undefined
   }
   await saveMeta(meta)
+  extractLessons(io, folded.plan.dropped, folded.seq)
   return pendingFromFold(folded, rows, Math.max(0, (await io.now()) - startedAt))
 }
 
@@ -236,6 +270,7 @@ async function prepareEngineFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
     return undefined
   }
   await saveMeta(meta)
+  extractLessons(io, folded.plan.dropped, folded.seq)
   return pendingFromFold(folded, working, Math.max(0, (await io.now()) - startedAt))
 }
 

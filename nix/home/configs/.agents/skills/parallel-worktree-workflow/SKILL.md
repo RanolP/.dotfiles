@@ -5,7 +5,7 @@ description: Run a multi-unit implementation as plan -> parallel workers in git 
 
 # Parallel worktree workflow
 
-Main plans, spawns, relays and merges; workers build. The loop ends in a stack of small green commits on `claude/local-dev`, each already merged the moment it passed the fast gate.
+Main plans, spawns, relays and merges; workers build. The loop ends in a stack of small commits on `claude/local-dev`, each merged as it landed, with the gate run once on the merged result.
 
 It extends three standing rules rather than restating them: `AGENTS.md` "Parallel execution, synchronous thought" (grouping, condition waits, streaming), `AGENTS.md` "`claude/local-dev` is a stash that holds a stack" (where commits land, how the stack is published), and `CLAUDE.md` "Run a delegated unit as a self-contained brief" (background spawn, typed results, receipt check).
 
@@ -30,7 +30,7 @@ WHY: long-diverged branches merged late needed a dedicated rebase worker, and te
 ## 3. Brief: what every worker carries
 
 - The goal, the files it owns, and every binding user decision quoted verbatim.
-- The fast gate command for this project (section 5), and "commit and report each step the moment it passes the gate".
+- "Commit and report each step the moment it lands"; the gate runs once, in main, on the merged result (section 5).
 - Scope is exactly the goal: leave adjacent code as found. A worker once spent 13 minutes deleting a function other workers still called.
 - Keep each file's existing line endings and encoding. A worker once rewrote a file as CRLF.
 - Put a timeout on any search or command that can run long, and scope searches to the repo. An unbounded `find /` hung a worker for 1.5 hours unnoticed.
@@ -65,11 +65,10 @@ On each event, main replies to the user in one or two lines, in the user's langu
 
 WHY: the user wants live visibility without asking "how is it going?", and one short line per event with k/N and an ETA gives it.
 
-## 5. Merge: small commits through a fast gate
+## 5. Merge: small commits, one gate at the end
 
-- The per-commit gate is the project's fast checks, about one minute -- for example a type-check plus the one test package whose ratchet catches broken output (`npx tsc -b && npx vitest run packages/<core>`).
-- A worker commits each step that passes the gate and reports it; main fast-forwards or cherry-picks it onto `claude/local-dev` right away and re-runs the fast gate in its own checkout.
-- The full suite, the conformance matrix and the benchmarks run once, in main, at the end. When the work is a performance change, bench each commit in order on the largest inputs and revert commits that show no macro gain.
+- A worker commits each step as it lands and reports it; main fast-forwards or cherry-picks it onto `claude/local-dev` right away, with no check run per step.
+- Once every unit has merged, main runs the gate once on the merged result: the project's checks -- for example a type-check plus the test package whose ratchet catches broken output (`npx tsc -b && npx vitest run packages/<core>`) -- then the full suite, the conformance matrix and the benchmarks. When the work is a performance change, bench each commit in order on the largest inputs and revert commits that show no macro gain.
 
 WHY: every merge serialized through a slow gate made integration, not coding, the bottleneck.
 

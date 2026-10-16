@@ -18,9 +18,9 @@ git commit -F <message-file>   # the next call
 
 NEVER: chain `git add` and `git commit` with `&&`, `;`, or a newline inside a single Bash call. A commit in exactly that form once carried a private organisation identifier past a denylist that already held it, into two commits that had to be rewritten.
 
-## Checkpoint commits land on main as each unit finishes
+## Checkpoint commits land on main as each unit lands
 
-In a repository whose rules forbid branches and work directly on `main` (this dotfiles repo is one), commit every finished unit onto local `main` the moment its tests and build pass, with no permission asked. Run steps 1-4 of the sequence for it -- read, stage, check safety, commit -- and stop there: the push waits for an explicit ship or push request. Other sessions share this checkout, so work left uncommitted gets stashed under them and fixed a second time -- [[ship-checkpoint-commit-main]].
+In a repository whose rules forbid branches and work directly on `main` (this dotfiles repo is one), commit every unit onto local `main` as soon as it lands, with no permission asked and no tests or build run first. Run steps 1-4 of the sequence for it -- read, stage, check safety, commit -- and stop there: the push waits for an explicit ship or push request, and the tests and build run once at that push (step 5). Other sessions share this checkout, so work left uncommitted gets stashed under them and fixed a second time -- [[ship-checkpoint-commit-main]].
 
 ## The sequence
 
@@ -28,7 +28,7 @@ In a repository whose rules forbid branches and work directly on `main` (this do
 2. **Stage explicit paths**, never `-A` and never `.`, in a Bash call that does nothing else.
 3. **Check safety** against the staged diff, before writing the message. The checks are below.
 4. **Commit** in its own call, with the message in the repo's dominant form (`git log --oneline -30` decides subject style, prefix and language).
-5. **Rebase onto the remote, then read the push position.** Run the fetch below, then `git -C <absolute-path> rebase origin/<branch>` whenever the left count is non-zero. After a rebase that replayed commits onto new upstream work, re-run the tests and the build those commits touch before going on, and ask the user when a conflict is not obviously mechanical.
+5. **Rebase onto the remote, then read the push position.** Run the fetch below, then `git -C <absolute-path> rebase origin/<branch>` whenever the left count is non-zero. Then run the tests and the build that the whole unpushed range touches, once, as the final gate before the push, and ask the user when a conflict is not obviously mechanical.
 6. **Push on a clean pass.** Four passing checks plus a left count of `0` after the rebase are the authorisation: run the push, then report the commit subjects, the file list and the remote's new position together, in one message.
 7. **Hand the push over on anything else.** A failing check, a non-zero left count, or a staged path this unit does not own keeps the work at the local commit: report which one fired and give the user one `git -C <absolute-path> push <remote> <branch>` command to run themselves.
 

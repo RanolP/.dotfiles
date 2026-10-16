@@ -16,7 +16,7 @@ Why kind-grouping fails:
 ## Procedure (refactor or greenfield)
 
 1. List recent changes/tickets — each names a domain. Name domains in the business's language.
-2. Move ALL artifacts of one domain into its module: UI, state, API, validation, tests. Migrate one domain at a time; keep the app green between moves.
+2. Move ALL artifacts of one domain into its module: UI, state, API, validation, tests. Migrate one domain at a time, and verify the app once after the last domain move.
 3. Inside a module, technical subfolders are fine — domain first, layer second.
 4. Each module exposes one public entry point; other domains import only that, never internals.
 5. Shared code: extract to `shared/` only at the third consumer (rule of three); tolerate duplication until then.

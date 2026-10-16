@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Semantics test for commit-check-guard.py.
 
-The guard denies a `git commit` when a file edited this session has a check
+The guard denies a `git push` when a file edited this session has a check
 this repo ships and that check never ran after the edit -- the b28bf99 failure,
 where a hook was committed without `scripts/verify-claude-hook.sh` and without
-its settings.json registration. It stays silent on every non-commit command, on
+its settings.json registration. It stays silent on every non-push command, on
 paths no rule covers, and on anything it cannot read: it fronts every Bash call
 in every session, so fail-open is the whole design.
 
@@ -66,46 +66,60 @@ BUILD = "cd ~/.dotfiles/nix && nix build .#darwinConfigurations.ranolp-work-MBP-
 # as the verify rule -- a passthrough case has to satisfy both.
 CASES = [
     # the b28bf99 incident itself
-    ("hook edit, no verify", [edit(NEW_HOOK)], "git commit -m x", "deny"),
+    ("hook edit, no verify", [edit(NEW_HOOK)], "git push", "deny"),
     ("hook edit, verify + build", [edit(NEW_HOOK), bash(VERIFY), bash(BUILD)],
-     "git commit -m x", "passthrough"),
-    ("hook edit, build but no verify", [edit(NEW_HOOK), bash(BUILD)], "git commit -m x", "deny"),
-    ("verify before the edit", [bash(VERIFY), edit(NEW_HOOK), bash(BUILD)], "git commit -m x",
+     "git push", "passthrough"),
+    ("hook edit, build but no verify", [edit(NEW_HOOK), bash(BUILD)], "git push", "deny"),
+    ("verify before the edit", [bash(VERIFY), edit(NEW_HOOK), bash(BUILD)], "git push",
      "deny"),
 
-    ("nix edit then build", [edit("nix/home/default.nix"), bash(BUILD)], "git commit -m x",
+    ("nix edit then build", [edit("nix/home/default.nix"), bash(BUILD)], "git push",
      "passthrough"),
-    ("nix edit, build ran first", [bash(BUILD), edit("nix/home/default.nix")], "git commit -m x",
+    ("nix edit, build ran first", [bash(BUILD), edit("nix/home/default.nix")], "git push",
      "deny"),
     ("nix edit, darwin-rebuild", [edit("nix/home/default.nix"),
                                   bash("sudo darwin-rebuild switch --flake ~/.dotfiles/nix#h")],
-     "git commit -m x", "passthrough"),
-    ("nix edit, no build", [edit("nix/home/default.nix")], "git commit -m x", "deny"),
+     "git push", "passthrough"),
+    ("nix edit, no build", [edit("nix/home/default.nix")], "git push", "deny"),
 
     # a hook with a sibling test needs the test too
     ("hook edit, verify only", [edit(HOOK_PATH), bash("./scripts/verify-claude-hook.sh " + HOOK_PATH)],
-     "git commit -m x", "deny"),
+     "git push", "deny"),
     ("hook edit, verify + test + build",
      [edit(HOOK_PATH), bash("./scripts/verify-claude-hook.sh " + HOOK_PATH),
       bash("python3 scripts/declarative-package-guard-test.py"), bash(BUILD)],
-     "git commit -m x", "passthrough"),
+     "git push", "passthrough"),
 
-    # not a commit, or nothing a rule covers
+    # commits are checkpoint gates, not verification gates
+    ("commit after hook edit", [edit(NEW_HOOK)], "git commit -m x", "passthrough"),
+    ("commit after nix edit", [edit("nix/home/default.nix")], "git commit -am x", "passthrough"),
+    ("wrapped commit", [edit(NEW_HOOK)],
+     "git -C /Users/ranolp/.dotfiles commit -m x", "passthrough"),
+    ("commit in a second segment", [edit(NEW_HOOK)],
+     "git add -A && git commit -m x", "passthrough"),
+
+    # a checkpoint commit does not reset the session-wide edit history
+    ("commit then unchecked push", [edit(NEW_HOOK), bash("git commit -m x")], "git push", "deny"),
+    ("commit then checked push",
+     [edit(NEW_HOOK), bash("git commit -m x"), bash(VERIFY), bash(BUILD)],
+     "git push", "passthrough"),
+
+    # not a push, or nothing a rule covers
     ("non-commit command", [edit(NEW_HOOK)], "git status", "passthrough"),
-    ("git add is not a commit", [edit(NEW_HOOK)], "git add -A", "passthrough"),
-    ("unrelated path", [edit("README.md")], "git commit -m x", "passthrough"),
-    ("empty transcript", [], "git commit -m x", "passthrough"),
+    ("git add is not a push", [edit(NEW_HOOK)], "git add -A", "passthrough"),
+    ("unrelated path", [edit("README.md")], "git push", "passthrough"),
+    ("empty transcript", [], "git push", "passthrough"),
 
-    # commit spellings the guard still has to recognize
-    ("git -C path commit", [edit(NEW_HOOK)], "git -C /Users/ranolp/.dotfiles commit -m x", "deny"),
-    ("git commit -am", [edit(NEW_HOOK)], "git commit -am x", "deny"),
-    ("commit in a second segment", [edit(NEW_HOOK)], "git add -A && git commit -m x", "deny"),
-    ("in-flight build satisfies", [edit("nix/home/default.nix")], BUILD + " && git commit -m x",
+    # push spellings the guard still has to recognize
+    ("git -C path push", [edit(NEW_HOOK)], "git -C /Users/ranolp/.dotfiles push", "deny"),
+    ("git push origin", [edit(NEW_HOOK)], "git push origin main", "deny"),
+    ("push in a second segment", [edit(NEW_HOOK)], "git status && git push", "deny"),
+    ("in-flight build satisfies", [edit("nix/home/default.nix")], BUILD + " && git push",
      "passthrough"),
 
     # fail open
-    ("unterminated quote", [edit(NEW_HOOK)], "git commit -m 'unclosed", "passthrough"),
-    ("commit word inside quotes", [edit(NEW_HOOK)], "echo 'git commit -m x'", "passthrough"),
+    ("unterminated quote", [edit(NEW_HOOK)], "git push 'unclosed", "passthrough"),
+    ("push word inside quotes", [edit(NEW_HOOK)], "echo 'git push'", "passthrough"),
     ("empty command", [edit(NEW_HOOK)], "", "passthrough"),
 ]
 
@@ -119,7 +133,7 @@ def main():
         print("%s  %-34s want=%-11s got=%s" % ("ok  " if ok else "FAIL", name, want, got))
 
     # A missing transcript file must never be treated as "nothing was checked".
-    got, _ = run([edit(NEW_HOOK)], "git commit -m x",
+    got, _ = run([edit(NEW_HOOK)], "git push",
                  transcript="/nonexistent/transcript-does-not-exist.jsonl")
     ok = got == "passthrough"
     failures += not ok
@@ -129,21 +143,21 @@ def main():
     # A truncated write mid-session leaves a half line; the good lines still count.
     got, _ = run(['{"type": "assistant", "message": {"content": [{"type": "tool_use"',
                   edit(NEW_HOOK), "not json at all", bash(VERIFY), bash(BUILD)],
-                 "git commit -m x")
+                 "git push")
     ok = got == "passthrough"
     failures += not ok
     print("%s  %-34s want=%-11s got=%s" % ("ok  " if ok else "FAIL", "malformed line among good",
                                            "passthrough", got))
 
     got, _ = run(['{"type": "assistant", "message": {"content": [{"type": "tool_use"',
-                  edit(NEW_HOOK)], "git commit -m x")
+                  edit(NEW_HOOK)], "git push")
     ok = got == "deny"
     failures += not ok
     print("%s  %-34s want=%-11s got=%s" % ("ok  " if ok else "FAIL", "malformed line, edit stands",
                                            "deny", got))
 
     # A deny is only useful if it names the command to run.
-    _, text = run([edit(NEW_HOOK)], "git commit -m x")
+    _, text = run([edit(NEW_HOOK)], "git push")
     for needle in ("./scripts/verify-claude-hook.sh", "nix/home/default.nix",
                    "settings.json", "b28bf99"):
         ok = needle in text

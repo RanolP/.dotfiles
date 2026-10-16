@@ -28,7 +28,7 @@ Format: `type(scope): subject`. Scope is optional but preferred when it sharpens
 
 ## Atomic commits
 
-One logical change per commit. The working tree should build/pass after each commit. If a change mixes concerns (a refactor plus a feature), split it into separate commits with explicit path staging.
+One logical change per commit. Each commit building and passing on its own is a property of the stack you publish: check it once, when the stack is rebuilt for review (below), and let local checkpoint commits land unchecked. If a change mixes concerns (a refactor plus a feature), split it into separate commits with explicit path staging.
 
 ## Staging discipline
 
@@ -80,7 +80,7 @@ git switch -c claude/<topic> origin/main   # fresh base, never local main
 #   git add <explicit paths>
 #   git commit
 git diff --exit-code claude/local-dev      # final tree matches, byte for byte
-git rebase --exec '<lint and typecheck>' origin/main   # every commit green on its own
+git rebase --exec '<lint and typecheck>' origin/main   # once, at publish: every commit green on its own
 ```
 
 - Split below the hunk. When one line carries two concerns, write that line's intermediate form in the first commit and its final form in the second.

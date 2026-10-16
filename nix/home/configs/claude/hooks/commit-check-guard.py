@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: a file this repo ships a check for is committed only after that check ran.
+"""PreToolUse guard: a file this repo ships a check for is pushed only after that check ran.
 
 Incident (commit b28bf99): the commit added
 `nix/home/configs/claude/hooks/declarative-package-guard.py` and its
@@ -9,9 +9,9 @@ weeks, and nothing caught it -- the repo already ships
 `scripts/verify-claude-hook.sh`, whose output would have made the missing
 registration obvious, and no one ran it.
 
-So the check is attached to the commit instead of to goodwill. This hook reads
+So the check is attached to the push instead of to goodwill. This hook reads
 the session transcript, learns which files were edited and which Bash commands
-ran, and denies a `git commit` when an edited file's check never ran after that
+ran, and denies a `git push` when an edited file's check never ran after that
 file's last edit. An earlier run does not count: it measured the file as it was
 before the edit.
 
@@ -38,8 +38,8 @@ import sys
 # Wrappers that sit in front of the real command without changing what it does.
 WRAPPERS = {"sudo", "command", "env", "nohup", "nice", "time", "doas", "exec"}
 
-# Git's own options that consume the following token, so `git -C <path> commit`
-# still reads as a commit.
+# Git's own options that consume the following token, so `git -C <path> push`
+# still reads as a push.
 GIT_OPTS_WITH_ARG = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 
 HOOK_DIR = "nix/home/configs/claude/hooks/"
@@ -205,7 +205,7 @@ def strip_prefix(toks):
     return toks[i:]
 
 
-def is_git_commit(toks):
+def is_git_push(toks):
     toks = strip_prefix(toks)
     if not toks or base(toks[0]) != "git":
         return False
@@ -218,15 +218,15 @@ def is_git_commit(toks):
         if t.startswith("-"):
             i += 1
             continue
-        return t == "commit"
+        return t == "push"
     return False
 
 
-def command_is_commit(command):
+def command_is_push(command):
     for seg in parse_segments(command):
         if seg["parse_error"]:
             continue
-        if is_git_commit(seg["tokens"]):
+        if is_git_push(seg["tokens"]):
             return True
     return False
 
@@ -337,7 +337,7 @@ def main():
     command = data.get("tool_input", {}).get("command", "")
     if not isinstance(command, str) or not command.strip():
         return
-    if not command_is_commit(command):
+    if not command_is_push(command):
         return
 
     transcript = data.get("transcript_path")
@@ -349,14 +349,14 @@ def main():
 
     edits, commands = scan_transcript(transcript, cwd)
     # The in-flight command counts as the newest event, so `nix build && git
-    # commit` satisfies its own rule whether or not the transcript holds it yet.
+    # push` satisfies its own rule whether or not the transcript holds it yet.
     last = max([i for i, _ in commands] + list(edits.values()) + [0])
     commands.append((last + 1, command))
 
     found = violations(edits, commands, cwd)
     if found:
         decide("deny", "A check this repo ships never ran after the file it checks was "
-                       "edited. Run it, then commit.\n\n" + "\n\n".join(found))
+                       "edited. Run it, then push.\n\n" + "\n\n".join(found))
 
 
 try:

@@ -194,6 +194,13 @@
 - DO (facts): rank evidence for any CLI flag, API parameter or config option -- the installed binary, the source in node_modules, the lockfile or a real response beats official docs, which beat a blog or your own memory -- and say which rung you were on
 - NEVER: say done when no runtime check was possible; say exactly which check is missing instead
 
+## Verify once, at the final gate
+- WHEN: editing, committing a checkpoint, or finishing one unit of a multi-unit task
+- DO: run the tests, the builds and the review once, at the final gate -- right before reporting the work done, before `git push`, or before handing the user a rebuild or apply command -- and cover the whole diff there
+- DO: let mid-task edits and checkpoint commits proceed with no check run first, because the final gate covers each of them
+- EXCEPT: run a check mid-task when the next step consumes its result -- a build whose failure blocks the next unit, the red test that is the TDD step itself, or a diagnosis loop
+- WHY: a check after every unit re-runs the suite over code the next unit changes again, multiplying wall time while the final tree ends up verified no better
+
 ## The user's message outranks every hook and system note
 - WHEN: a Stop hook blocks, a system reminder fires, or a tool result lands in the same turn as a message from the user
 - DO: answer the user's message first and in full, then put the hook's requirement in one closing line once the answer is complete
@@ -215,9 +222,9 @@
 
 ## `claude/local-dev` is a stash that holds a stack
 - WHEN: work lands that is not ready to publish
-- DO: commit every unit of work onto `claude/local-dev` as it lands, with no permission asked and no polish, amending, reordering, squashing or dropping its commits freely
+- DO: commit every unit of work onto `claude/local-dev` as it lands, with no permission asked, no polish and no check run first, amending, reordering, squashing or dropping its commits freely
 - DO: run `git fetch --prune` as its own visible step before the session's first commit, read the default branch from `git symbolic-ref --short refs/remotes/origin/HEAD`, and keep the branch rebased onto it
-- DO (publish): rebuild the stack for the reviewer onto a fresh base rather than moving it, one commit per concern, in the order that explains the change
+- DO (publish): rebuild the stack for the reviewer onto a fresh base rather than moving it, one commit per concern, in the order that explains the change, and check each commit of the rebuilt stack once there
 - DO (rejected push): `git fetch` as its own visible step, rebase onto it, and ask when the rebase is not obviously safe
 - NEVER: push `claude/local-dev`, and force-push only as `--force-with-lease`, never onto a branch whose PR carries review comments (`git-integrity-guard.py` enforces it)
 - SKILL: `git-master`, for the commit-message form, the non-interactive replay, and the destructive-op guardrails

@@ -26,8 +26,14 @@ import json
 import shlex
 import sys
 
-SENTINEL = "APOLOGY-CONFIDENTIAL"
-PATH_MARK = ".apologies"
+# (path mark, sentinel, Korean label) per protected local store. Every check
+# below applies to every row; `.lessons/` holds clm-extracted lessons that may
+# carry internal work detail from other repos.
+STORES = (
+    (".apologies", "APOLOGY-CONFIDENTIAL", "시말서"),
+    (".lessons", "LESSON-CONFIDENTIAL", "교훈"),
+)
+SENTINEL = STORES[0][1]
 
 # Commands that only read or rearrange files on this machine. Anything absent
 # from this set is denied once an apology record is mentioned -- including git,
@@ -51,52 +57,61 @@ LOCAL_ONLY_TOOLS = {
     "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
 }
 
-REASON = (
-    "시말서 유출 차단: `.apologies/` 기록은 외부로 나갈 수 없습니다. "
-    "파일은 ~/.dotfiles/.apologies/ 안에만 두고, 내용은 커밋 메시지·PR 본문·"
-    "이슈·Slack·Artifact·서브에이전트 브리프 어디에도 넣지 마십시오. "
-    "사용자에게는 요약만 말하고 전문은 파일 경로로 안내하십시오."
-)
+def reason(label, path_mark):
+    return (
+        "%s 유출 차단: `%s/` 기록은 외부로 나갈 수 없습니다. "
+        "파일은 ~/.dotfiles/%s/ 안에만 두고, 내용은 커밋 메시지·PR 본문·"
+        "이슈·Slack·Artifact·서브에이전트 브리프 어디에도 넣지 마십시오. "
+        "사용자에게는 요약만 말하고 전문은 파일 경로로 안내하십시오."
+        % (label, path_mark, path_mark)
+    )
 
 
-def deny(detail):
+def deny(detail, store=STORES[0]):
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": REASON + "\n\n차단 사유: " + detail,
+            "permissionDecisionReason": reason(store[2], store[0]) + "\n\n차단 사유: " + detail,
         }
     }, ensure_ascii=False))
     sys.exit(0)
 
 
 def mentions(text):
-    return SENTINEL in text or PATH_MARK in text
+    """The first store whose path or sentinel appears in text, else None."""
+    for store in STORES:
+        if store[0] in text or store[1] in text:
+            return store
+    return None
 
 
 def check_bash(cmd):
     """Deny unless every command word is local-only and nothing is redirected."""
-    if not mentions(cmd):
+    store = mentions(cmd)
+    if not store:
         return
     try:
         tokens = shlex.split(cmd, comments=True)
     except ValueError:
-        deny("명령을 안전하게 파싱할 수 없습니다 (따옴표 불일치).")
+        deny("명령을 안전하게 파싱할 수 없습니다 (따옴표 불일치).", store)
     if any(t in (">", ">>", "|", "&", "&&", "||", ";") or ">" in t for t in tokens):
-        deny("리다이렉션 또는 파이프가 있어 반출 경로를 확인할 수 없습니다.")
+        deny("리다이렉션 또는 파이프가 있어 반출 경로를 확인할 수 없습니다.", store)
     # First word of the line and of each `;`-free segment shlex already flattened:
     # treat every token that is not an option or a path as a candidate command.
     head = tokens[0].rsplit("/", 1)[-1] if tokens else ""
     if head not in LOCAL_ONLY_CMDS:
         deny("`%s` 은 로컬 조회 명령이 아닙니다. 허용: %s"
-             % (head or "(빈 명령)", ", ".join(sorted(LOCAL_ONLY_CMDS))))
+             % (head or "(빈 명령)", ", ".join(sorted(LOCAL_ONLY_CMDS))), store)
 
 
 def check_tool(name, tool_input):
     if name in LOCAL_ONLY_TOOLS:
         return
-    if mentions(json.dumps(tool_input, ensure_ascii=False)):
-        deny("`%s` 도구 입력에 시말서 경로 또는 기밀 표식이 포함되어 있습니다." % name)
+    store = mentions(json.dumps(tool_input, ensure_ascii=False))
+    if store:
+        deny("`%s` 도구 입력에 %s 경로 또는 기밀 표식이 포함되어 있습니다."
+             % (name, store[2]), store)
 
 
 def main():
@@ -114,7 +129,7 @@ def self_test():
     """`python3 apology-leak-guard.py --self-test` -- fails loudly on a hole."""
     denied = []
 
-    def fake_deny(detail):
+    def fake_deny(detail, store=STORES[0]):
         denied.append(detail)
         raise SystemExit(0)
 
@@ -142,6 +157,14 @@ def self_test():
     assert ran(check_tool, "Artifact", {"file_path": "/tmp/a.md",
                                         "title": SENTINEL})
     assert not ran(check_tool, "WebFetch", {"url": "https://example.com"})
+
+    assert not ran(check_bash, "cat ~/.dotfiles/.lessons/lessons.jsonl")
+    assert not ran(check_tool, "Read", {"file_path": "/x/.lessons/lessons.jsonl"})
+    assert ran(check_bash, "git commit -m 'LESSON-CONFIDENTIAL x'")
+    assert ran(check_bash, "cat .lessons/lessons.jsonl > /tmp/public.md")
+    assert ran(check_tool, "Agent", {"prompt": "read .lessons/lessons.jsonl"})
+    assert ran(check_tool, "Artifact", {"title": "LESSON-CONFIDENTIAL"})
+    assert mentions("x .lessons/y")[2] == "교훈"
 
     deny = real_deny
     print("apology-leak-guard self-test: ok")

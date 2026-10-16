@@ -9,6 +9,10 @@ local.nix
 # apology-leak-guard.py blocks the non-git channels this line cannot reach.
 .apologies/
 
+# clm lessons: local lessons extracted by clm; may contain internal work detail
+# from other repos. apology-leak-guard.py blocks the non-git channels.
+.lessons/
+
 # macOS metadata
 .DS_Store
 

@@ -39,7 +39,6 @@ export function parseTranscriptRows(text: string): AddressRow[] {
 
 /** When a message was sent, as the transcript's ISO time, or undefined when unknown. */
 export type SentAt = (m: SessionMessage) => string | undefined
-export const unknownSentAt: SentAt = () => undefined
 
 /**
  * Joins messages to transcript rows for their send time. SessionMessage carries
@@ -121,11 +120,18 @@ export async function transcriptPath(io: AddressRuntimeIo, session: string): Pro
 }
 
 export async function transcriptRows(io: AddressRuntimeIo): Promise<AddressRow[]> {
-  const session = await io.sessionId()
-  const path = await transcriptPath(io, session)
-  if (!path) return []
-  const source = await io.read(path)
-  return source === undefined ? [] : parseTranscriptRows(source)
+  let path: string | undefined
+  // A transcript past the engine's read cap never shrinks, so a throw here would stop every later fold.
+  try {
+    const session = await io.sessionId()
+    path = await transcriptPath(io, session)
+    if (!path) return []
+    const source = await io.read(path)
+    return source === undefined ? [] : parseTranscriptRows(source)
+  } catch (err) {
+    io.log(`clm: transcript rows unavailable${path ? ` for ${path}` : ''} (${String(err)})`, { to: 'debug' })
+    return []
+  }
 }
 
 export async function rememberTranscriptPath(io: AddressRuntimeIo, session: string, path: string): Promise<void> {

@@ -31,6 +31,20 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   expect(seen.engineCompactions).toBe(0)
 })
 
+// Regression caught: a transcript read over the engine's size cap aborted the resident ledger step and left the transcript unfolded.
+test('a transcript size-cap read error still folds and writes a ledger', OPTS, async ($, on) => {
+  const path = '/tmp/s1-transcript.jsonl'
+  const readError = new Error('refused: transcript exceeds the 50 MB read limit')
+  const seen = bottoms(on, { rows: ROWS, replies: [ledger('READ-CAP-FACT')] })
+  seen.store['transcript-path:s1'] = path
+  Object.defineProperty(seen.files, path, { enumerable: true, get: () => { throw readError } })
+  const result = compactedMessages(await $.session.compact(compactInput('manual', handled(ROWS))))
+  expect(result[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(storedLedger(seen)).toContain('READ-CAP-FACT')
+  // The engine rewrites a hook's thrown error, so the log is matched by path rather than by readError's text.
+  expect(seen.logs.some(line => line.includes(path) && line.includes('transcript rows unavailable'))).toBe(true)
+})
+
 // Regression caught: a second fold loses the first ledger (not fed back from the file) or stacks a second ledger row beside the first.
 test('the ledger round-trips through its file and survives a second fold', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('FIRST-FACT'), ledger('SECOND-FACT', '[]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }])] }

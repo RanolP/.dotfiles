@@ -70,6 +70,8 @@
           nix-homebrew.darwinModules.nix-homebrew
           home-manager.darwinModules.home-manager
           {
+            system.configurationRevision = self.rev or self.dirtyRev or null;
+
             nix-homebrew = {
               enable = true;
               enableRosetta = false;

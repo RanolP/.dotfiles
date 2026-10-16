@@ -171,6 +171,7 @@ path = [
     "nix/home/configs/claude/mods/dash/hooks/hooks.json",
     "nix/home/configs/claude/mods/dash/hooks/register.tsx",
     "nix/home/configs/claude/mods/dash/hooks/fleet.ts",
+    "nix/home/configs/claude/mods/dash/hooks/rebuild.ts",
     "nix/home/configs/claude/mods/dash/hooks/fleet.test.ts",
     "nix/home/configs/claude/mods/dash/hooks/dash.test.ts",
     "nix/home/configs/claude/mods/dash/types/index.d.ts",

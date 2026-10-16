@@ -2,8 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type {
   DashDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
-import type { TrackedAgent, UsageSnapshot } from '../types'
+import type { Behind, SystemGeneration, TrackedAgent, UsageSnapshot } from '../types'
 import { reconcileAgents, recordCompletion, recordMessage, recordSpawn, withoutStaleDone } from './fleet'
+import { behindFromCount, behindLabel, revisionOf, revisionRange } from './rebuild'
 
 type Elements = ReturnType<EngineInterface['ui']['resolve']>
 type ClmStatus = Awaited<ReturnType<EngineInterface['clm']['status']>>
@@ -11,6 +12,7 @@ type ClmStatus = Awaited<ReturnType<EngineInterface['clm']['status']>>
 const PANE = 'dash'
 const TITLE = 'Dash'
 const REFRESH_MS = 15_000
+const CURRENT_SYSTEM = '/run/current-system'
 const dashboard = atom({ plugin: 'dash', key: 'dashboard' } as const, {
   now: 0, usage: null, agents: [], clm: null,
 } satisfies DashDashboardState)
@@ -99,6 +101,60 @@ async function refreshUsage($: EngineInterface): Promise<void> {
   }
 }
 
+async function readGeneration($: EngineInterface, operation: string): Promise<SystemGeneration | undefined> {
+  try {
+    if (!(await $.fs.exists(CURRENT_SYSTEM))) return undefined
+    const storePath = (await $.fs.stat(CURRENT_SYSTEM, { resolve: true })).realPath
+    if (storePath === undefined) return undefined
+    const versionPath = `${storePath}/darwin-version.json`
+    const revision = await $.fs.read(versionPath).then(
+      text => revisionOf(String(text)),
+      (error: unknown) => log($, `${operation}: read ${versionPath}`, error).then(() => undefined),
+    )
+    return { storePath, ...(revision ? { revision } : {}) }
+  } catch (error) {
+    await log($, `${operation}: resolve ${CURRENT_SYSTEM}`, error)
+    return undefined
+  }
+}
+
+async function countBehind($: EngineInterface, baseline: SystemGeneration, latest: SystemGeneration): Promise<Behind | undefined> {
+  if (latest.storePath === baseline.storePath) return undefined
+  const range = revisionRange(baseline, latest)
+  if (range === undefined) return 'unknown'
+  try {
+    const home = await $.env.get('HOME')
+    if (!home) throw new Error('HOME is unset')
+    const { exitCode, stdout, stderr } = await $.process.run(['git', '-C', `${home}/.dotfiles`, 'rev-list', '--count', range])
+    if (exitCode !== 0) throw new Error(`exit ${exitCode}: ${stderr.trim()}`)
+    return behindFromCount(stdout)
+  } catch (error) {
+    await log($, `git rev-list --count ${range} (${baseline.storePath} -> ${latest.storePath})`, error)
+    return 'unknown'
+  }
+}
+
+async function recordBaseline($: EngineInterface): Promise<void> {
+  const state = await read($, dashboard).catch(
+    (error: unknown) => log($, 'read dashboard for system baseline', error).then(() => undefined),
+  )
+  if (state === undefined || state.generation !== undefined) return
+  const generation = await readGeneration($, 'system baseline')
+  if (generation) await change($, 'system baseline state update', current => ({ ...current, generation }))
+}
+
+async function refreshBehind($: EngineInterface): Promise<void> {
+  const state = await read($, dashboard).catch(
+    (error: unknown) => log($, 'read dashboard for rebuild drift', error).then(() => undefined),
+  )
+  const baseline = state?.generation
+  if (baseline === undefined) return
+  const latest = await readGeneration($, 'rebuild drift')
+  if (latest === undefined) return
+  const behind = await countBehind($, baseline, latest)
+  await change($, 'rebuild drift state update', ({ behind: _, ...current }) => ({ ...current, ...(behind === undefined ? {} : { behind }) }))
+}
+
 async function openDash($: EngineInterface, operation: string): Promise<void> {
   try {
     const opened = await $.ui.open({ id: PANE, title: TITLE })
@@ -119,6 +175,7 @@ function startTicker($: EngineInterface, isMainSession: boolean, timer?: Timer):
         }
         await refreshUsage($)
         await refreshClm($)
+        if (isMainSession) await refreshBehind($)
         if (isMainSession) await openDash($, 'ui.open dash during refresh')
       })().catch(error => log($, 'elapsed refresh', error))
     })
@@ -247,7 +304,7 @@ function clmHead(state: DashDashboardState, width: number): { text: string, dim:
   const { status } = state.clm
   const focus = status.focus ? `${status.focus.title}${status.focus.status === 'doing' ? '' : ` (${status.focus.status})`}` : 'no focus'
   const depth = status.focus && status.stackDepth > 1 ? ` · depth ${status.stackDepth}` : ''
-  return { text: clip(`▸ ${focus}${depth} · later ${status.later.length} · issues ${status.openIssues}`, width), dim: false, status }
+  return { text: clip(`▸ ${focus}${depth} · later ${status.later.length} · issues ${status.openIssues}${behindLabel(state.behind)}`, width), dim: false, status }
 }
 
 function workRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
@@ -286,6 +343,7 @@ export const register: Register = on => {
     await initialize($)
     await refreshClm($)
     isMainSession = !('agentId' in e)
+    if (isMainSession) await recordBaseline($)
     ticker = startTicker($, isMainSession, ticker)
     if (isMainSession) await openDash($, 'ui.open dash at session start')
     return started

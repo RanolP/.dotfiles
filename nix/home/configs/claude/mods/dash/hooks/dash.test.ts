@@ -353,3 +353,67 @@ test('the head line hides a doing focus status but shows any other', async ($, o
   const again = await mountPane($)
   expect(await again.find({ type: 'Text', text: '▸ dash 디자인 (uncertain) · later 0 · issues 0' })).toBeDefined()
 })
+
+const withSystem = (on: any, generation: { storePath: string, revision?: string }, count = '3\n') => {
+  const runs: string[][] = []
+  on('fs.exists', () => ({ value: true }))
+  on('fs.stat', () => ({ value: { kind: 'dir', size: 0, realPath: generation.storePath } }))
+  on('fs.read', () => ({ value: JSON.stringify(generation.revision ? { configurationRevision: generation.revision } : {}) }))
+  on('env.get', () => ({ value: '/home/me' }))
+  on('process.run', (_$: any, e: any) => { runs.push([...e.argv]); return { value: { exitCode: 0, stdout: count, stderr: '' } } })
+  return runs
+}
+
+// Regression: a session outliving a darwin-rebuild switch gave no sign its loaded config was stale.
+test('the head line shows behind N once the system path moves past the session baseline, counted between clean revisions', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => emptyStatus)
+  const generation = { storePath: '/nix/store/a-darwin-system', revision: 'aaa-dirty' }
+  const runs = withSystem(on, generation)
+  await start($)
+
+  await clock.advance(15_000)
+  const unchanged = await mountPane($)
+  expect(await unchanged.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0' })).toBeDefined()
+  expect(runs).toEqual([])
+  await unchanged.unmount()
+
+  Object.assign(generation, { storePath: '/nix/store/b-darwin-system', revision: 'bbb' })
+  await clock.advance(15_000)
+  const behind = await mountPane($)
+  expect(await behind.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · behind 3' })).toBeDefined()
+  expect(runs).toEqual([['git', '-C', '/home/me/.dotfiles', 'rev-list', '--count', 'aaa..bbb']])
+})
+
+// Regression: a missing revision or a zero count read as "not behind" although the system had changed.
+test('the head line shows behind ? when the system moved but the revisions cannot count it', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => emptyStatus)
+  const generation: { storePath: string, revision?: string } = { storePath: '/nix/store/a-darwin-system' }
+  withSystem(on, generation, '0\n')
+  await start($)
+
+  generation.storePath = '/nix/store/b-darwin-system'
+  await clock.advance(15_000)
+  const missing = await mountPane($)
+  expect(await missing.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · behind ?' })).toBeDefined()
+  await missing.unmount()
+})
+
+// Regression: a hot reload re-runs session.start, and re-taking the baseline there hid every rebuild made before the reload.
+test('a second session.start keeps the first baseline', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => emptyStatus)
+  const generation = { storePath: '/nix/store/a-darwin-system', revision: 'aaa' }
+  withSystem(on, generation)
+  await start($)
+
+  Object.assign(generation, { storePath: '/nix/store/b-darwin-system', revision: 'bbb' })
+  await start($)
+  await clock.advance(15_000)
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · behind 3' })).toBeDefined()
+})

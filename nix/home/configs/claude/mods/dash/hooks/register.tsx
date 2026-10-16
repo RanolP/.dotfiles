@@ -3,7 +3,7 @@ import type {
   DashDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
 import type { TrackedAgent, UsageSnapshot } from '../types'
-import { reconcileAgents, recordCompletion, recordMessage, recordSpawn } from './fleet'
+import { reconcileAgents, recordCompletion, recordMessage, recordSpawn, withoutStaleDone } from './fleet'
 
 type Elements = ReturnType<EngineInterface['ui']['resolve']>
 type ClmStatus = Awaited<ReturnType<EngineInterface['clm']['status']>>
@@ -253,8 +253,9 @@ function clmHead(state: DashDashboardState, width: number): { text: string, dim:
 function workRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   const head = clmHead(state, width)
   const titles = new Map((head.status?.agents ?? []).map(agent => [agent.agentId, agent.title]))
-  const paired = state.agents.filter(agent => titles.has(agent.id))
-  const agents = [...paired, ...state.agents.filter(agent => !titles.has(agent.id))]
+  const shown = withoutStaleDone(state.agents, 2)
+  const paired = shown.filter(agent => titles.has(agent.id))
+  const agents = [...paired, ...shown.filter(agent => !titles.has(agent.id))]
   const known = new Set(state.agents.map(agent => agent.id))
   const orphans = (head.status?.agents ?? []).filter(agent => !known.has(agent.agentId))
   const typeWidth = Math.max(0, ...agents.map(agent => typeLabel(agent.type).length))

@@ -63,3 +63,12 @@ export function recordCompletion(agents: TrackedAgent[], id: string, text: strin
     : { id, type: 'agent', status: 'done', startedAt: now, startEstimated: true, finishedAt: now, lastMessage: excerpt(text) }
   return [...agents.filter(agent => agent.id !== id), tracked].sort((a, b) => a.startedAt - b.startedAt)
 }
+
+export function withoutStaleDone(agents: TrackedAgent[], keep: number): TrackedAgent[] {
+  const stale = agents
+    .filter(agent => agent.status === 'done')
+    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
+    .slice(keep)
+  const hidden = new Set(stale.map(agent => agent.id))
+  return agents.filter(agent => !hidden.has(agent.id))
+}

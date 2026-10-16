@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 import type { AgentInfo } from 'claude-code'
-import { reconcileAgents, recordCompletion, recordMessage } from './fleet'
+import { reconcileAgents, recordCompletion, recordMessage, withoutStaleDone } from './fleet'
 
 // Regression: a stale listing requested before completion cannot undo the newer turn.complete event.
 test('reconcile keeps a completion newer than the agent.list request', () => {
@@ -32,4 +32,12 @@ test('reconcile finishes agents missing from the listing', () => {
 
   expect(merged[0]?.status).toBe('done')
   expect(merged[0]?.finishedAt).toBe(20_000)
+})
+
+// Regression: every finished agent of the session stayed in dash, pushing running ones out of view.
+test('only the two most recently finished agents survive alongside running ones', () => {
+  let agents = recordMessage([], 'running', 'Working', 1_000)
+  for (const [id, at] of [['old', 2_000], ['newest', 5_000], ['middle', 4_000]] as const) agents = recordCompletion(agents, id, 'done', at)
+
+  expect(withoutStaleDone(agents, 2).map(agent => agent.id).sort()).toEqual(['middle', 'newest', 'running'])
 })

@@ -453,6 +453,31 @@ test('parallel spawns keep separate child tasks and clear each root when its age
   expect(seen.store['agent-task-roots:s1']).not.toHaveProperty('worker-a')
 })
 
+// Regression caught: with no focus event, the session's one doing task did not count, and every spawn was denied.
+test('an empty focus with one doing root lets the main agent spawn', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Delegate a check.')], replies: [] })
+  panelHandlers(on, seen)
+  seedTracker(seen, [{ op: 'create', issue: 's1-root', title: 'main work', status: 'doing' }])
+  on('agent.spawn', () => ({ model: 'haiku', agentId: 'worker-a' }))
+  const spawned = await $.agent.spawn({ prompt: 'Check one.', description: 'first check' })
+  expect('deny' in spawned).toBe(false)
+  const events = parseLog(seen.files[TRACKER] ?? '')
+  expect(focusOf(events, 's1').stack).toEqual(['s1-root'])
+  expect(snapshot(events).find(issue => issue.title === 'first check')?.parent).toBe('s1-root')
+})
+
+// Regression caught: clm_task had no way to start the main focus, so a session whose classifier never ran stayed blocked.
+test('clm_task doing with a title starts the main focus when none exists', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  panelHandlers(on, seen)
+  const result = await $.tool.call({ tool: TASK_TOOL, title: 'Fix the focus bug', status: 'doing' } satisfies ToolCallInput)
+  expect(result.result).toContain('main focus')
+  const events = parseLog(seen.files[TRACKER] ?? '')
+  const top = snapshot(events).find(issue => issue.id === focusOf(events, 's1').stack.at(-1))
+  expect(top).toMatchObject({ title: 'Fix the focus bug', status: 'doing' })
+  expect(top?.parent).toBeUndefined()
+})
+
 // Regression caught: a worker's own Bash result was unavailable to clm_task, so verified work stayed uncertain.
 test('a spawned worker can finish a task with a quote from its Bash result', OPTS, async ($, on) => {
   const s: State = {

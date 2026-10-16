@@ -201,15 +201,43 @@ async function createChildTask(
   return taskId
 }
 
+// The prompt classifier is the usual writer of the main focus; when it never
+// lands one, the session's sole doing root (or the root clm_task marks doing)
+// becomes the top, so an empty focus cannot block clm_task and spawns forever.
+export async function settleMainFocus(
+  io: Pick<PanelIo, 'append'>, origin: Origin, events: readonly TrackerEvent[], roots: Readonly<Record<string, string>>, claim?: string,
+): Promise<FocusState> {
+  const focus = focusOf(events, origin.session)
+  if (focus.stack.length) return focus
+  const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
+  const isMainRoot = (issue: Issue | undefined): issue is Issue => issue !== undefined && !issue.parent && !Object.values(roots).includes(issue.id)
+  const claimed = claim === undefined ? undefined : issues.find(issue => issue.id === claim)
+  const doing = issues.filter(issue => issue.status === 'doing' && isMainRoot(issue))
+  const top = isMainRoot(claimed) && claimed.status !== 'dropped' ? claimed.id : doing.length === 1 ? doing[0]?.id : undefined
+  if (!top) return focus
+  const next = { stack: [top], pending: focus.pending.filter(id => id !== top) }
+  await io.append([{ op: 'focus', ...next, intent: claimed ? 'handoff' : 'continue' }], origin)
+  return next
+}
+
 export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: string): Promise<{ result: string } | { deny: string }> {
   const origin = await io.captureOrigin()
   const events = await io.readAll()
   const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
   const byId = new Map(issues.map(issue => [issue.id, issue]))
-  const focus = focusOf(events, origin.session)
   const roots = await assignedTaskRoots(io, origin.session)
+  const title = input.title?.trim()
+  if (!agentId && input.status === 'doing' && input.id === undefined && title && !focusOf(events, origin.session).stack.length) {
+    const note = input.note?.trim()
+    const created = await io.append([{ op: 'create', title, status: 'doing', ...(note ? { note } : {}) }], origin)
+    const rootId = created.find(event => event.op === 'create')?.issue
+    if (!rootId) return { result: 'clm_task: task creation did not return an issue id.' }
+    await settleMainFocus(io, origin, await io.readAll(), roots, rootId)
+    return { result: `clm_task: ${rootId} doing; it is now the main focus.` }
+  }
+  const focus = agentId ? focusOf(events, origin.session) : await settleMainFocus(io, origin, events, roots, input.status === 'doing' ? input.id : undefined)
   const ownRoot = agentId ? roots[agentId] : focus.stack.at(-1)
-  if (!ownRoot) return { result: agentId ? `clm_task: subagent ${agentId} has no task assigned by the harness.` : 'clm_task: the main agent has no focused task to own.' }
+  if (!ownRoot) return { result: agentId ? `clm_task: subagent ${agentId} has no task assigned by the harness.` : 'clm_task: the main agent has no focused task to own. Call clm_task with status doing and a title to start one.' }
   const ownRootOwner = taskOwner(ownRoot, focus.stack, roots, byId)
   if (ownRootOwner !== (agentId ?? 'main')) return { result: `clm_task: ${ownRoot} belongs to ${taskOwnerName(ownRootOwner)}.` }
   const target = input.id === undefined ? undefined : byId.get(input.id)
@@ -218,7 +246,6 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
     const owner = taskOwner(target.id, focus.stack, roots, byId)
     if (owner !== (agentId ?? 'main')) return { result: `clm_task: issue ${target.id} belongs to ${taskOwnerName(owner)}.` }
   }
-  const title = input.title?.trim()
   if (input.id === undefined && !title) return { result: 'clm_task: provide an issue id to update or a title to create a child task.' }
   const reopensDropped = target?.status === 'dropped' && input.status !== 'dropped'
   const directionProblem = input.status === 'dropped' || reopensDropped

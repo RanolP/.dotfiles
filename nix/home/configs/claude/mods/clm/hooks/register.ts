@@ -1,6 +1,6 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields } from './events'
-import { assignedTaskRoots, createAgentTaskRoot, removeAgentTaskRoot, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignedTaskRoots, createAgentTaskRoot, removeAgentTaskRoot, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, settleMainFocus, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
@@ -18,7 +18,7 @@ import {
 } from './ledger'
 import {
   archivedDone, injected, normalizeRemote, parseLog, parseOps, toEvents,
-  focusOf, isRecord, type Issue, type Origin, type Payload, type TrackerEvent,
+  isRecord, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
 import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
@@ -519,8 +519,8 @@ export const register: Register = (on, options) => {
     const io = panelIo($)
     const origin = await captureOrigin($)
     const roots = await assignedTaskRoots(io, origin.session)
-    const parent = e.parentAgentId === undefined ? focusOf(await readAll($), origin.session).stack.at(-1) : roots[e.parentAgentId]
-    if (!parent) return { deny: `clm: ${e.parentAgentId ? `agent ${e.parentAgentId}` : 'the main agent'} needs an assigned task before spawning a child agent.` }
+    const parent = e.parentAgentId === undefined ? (await settleMainFocus(io, origin, await readAll($), roots)).stack.at(-1) : roots[e.parentAgentId]
+    if (!parent) return { deny: `clm: ${e.parentAgentId ? `agent ${e.parentAgentId}` : 'the main agent'} needs an assigned task before spawning a child agent.${e.parentAgentId ? '' : ' Call clm_task with status doing and a title to start one.'}` }
     const spawned = await next(e)
     if (!spawned.agentId) return spawned
     await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)

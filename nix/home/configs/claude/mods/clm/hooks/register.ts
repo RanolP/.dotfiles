@@ -583,7 +583,7 @@ export const register: Register = (on, options) => {
         promptSeq = await stampHumanPrompt($)
         await reconcileReplay($)
       } catch (err) {
-        $.ui.log(`clm: prompt state update failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+        $.ui.log(`clm: prompt state update failed (${String(err).slice(0, 160)})`)
       }
     }
     const submitted = await next(e)

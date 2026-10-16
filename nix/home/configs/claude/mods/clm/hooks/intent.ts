@@ -501,9 +501,9 @@ export async function recordPromptIntent(io: PromptIntentIo, text: string, promp
         }
       })
     } catch (err) {
-      io.log(`clm intent: focus classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      io.log(`clm intent: focus classification failed (${String(err).slice(0, 160)})`)
     }
   } catch (err) {
-    io.log(`clm intent: classification failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    io.log(`clm intent: classification failed (${String(err).slice(0, 160)})`)
   }
 }

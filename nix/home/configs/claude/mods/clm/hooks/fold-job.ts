@@ -362,7 +362,7 @@ export async function maybeClear(io: FoldJobIo, opts: Opts): Promise<void> {
 
 async function applyFoldPlan(
   io: FoldJobIo, workingRows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, escaped: boolean,
-  startedAt: number, key: string,
+  startedAt: number, key: string, opts: Opts,
 ): Promise<SessionCompactResult> {
   const rewind = io.readRewindIo()
   const here = await io.captureOrigin()
@@ -375,7 +375,7 @@ async function applyFoldPlan(
   const liveFocus = focusOf(stateEvents, here.session)
   const ledger = await io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus })
   const fileLedger = composeLedger(use.fullNotes, currentView.issues)
-  const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger)
+  const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
   const messages = buildCleared({ head: workingRows.slice(0, first + 1), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow)
   const tokensBefore = sum(workingRows)
@@ -407,7 +407,7 @@ async function applyFoldPlan(
   return { messages, tokensBefore, tokensAfter }
 }
 
-async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, key: string): Promise<SessionCompactResult> {
+async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, key: string, opts: Opts): Promise<SessionCompactResult> {
   const rewind = io.readRewindIo()
   const here = await io.captureOrigin()
   const stateEvents = await io.readAll()
@@ -416,7 +416,7 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
   const liveFocus = focusOf(stateEvents, here.session)
   const ledger = await io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus })
   const fullLedger = composeLedger(use.fullNotes, view.issues)
-  const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger)
+  const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const row: SessionMessage = { role: 'user', text, toolUses: [] }
   const plan: ClearPlan = {
     head: rows.slice(0, first + 1).filter(message => !isLedgerRow(message)), dropped: [],
@@ -511,8 +511,8 @@ export async function handleSessionCompact(
   const swap = Promise.resolve().then(async (): Promise<SessionCompactResult> => {
     try {
       return use.rewindOnly
-        ? await applyRewindPlan(io, workingRows, meta, first, use, key)
-        : await applyFoldPlan(io, workingRows, meta, first, use, false, compactStartedAt, key)
+        ? await applyRewindPlan(io, workingRows, meta, first, use, key, opts)
+        : await applyFoldPlan(io, workingRows, meta, first, use, false, compactStartedAt, key, opts)
     } finally {
       foldJobs.set(key, { state: 'idle' })
       await io.storeDelete(await io.pendingKey(key))

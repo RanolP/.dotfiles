@@ -104,7 +104,7 @@ export async function compressTopics(
   const pointer = await io.ledgerPath()
   const renderRow = async (topicList: readonly TopicState[], ledgerNotes: string): Promise<SessionMessage> => {
     const text = await io.residentLedger(key, issues, state, events, { notes: ledgerNotes, topics: [...topicList], issues, state })
-    return { role: 'user', text: ledgerRowText(seq, kst(), pointer, text), toolUses: [] }
+    return { role: 'user', text: ledgerRowText(seq, kst(), pointer, text, opts.ledgerTarget), toolUses: [] }
   }
   const fixedRow = await renderRow([], fixedNotes)
   const fixedTokens = sum([fixedRow])
@@ -306,7 +306,7 @@ export async function fold(
     } else topics = previousTopics
   }
   const preview = await io.residentLedger(transcript ?? `${here.session}:main`, currentView.issues, focusState, currentEvents, { notes: fullNotes, topics, issues: currentView.issues, state: focusState })
-  const text = ledgerRowText(seq, kst(), await io.ledgerPath(), preview)
+  const text = ledgerRowText(seq, kst(), await io.ledgerPath(), preview, opts.ledgerTarget)
   const tokensBefore = messageTokens(rows, observed, meta)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
   const tailTokens = sum([{ role: 'user', text, toolUses: [] }, ...plan.tail.filter(message => !isLedgerRow(message) && !isSystemRow(message))])

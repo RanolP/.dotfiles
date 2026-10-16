@@ -12,7 +12,7 @@ import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM,
 import { recordPrompt, sentAtOf, stampMessages } from './address'
 import { renderRange } from './evidence'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint } from './fold'
+import { fingerprint, ledgerRowText } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 // Regression caught: a merge withdrawing an instruction the user never gave was counted as valid, or a reply without 사용자 지시 was refused.
@@ -403,4 +403,24 @@ test('renderTurns and renderRange stamp each message with its own KST send time 
     '[user 2026-10-15 14:03 KST] 내일 배포하자', '[assistant 2026-10-15 14:04 KST]', '[user] never seen by a hook',
   ])
   expect(renderRange(rows, 120_000, 0, sentAt).text).toContain('[user m1 2026-10-15 14:03 KST] 내일 배포하자')
+})
+
+// Regression caught: fixed ledger sections accumulated past ledgerTarget while older learned facts crowded out constraints.
+test('a row built from oversized sections no longer exceeds ledgerTarget', async () => {
+  const items = (label: string, count: number) => Array.from({ length: count }, (_, i) => `- ${label} ${i} ${'x'.repeat(300)}`)
+  const section = (name: string, lines: string[]) => `## ${name}\n${lines.join('\n')}`
+  const ledger = [
+    section('where we are', ['- focused task @aabbccdd', ...items('old topic', 12), 'Stack size', '2', 'Pending count', '0']),
+    section('what to do', items('child task', 6)),
+    section('what to request', items('open request', 5)),
+    section('constraints & preferences', ['- keep the migration constraint']),
+    section('uncertain', items('uncertain issue', 5)),
+    section('learned', items('old learned', 25)),
+    section('owned resources', items('owned resource', 8)),
+  ].join('\n\n')
+  const row = ledgerRowText(9, '2026-10-16 09:00 KST', '/ledger.md', ledger, 400)
+  expect(Math.ceil(row.length / 4)).toBeLessThanOrEqual(400)
+  expect(row).toContain('keep the migration constraint')
+  expect(row).not.toContain('old learned 0')
+  expect(row).not.toContain('old learned 1')
 })

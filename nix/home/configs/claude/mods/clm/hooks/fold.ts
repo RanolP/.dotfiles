@@ -156,5 +156,56 @@ export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, le
 }
 
 // clm-prompt
-export const ledgerRowText = (seq: number, at: string, _path: string, ledger: string) =>
-	`[clm ledger #${seq} · ${at}]\n\n${ledger}\n\nPR, branch, deploy and ticket states may have moved since: re-query one before acting on it.`
+const LEDGER_LINE_LIMIT = 240
+const LEDGER_NONE = '- (none yet)'
+const LEDGER_MORE = '- …+'
+const clipLedgerLine = (line: string) => {
+  const chars = [...line.replace(/\s+/g, ' ').trim()]
+  return chars.length > LEDGER_LINE_LIMIT ? `${chars.slice(0, LEDGER_LINE_LIMIT - 1).join('')}…` : chars.join('')
+}
+type LedgerSection = { name: string; lines: string[]; dropped: number }
+const ledgerSections = (ledger: string): LedgerSection[] => ledger.split(/\n\n(?=## )/).map(part => {
+  const [heading, ...lines] = part.split('\n')
+  return { name: heading?.startsWith('## ') ? heading.slice(3) : '', lines: lines.map(clipLedgerLine), dropped: 0 }
+})
+const renderLedgerSections = (sections: readonly LedgerSection[]) => sections.map(section => {
+  const lines = section.lines.filter(line => line !== LEDGER_NONE)
+  if (section.name === 'where we are' && section.dropped) {
+    const metadata = lines.findIndex(line => line === 'Stack size' || line === 'Pending count')
+    const before = metadata < 0 ? lines : lines.slice(0, metadata)
+    const after = metadata < 0 ? [] : lines.slice(metadata)
+    before.push(`${LEDGER_MORE}${section.dropped} older, see clm_recall`)
+    return `## ${section.name}\n${[...before, ...after].join('\n')}`
+  }
+  if (section.dropped) lines.push(`${LEDGER_MORE}${section.dropped} older, see clm_recall`)
+  return `## ${section.name}\n${lines.length ? lines.join('\n') : LEDGER_NONE}`
+}).join('\n\n')
+const dropOldestLedgerItem = (section: LedgerSection | undefined) => {
+  if (!section) return false
+  let index = -1
+  if (section.name === 'where we are') {
+    const metadata = section.lines.findIndex(line => line === 'Stack size' || line === 'Pending count')
+    const end = metadata < 0 ? section.lines.length : metadata
+    for (let i = 1; i < end; i++) if (section.lines[i] !== LEDGER_NONE) { index = i; break }
+  } else index = section.lines.findIndex(line => line !== LEDGER_NONE)
+  if (index < 0) return false
+  section.lines.splice(index, 1)
+  section.dropped++
+  return true
+}
+
+export const ledgerRowText = (seq: number, at: string, _path: string, ledger: string, maxTokens: number) => {
+  const header = `[clm ledger #${seq} · ${at}]\n\n`
+  const footer = '\n\nPR, branch, deploy and ticket states may have moved since: re-query one before acting on it.'
+  const sections = ledgerSections(ledger)
+  const render = () => `${header}${renderLedgerSections(sections)}${footer}`
+  const fits = () => Math.ceil(render().length / 4) <= maxTokens
+  if (fits()) return render()
+  const byName = (name: string) => sections.find(section => section.name === name)
+  const trimOrder = ['learned', 'where we are', 'owned resources', 'uncertain', 'what to do', 'what to request', 'constraints & preferences']
+  while (!fits()) {
+    const trimmed = trimOrder.some(name => dropOldestLedgerItem(byName(name)))
+    if (!trimmed) break
+  }
+  return render()
+}

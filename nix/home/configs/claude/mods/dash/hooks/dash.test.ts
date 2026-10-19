@@ -354,66 +354,89 @@ test('the head line hides a doing focus status but shows any other', async ($, o
   expect(await again.find({ type: 'Text', text: '▸ dash 디자인 (uncertain) · later 0 · issues 0' })).toBeDefined()
 })
 
-const withSystem = (on: any, generation: { storePath: string, revision?: string }, count = '3\n') => {
+const BASELINE = '29096c9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+const withDotfiles = (on: any, answer: { head?: string, count?: { exitCode: number, stdout: string, stderr: string } } = {}) => {
   const runs: string[][] = []
-  on('fs.exists', () => ({ value: true }))
-  on('fs.stat', () => ({ value: { kind: 'dir', size: 0, realPath: generation.storePath } }))
-  on('fs.read', () => ({ value: JSON.stringify(generation.revision ? { configurationRevision: generation.revision } : {}) }))
+  const logs: string[] = []
+  let head = answer.head ?? BASELINE
+  let count = answer.count ?? { exitCode: 0, stdout: '3\n', stderr: '' }
   on('env.get', () => ({ value: '/home/me' }))
-  on('process.run', (_$: any, e: any) => { runs.push([...e.argv]); return { value: { exitCode: 0, stdout: count, stderr: '' } } })
-  return runs
+  on('ui.log', (_$: any, e: any) => { logs.push(e.text); return { value: undefined } })
+  on('process.run', (_$: any, e: any) => {
+    runs.push([...e.argv])
+    if (e.argv.includes('rev-parse')) return { value: { exitCode: 0, stdout: `${head}\n`, stderr: '' } }
+    return { value: count }
+  })
+  return {
+    runs, logs,
+    setHead: (next: string) => { head = next },
+    setCount: (next: typeof count) => { count = next },
+  }
 }
 
-// Regression: a session outliving a darwin-rebuild switch gave no sign its loaded config was stale.
-test('the head line shows behind N once the system path moves past the session baseline, counted between clean revisions', async ($, on) => {
+const settle = async (find: () => Promise<unknown>) => {
+  for (let tries = 0; tries < 50 && !(await find()); tries++) await Promise.resolve()
+  return find()
+}
+
+// Regression: the dotfiles version never showed, so a stale session could not be told apart from a fresh one.
+test('the head line shows the start-time dotfiles HEAD and no behind part until refresh is pressed, even across ticks', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
   withClm(on, async () => emptyStatus)
-  const generation = { storePath: '/nix/store/a-darwin-system', revision: 'aaa-dirty' }
-  const runs = withSystem(on, generation)
+  const git = withDotfiles(on)
   await start($)
 
   await clock.advance(15_000)
-  const unchanged = await mountPane($)
-  expect(await unchanged.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0' })).toBeDefined()
-  expect(runs).toEqual([])
-  await unchanged.unmount()
-
-  Object.assign(generation, { storePath: '/nix/store/b-darwin-system', revision: 'bbb' })
-  await clock.advance(15_000)
-  const behind = await mountPane($)
-  expect(await behind.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · behind 3' })).toBeDefined()
-  expect(runs).toEqual([['git', '-C', '/home/me/.dotfiles', 'rev-list', '--count', 'aaa..bbb']])
+  const ui = await mountPane($, 80)
+  expect(await ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9' })).toBeDefined()
+  expect(await ui.find({ type: 'Button', key: 'refresh' })).toBeDefined()
+  expect(git.runs).toEqual([['git', '-C', '/home/me/.dotfiles', 'rev-parse', 'HEAD']])
 })
 
-// Regression: a missing revision or a zero count read as "not behind" although the system had changed.
-test('the head line shows behind ? when the system moved but the revisions cannot count it', async ($, on) => {
-  const clock = mock.clock(on, { now: 1_000 })
+// Regression: pressing refresh did not count commits made since session start, or hid a zero count.
+test('pressing refresh counts commits since the baseline and shows behind N, including 0', async ($, on) => {
+  mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
   withClm(on, async () => emptyStatus)
-  const generation: { storePath: string, revision?: string } = { storePath: '/nix/store/a-darwin-system' }
-  withSystem(on, generation, '0\n')
+  const git = withDotfiles(on)
   await start($)
 
-  generation.storePath = '/nix/store/b-darwin-system'
-  await clock.advance(15_000)
-  const missing = await mountPane($)
-  expect(await missing.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · behind ?' })).toBeDefined()
-  await missing.unmount()
+  const ui = await mountPane($, 80)
+  await ui.press({ key: 'refresh' })
+  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind 3' }))).toBeDefined()
+  expect(git.runs.at(-1)).toEqual(['git', '-C', '/home/me/.dotfiles', 'rev-list', '--count', `${BASELINE}..HEAD`])
+
+  git.setCount({ exitCode: 0, stdout: '0\n', stderr: '' })
+  await ui.press({ key: 'refresh' })
+  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind 0' }))).toBeDefined()
 })
 
-// Regression: a hot reload re-runs session.start, and re-taking the baseline there hid every rebuild made before the reload.
+// Regression: a failed count read as "not behind", or failed without a log naming the command, exit code and stderr.
+test('a failed refresh shows behind ? and logs the command, exit code and stderr', async ($, on) => {
+  mock.clock(on, { now: 1_000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => emptyStatus)
+  const git = withDotfiles(on, { count: { exitCode: 128, stdout: '', stderr: 'fatal: bad revision\n' } })
+  await start($)
+
+  const ui = await mountPane($, 80)
+  await ui.press({ key: 'refresh' })
+  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind ?' }))).toBeDefined()
+  expect(git.logs).toContain(`[dash] git -C /home/me/.dotfiles rev-list --count ${BASELINE}..HEAD: exit 128: fatal: bad revision`)
+})
+
+// Regression: a hot reload re-runs session.start, and re-taking the baseline there hid every commit made before the reload.
 test('a second session.start keeps the first baseline', async ($, on) => {
-  const clock = mock.clock(on, { now: 1_000 })
+  mock.clock(on, { now: 1_000 })
   on('session.start', () => ({ cwd: '/work' }))
   withClm(on, async () => emptyStatus)
-  const generation = { storePath: '/nix/store/a-darwin-system', revision: 'aaa' }
-  withSystem(on, generation)
+  const git = withDotfiles(on)
   await start($)
 
-  Object.assign(generation, { storePath: '/nix/store/b-darwin-system', revision: 'bbb' })
+  git.setHead('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
   await start($)
-  await clock.advance(15_000)
-  const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · behind 3' })).toBeDefined()
+  const ui = await mountPane($, 80)
+  expect(await ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9' })).toBeDefined()
 })

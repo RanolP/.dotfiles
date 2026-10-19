@@ -412,7 +412,7 @@ export async function resolveConfirmAnswer(io: PromptIntentIo, origin: Origin, r
     const issues = snapshot(await io.readAll()).filter(issue => issue.origin.session === origin.session)
     const question = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX))
     if (!question) return
-    const items = askedItems(question)
+    const items = askedItems(question).filter(item => !item.denied)
     const askedInReply = lastAssistantReply.includes(question.id) || items.some(item => !item.opaque && lastAssistantReply.includes(item.title))
     const answer = confirmAnswer(reply, items, askedInReply)
     if (!answer) return

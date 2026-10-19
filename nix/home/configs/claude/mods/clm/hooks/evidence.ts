@@ -185,8 +185,8 @@ const CONFIRM_TITLE_MAX = 200
 /** Prefix of the note holding a confirm question's items as JSON; the ledger line hides it. */
 export const CONFIRM_ITEMS = '확인 대기 항목 '
 
-/** `denied` marks an item the user said is not finished: kept in the stored list so no later fold asks it again. */
-export type ConfirmItem = { id?: string; title: string; opaque?: true; denied?: true }
+/** `denied` marks an item the user said, at `at`, is not finished: kept in the stored list so a later fold asks it again only once its issue moves. */
+export type ConfirmItem = { id?: string; title: string; opaque?: true; denied?: true; at?: string }
 const confirmText = (item: ConfirmItem) => item.opaque ? item.title : `${item.id ? `${item.id} ` : ''}"${item.title}"`
 
 export const storedItems = (note: string): ConfirmItem[] | undefined => {
@@ -230,9 +230,10 @@ function confirmTitle(items: readonly ConfirmItem[]): string {
 // duplicated while it stays open; the user's answer then lands the dones
 // through a later fold's user-quoted ops. The items live in a note rather
 // than the title, because the title is clipped for display and cannot be
-// read back. `denied` titles join the question's stored denials, which every
-// confirm question of the session, open or closed, keeps out of later asks.
-export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>, denied: ReadonlySet<string> = new Set()): Payload[] {
+// read back. `denied` titles are the items the user just said are not
+// finished; they join the stored denials of every confirm question of the
+// session, open or closed.
+export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>, denied: ReadonlySet<string> = new Set(), now = new Date().toISOString()): Payload[] {
   type Item = ConfirmItem
   const statusAfter = new Map(issues.map(issue => [issue.id, issue.status]))
   for (const o of landed) if (o.op === 'status') statusAfter.set(o.issue, o.status)
@@ -243,8 +244,16 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
     ...issues.filter(issue => closed(statusAfter.get(issue.id))).map(issue => issue.title.trim()),
   ])
   const questions = issues.filter(issue => issue.title.startsWith(CONFIRM_PREFIX))
-  const deniedTitles = new Set([...denied, ...questions.flatMap(q => askedItems(q).filter(item => item.denied).map(item => item.title))])
-  const stillOpen = (item: Item) => !deniedTitles.has(item.title) && (item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id))))
+  // A denial answers the claim it was asked about: keyed by issue id (by title for an item without one), and lifted once that issue has any tracker event after it.
+  const keyOf = (item: Item) => item.id ?? `"${item.title}"`
+  const deniedAt = new Map<string, string>()
+  for (const item of questions.flatMap(askedItems)) if (item.denied) deniedAt.set(keyOf(item), [deniedAt.get(keyOf(item)) ?? '', item.at ?? ''].sort().at(-1) ?? '')
+  const issueOf = (item: Item) => item.id ? issues.find(issue => issue.id === item.id) : issues.find(issue => issue.title.trim() === item.title && !issue.title.startsWith(CONFIRM_PREFIX))
+  const stillDenied = (item: Item) => {
+    const at = deniedAt.get(keyOf(item))
+    return at !== undefined && !((issueOf(item)?.updated ?? '') > at)
+  }
+  const stillOpen = (item: Item) => !denied.has(item.title) && !stillDenied(item) && (item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id))))
   const title = (id: string) => issues.find(issue => issue.id === id)?.title.trim() ?? ''
   // A done on a dropped or finished issue is a re-open the user's own words decide, not a completion to confirm.
   const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && !closed(issue.status))
@@ -254,8 +263,11 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
   const open = questions.find(issue => issue.status === 'question' && statusAfter.get(issue.id) === 'question')
   const asked = open ? askedItems(open) : []
   const items: Item[] = []
-  for (const item of [...asked.filter(stillOpen), ...claims]) if (!items.some(seen => seen.title === item.title)) items.push(item)
-  const denials = asked.filter(item => !item.opaque && (item.denied || denied.has(item.title))).map((item): Item => ({ ...item, denied: true }))
+  for (const item of [...asked.filter(item => !item.denied && stillOpen(item)), ...claims]) if (!items.some(seen => seen.title === item.title)) items.push(item)
+  const denials = [
+    ...asked.filter(item => item.denied && !items.some(seen => keyOf(seen) === keyOf(item))),
+    ...asked.filter(item => !item.denied && !item.opaque && denied.has(item.title)).map((item): Item => ({ ...item, denied: true, at: now })),
+  ]
   const stored = [...items, ...denials]
   const note = CONFIRM_ITEMS + JSON.stringify(stored)
   if (!open) return items.length ? [{ op: 'create', title: confirmTitle(items), status: 'question', note }] : []

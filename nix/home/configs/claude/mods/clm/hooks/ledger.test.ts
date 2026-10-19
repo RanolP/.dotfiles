@@ -256,6 +256,16 @@ test('a denied confirm item is not asked again after its question closes', () =>
   expect(confirmQuestion([{ op: 'create', title: 'tag the release', status: 'done' }], [], [closed], new Set())).toEqual([])
 })
 
+// Regression caught: a denial held forever by title, so a done claimed again after work resumed on the issue was never asked and the issue could close only through clm_task.
+test('a done claimed again after the denied issue moved is asked again', () => {
+  const closed = { ...confirmIssue('s1-q', `${CONFIRM_PREFIX}s1-a "push the tag"`, 'done'), notes: [`${CONFIRM_ITEMS}[{"id":"s1-a","title":"push the tag","denied":true,"at":"2026-10-06T00:00:01.000Z"}]`] }
+  const claim: Payload = { op: 'status', issue: 's1-a', status: 'done' }
+  const issue = (updated: string) => ({ ...confirmIssue('s1-a', 'push the tag', 'doing'), updated })
+  expect(confirmQuestion([claim], [], [closed, issue('2026-10-06T00:00:00.000Z')], new Set())).toEqual([])
+  const [made] = confirmQuestion([claim], [], [closed, issue('2026-10-06T00:00:02.000Z')], new Set())
+  expect(made?.op === 'create' && made.title).toBe(`${CONFIRM_PREFIX}s1-a "push the tag"`)
+})
+
 // Regression caught: a new merge kept sending already-small old topics back to the model.
 test('age decay leaves a floor-sized old topic untouched on the next merge', async () => {
   const topics = [

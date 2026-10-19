@@ -8,10 +8,10 @@ import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, fallbackLedger, instructionValues, issueList, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
-import { CONFIRM_ITEMS, CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
-import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
+import { askedItems, CONFIRM_ITEMS, CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
+import { describe, focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint, ledgerRowText } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
@@ -148,6 +148,27 @@ test('a fold that closes the confirm question and adds a claim asks in a new que
   const issues = [confirmIssue('s1-q', `${CONFIRM_PREFIX}"tag the release"`, 'question'), confirmIssue('s1-a', 'push the tag', 'todo')]
   const out = confirmQuestion([{ op: 'status', issue: 's1-a', status: 'done' }], [{ op: 'status', issue: 's1-q', status: 'done' }], issues, new Set())
   expect(out).toEqual([{ op: 'create', title: `${CONFIRM_PREFIX}s1-a "push the tag"`, status: 'question', note: `${CONFIRM_ITEMS}[{"id":"s1-a","title":"push the tag"}]` }])
+})
+
+// Regression caught: a malformed note carrying the item prefix sent the re-read to the clipped title, losing the items behind "외 N건" and keeping that tail as an item.
+test('a malformed confirm note falls back to the last stored list, and the title tail is not an item', () => {
+  const claims: Payload[] = ['one', 'two', 'three', 'four', 'five', 'six'].map(t => ({ op: 'create', title: `${t} ${'z'.repeat(25)}`, status: 'done' }))
+  const [made] = confirmQuestion(claims, [], [], new Set())
+  if (made?.op !== 'create') throw new Error('expected a create')
+  expect(made.title).toMatch(/외 \d+건$/)
+  const q = { ...confirmIssue('s1-q', made.title, 'question'), notes: [made.note ?? '', `${CONFIRM_ITEMS}2건 남음`] }
+  expect(askedItems(q).map(i => i.title)).toEqual(claims.map(c => c.op === 'create' ? c.title : ''))
+  expect(askedItems({ ...q, notes: [] }).some(i => /외 \d+건/.test(i.title))).toBe(false)
+})
+
+// Regression caught: the confirm question's stored JSON item list leaked into the ledger issue list, the tracker log and the resident ledger.
+test('the confirm item note never shows where an issue note is shown', () => {
+  const [made] = confirmQuestion([{ op: 'create', title: 'tag the release', status: 'done' }], [], [], new Set())
+  if (made?.op !== 'create') throw new Error('expected a create')
+  const q = { ...confirmIssue('s1-q', made.title, 'question'), notes: [made.note ?? ''] }
+  const event = toEvents([{ op: 'note', issue: 's1-q', text: made.note ?? '' }], { session: 's1', repo: 'r', cwd: '/' }, 0, '')
+  const shown = [issueList([q]), describe(event, [q]).join('\n'), residentLedgerText(q, undefined, 1, 0, [], new Set(), { children: [{ ...q, parent: 's1-q' }] })]
+  for (const text of shown) expect(text).not.toContain(CONFIRM_ITEMS)
 })
 
 // Regression caught: a question whose title was clipped, or whose item held the ` · ` separator, lost items on the next fold's re-read and closed unanswered.

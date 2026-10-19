@@ -3,7 +3,7 @@ import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { boardHtml } from './board'
 import { checkEvidence, describeOp, renderRange, type Evidence, type Source, type SourceKind } from './evidence'
 import { compose } from './intent'
-import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
+import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, shownNote, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { FocusState } from './tracker'
 
 export const TASK_TOOL = 'mcp__clm__clm_task'
@@ -49,7 +49,7 @@ const taskStatus: Record<string, Issue['status'] | undefined> = {
   pending: 'todo', in_progress: 'doing', completed: 'done', deleted: 'dropped',
 }
 const panelSubject = (issue: Issue) => `${issue.status === 'question' ? '질문: ' : ''}${issue.title}${issue.progress ? ` (${issue.progress.done}/${issue.progress.total})` : ''}`
-const panelDescription = (issue: Issue) => issue.notes.at(-1) ?? issue.title
+const panelDescription = (issue: Issue) => shownNote(issue) ?? issue.title
 const agentTaskRootsKey = (session: string) => `agent-task-roots:${session}`
 const taskStatuses = new Set(['doing', 'done', 'dropped'])
 export function isClmTaskInput(value: unknown): value is ClmTaskInput {

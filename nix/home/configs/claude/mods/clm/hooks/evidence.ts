@@ -188,16 +188,24 @@ export const CONFIRM_ITEMS = '확인 대기 항목 '
 type ConfirmItem = { id?: string; title: string; opaque?: true }
 const confirmText = (item: ConfirmItem) => item.opaque ? item.title : `${item.id ? `${item.id} ` : ''}"${item.title}"`
 
-/** The asked items from the question's last CONFIRM_ITEMS note; a legacy question without one is read from its title, an unparseable segment kept as an opaque item that never resolves. */
-function askedItems(question: Issue): ConfirmItem[] {
-  const note = question.notes.findLast(n => n.startsWith(CONFIRM_ITEMS))
-  if (note !== undefined) {
-    try {
-      const items: unknown = JSON.parse(note.slice(CONFIRM_ITEMS.length))
-      if (Array.isArray(items)) return items.filter((i): i is ConfirmItem => typeof i?.title === 'string')
-    } catch {}
+export const storedItems = (note: string): ConfirmItem[] | undefined => {
+  if (!note.startsWith(CONFIRM_ITEMS)) return undefined
+  try {
+    const items: unknown = JSON.parse(note.slice(CONFIRM_ITEMS.length))
+    return Array.isArray(items) ? items.filter((i): i is ConfirmItem => typeof i?.title === 'string') : undefined
+  } catch { return undefined }
+}
+
+/** The asked items from the question's newest note that parses as a stored list (a hand-edited or model-written note with the prefix is skipped); a legacy question without one is read from its title, an unparseable segment kept as an opaque item that never resolves. */
+export function askedItems(question: Issue): ConfirmItem[] {
+  for (const note of [...question.notes].reverse()) {
+    const items = storedItems(note)
+    if (items) return items
   }
-  return question.title.slice(CONFIRM_PREFIX.length).split(CONFIRM_SEP).filter(Boolean).map((text): ConfirmItem => {
+  const segments = question.title.slice(CONFIRM_PREFIX.length).split(CONFIRM_SEP).filter(Boolean)
+  // The rendered "외 N건" tail counts items the title could not hold; it is not an item itself.
+  if (/^외 \d+건$/.test(segments.at(-1) ?? '')) segments.pop()
+  return segments.map((text): ConfirmItem => {
     const match = /^(?:(\S+) )?"(.*)"$/.exec(text)
     return match ? { ...(match[1] ? { id: match[1] } : {}), title: match[2] ?? '' } : { title: text, opaque: true }
   })

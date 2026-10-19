@@ -3,7 +3,7 @@ import type { SessionMessage } from 'claude-code'
 import type { SentAt } from './address'
 import { readEvidence, sentStamp, type Evidence } from './evidence'
 import { isUserTyped, stripReminders } from './fold'
-import { isTrackerSection, parseOps, sectionLines, type Issue, type Payload } from './tracker'
+import { isTrackerSection, parseOps, sectionLines, shownNote, type Issue, type Payload } from './tracker'
 
 export const SECTIONS = ['목표', '사용자 지시', '한 일', '할 일', '미결 질문', '핵심 사실·경로'] as const
 export const EMPTY_LEDGER = SECTIONS.map(s => `## ${s}\n- (none yet)`).join('\n\n')
@@ -428,4 +428,4 @@ export function parseReview(reply: string): Verdict[] | string {
 }
 
 export const issueList = (issues: readonly Issue[]) =>
-  issues.length ? issues.map(i => `${i.id} | ${i.status} | ${i.title}${i.notes.length ? ` — ${i.notes.at(-1)}` : ''}`).join('\n') : '(none)'
+  issues.length ? issues.map(i => `${i.id} | ${i.status} | ${i.title}${shownNote(i) ? ` — ${shownNote(i)}` : ''}`).join('\n') : '(none)'

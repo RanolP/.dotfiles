@@ -1,4 +1,4 @@
-import { isOpen, isRecord, type Issue, type TrackerEvent } from './tracker'
+import { isOpen, isRecord, shownNote, type Issue, type TrackerEvent } from './tracker'
 import {
   EMPTY_LEDGER, constraintFactLines, instructionKey, instructionValues, learnedFactLines, notesOf, withdrawnInstructionKeys,
   WITHDRAWN_PREFIX, type Topic,
@@ -121,7 +121,7 @@ export function residentLedgerText(
   instructions: readonly InstructionIndex[], ancestorIds: ReadonlySet<string>, sections: ResidentLedgerSections = {},
 ): string {
   const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim()
-  const lastNote = top?.notes.at(-1)
+  const lastNote = top && shownNote(top)
   const focus = top
     ? `- ${oneLine(top.title)}${lastNote ? ` — ${oneLine(lastNote)}` : ''} ${topAddress ?? '@unknown'}`
     : '- (none)'
@@ -130,14 +130,14 @@ export function residentLedgerText(
   const where = [focus, ...(sections.where ?? []).map(line => `- ${oneLine(line)}`), 'Stack size', String(stackSize), 'Pending count', String(pendingCount)]
   const tasks = (sections.children ?? []).filter(issue => issue.parent === top?.id && isOpen(issue))
     .map(issue => {
-      const note = issue.notes.at(-1)
+      const note = shownNote(issue)
       return `- ${oneLine(issue.title)}${note ? ` — ${oneLine(note)}` : ''} [${issue.id}]`
     })
   const requests = (sections.requests ?? []).filter(request => request.status === 'open')
     .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
   const constraints = [...index, ...(sections.constraints ?? []).map(oneLine)]
   const uncertain = (sections.uncertain ?? []).filter(issue => issue.status === 'uncertain')
-    .map(issue => `- ${oneLine(issue.title)} — settling check: ${oneLine(issue.notes.at(-1) ?? 'verify the claim')} [${issue.id}]`)
+    .map(issue => `- ${oneLine(issue.title)} — settling check: ${oneLine(shownNote(issue) ?? 'verify the claim')} [${issue.id}]`)
   const learned = (sections.learned ?? []).map(oneLine)
   const resources = (sections.resources ?? []).map(oneLine)
   const body = (lines: readonly string[]) => lines.length ? lines.join('\n') : '- (none yet)'

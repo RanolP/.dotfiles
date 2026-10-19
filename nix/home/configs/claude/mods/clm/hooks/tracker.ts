@@ -6,7 +6,7 @@
 // "append". Log contents are cached by the metadata returned from `$.fs.list`,
 // so an unchanged session file is parsed once.
 
-import { CONFIRM_ITEMS, readEvidence, type Evidence } from './evidence'
+import { CONFIRM_ITEMS, readEvidence, storedItems, type Evidence } from './evidence'
 
 export const STATUSES = ['todo', 'doing', 'done', 'question', 'uncertain', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
@@ -190,8 +190,11 @@ export const isTrackerSection = (s: string) => s in TRACKER_SECTIONS
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
 const flat = (s: string) => s.replace(/\s*\n\s*/g, ' ').trim()
 
+/** The issue's last note meant for people: a confirm question's stored item list is data, not a note to show. */
+export const shownNote = (i: Pick<Issue, 'notes'>) => i.notes.findLast(n => !n.startsWith(CONFIRM_ITEMS))
+
 export const issueLine = (i: Issue) => {
-  const note = i.notes.findLast(n => !n.startsWith(CONFIRM_ITEMS))
+  const note = shownNote(i)
   return `- ${i.status === 'doing' ? '(doing) ' : ''}${i.title}${i.progress ? ` (${i.progress.done}/${i.progress.total})` : ''}${note ? ` — ${note}` : ''} [${i.id}]`
 }
 
@@ -270,6 +273,8 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       out.push(`작업 '${title}' 상위 작업: ${e.parent ? state.get(e.parent)?.title ?? e.parent : '(none)'}`)
     } else if (e.op === 'focus') {
       out.push(`주 작업 초점 갱신 (${e.intent})`)
+    } else if (e.op === 'note' && e.text.startsWith(CONFIRM_ITEMS)) {
+      out.push(`작업 '${title}' 확인 대기 ${storedItems(e.text)?.length ?? 0}건`)
     } else if (e.op === 'note') {
       out.push(`작업 '${title}' 메모: ${clip((e.text.split(/\r?\n/, 1)[0] ?? '').trim(), 60)}`)
     } else {

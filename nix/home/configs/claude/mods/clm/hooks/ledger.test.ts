@@ -10,7 +10,7 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
-import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
+import { CONFIRM_ITEMS, CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint, ledgerRowText } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
@@ -147,20 +147,35 @@ const confirmIssue = (id: string, title: string, status: Issue['status']): Issue
 test('a fold that closes the confirm question and adds a claim asks in a new question', () => {
   const issues = [confirmIssue('s1-q', `${CONFIRM_PREFIX}"tag the release"`, 'question'), confirmIssue('s1-a', 'push the tag', 'todo')]
   const out = confirmQuestion([{ op: 'status', issue: 's1-a', status: 'done' }], [{ op: 'status', issue: 's1-q', status: 'done' }], issues, new Set())
-  expect(out).toEqual([{ op: 'create', title: `${CONFIRM_PREFIX}s1-a "push the tag"`, status: 'question', note: '사용자 확인 대기' }])
+  expect(out).toEqual([{ op: 'create', title: `${CONFIRM_PREFIX}s1-a "push the tag"`, status: 'question', note: `${CONFIRM_ITEMS}[{"id":"s1-a","title":"push the tag"}]` }])
 })
 
-// Regression caught: the extended confirm question kept items already finished, repeated one asked as `<id> "T"` and as `"T"`, and outgrew the 200-char title bound.
-test('extending the confirm question drops finished items, dedupes by title, clips, and closes when empty', () => {
+// Regression caught: a question whose title was clipped, or whose item held the ` · ` separator, lost items on the next fold's re-read and closed unanswered.
+test('a confirm question survives a later fold with no claims, whatever its titles', () => {
+  const asQuestion = (ops: Payload[]) => {
+    const [made] = ops
+    if (made?.op !== 'create') throw new Error(`expected a create, got ${JSON.stringify(ops)}`)
+    expect(made.title.length).toBeLessThanOrEqual(200)
+    return { ...confirmIssue('s1-q', made.title, 'question'), notes: made.note ? [made.note] : [] }
+  }
+  const claim = (title: string): Payload => ({ op: 'create', title, status: 'done' })
+  for (const titles of [['a'.repeat(100), 'b'.repeat(100)], ['x'.repeat(250)], ['split · here']]) {
+    const q = asQuestion(confirmQuestion(titles.map(claim), [], [], new Set()))
+    expect(confirmQuestion([], [], [q], new Set())).toEqual([])
+    const [note, retitle] = confirmQuestion([claim('push the tag')], [], [q], new Set())
+    expect(note?.op === 'note' && JSON.parse(note.text.slice(CONFIRM_ITEMS.length)).map((i: { title: string }) => i.title)).toEqual([...titles, 'push the tag'])
+    expect(retitle?.op === 'retitle' && retitle.title.length <= 200).toBe(true)
+  }
+})
+
+// Regression caught: the extended confirm question kept items already finished, or repeated one asked as `<id> "T"` and as `"T"`.
+test('extending the confirm question drops finished items, dedupes by title, and closes when empty', () => {
   const q = confirmIssue('s1-q', `${CONFIRM_PREFIX}s1-a "push the tag" · "tag the release"`, 'question')
   const issues = [q, confirmIssue('s1-a', 'push the tag', 'done')]
   expect(confirmQuestion([{ op: 'create', title: 'push the tag', status: 'done' }], [], issues, new Set(['tag the release'])))
     .toEqual([{ op: 'status', issue: 's1-q', status: 'done' }])
   const open = [{ ...q, title: `${CONFIRM_PREFIX}s1-a "push the tag"` }, confirmIssue('s1-a', 'push the tag', 'todo')]
   expect(confirmQuestion([{ op: 'create', title: 'push the tag', status: 'done' }], [], open, new Set())).toEqual([])
-  const long = 'x'.repeat(250)
-  const [grown] = confirmQuestion([{ op: 'create', title: long, status: 'done' }], [], open, new Set())
-  expect(grown?.op === 'retitle' && grown.title.length <= 201).toBe(true)
 })
 
 // Regression caught: the fold's uncited done claims were silently parked as uncertain instead of going to the user, and each fold would ask again in a new question.

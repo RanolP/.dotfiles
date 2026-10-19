@@ -181,13 +181,49 @@ export const withhold = (o: Payload): Payload[] => (o.op === 'status' ? [] : o.o
 
 export const CONFIRM_PREFIX = '이 항목들이 끝났는지 확인: '
 const CONFIRM_SEP = ' · '
+const CONFIRM_TITLE_MAX = 200
+/** Prefix of the note holding a confirm question's items as JSON; the ledger line hides it. */
+export const CONFIRM_ITEMS = '확인 대기 항목 '
+
+type ConfirmItem = { id?: string; title: string; opaque?: true }
+const confirmText = (item: ConfirmItem) => item.opaque ? item.title : `${item.id ? `${item.id} ` : ''}"${item.title}"`
+
+/** The asked items from the question's last CONFIRM_ITEMS note; a legacy question without one is read from its title, an unparseable segment kept as an opaque item that never resolves. */
+function askedItems(question: Issue): ConfirmItem[] {
+  const note = question.notes.findLast(n => n.startsWith(CONFIRM_ITEMS))
+  if (note !== undefined) {
+    try {
+      const items: unknown = JSON.parse(note.slice(CONFIRM_ITEMS.length))
+      if (Array.isArray(items)) return items.filter((i): i is ConfirmItem => typeof i?.title === 'string')
+    } catch {}
+  }
+  return question.title.slice(CONFIRM_PREFIX.length).split(CONFIRM_SEP).filter(Boolean).map((text): ConfirmItem => {
+    const match = /^(?:(\S+) )?"(.*)"$/.exec(text)
+    return match ? { ...(match[1] ? { id: match[1] } : {}), title: match[2] ?? '' } : { title: text, opaque: true }
+  })
+}
+
+/** Whole items while they fit, then a count of the rest; a lone item too long for the bound is clipped on its own. */
+function confirmTitle(items: readonly ConfirmItem[]): string {
+  const budget = CONFIRM_TITLE_MAX - CONFIRM_PREFIX.length
+  const texts = items.map(confirmText)
+  const tail = (n: number) => n ? `${CONFIRM_SEP}외 ${n}건` : ''
+  let k = texts.length
+  while (k > 1 && texts.slice(0, k).join(CONFIRM_SEP).length + tail(texts.length - k).length > budget) k--
+  const rest = tail(texts.length - k)
+  let body = texts.slice(0, k).join(CONFIRM_SEP)
+  if (body.length + rest.length > budget) body = `${body.slice(0, budget - rest.length - 1)}…`
+  return CONFIRM_PREFIX + body + rest
+}
 
 // The fold only observes the transcript, so a done it inferred but could not
 // prove goes to the user as one question per fold, extended rather than
 // duplicated while it stays open; the user's answer then lands the dones
-// through a later fold's user-quoted ops.
+// through a later fold's user-quoted ops. The items live in a note rather
+// than the title, because the title is clipped for display and cannot be
+// read back.
 export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>): Payload[] {
-  type Item = { id?: string; title: string }
+  type Item = ConfirmItem
   const statusAfter = new Map(issues.map(issue => [issue.id, issue.status]))
   for (const o of landed) if (o.op === 'status') statusAfter.set(o.issue, o.status)
   const closed = (status: string | undefined) => status === 'done' || status === 'dropped'
@@ -196,7 +232,7 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
     ...landed.flatMap(o => o.op === 'create' && o.status === 'done' ? [o.title.trim()] : []),
     ...issues.filter(issue => closed(statusAfter.get(issue.id))).map(issue => issue.title.trim()),
   ])
-  const stillOpen = (item: Item) => !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id)))
+  const stillOpen = (item: Item) => item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id)))
   const title = (id: string) => issues.find(issue => issue.id === id)?.title.trim() ?? ''
   // A done on a dropped or finished issue is a re-open the user's own words decide, not a completion to confirm.
   const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && !closed(issue.status))
@@ -204,18 +240,14 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
     .map((o): Item => o.op === 'status' ? { id: o.issue, title: title(o.issue) } : { title: o.op === 'create' ? o.title.trim() : '' })
     .filter(stillOpen)
   const open = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX) && statusAfter.get(issue.id) === 'question')
-  const asked = (open?.title.slice(CONFIRM_PREFIX.length).split(CONFIRM_SEP) ?? []).flatMap((text): Item[] => {
-    const match = /^(?:(\S+) )?"(.*)"$/.exec(text)
-    return match ? [{ ...(match[1] ? { id: match[1] } : {}), title: match[2] ?? '' }] : []
-  })
+  const asked = open ? askedItems(open) : []
   const items: Item[] = []
   for (const item of [...asked.filter(stillOpen), ...claims]) if (!items.some(seen => seen.title === item.title)) items.push(item)
-  const text = (item: Item) => `${item.id ? `${item.id} ` : ''}"${item.title}"`
-  let body = items.map(text).join(CONFIRM_SEP)
-  if (CONFIRM_PREFIX.length + body.length > 200) body = `${body.slice(0, 200 - CONFIRM_PREFIX.length)}…`
-  if (!open) return items.length ? [{ op: 'create', title: CONFIRM_PREFIX + body, status: 'question', note: '사용자 확인 대기' }] : []
+  const note = CONFIRM_ITEMS + JSON.stringify(items)
+  if (!open) return items.length ? [{ op: 'create', title: confirmTitle(items), status: 'question', note }] : []
   if (!items.length) return [{ op: 'status', issue: open.id, status: 'done' }]
-  return CONFIRM_PREFIX + body === open.title ? [] : [{ op: 'retitle', issue: open.id, title: CONFIRM_PREFIX + body }]
+  if (items.length === asked.length && items.every((item, i) => confirmText(item) === confirmText(asked[i]!))) return []
+  return [{ op: 'note', issue: open.id, text: note }, { op: 'retitle', issue: open.id, title: confirmTitle(items) }]
 }
 
 /** Appends the first held quote to a done create's note, so 한 일 shows what proved it. */

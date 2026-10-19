@@ -277,16 +277,18 @@ in
     (
       export PATH="/usr/bin:/bin:$PATH"
       export ANDROID_HOME="$HOME/Library/Android/sdk"
-      export JAVA_HOME=$(/usr/libexec/java_home 2>/dev/null || echo "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home")
-      sdkmanager=/opt/homebrew/bin/sdkmanager
-      if [ -x "$sdkmanager" ]; then
-        yes | "$sdkmanager" --sdk_root="$ANDROID_HOME" --licenses > /dev/null 2>&1 || true
-        "$sdkmanager" --sdk_root="$ANDROID_HOME" \
+      # The cask's `android` launches Android CLI, which accepts the SDK licenses itself
+      android=/opt/homebrew/bin/android
+      if [ -x "$android" ]; then
+        "$android" --no-metrics --sdk="$ANDROID_HOME" sdk install \
           "platform-tools" \
-          "platforms;android-35" \
-          "build-tools;35.0.0" \
+          "platforms/android-35" \
+          "build-tools/35.0.0" \
           "emulator" \
-          "system-images;android-35;google_apis;arm64-v8a"
+          "system-images/android-36/google_apis_playstore/arm64-v8a"
+        # medium_phone resolves to the Play Store image above; create it only once so a rebuild keeps its data
+        "$android" --no-metrics --sdk="$ANDROID_HOME" emulator list | grep -qx medium_phone \
+          || "$android" --no-metrics --sdk="$ANDROID_HOME" emulator create medium_phone
       fi
     )
   '';

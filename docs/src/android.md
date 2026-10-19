@@ -10,7 +10,7 @@ Android development environment.
 |-----------|--------|
 | android-commandlinetools | Homebrew cask |
 | temurin (JDK) | Homebrew cask |
-| SDK packages | installed by home-manager activation |
+| SDK packages, AVD | installed by home-manager activation through Android CLI (`android`, launched by the commandlinetools cask) |
 
 ## Environment
 
@@ -24,11 +24,13 @@ Android SDK paths are also prepended to `PATH` in `nix/home/configs/nushell/env.
 ## SDK Packages (auto-installed on activation)
 
 - `platform-tools`
-- `platforms;android-35`
-- `build-tools;35.0.0`
+- `platforms/android-35`
+- `build-tools/35.0.0`
 - `emulator`
-- `system-images;android-35;google_apis;arm64-v8a`
+- `system-images/android-36/google_apis_playstore/arm64-v8a`
 
-## sdkmanager awk Workaround
+## Emulator
 
-`nix/darwin/default.nix` patches `sdkmanager` to use `/usr/bin/awk` during activation when its script contains a bare `awk` command.
+Activation creates the `medium_phone` AVD once with `android emulator create medium_phone`, which uses the Google Play system image above. Start it with `android emulator start medium_phone`.
+
+The commandlinetools cask stays, because its `zap` trashes `~/.android`, which holds every AVD and Android CLI itself. The standalone `android-cli` cask would also collide with it on the `android` binary.

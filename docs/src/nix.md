@@ -44,7 +44,7 @@ macOS adds `pinentry_mac`, `pinentry-tty`, `xcodes`, `docker-compose`, `gmp`, an
 
 `nix/darwin/default.nix` enables Touch ID for `sudo`, hides the Dock automatically, disables recent apps, shows file extensions and hidden files in Finder, selects dark appearance, speeds up key repeat, and enables trackpad clicking and three-finger drag. It also disables the Bluetooth menu-bar item.
 
-The activation script assigns the bottom-left Dock hot corner to Lock Screen, maps F18 to the Korean input toggle, disables Spotlight's Cmd+Space shortcut, and maps Cmd+Shift+S to the screenshot toolbar. It also disables the macOS 26 SwiftUI glass effect and patches `sdkmanager` to call `/usr/bin/awk`.
+The activation script assigns the bottom-left Dock hot corner to Lock Screen, maps F18 to the Korean input toggle, disables Spotlight's Cmd+Space shortcut, and maps Cmd+Shift+S to the screenshot toolbar. It also disables the macOS 26 SwiftUI glass effect.
 
 ## Services
 

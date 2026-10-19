@@ -1,6 +1,6 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields } from './events'
-import { assignedTaskRoots, createAgentTaskRoot, FOCUS_HINT,removeAgentTaskRoot, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignAgentTaskRoot, assignedTaskRoots, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
@@ -594,7 +594,7 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_task',
-        description: 'Update a task you are working on: mark it doing when you start, done when a tool result shows it finished (cite that row and a verbatim quote), uncertain when you cannot verify it, dropped when the user abandons it. Create a child task for a sub-step you will do yourself.',
+        description: 'Update a task you are working on: mark it doing when you start, done when you finish it (add evidence with the row and a verbatim quote when one shows the result), dropped when the user abandons it, citing that user message. Create a child task for a sub-step you will do yourself.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -643,7 +643,7 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) {
       try { return await next(e) }
       finally {
-        try { await removeAgentTaskRoot(panelIo($), await sid($), e.agentId) }
+        try { await closeAgentTaskRoot(panelIo($), await sid($), e.agentId, e.isAborted ? 'dropped' : 'done') }
         catch (err) { $.ui.log(`clm: could not clear task root for agent ${e.agentId}: ${String(err).slice(0, 120)}`, { to: 'debug' }) }
       }
     }
@@ -676,10 +676,12 @@ export const register: Register = (on, options) => {
     const origin = await captureOrigin($)
     const roots = await assignedTaskRoots(io, origin.session)
     const parent = e.parentAgentId === undefined ? focusOf(await readAll($), origin.session).stack.at(-1) : roots[e.parentAgentId]
-    if (!parent) return { deny: e.parentAgentId ? `clm: agent ${e.parentAgentId} needs an assigned task before spawning a child agent.` : `clm: the main agent needs a focused task before spawning a child agent. ${FOCUS_HINT}` }
+    if (!parent) return { deny: e.parentAgentId ? `clm: agent ${e.parentAgentId} needs an assigned task before spawning a child agent.` : SPAWN_PLAN_REQUEST }
     const spawned = await next(e)
     if (!spawned.agentId) return spawned
-    await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)
+    const planned = await plannedAgentStep(io, origin.session, parent, e.description)
+    if (planned && !Object.values(await assignedTaskRoots(io, origin.session)).includes(planned)) await assignAgentTaskRoot(io, origin.session, spawned.agentId, planned)
+    else await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)
     return spawned
   })
   on('tool.call', { tool: TASK_TOOL }, async ($, e) => {

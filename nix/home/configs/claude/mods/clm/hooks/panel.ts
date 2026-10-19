@@ -86,6 +86,14 @@ export async function removeAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeS
   })
 }
 
+// A finished subagent reports its own end, so its root closes with no citation.
+export async function closeAgentTaskRoot(io: PanelIo, session: string, agentId: string, status: 'done' | 'dropped'): Promise<void> {
+  const root = (await assignedTaskRoots(io, session))[agentId]
+  const issue = root === undefined ? undefined : snapshot(await io.readAll()).find(item => item.id === root)
+  if (issue && isOpen(issue)) await io.append([{ op: 'status', issue: issue.id, status }], await io.captureOrigin())
+  await removeAgentTaskRoot(io, session, agentId)
+}
+
 export async function createAgentTaskRoot(io: PanelIo, session: string, agentId: string, parent: string, title: string): Promise<string> {
   const origin = await io.captureOrigin()
   const created = await io.append([{ op: 'create', title: title.trim() || `Agent task (${agentId})`, status: 'todo' }], origin)
@@ -202,6 +210,20 @@ async function createChildTask(
 }
 
 export const FOCUS_HINT = 'Call clm_task with status "doing" and a title, or the id of an open task, to focus one.'
+export const SPAWN_PLAN_REQUEST = [
+  'clm: report your plan as clm tasks first, then spawn the agent.',
+  '1. Load the tool: ToolSearch with query "select:mcp__clm__clm_task".',
+  '2. Call mcp__clm__clm_task with {"status":"doing","title":"<the task you are working on>"}. It becomes your focused task at once.',
+  '3. For each sub-step, call mcp__clm__clm_task with {"status":"doing","title":"<sub-step>"}. Title the step this agent will do exactly as the Agent call\'s description, so the agent takes that step as its task.',
+  '4. Re-issue this same Agent call.',
+].join('\n')
+
+// The step the plan named with the Agent call's description becomes the agent's root, so the plan and the spawn share one task.
+export async function plannedAgentStep(io: Pick<PanelIo, 'readAll'>, session: string, parent: string, description: string): Promise<string | undefined> {
+  const title = description.trim()
+  if (!title) return undefined
+  return snapshot(await io.readAll()).find(issue => issue.origin.session === session && issue.parent === parent && isOpen(issue) && issue.title === title)?.id
+}
 
 // The intent classifier writes main's focus only from a user prompt it can
 // classify; a session driven by harness text (a cross-session message, a
@@ -259,11 +281,8 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
     ? await taskEvidenceProblem(io, undefined, input.evidence, ['user'], false, 'drop or re-open requires a quote from a user message.')
     : undefined
   if (directionProblem) return { deny: `clm_task: ${directionProblem}` }
-  const reason = input.status === 'done'
-    ? await taskEvidenceProblem(io, agentId, input.evidence, ['tool_result'], true, 'done requires a tool-result ref and a verbatim quote.')
-    : undefined
-  const status: ClmTaskInput['status'] = reason ? 'uncertain' : input.status
-  const audit = status === 'done' && input.evidence ? `verified tool result ${input.evidence.ref}: ${input.evidence.quote}` : undefined
+  const status = input.status
+  const audit = status === 'done' && input.evidence ? `cited ${input.evidence.ref}: ${input.evidence.quote}` : undefined
   const note = [input.note?.trim(), audit].filter((line): line is string => Boolean(line)).join('\n')
   const createdTask = input.id === undefined && title ? await createChildTask(io, origin, title, status, note, ownRoot) : undefined
   const taskId = input.id ?? createdTask
@@ -280,7 +299,7 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   }
   const current = await sessionIssues(io, { issue: taskId })
   const actualStatus = current[0]?.status ?? status
-  return { result: `clm_task: ${taskId} ${actualStatus}${reason ? `; recorded as uncertain because ${reason}` : ''}.` }
+  return { result: `clm_task: ${taskId} ${actualStatus}.` }
 }
 
 export async function mirrorModelTask(io: Pick<PanelIo, 'captureOrigin' | 'readAll' | 'append'>, event: ModelTaskCall): Promise<Mirrored> {

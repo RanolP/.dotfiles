@@ -306,9 +306,9 @@ function clmHead(state: DashDashboardState, width: number): { text: string, dim:
 function workRows({ Box, Text }: Elements, state: DashDashboardState, width: number) {
   const head = clmHead(state, width)
   const titles = new Map((head.status?.agents ?? []).map(agent => [agent.agentId, agent.title]))
-  const shown = withoutStaleDone(state.agents, 2)
-  const paired = shown.filter(agent => titles.has(agent.id))
-  const agents = [...paired, ...shown.filter(agent => !titles.has(agent.id))]
+  // Running first, finished last; spawn order within each group.
+  const rank = (status: string) => status === 'running' ? 0 : status === 'done' || status === 'completed' ? 2 : 1
+  const agents = withoutStaleDone(state.agents, 2).sort((a, b) => rank(a.status) - rank(b.status) || a.startedAt - b.startedAt)
   const known = new Set(state.agents.map(agent => agent.id))
   const orphans = (head.status?.agents ?? []).filter(agent => !known.has(agent.agentId))
   const elapsedWidth = Math.max(0, ...agents.map(agent => elapsedLabel(agent, state.now).length))

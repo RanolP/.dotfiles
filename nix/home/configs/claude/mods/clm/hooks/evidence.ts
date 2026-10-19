@@ -185,7 +185,7 @@ const CONFIRM_TITLE_MAX = 200
 /** Prefix of the note holding a confirm question's items as JSON; the ledger line hides it. */
 export const CONFIRM_ITEMS = '확인 대기 항목 '
 
-type ConfirmItem = { id?: string; title: string; opaque?: true }
+export type ConfirmItem = { id?: string; title: string; opaque?: true }
 const confirmText = (item: ConfirmItem) => item.opaque ? item.title : `${item.id ? `${item.id} ` : ''}"${item.title}"`
 
 export const storedItems = (note: string): ConfirmItem[] | undefined => {
@@ -230,7 +230,7 @@ function confirmTitle(items: readonly ConfirmItem[]): string {
 // through a later fold's user-quoted ops. The items live in a note rather
 // than the title, because the title is clipped for display and cannot be
 // read back.
-export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>): Payload[] {
+export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>, answered: ReadonlySet<string> = new Set()): Payload[] {
   type Item = ConfirmItem
   const statusAfter = new Map(issues.map(issue => [issue.id, issue.status]))
   for (const o of landed) if (o.op === 'status') statusAfter.set(o.issue, o.status)
@@ -240,7 +240,7 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
     ...landed.flatMap(o => o.op === 'create' && o.status === 'done' ? [o.title.trim()] : []),
     ...issues.filter(issue => closed(statusAfter.get(issue.id))).map(issue => issue.title.trim()),
   ])
-  const stillOpen = (item: Item) => item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id)))
+  const stillOpen = (item: Item) => !answered.has(item.title) && (item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id))))
   const title = (id: string) => issues.find(issue => issue.id === id)?.title.trim() ?? ''
   // A done on a dropped or finished issue is a re-open the user's own words decide, not a completion to confirm.
   const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && !closed(issue.status))
@@ -256,6 +256,37 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
   if (!items.length) return [{ op: 'status', issue: open.id, status: 'done' }]
   if (items.length === asked.length && items.every((item, i) => confirmText(item) === confirmText(asked[i]!))) return []
   return [{ op: 'note', issue: open.id, text: note }, { op: 'retitle', issue: open.id, title: confirmTitle(items) }]
+}
+
+const CONFIRM_YES = /^(?:네|예|응|ㅇㅇ|맞아요?|다?\s?끝났어요?|다?\s?됐어요?|yes|y|yep|yeah|ok|okay|done)$/i
+const CONFIRM_NO = /^(?:아니요?|아뇨|ㄴㄴ|아직(?:\s?안\s?(?:됐|끝났)어요?|이요)?|no|n|nope|not yet)$/i
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * The user's reply read as an answer to the confirm question, or undefined when
+ * it is not plainly one; the fold still reads that reply. Items named by id or
+ * verbatim title take the verdict of whatever else the reply says (nothing or
+ * a yes confirms, a no denies). A bare yes or no answers every item, but only
+ * when `askedInReply`, since otherwise it most likely answers the agent.
+ */
+export function confirmAnswer(reply: string, items: readonly ConfirmItem[], askedInReply: boolean): { confirmed: ConfirmItem[]; denied: ConfirmItem[] } | undefined {
+  const verdict = (text: string) => {
+    const tidy = text.replace(/[\s,·.!?"'`~]+/g, ' ').trim()
+    return tidy === '' ? 'bare' : CONFIRM_YES.test(tidy) ? 'yes' : CONFIRM_NO.test(tidy) ? 'no' : undefined
+  }
+  let rest = reply
+  const named = items.filter(item => {
+    if (item.opaque) return false
+    const patterns = [...(item.id ? [new RegExp(`(?<![\\w-])${escapeRe(item.id)}(?![\\w-])`, 'g')] : []), ...(item.title.length >= 3 ? [new RegExp(escapeRe(item.title), 'gi')] : [])]
+    const hit = patterns.some(p => p.test(rest))
+    for (const p of patterns) rest = rest.replace(p, ' ')
+    return hit
+  })
+  const said = verdict(rest)
+  if (named.length) return said === 'no' ? { confirmed: [], denied: named } : said ? { confirmed: named, denied: [] } : undefined
+  const all = items.filter(item => !item.opaque)
+  if (!askedInReply || !all.length) return undefined
+  return said === 'yes' ? { confirmed: all, denied: [] } : said === 'no' ? { confirmed: [], denied: all } : undefined
 }
 
 /** Appends the first held quote to a done create's note, so 한 일 shows what proved it. */

@@ -1,5 +1,5 @@
 import { isOpen, isRecord, type FocusState as TrackerFocusState, type Intent, type Issue, type Payload } from './tracker'
-import { checkEvidence, type Source } from './evidence'
+import { askedItems, checkEvidence, CONFIRM_PREFIX, confirmAnswer, confirmQuestion, type Source } from './evidence'
 import { isHarnessText, stripReminders } from './fold'
 import { removeQueueSnapshotTargets } from './workflow'
 import type { ClmWorkflow } from '../types'
@@ -397,6 +397,33 @@ async function parseAndApplyLater(io: PromptIntentIo, raw: string, prompt: strin
 }
 
 /** `address` is the one clm coined for this prompt at prompt.submit, absent when recording it failed. */
+/**
+ * Lands the user's plain answer to the open confirm question without a model:
+ * confirmed items become done citing the reply, denied items leave the
+ * question and stay open, and the question is retitled or closed to match.
+ */
+export async function resolveConfirmAnswer(io: PromptIntentIo, origin: Origin, reply: string, lastAssistantReply: string, address?: string): Promise<void> {
+  await io.serialize(origin.session, async () => {
+    const issues = snapshot(await io.readAll()).filter(issue => issue.origin.session === origin.session)
+    const question = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX))
+    if (!question) return
+    const items = askedItems(question)
+    const askedInReply = lastAssistantReply.includes(question.id) || items.some(item => !item.opaque && lastAssistantReply.includes(item.title))
+    const answer = confirmAnswer(reply, items, askedInReply)
+    if (!answer) return
+    const note = `cited ${address ?? 'user'}: ${reply.replace(/\s+/g, ' ').trim().slice(0, 200)}`
+    const ops: Payload[] = answer.confirmed.flatMap((item): Payload[] => {
+      const issue = issues.find(i => isOpen(i) && (item.id ? i.id === item.id : i.title.trim() === item.title))
+      return issue ? [{ op: 'status', issue: issue.id, status: 'done' }, { op: 'note', issue: issue.id, text: note }] : [{ op: 'create', title: item.title, status: 'done', note }]
+    })
+    const doneTitles = new Set(issues.filter(issue => issue.status === 'done').map(issue => issue.title.trim()))
+    ops.push(...confirmQuestion([], ops, issues, doneTitles, new Set(answer.denied.map(item => item.title))))
+    if (!ops.length) return
+    await io.syncPanel(origin, await io.writeEvents(ops, origin))
+    io.log(`clm confirm: ${answer.confirmed.length} confirmed, ${answer.denied.length} denied from the user's reply`, { to: 'debug' })
+  })
+}
+
 export async function recordPromptIntent(io: PromptIntentIo, text: string, promptSeq: number, address?: string): Promise<void> {
   const userPrompt = stripReminders(text)
   if (!userPrompt || isHarnessText(userPrompt)) return
@@ -412,6 +439,8 @@ export async function recordPromptIntent(io: PromptIntentIo, text: string, promp
     const queueSnapshot = workflow.later.map(item => ({ ...item }))
     const rows = await io.sessionMessages()
     const lastAssistantReply = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
+    try { await resolveConfirmAnswer(io, origin, userPrompt, lastAssistantReply, address) }
+    catch (err) { io.log(`clm confirm: answer not applied (${String(err).slice(0, 160)})`, { to: 'debug' }) }
     const response = await io.complete({
       model: 'haiku', system: INTENT_SYSTEM,
       prompt: intentPrompt({ state, issues, lastAssistantReply, userPrompt, later: queueSnapshot, requests }),

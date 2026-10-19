@@ -9,6 +9,7 @@ import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { CONFIRM_ITEMS, CONFIRM_PREFIX } from './evidence'
 import { focusOf, parseLog, parseOps, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
@@ -157,6 +158,33 @@ test('a rebuild request without a question mark is stored', OPTS, async ($, on) 
 })
 
 // Regression caught: one assistant response could answer several queued requests, but only the last one was closed.
+// Regression caught: the user's plain answer to the confirm question landed nothing until a later fold happened to read it, and a reply that did not answer it could still change it.
+for (const [name, assistant, reply, want] of [
+  ['a bare yes after the agent relayed the question confirms all', 'Did you push the tag and tag the release?', '네', { a: 'done', b: 'done', q: 'done' }],
+  ['naming one item confirms only it', 'Fixed the lint.', 's1-a 끝났어', { a: 'done', b: 'todo', q: 'question', left: '"tag the release"' }],
+  ['naming one item with a no denies it and keeps it open', 'Fixed the lint.', '"push the tag" 아직', { a: 'todo', b: 'todo', q: 'question', left: '"tag the release"' }],
+  ['an unrelated reply changes nothing', 'Did you push the tag?', 'run the tests again', { a: 'todo', b: 'todo', q: 'question' }],
+  ['a bare yes the agent did not ask for changes nothing', 'Shall I run the tests?', '네', { a: 'todo', b: 'todo', q: 'question' }],
+] as const) {
+  test(`confirm answer: ${name}`, OPTS, async ($, on) => {
+    const seen = bottoms(on, { rows: [M('user', 'Ship it.'), M('assistant', assistant)], replies: [] })
+    const title = `${CONFIRM_PREFIX}s1-a "push the tag" · "tag the release"`
+    seedTracker(seen, [
+      { op: 'create', issue: 's1-a', title: 'push the tag', status: 'todo' },
+      { op: 'create', issue: 's1-b', title: 'tag the release', status: 'todo' },
+      { op: 'create', issue: 's1-q', title, status: 'question', note: `${CONFIRM_ITEMS}[{"id":"s1-a","title":"push the tag"},{"title":"tag the release"}]` },
+    ])
+    await $.prompt.submit(promptInput(reply))
+    for (let i = 0; i < 200 && !seen.intentPrompts.length; i++) await new Promise(resolve => setTimeout(resolve, 2))
+    const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
+    const status = (id: string) => issues.find(issue => issue.id === id)?.status
+    expect({ a: status('s1-a'), b: status('s1-b'), q: status('s1-q') }).toEqual({ a: want.a, b: want.b, q: want.q })
+    const q = issues.find(issue => issue.id === 's1-q')
+    expect(q?.title).toBe('left' in want ? `${CONFIRM_PREFIX}${want.left}` : title)
+    if (want.a === 'done') expect(issues.find(issue => issue.id === 's1-a')?.notes.at(-1)).toContain(reply)
+  })
+}
+
 test('one assistant answer resolves every matching open request', OPTS, async ($, on) => {
   const quote = 'The configuration was rebuilt and the docs were updated'
   const seen = bottoms(on, {

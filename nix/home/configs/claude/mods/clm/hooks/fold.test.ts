@@ -358,6 +358,20 @@ test('a mid-topic split or tail overflow is rejected, retried once, then dropped
   expect(seen.logs.some(line => line.includes('split summary dropped'))).toBe(true)
 })
 
+// Regression caught: a session opened by an isMeta peer message kept its whole first turn in the head and re-emitted it after every fold.
+test('rows ahead of the first request are folded, leaving the ledger right after the request', BG_OPTS, async ($, on) => {
+  const fold = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
+  const rows = [use('tu_p', 'Read'), res('tu_p', 'peer turn output'), ...fold]
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  const out = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
+  expect(out[0]?.text).toBe('protected request')
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(out.some(m => m.toolResults?.some(r => r.text === 'peer turn output'))).toBe(false)
+})
+
 // Regression caught: applying a precomputed summary changed B after the model selected its split.
 test('the applied background fold is head plus ledger plus B verbatim', BG_OPTS, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'), M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done')]

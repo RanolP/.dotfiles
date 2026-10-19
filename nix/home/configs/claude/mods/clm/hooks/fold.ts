@@ -78,6 +78,14 @@ export const protectedIndex = (msgs: readonly SessionMessage[]): number => {
   const i = msgs.findIndex(m => isPrompt(m) || isLedgerRow(m))
   return i < 0 ? 0 : i
 }
+// Conversation rows ahead of the first request open a session whose first
+// turn began on a row the transcript does not hand back (an isMeta peer
+// message). A head that kept them re-emitted that turn after every fold, so
+// they are folded with the range after the request; system rows stay put.
+export const headRows = (msgs: readonly SessionMessage[], first: number): SessionMessage[] =>
+  msgs.slice(0, first + 1).filter((m, i) => i === first || isSystemRow(m) || isLedgerRow(m))
+export const foldedRows = (msgs: readonly SessionMessage[], first: number, keepFrom: number): SessionMessage[] =>
+  [...msgs.slice(0, first), ...msgs.slice(first + 1, keepFrom)].filter(m => !isLedgerRow(m) && !isSystemRow(m))
 export const visibleTokens = (msgs: readonly SessionMessage[]) => msgs.reduce((n, m) => n + (isSystemRow(m) ? 0 : estTokens(m)), 0)
 
 // `$.session.messages()` returns the stored transcript, older chains before a
@@ -120,7 +128,7 @@ const sumAfterCuts = (rows: readonly SessionMessage[], cuts: Record<string, numb
 export function planClear(msgs: readonly SessionMessage[], target: number, ledgerTokens: number): ClearPlan | undefined {
   const first = protectedIndex(msgs)
   const starts = msgs.flatMap((m, i) => (i > first && isPrompt(m) ? [i] : []))
-  const head = msgs.slice(0, first + 1)
+  const head = headRows(msgs, first)
   const fixed = sum(head) + ledgerTokens
   let keepFrom = starts.length ? starts[starts.length - 1]! : first + 1
   let keptTurns = starts.length ? 1 : 0
@@ -134,7 +142,7 @@ export function planClear(msgs: readonly SessionMessage[], target: number, ledge
     keptTurns++
   }
   const tail = msgs.slice(keepFrom)
-  const dropped = msgs.slice(first + 1, keepFrom).filter(m => !isLedgerRow(m) && !isSystemRow(m))
+  const dropped = foldedRows(msgs, first, keepFrom)
   // The newest turn may still be in progress when compaction is requested;
   // preserve its tool results whole so a live command's output is not lost.
   const newestStart = starts.at(-1)

@@ -1,6 +1,6 @@
 import type { SessionMessage, SessionCompactResult } from 'claude-code'
 import {
-  buildCleared, fingerprint, isHarnessText, isLedgerRow, isPrompt, isSystemRow, kst, ledgerRowText, liveRows, planClear,
+  buildCleared, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, kst, ledgerRowText, liveRows, planClear,
   protectedIndex, sum, visibleTokens, type ClearPlan,
 } from './fold'
 import { renderRange } from './evidence'
@@ -106,7 +106,8 @@ function queueTurns(rows: readonly SessionMessage[], first: number): QueueTurn[]
   return prompts.map((prompt, index) => {
     const from = index === 0 ? 0 : prompt
     const to = prompts[index + 1] ?? queue.length
-    return { number: index + 1, start: start + prompt, rows: queue.slice(from, to).filter(message => !isLedgerRow(message)) }
+    const orphans = index === 0 ? foldedRows(rows, first, 0) : []
+    return { number: index + 1, start: start + prompt, rows: [...orphans, ...queue.slice(from, to)].filter(message => !isLedgerRow(message)) }
   })
 }
 
@@ -180,8 +181,8 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
     }
     const keepFrom = boundary.start
     const plan: ClearPlan = {
-      head: rows.slice(0, first + 1),
-      dropped: rows.slice(first + 1, keepFrom).filter(message => !isLedgerRow(message) && !isSystemRow(message)),
+      head: headRows(rows, first),
+      dropped: foldedRows(rows, first, keepFrom),
       tail: rows.slice(keepFrom), keptTurns: turns.length - answer.split + 1, cuts: {},
     }
     if (plan.dropped.length === 0) {
@@ -380,7 +381,7 @@ async function applyFoldPlan(
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
   const attachments = await io.stableAttachments()
-  const messages = buildCleared({ head: workingRows.slice(0, first + 1), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow, attachments)
+  const messages = buildCleared({ head: headRows(workingRows, first), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow, attachments)
   const tokensBefore = sum(workingRows)
   const tokensAfter = sum(messages)
   await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
@@ -504,7 +505,7 @@ export async function handleSessionCompact(
   if (!plan.rewindOnly && (reading ?? 0) < opts.budget - opts.reserve) return { messages: [...all] }
   const keepFrom = plan.keepFrom
   const row = keepFrom < workingRows.length ? workingRows[keepFrom] : undefined
-  const expectedDropped = workingRows.slice(first + 1, keepFrom).filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint)
+  const expectedDropped = foldedRows(workingRows, first, keepFrom).map(fingerprint)
   const sameDropped = expectedDropped.length === plan.dropFps.length && expectedDropped.every((fp, index) => fp === plan.dropFps[index])
   const sameKept = plan.keepFp === undefined ? keepFrom === workingRows.length : row !== undefined && fingerprint(row) === plan.keepFp
   if (keepFrom < first + 1 || keepFrom > workingRows.length || !sameKept || !sameDropped) {

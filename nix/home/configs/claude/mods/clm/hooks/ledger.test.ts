@@ -150,6 +150,17 @@ test('a fold that closes the confirm question and adds a claim asks in a new que
   expect(out).toEqual([{ op: 'create', title: `${CONFIRM_PREFIX}s1-a "push the tag"`, status: 'question', note: `${CONFIRM_ITEMS}[{"id":"s1-a","title":"push the tag"}]` }])
 })
 
+// Regression caught: the main agent's resident ledger had no questions section, so it never saw the confirm question it should relay.
+test('the resident ledger lists open questions without the stored item list', () => {
+  const [made] = confirmQuestion([{ op: 'create', title: 'tag the release', status: 'done' }], [], [], new Set())
+  if (made?.op !== 'create') throw new Error('expected a create')
+  const q = { ...confirmIssue('s1-q', made.title, 'question'), notes: [made.note ?? ''] }
+  const row = residentLedgerText(undefined, undefined, 0, 0, [], new Set(), { questions: [q, confirmIssue('s1-z', 'answered before', 'done')] })
+  expect(row).toContain(`## open questions\n\n- ${made.title} [s1-q]`)
+  expect(row).not.toContain('answered before')
+  expect(row).not.toContain(CONFIRM_ITEMS)
+})
+
 // Regression caught: a malformed note carrying the item prefix sent the re-read to the clipped title, losing the items behind "외 N건" and keeping that tail as an item.
 test('a malformed confirm note falls back to the last stored list, and the title tail is not an item', () => {
   const claims: Payload[] = ['one', 'two', 'three', 'four', 'five', 'six'].map(t => ({ op: 'create', title: `${t} ${'z'.repeat(25)}`, status: 'done' }))

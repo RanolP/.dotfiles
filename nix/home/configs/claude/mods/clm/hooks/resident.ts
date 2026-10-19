@@ -18,6 +18,7 @@ export type ResidentLedgerSections = {
   children?: readonly Issue[]
   requests?: readonly ResidentLedgerRequest[]
   constraints?: readonly string[]
+  questions?: readonly Issue[]
   uncertain?: readonly Issue[]
   learned?: readonly string[]
   resources?: readonly string[]
@@ -107,6 +108,7 @@ export async function residentLedger(
     children: shownIssues.filter(issue => topId !== undefined && issue.parent === topId && isOpen(issue)),
     requests,
     constraints,
+    questions: shownIssues.filter(issue => issue.status === 'question'),
     uncertain: shownIssues.filter(issue => issue.status === 'uncertain'),
     learned,
     resources,
@@ -136,6 +138,11 @@ export function residentLedgerText(
   const requests = (sections.requests ?? []).filter(request => request.status === 'open')
     .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
   const constraints = [...index, ...(sections.constraints ?? []).map(oneLine)]
+  const questions = (sections.questions ?? []).filter(issue => issue.status === 'question')
+    .map(issue => {
+      const note = shownNote(issue)
+      return `- ${oneLine(issue.title)}${note ? ` — ${oneLine(note)}` : ''} [${issue.id}]`
+    })
   const uncertain = (sections.uncertain ?? []).filter(issue => issue.status === 'uncertain')
     .map(issue => `- ${oneLine(issue.title)} — settling check: ${oneLine(shownNote(issue) ?? 'verify the claim')} [${issue.id}]`)
   const learned = (sections.learned ?? []).map(oneLine)
@@ -145,6 +152,8 @@ export function residentLedgerText(
     '## where we are', where.join('\n'),
     '## what to do', body(tasks),
     '## what to request', body(requests),
+    // Shown only while a question waits, so the common case pays nothing for it.
+    ...(questions.length ? ['## open questions', questions.join('\n')] : []),
     '## constraints & preferences', body(constraints),
     '## uncertain', body(uncertain),
     '## learned', body(learned),

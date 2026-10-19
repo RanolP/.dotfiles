@@ -234,7 +234,7 @@ export const ledgerRowText = (seq: number, at: string, _path: string, ledger: st
   const fits = () => Math.ceil(render().length / 4) <= maxTokens
   if (fits()) return render()
   const byName = (name: string) => sections.find(section => section.name === name)
-  const trimOrder = ['learned', 'where we are', 'owned resources', 'uncertain', 'what to do', 'what to request', 'constraints & preferences']
+  const trimOrder = ['learned', 'where we are', 'owned resources', 'uncertain', 'open questions', 'what to do', 'what to request', 'constraints & preferences']
   while (!fits()) {
     const trimmed = trimOrder.some(name => dropOldestLedgerItem(byName(name)))
     if (!trimmed) break

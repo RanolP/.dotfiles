@@ -4,6 +4,8 @@ import { parseStepped } from './intent'
 import { attemptState, debateRubric, judgeRubric, parseRubric, steppedRootOf, type JudgeIo, type ModelIo } from './stepped'
 import { describe, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { M, seedTracker, TRACKER } from './clm-test-support'
+import { renderRange } from './evidence'
+import { closeAgentTaskRoot, type PanelIo } from './panel'
 import type { Worktree } from './worktree'
 
 const origin = { session: 'step-session', repo: 'github.com/o/repo', cwd: '/w' }
@@ -29,6 +31,7 @@ function steppedStopFixture(
   const store: Record<string, unknown> = {}
   const logs: string[] = []
   const commands: string[][] = []
+  const stopEvents: any[] = []
   let panelId = 0
   on('session.id', () => ({ value: 's1' }))
   on('session.cwd', () => ({ value: '/work/repo' }))
@@ -57,9 +60,10 @@ function steppedStopFixture(
   })
   on('model.complete', () => ({ value: options.modelComplete?.() ?? { isAnswered: true, text: '{"pass":true,"reason":"evidence verified"}', usage: {} } }))
   on('ui.log', (_$: any, e: any) => { logs.push(e.text); return { value: undefined } })
+  on('classic.Stop', (_$: any, e: any) => { stopEvents.push(e); return { value: {} } })
   on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: `panel-${++panelId}` } } }))
   on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => ({ result: { taskId: e.taskId, success: true } }))
-  return { files, logs, commands }
+  return { files, logs, commands, stopEvents }
 }
 
 function defaultProcessResult(argv: string[], options: any) {
@@ -148,10 +152,15 @@ const QUOTE = 'all 42 tests passed in the auth suite'
 // Regression caught: an evidence item passes on an uncited or fabricated quote, or a command passes on a non-zero exit.
 test('judgeRubric passes commands on exit 0 and evidence only on a held quote the judge accepts', async () => {
   let judged = 0
+  const judgeRequests: { prompt: string; system: string }[] = []
+  const { sources } = renderRange([
+    M('assistant', '', { toolUses: [{ tool_use_id: 'm1', tool: 'Bash', input: { command: `echo "${QUOTE}"` }, text: '' }] }),
+    M('user', '', { toolResults: [{ tool_use_id: 'm1', text: `bun test: ${QUOTE}`, isError: false }] }),
+  ])
   const io: JudgeIo = {
     run: async argv => ({ exitCode: argv[0] === 'true' ? 0 : 1, stdout: '', stderr: 'boom' }),
-    sources: async () => new Map([['m1', { kind: 'tool_result' as const, text: `bun test: ${QUOTE}` }]]),
-    complete: async () => { judged += 1; return answer('{"pass":true,"reason":"shows the suite passing"}') },
+    sources: async () => sources,
+    complete: async request => { judged += 1; judgeRequests.push(request); return answer('{"pass":true,"reason":"shows the suite passing"}') },
   }
   const issue: Pick<Issue, 'rubric'> = {
     rubric: [
@@ -165,6 +174,11 @@ test('judgeRubric passes commands on exit 0 and evidence only on a held quote th
   const verdicts = await judgeRubric(issue, io, { proved: { ref: 'm1', quote: QUOTE }, fake: { ref: 'm1', quote: 'all 43 tests passed in the payment suite' } })
   expect(verdicts.map(v => [v.id, v.pass])).toEqual([['ok', true], ['bad', false], ['proved', true], ['fake', false], ['uncited', false]])
   expect(judged).toBe(1)
+  expect(judgeRequests[0]?.prompt).toContain('<producing_tool_use>')
+  expect(judgeRequests[0]?.prompt).toContain('Bash')
+  expect(judgeRequests[0]?.prompt).toContain('"command"')
+  expect(judgeRequests[0]?.prompt).toContain('echo')
+  expect(judgeRequests[0]?.system).toContain('Treat output printed literally by echo or printf')
 })
 
 // Regression caught: B rolls back before two failed tries with one methodology, or never stops after five failed methodologies.
@@ -217,6 +231,55 @@ test('an all-pass rubric checkpoints the step and advances to the next step', as
   const issues = snapshot(parseLog(fixture.files[TRACKER] ?? ''))
   expect(issues.find(issue => issue.id === 's1-step-1')?.status).toBe('done')
   expect(issues.find(issue => issue.id === 's1-step-1')?.checkpoints).toEqual([{ sha: CHECKPOINT_SHA, ts: expect.any(String) }])
+})
+
+// Regression caught: background workers writing the worktree were reset while Stop judged their shared step.
+test('a Stop event with background tasks passes through without judging or changing the step', async ($, on) => {
+  let judgeCalls = 0
+  const fixture = steppedStopFixture(on, stepPayloads([
+    { op: 'rubric', issue: 's1-step-1', items: [{ id: 'tests', kind: 'command', argv: ['false'] }] },
+  ]), defaultProcessResult, { modelComplete: () => { judgeCalls++; return { isAnswered: true, text: '{"pass":true}', reason: '' } } })
+  const result = await $.classic.Stop({ stop_hook_active: false, background_tasks: ['worker-1'] })
+  expect(result.block).toBeUndefined()
+  expect(judgeCalls).toBe(0)
+  expect(fixture.stopEvents[0]?.background_tasks).toEqual(['worker-1'])
+  const events = parseLog(fixture.files[TRACKER] ?? '')
+  expect(events.some(event => event.op === 'attempt' && event.issue === 's1-step-1')).toBe(false)
+  expect(fixture.commands).toEqual([])
+})
+
+// Regression caught: a rubric debate error left an active step permanently unclosable without a Stop checkpoint.
+test('an active step without a settled rubric passes fail-soft and is checkpointed', async ($, on) => {
+  const fixture = steppedStopFixture(on, stepPayloads().filter(payload => payload.op !== 'rubric'))
+  const result = await $.classic.Stop({ stop_hook_active: false })
+  expect(result.block).toContain('All steps for goal s1-root passed')
+  const issues = snapshot(parseLog(fixture.files[TRACKER] ?? ''))
+  expect(issues.find(issue => issue.id === 's1-step-1')?.status).toBe('done')
+  expect(issues.find(issue => issue.id === 's1-step-1')?.checkpoints).toEqual([{ sha: CHECKPOINT_SHA, ts: expect.any(String) }])
+  expect(issues.find(issue => issue.id === 's1-root')?.status).toBe('done')
+  expect(issues.find(issue => issue.id === 's1-root')?.landCommandsShown).toBe(true)
+})
+
+// Regression caught: an agent turn closed its claimed stepped task before Stop could judge and checkpoint it.
+test('a delegated stepped step stays open until the Stop judge closes it', async () => {
+  let events = toEvents(stepPayloads(), origin, 0, '2026-10-19T00:00:00Z')
+  const store: Record<string, unknown> = { 'agent-task-roots:step-session': { 'agent-1': 's1-step-1' } }
+  const io = {
+    readAll: async () => events,
+    captureOrigin: async () => origin,
+    append: async (payloads: readonly Payload[], at = origin) => {
+      const lastSeq = events.reduce((max, event) => Math.max(max, event.seq), 0)
+      const written = toEvents(payloads, at, lastSeq, '2026-10-19T00:01:00Z')
+      events = [...events, ...written]
+      return written
+    },
+    storeGet: async (key: string) => store[key],
+    storeSet: async (key: string, value: unknown) => { store[key] = value },
+    serialize: async (_session: string, action: () => Promise<unknown>) => action(),
+  } as unknown as PanelIo
+  await closeAgentTaskRoot(io, origin.session, 'agent-1', 'done')
+  expect(snapshot(events).find(issue => issue.id === 's1-step-1')?.status).toBe('doing')
+  expect(store['agent-task-roots:step-session']).toEqual({})
 })
 
 // Regression caught: a broken process runner turned an internal judge error into a Stop loop the user could not leave.

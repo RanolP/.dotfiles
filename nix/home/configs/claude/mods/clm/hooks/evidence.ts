@@ -17,7 +17,7 @@ export type Evidence = { ref: string; quote: string }
 export type SourceKind = 'user' | 'tool_result' | 'assistant'
 // `full` is the row's text before display clipping, kept so a quote taken from
 // past the clip still matches; it is itself capped so a held source stays small.
-export type Source = { kind: SourceKind; text: string; full?: string; tool?: string; isError?: boolean }
+export type Source = { kind: SourceKind; text: string; full?: string; tool?: string; toolInput?: string; isError?: boolean }
 export type Sources = ReadonlyMap<string, Source>
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
@@ -52,7 +52,10 @@ export const rowRef = (i: number) => `m${i + 1}`
  * against. Over `cap`, whole oldest rows go, so every kept ref is shown whole.
  */
 export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refOffset = 0, sentAt?: SentAt): { text: string; sources: Map<string, Source> } {
-  const toolOf = new Map(rows.flatMap(m => m.toolUses.map(u => [u.tool_use_id, u.tool] as const)))
+  const toolUseOf = new Map(rows.flatMap(m => m.toolUses.map(u => [u.tool_use_id, {
+    tool: u.tool,
+    input: clip(JSON.stringify(u.input ?? {}) ?? '{}', INPUT_CLIP),
+  }] as const)))
   const rendered = rows.map((m, i) => {
     const sources: [string, Source][] = []
     const at = sentStamp(m, sentAt)
@@ -71,7 +74,11 @@ export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refO
     for (const r of m.toolResults ?? []) {
       const { text, full } = clippedSource(r.text, RESULT_CLIP)
       parts.push(`  <- [${r.tool_use_id}] ${r.isError ? 'error ' : ''}${text}`)
-      sources.push([r.tool_use_id, { kind: 'tool_result', text, ...(full ? { full } : {}), tool: toolOf.get(r.tool_use_id), isError: r.isError }])
+      const toolUse = toolUseOf.get(r.tool_use_id)
+      sources.push([r.tool_use_id, {
+        kind: 'tool_result', text, ...(full ? { full } : {}),
+        ...(toolUse ? { tool: toolUse.tool, toolInput: toolUse.input } : {}), isError: r.isError,
+      }])
     }
     return { text: parts.join('\n'), sources }
   })

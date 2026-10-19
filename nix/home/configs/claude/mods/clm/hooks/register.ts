@@ -18,7 +18,7 @@ import {
 } from './ledger'
 import {
   archivedDone, injected, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
-  focusOf, isRecord, type Issue, type Origin, type Payload, type TrackerEvent,
+  focusOf, isOpen, isRecord, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
@@ -392,7 +392,7 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
     const message = `clm stepped: ${stage} failed; stop released (${detail})`
     $.ui.log(message)
     $.ui.log(message, { to: 'debug' })
-    return {}
+    return undefined
   }
   try {
     const origin = await captureOrigin($)
@@ -408,18 +408,21 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
     const children = issues.filter(issue => issue.parent === root.id)
     const active = children.filter(issue => issue.status === 'doing').at(-1)
 
-    const land = async (goal: Issue): Promise<{ block?: string }> => {
+    const land = async (goal: Issue): Promise<{ block?: string } | undefined> => {
       issueId = goal.id
       if (!goal.worktree) return failOpen('landing worktree lookup', new Error('stepped root has no persisted worktree'))
-      if (goal.landCommandsShown) return {}
+      if (goal.landCommandsShown) return undefined
       const commands = landCommands(goal.worktree)
-      await append($, [{ op: 'land', issue: goal.id }], origin)
+      await append($, [
+        { op: 'land', issue: goal.id },
+        { op: 'status', issue: goal.id, status: 'done' },
+      ], origin)
       return {
         block: `All steps for goal ${goal.id} passed. Run these commands in order through Bash in the main session to land the worktree:\n${commands.map(command => `- \`${command}\``).join('\n')}\nAfter the commands finish, stop again.`,
       }
     }
 
-    if (active?.rubric?.length) {
+    if (active) {
       issueId = active.id
       if (!root.worktree) return failOpen('worktree lookup', new Error('active stepped goal has no persisted worktree'))
       const before = attemptState(active)
@@ -428,7 +431,7 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
         const message = `clm stepped: goal ${root.id} stopped after five failed methodologies on issue ${active.id}: ${failed.slice(-5).join('; ')}`
         $.ui.log(message)
         $.ui.log(message, { to: 'debug' })
-        return {}
+        return undefined
       }
       const method = active.activeMethod ?? before.method ?? DEFAULT_STEP_METHOD
       const verdicts = await judgeRubric(active, stepJudgeIo($, undefined, root.worktree), stepCitationMap(lastAssistantMessage))
@@ -437,7 +440,7 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
         const message = `clm stepped: judge internal error issue=${active.id}; stop released: ${internal.map(item => `${item.id} ${item.reason}`).join('; ')}`
         $.ui.log(message)
         $.ui.log(message, { to: 'debug' })
-        return {}
+        return undefined
       }
       const failed = verdicts.filter(verdict => !verdict.pass)
       if (failed.length === 0) {
@@ -474,7 +477,7 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
           const message = `clm stepped: goal ${root.id} stopped after five failed methodologies on issue ${active.id}: ${failedMethods.slice(-5).join('; ')}`
           $.ui.log(message)
           $.ui.log(message, { to: 'debug' })
-          return {}
+          return undefined
         }
         return {
           block: `The rubric failed for issue ${active.id}:\n${reason}\nThe worktree was rolled back to ${rollbackSha}. Failed methodologies: ${failedMethods.join('; ')}. Declare a different method with clm_task before continuing.`,
@@ -828,7 +831,8 @@ export const register: Register = (on, options) => {
     const parent = e.parentAgentId === undefined ? focusOf(events, origin.session).stack.at(-1) : roots[e.parentAgentId]
     if (!parent) return { deny: e.parentAgentId ? `clm: agent ${e.parentAgentId} needs an assigned task before spawning a child agent.` : SPAWN_PLAN_REQUEST }
     const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
-    const goal = outermostSteppedRootOf(parent, new Map(issues.map(issue => [issue.id, issue])))
+    const steppedGoal = outermostSteppedRootOf(parent, new Map(issues.map(issue => [issue.id, issue])))
+    const goal = steppedGoal && isOpen(steppedGoal) && !steppedGoal.landCommandsShown ? steppedGoal : undefined
     const spawnInput = goal?.worktree
       ? { ...e, cwd: goal.worktree.dir, prompt: `${STEPPED_WORKTREE_CONTEXT(goal.worktree)}\n\n${e.prompt}` }
       : e
@@ -845,8 +849,10 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
   on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
   on('classic.Stop', async ($, e, next) => {
+    if (e.background_tasks?.length) return next(e)
     const result = await handleSteppedStop($, e.last_assistant_message)
-    return result === undefined ? next(e) : result
+    if (result === undefined) return next(e)
+    return { ...(await next(e)), ...result }
   })
   on('tool.describe', { tool: 'TaskCreate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('tool.describe', { tool: 'TaskUpdate' }, ($, e) => ({ ...e, isDeferred: true }))

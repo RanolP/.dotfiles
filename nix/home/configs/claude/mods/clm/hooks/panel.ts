@@ -107,8 +107,12 @@ export async function removeAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeS
 // A finished subagent reports its own end, so its root closes with no citation.
 export async function closeAgentTaskRoot(io: PanelIo, session: string, agentId: string, status: 'done' | 'dropped'): Promise<void> {
   const root = (await assignedTaskRoots(io, session))[agentId]
-  const issue = root === undefined ? undefined : snapshot(await io.readAll()).find(item => item.id === root)
-  if (issue && isOpen(issue)) await io.append([{ op: 'status', issue: issue.id, status }], await io.captureOrigin())
+  const issues = snapshot(await io.readAll())
+  const issue = root === undefined ? undefined : issues.find(item => item.id === root)
+  const byId = new Map(issues.map(item => [item.id, item]))
+  const goal = issue && outermostSteppedRootOf(issue.id, byId)
+  const isSteppedStep = goal !== undefined && stepForTask(issue.id, goal, byId)?.id === issue.id
+  if (issue && isOpen(issue) && !isSteppedStep) await io.append([{ op: 'status', issue: issue.id, status }], await io.captureOrigin())
   await removeAgentTaskRoot(io, session, agentId)
 }
 
@@ -262,7 +266,7 @@ export async function steppedPromptContext(io: Pick<PanelIo, 'captureOrigin' | '
   const focusId = focusOf(events, origin.session).stack.at(-1)
   if (!focusId) return undefined
   const root = outermostSteppedRootOf(focusId, byId)
-  if (!root) return undefined
+  if (!root || !isOpen(root) || root.landCommandsShown) return undefined
   const children = issues.filter(issue => issue.parent === root.id)
   if (children.length === 0)
     return `${STEPPED_PLANNER_CONTEXT}\nGoal title: ${root.title}\nRepository: ${origin.cwd}`

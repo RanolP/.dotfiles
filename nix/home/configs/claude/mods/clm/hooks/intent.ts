@@ -483,11 +483,11 @@ export async function recordPromptIntent(io: PromptIntentIo, text: string, promp
         const classification = parseFocus(response.text, knownIds)
         const lastSeq = currentEvents.filter(event => event.origin.session === origin.session).reduce((n, event) => Math.max(n, event.seq), 0)
         const { payloads, next } = compose(currentState, classification, currentIssues, () => issueId(origin.session, lastSeq + 1))
-        const written = await io.writeEvents([
-          ...payloads,
         const steppedRoot = classification.intent === 'question' || !parseStepped(response.text) ? undefined
           : payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue ?? classification.target ?? next.stack.at(-1)
         if (steppedRoot && !currentIssues.some(issue => issue.id === steppedRoot && issue.stepped)) payloads.push({ op: 'stepped', issue: steppedRoot })
+        const written = await io.writeEvents([
+          ...payloads,
           { op: 'focus', stack: next.stack, pending: next.pending, intent: classification.intent, ...(classification.rule === null ? {} : { rule: classification.rule }) },
         ], origin)
         try { for (const line of describe(written, allIssues)) io.log(line) }

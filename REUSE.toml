@@ -141,6 +141,8 @@ path = [
     "nix/home/configs/claude/mods/clm/hooks/held.ts",
     "nix/home/configs/claude/mods/clm/hooks/panel.ts",
     "nix/home/configs/claude/mods/clm/hooks/rewind.ts",
+    "nix/home/configs/claude/mods/clm/hooks/worktree.ts",
+    "nix/home/configs/claude/mods/clm/hooks/worktree.test.ts",
     "nix/home/configs/claude/mods/clm/types/index.d.ts",
     "nix/home/configs/claude/mods/clm/eval/data.ts",
     "nix/home/configs/claude/mods/clm/eval/fixtures/auth.json",

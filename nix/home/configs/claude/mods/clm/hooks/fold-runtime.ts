@@ -2,7 +2,7 @@ import type { SessionMessage } from 'claude-code'
 import {
   buildCleared, isLedgerRow, isSystemRow, isUserTyped, kst, ledgerRowText, planClear, stripReminders, sum, type Boundary, type ClearPlan,
 } from './fold'
-import { renderRange, type Evidence, type Source } from './evidence'
+import { confirmQuestion, renderRange, type Evidence, type Source } from './evidence'
 import {
   EMPTY_LEDGER, ageDecayPlan, fallbackLedger, factLines, instructionKey, instructionValues, issueList,
   LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, legacyItems, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseMerge,
@@ -224,7 +224,7 @@ export async function fold(
   const range = renderRange(plan.dropped, undefined, undefined, await io.sentAt())
   let ops: Payload[] = [], evidence: Evidence[][] = [], facts: Fact[] = [], retracted: string[] = [], withdrawn: string[] = []
   let fallback = false
-  let promoted: Payload[] = [], hold: Held[] = []
+  let promoted: Payload[] = [], hold: Held[] = [], claimed: Payload[] = []
   const held = io.heldClaims(await io.readHeld(), view.issues, here.session)
   let settled = held.settled
   let topics: TopicState[] | undefined
@@ -250,6 +250,7 @@ export async function fold(
     if (typeof merged !== 'string') {
       notes = withNotes(notes, merged.notes)
       ;({ ops, evidence, facts, retracted, withdrawn } = merged)
+      claimed = ops
       meta.fails = 0
       if (merged.rejected) await io.logEvent('ops-rejected', { ratio, reason: `${merged.rejected} op(s) failed validation; ${ops.length} kept` })
       const gated = await io.gateMerge(ops, evidence, facts, range.sources, ratio, new Set(view.dropped.map(issue => issue.id)))
@@ -277,7 +278,9 @@ export async function fold(
     hold = reviewed.hold
     settled = [...settled, ...reviewed.settled]
   }
-  ops = ops.filter(op => !(op.op === 'create' && op.status === 'done' && view.doneTitles.has(op.title.trim())))
+  const finishedEarlier = (op: Payload) => op.op === 'create' && op.status === 'done' && view.doneTitles.has(op.title.trim())
+  ops = ops.filter(op => !finishedEarlier(op))
+  if (!fallback) ops = [...ops, ...confirmQuestion(claimed.filter(op => !finishedEarlier(op)), ops, view.issues)]
   notes = rememberFacts(notes, facts, retracted)
   const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await io.ledgerPath(), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)

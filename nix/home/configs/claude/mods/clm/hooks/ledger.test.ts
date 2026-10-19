@@ -140,15 +140,20 @@ test('a quoted tool constraint survives two folds without entering topic decay',
   expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('[constraint] The build tool requires generated artifacts to stay checked in.')
 })
 
-// Regression caught: a done claim without verified evidence was shown as active work instead of awaiting verification.
-test('an unevidenced done becomes uncertain with a settling check', OPTS, async ($, on) => {
-  const ops = JSON.stringify([{ op: 'create', title: 'verify the package checksum', status: 'done' }])
+// Regression caught: the fold's uncited done claims were silently parked as uncertain instead of going to the user, and each fold would ask again in a new question.
+test('fold uncited dones become one confirm question, not uncertain', OPTS, async ($, on) => {
+  const ops = JSON.stringify([{ op: 'create', title: 'verify the package checksum', status: 'done' }, { op: 'create', title: 'tag the release', status: 'done' }])
   const s: State = { rows: ROWS, replies: [`## 목표\n- build summary\n\n<ops>${ops}</ops>`] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  const row = seen.results[0].messages[1].text
-  expect(snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? '')).find(issue => issue.title === 'verify the package checksum')?.status).toBe('uncertain')
-  expect(section(row, 'uncertain')).toContain('verify the package checksum — settling check: verify the claim')
+  const tracker = () => snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
+  expect(tracker().filter(issue => issue.status !== 'question').map(issue => [issue.title, issue.status])).toEqual([['verify the package checksum', 'todo'], ['tag the release', 'todo']])
+  expect(tracker().filter(issue => issue.status === 'question').map(issue => issue.title)).toEqual(['이 항목들이 끝났는지 확인: "verify the package checksum" · "tag the release"'])
+  expect(section(storedLedger(seen), '미결 질문')).toContain('이 항목들이 끝났는지 확인')
+  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
+  s.replies.push(`## 목표\n- build summary\n\n<ops>${JSON.stringify([{ op: 'create', title: 'push the tag', status: 'done' }])}</ops>`)
+  await turnEnds($, s, seen)
+  expect(tracker().filter(issue => issue.status === 'question').map(issue => issue.title)).toEqual(['이 항목들이 끝났는지 확인: "verify the package checksum" · "tag the release" · "push the tag"'])
 })
 
 // Regression caught: a new merge kept sending already-small old topics back to the model.

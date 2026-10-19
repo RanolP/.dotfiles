@@ -52,13 +52,12 @@ test('a close the assistant only recommended, with the PR still OPEN, ends not d
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
   expect(section(storedLedger(seen), '한 일')).not.toContain('PR #<pr>')
-  expect(section(row, 'uncertain')).toContain('PR #<pr> 닫기')
-  expect(section(row, 'uncertain')).toContain('PR #<pr> 정리')
+  expect(section(storedLedger(seen), '미결 질문')).toContain('"PR #<pr> 닫기" · "PR #<pr> 정리"')
   expect(seen.reviewPrompts[0]).toContain('"quote":"PR <pr> state: OPEN"')
   expect(seen.reviewPrompts[0]).toContain('[assistant 2026-10-06 09:00 KST] I recommend closing PR #<pr>; closed it.')
   const events = logEvents(seen)
-  expect(events.find(e => e.event === 'evidence-rejected')?.reason).toContain('PR #<pr> 정리" as done: done moved to uncertain (quote "I recommend closing PR #<pr>; closed it" is not in tu_pr)')
-  expect(events.find(e => e.event === 'review-rejected')?.reason).toContain('done moved to uncertain')
+  expect(events.find(e => e.event === 'evidence-rejected')?.reason).toContain('PR #<pr> 정리" as done: done held for the user\'s confirmation (quote "I recommend closing PR #<pr>; closed it" is not in tu_pr)')
+  expect(events.find(e => e.event === 'review-rejected')?.reason).toContain('done held for the user\'s confirmation')
 })
 
 // Regression caught (b): a fact whose quote appears nowhere in the folded rows was kept as if the user or a tool had said it.
@@ -100,7 +99,7 @@ test('a reviewer failure records no done, holds the facts out of the ledger, and
   const row = seen.results[0].messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
   expect(section(storedLedger(seen), '한 일')).toBe('- (none yet)')
-  expect(section(row, 'uncertain')).toContain('빌드 로그 확인')
+  expect(section(storedLedger(seen), '미결 질문')).toContain('"빌드 로그 확인"')
   expect(row).not.toContain('HELD-FACT-ONE')
   expect(heldIn(seen).map(h => [h.kind, h.text])).toEqual([['fact', 'HELD-FACT-ONE']])
   expect(logEvents(seen).find(e => e.event === 'review-failed')?.reason).toContain('review call failed')
@@ -173,7 +172,7 @@ test('empty verdicts record no done and drop the unverdicted facts', OPTS, async
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
   expect(section(storedLedger(seen), '한 일')).toBe('- (none yet)')
-  expect(section(row, 'uncertain')).toContain('빌드 로그 확인')
+  expect(section(storedLedger(seen), '미결 질문')).toContain('"빌드 로그 확인"')
   expect(row).not.toContain('UNREVIEWED-FACT')
   expect(logEvents(seen).find(e => e.event === 'review-rejected')?.reason).toContain('no verdict')
 })

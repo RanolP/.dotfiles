@@ -1,4 +1,4 @@
-import { checkEvidence, describeOp, downgrade, gateOps, isDoneClaim, isDropClaim, isReopenClaim, resolveRef, type Evidence, type Source } from './evidence'
+import { checkEvidence, describeOp, gateOps, withhold, isDoneClaim, isDropClaim, isReopenClaim, resolveRef, type Evidence, type Source } from './evidence'
 import { instructionKey, parseReview, REVIEW_SYSTEM, type Fact } from './ledger'
 import { isRecord, type Payload } from './tracker'
 
@@ -126,8 +126,8 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
     for (const [index, op] of input.ops.entries()) if (op.op === 'status' && isDropClaim(op)) hold.push(await heldDrop(io, op.issue, input.evidence[index] ?? [], citedSources(input.evidence[index] ?? [], input.range.sources)))
     const drops = hold.length
     for (const fact of input.facts) hold.push({ key: `fact:${instructionKey(fact.text)}`, nonce: `${await io.now()}-${Math.random().toString(36).slice(2, 10)}`, kind: 'fact', factKind: fact.kind, text: fact.text, evidence: fact.evidence, sources: citedSources(fact.evidence, input.range.sources) })
-    await io.logEvent('review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) moved to uncertain, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(op => describeOp(op)).join('; ')})` : ''}, ${drops} drop(s) held, retracts dropped, ${input.facts.length} fact(s) and ${input.claims.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
-    return { ops: input.ops.filter(op => landsUnreviewed(op, dropped)).map(op => isDoneClaim(op) ? downgrade(op) : op), facts: [], promoted: [], hold, settled: [], failed: true }
+    await io.logEvent('review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) held for the user's confirmation, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(op => describeOp(op)).join('; ')})` : ''}, ${drops} drop(s) held, retracts dropped, ${input.facts.length} fact(s) and ${input.claims.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
+    return { ops: input.ops.filter(op => landsUnreviewed(op, dropped)).flatMap(op => isDoneClaim(op) ? withhold(op) : [op]), facts: [], promoted: [], hold, settled: [], failed: true }
   }
   const verdict = new Map(review.map(item => [item.id, item]))
   const lines: string[] = []
@@ -136,8 +136,8 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
     if (item?.accept) return [op]
     if (!item && !isDoneClaim(op)) return [op]
     const why = item ? item.reason : 'no verdict'
-    lines.push(`op${index + 1} ${describeOp(op)}: ${isDoneClaim(op) ? 'done moved to uncertain' : 'dropped'} (${why})`)
-    return isDoneClaim(op) ? [downgrade(op)] : []
+    lines.push(`op${index + 1} ${describeOp(op)}: ${isDoneClaim(op) ? 'done held for the user\'s confirmation' : 'dropped'} (${why})`)
+    return isDoneClaim(op) ? withhold(op) : []
   })
   const facts = input.facts.filter((fact, index) => {
     const item = verdict.get(`fact${index + 1}`)

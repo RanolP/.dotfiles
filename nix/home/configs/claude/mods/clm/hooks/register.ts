@@ -8,7 +8,7 @@ import {
   type Boundary, type ClearPlan, type StableAttachmentType,
 } from './fold'
 import {
-  checkEvidence, clippedSource, describeOp, downgrade, gateOps, isDoneClaim, isDropClaim, isReopenClaim, renderRange,
+  checkEvidence, clippedSource, describeOp, gateOps, isDoneClaim, isDropClaim, isReopenClaim, renderRange,
   type Evidence, type Source,
 } from './evidence'
 import {

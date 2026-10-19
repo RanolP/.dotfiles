@@ -2,7 +2,7 @@ import type { SessionMessage } from 'claude-code'
 
 import type { SentAt } from './address'
 import { isUserTyped, kst, stripReminders } from './fold'
-import type { Payload } from './tracker'
+import type { Issue, Payload } from './tracker'
 
 // A summary claim (a done step, a key fact, a user instruction) stands only on
 // a verbatim quote from one row of the folded range. The rows a quote may come
@@ -176,8 +176,31 @@ export function checkEvidence(list: readonly Evidence[], sources: Sources, admis
 
 export const isDoneClaim = (o: Payload) => (o.op === 'create' || o.op === 'status') && o.status === 'done'
 
-/** A done claim that lost its evidence: a create keeps the step as `doing`; a status move to done becomes a move to doing. */
-export const downgrade = (o: Payload): Payload => (o.op === 'create' || o.op === 'status' ? { ...o, status: 'uncertain' } : o)
+/** A done claim that lost its evidence leaves its issue where it was: a status move is withheld and a create lands as todo, while `confirmQuestion` asks the user. */
+export const withhold = (o: Payload): Payload[] => (o.op === 'status' ? [] : o.op === 'create' ? [{ ...o, status: 'todo' }] : [o])
+
+export const CONFIRM_PREFIX = '이 항목들이 끝났는지 확인: '
+const CONFIRM_SEP = ' · '
+
+// The fold only observes the transcript, so a done it inferred but could not
+// prove goes to the user as one question per fold, extended rather than
+// duplicated while it stays open; the user's answer then lands the dones
+// through a later fold's user-quoted ops.
+export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[]): Payload[] {
+  const key = (o: Payload) => o.op === 'status' ? `status:${o.issue}` : o.op === 'create' ? `create:${o.title.trim()}` : ''
+  const landedDone = new Set(landed.filter(isDoneClaim).map(key))
+  const title = (id: string) => issues.find(issue => issue.id === id)?.title
+  // A done on a dropped or finished issue is a re-open the user's own words decide, not a completion to confirm.
+  const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && issue.status !== 'dropped' && issue.status !== 'done')
+  const items = claimed.filter(o => isDoneClaim(o) && asksAbout(o) && !landedDone.has(key(o)))
+    .map(o => o.op === 'status' ? `${o.issue} "${title(o.issue) ?? ''}"` : o.op === 'create' ? `"${o.title.trim()}"` : '')
+  if (!items.length) return []
+  const open = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX))
+  if (!open) return [{ op: 'create', title: CONFIRM_PREFIX + [...new Set(items)].join(CONFIRM_SEP), status: 'question', note: '사용자 확인 대기' }]
+  const asked = open.title.slice(CONFIRM_PREFIX.length).split(CONFIRM_SEP)
+  const fresh = [...new Set(items)].filter(item => !asked.includes(item))
+  return fresh.length ? [{ op: 'retitle', issue: open.id, title: CONFIRM_PREFIX + [...asked, ...fresh].join(CONFIRM_SEP) }] : []
+}
 
 /** Appends the first held quote to a done create's note, so 한 일 shows what proved it. */
 export function citeNote(o: Payload, held: readonly Evidence[]): Payload {
@@ -191,7 +214,7 @@ export const isDropClaim = (o: Payload) => o.op === 'status' && o.status === 'dr
 
 /**
  * Applies the mechanical check to tracker ops: a done claim with no held
- * evidence is downgraded, and a drop with no held quote from the user is
+ * evidence is withheld for the user's confirmation, and a drop with no held quote from the user is
  * discarded, since only the user can abandon a direction. Returns the ops (aligned with `evidence` by index,
  * now holding only the held items) and one line per rejection.
  */
@@ -224,9 +247,11 @@ export function gateOps(ops: readonly Payload[], evidence: readonly Evidence[][]
       kept.push(held)
       return
     }
-    rejections.push(`${describeOp(o)}: done moved to uncertain (${problems.join('; ') || 'no evidence'})`)
-    out.push(downgrade(o))
-    kept.push([])
+    rejections.push(`${describeOp(o)}: done held for the user's confirmation (${problems.join('; ') || 'no evidence'})`)
+    for (const op of withhold(o)) {
+      out.push(op)
+      kept.push([])
+    }
   })
   return { ops: out, evidence: kept, rejections }
 }

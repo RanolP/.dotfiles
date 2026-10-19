@@ -214,6 +214,7 @@ path = [
     "nix/home/configs/claude/agents/oracle.md",
     "nix/home/configs/claude/agents/artifact-writer.md",
     "nix/home/configs/claude/agents/artifact-coldread.md",
+    "nix/home/configs/claude/agents/planner.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

@@ -5,6 +5,7 @@ import { checkEvidence, describeOp, renderRange, type Evidence, type Source, typ
 import { compose } from './intent'
 import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, shownNote, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { FocusState } from './tracker'
+import { debateRubric, rubricText, steppedRootOf, type ModelIo } from './stepped'
 
 export const TASK_TOOL = 'mcp__clm__clm_task'
 
@@ -40,6 +41,7 @@ export type PanelIo = {
   open: (path: string) => Promise<{ exitCode: number; stderr: string }>
   now: () => string
   log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
+  complete: ModelIo['complete']
 }
 
 const panelStatus: Record<Issue['status'], 'pending' | 'in_progress' | 'completed' | 'deleted'> = {
@@ -310,7 +312,28 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   }
   const current = await sessionIssues(io, { issue: taskId })
   const actualStatus = current[0]?.status ?? status
-  return { result: `clm_task: ${taskId} ${actualStatus}.` }
+  const rubric = status === 'doing' ? await settleStepRubric(io, origin, taskId) : undefined
+  return { result: `clm_task: ${taskId} ${actualStatus}.${rubric ? `\n${rubric}` : ''}` }
+}
+
+/** A step of a stepped goal started without a rubric gets one from the debate; the tool result carries it or why it is missing. */
+async function settleStepRubric(io: PanelIo, origin: Origin, taskId: string): Promise<string | undefined> {
+  const issues = snapshot(await io.readAll()).filter(issue => issue.origin.session === origin.session)
+  const byId = new Map(issues.map(issue => [issue.id, issue]))
+  const step = byId.get(taskId)
+  const root = step && steppedRootOf(step.id, byId)
+  if (!step || !root) return undefined
+  if (step.rubric) return `Rubric for this step:\n${rubricText(step.rubric)}`
+  const items = await debateRubric(io, {
+    goal: root.title, step: step.title, notes: step.notes, cwd: origin.cwd,
+    siblings: issues.filter(issue => issue.parent === step.parent && issue.id !== step.id).map(issue => issue.title),
+  })
+  if (typeof items === 'string') {
+    io.log(`clm stepped: rubric debate failed for ${taskId} (${items})`, { to: 'debug' })
+    return `No rubric settled for this step (${items}); the step has no done check yet.`
+  }
+  await io.append([{ op: 'rubric', issue: taskId, items }], origin)
+  return `Rubric for this step, settled after two review rounds:\n${rubricText(items)}`
 }
 
 export async function mirrorModelTask(io: Pick<PanelIo, 'captureOrigin' | 'readAll' | 'append'>, event: ModelTaskCall): Promise<Mirrored> {

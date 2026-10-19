@@ -13,6 +13,14 @@ export type IssueStatus = (typeof STATUSES)[number]
 export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' && (STATUSES as readonly string[]).includes(v)
 export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
+/** A step's done state: a command that exits 0, or a criterion a cited transcript quote must prove. */
+export type RubricItem =
+  | { id: string; kind: 'command'; argv: string[]; cwd?: string }
+  | { id: string; kind: 'evidence'; criterion: string }
+export type Verdict = 'pass' | 'fail'
+export type Attempt = { method: string; verdict: Verdict; ts: string }
+export type Method = { text: string; failed: boolean }
+
 export type Origin = { session: string; repo: string; branch?: string; cwd: string }
 type Base = { ts: string; seq: number; issue: string; origin: Origin }
 type Create = { op: 'create'; title: string; status: IssueStatus; note?: string; taskId?: string }
@@ -29,6 +37,11 @@ export type TrackerEvent = Base & (
   | { op: 'link' }
   | { op: 'parent'; parent: string | null }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
+  // Stepped goal: the root is planned into steps, each with a rubric, attempts and methodologies.
+  | { op: 'stepped' }
+  | { op: 'rubric'; items: RubricItem[] }
+  | { op: 'attempt'; method: string; verdict: Verdict }
+  | { op: 'method'; text: string; failed: boolean }
 )
 export type Payload =
   | { op: 'create'; issue?: string; title: string; status: IssueStatus; note?: string; taskId?: string }
@@ -40,6 +53,10 @@ export type Payload =
   | { op: 'link'; issue: string }
   | { op: 'parent'; issue: string; parent: string | null }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
+  | { op: 'stepped'; issue: string }
+  | { op: 'rubric'; issue: string; items: RubricItem[] }
+  | { op: 'attempt'; issue: string; method: string; verdict: Verdict }
+  | { op: 'method'; issue: string; text: string; failed: boolean }
 
 export type Issue = {
   id: string
@@ -54,6 +71,13 @@ export type Issue = {
   updated: string
   /** Position of the event that last made this issue done, in snapshot order; later is larger. */
   doneOrder?: number
+  /** The root of a stepped goal: its children are planned steps. */
+  stepped?: true
+  /** The latest settled rubric; a later `rubric` op replaces it whole. */
+  rubric?: RubricItem[]
+  attempts?: Attempt[]
+  /** One entry per methodology tried; a repeated `method` op on the same text updates its `failed` flag. */
+  methods?: Method[]
 }
 
 export const issueId = (session: string, seq: number) => `${session.slice(0, 8)}-${seq}`
@@ -105,6 +129,15 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
       if (e.parent === null) delete i.parent
       else i.parent = e.parent
     }
+    else if (e.op === 'stepped') i.stepped = true
+    else if (e.op === 'rubric') i.rubric = e.items.map(item => ({ ...item }))
+    else if (e.op === 'attempt') (i.attempts ??= []).push({ method: e.method, verdict: e.verdict, ts: e.ts })
+    else if (e.op === 'method') {
+      const methods = (i.methods ??= [])
+      const known = methods.find(m => m.text === e.text)
+      if (known) known.failed = e.failed
+      else methods.push({ text: e.text, failed: e.failed })
+    }
     else if (e.op === 'link' && !i.linked.includes(e.origin.session)) i.linked.push(e.origin.session)
     i.updated = e.ts
   }
@@ -129,6 +162,10 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       case 'note': return { ...base, issue: p.issue, op: 'note', text: p.text }
       case 'link': return { ...base, issue: p.issue, op: 'link' }
       case 'parent': return { ...base, issue: p.issue, op: 'parent', parent: p.parent }
+      case 'stepped': return { ...base, issue: p.issue, op: 'stepped' }
+      case 'rubric': return { ...base, issue: p.issue, op: 'rubric', items: p.items.map(item => ({ ...item })) }
+      case 'attempt': return { ...base, issue: p.issue, op: 'attempt', method: p.method, verdict: p.verdict }
+      case 'method': return { ...base, issue: p.issue, op: 'method', text: p.text, failed: p.failed }
       // Focus snapshots are session metadata, so the log's issue key is the session id.
       case 'focus': return { ...base, issue: origin.session, op: 'focus', stack: [...p.stack], pending: [...p.pending], intent: p.intent, ...(p.rule === undefined ? {} : { rule: p.rule }) }
     }
@@ -273,6 +310,14 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       out.push(`작업 '${title}' 상위 작업: ${e.parent ? state.get(e.parent)?.title ?? e.parent : '(none)'}`)
     } else if (e.op === 'focus') {
       out.push(`주 작업 초점 갱신 (${e.intent})`)
+    } else if (e.op === 'stepped') {
+      out.push(`작업 '${title}' 단계 목표로 지정`)
+    } else if (e.op === 'rubric') {
+      out.push(`작업 '${title}' 완료 기준 ${e.items.length}개 확정`)
+    } else if (e.op === 'attempt') {
+      out.push(`작업 '${title}' 시도 ${e.verdict === 'pass' ? '통과' : '실패'}: ${clip(flat(e.method), 60)}`)
+    } else if (e.op === 'method') {
+      out.push(`작업 '${title}' 방법론 ${e.failed ? '실패 기록' : '기록'}: ${clip(flat(e.text), 60)}`)
     } else if (e.op === 'note' && e.text.startsWith(CONFIRM_ITEMS)) {
       out.push(`작업 '${title}' 확인 대기 ${storedItems(e.text)?.length ?? 0}건`)
     } else if (e.op === 'note') {

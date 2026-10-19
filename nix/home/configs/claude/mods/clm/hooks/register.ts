@@ -20,6 +20,7 @@ import {
   archivedDone, injected, normalizeRemote, parseLog, parseOps, toEvents,
   focusOf, isRecord, type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
+import type { JudgeIo } from './stepped'
 import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
@@ -341,6 +342,16 @@ const panelIo = ($: EngineInterface): PanelIo => ({
   open: path => $.process.run(['open', path], { timeoutMs: 5000 }),
   now: () => kst(),
   log: (text, options) => $.ui.log(text, options),
+  complete: request => $.model.complete(request),
+})
+/** What `judgeRubric` needs from the engine; `agentId` picks whose transcript evidence items cite. */
+export const stepJudgeIo = ($: EngineInterface, agentId?: string): JudgeIo => ({
+  complete: request => $.model.complete(request),
+  run: (argv, options) => $.process.run(argv, options),
+  sources: async () => {
+    const rows = agentId === undefined ? await $.session.messages() : await $.session.messages({ agentId })
+    return Array.isArray(rows) ? renderRange(rows).sources : new Map()
+  },
 })
 const clmStatusIo = ($: StatusReader) => ({
   readWorkflow: () => readWorkflow($), readMeta: () => readMeta($), readAll: () => readAll($),

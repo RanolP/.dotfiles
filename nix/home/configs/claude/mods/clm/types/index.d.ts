@@ -60,7 +60,7 @@ export type ClmRecallInput = { address: string }
 export type ClmTaskInput = {
   id?: string
   title?: string
-  status: 'doing' | 'done' | 'uncertain' | 'dropped'
+  status: 'doing' | 'done' | 'dropped'
   note?: string
   evidence?: { ref: string; quote: string }
 }

@@ -1,6 +1,6 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields } from './events'
-import { assignAgentTaskRoot, assignedTaskRoots, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
@@ -598,7 +598,7 @@ export const register: Register = (on, options) => {
         inputSchema: {
           type: 'object',
           properties: {
-            id: { type: 'string' }, title: { type: 'string' }, status: { type: 'string', enum: ['doing', 'done', 'uncertain', 'dropped'] },
+            id: { type: 'string' }, title: { type: 'string' }, status: { type: 'string', enum: ['doing', 'done', 'dropped'] },
             note: { type: 'string' }, evidence: { type: 'object', properties: { ref: { type: 'string' }, quote: { type: 'string' } }, required: ['ref', 'quote'], additionalProperties: false },
           },
           required: ['status'], additionalProperties: false,
@@ -643,7 +643,7 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) {
       try { return await next(e) }
       finally {
-        try { await closeAgentTaskRoot(panelIo($), await sid($), e.agentId, e.isAborted ? 'dropped' : 'done') }
+        try { await closeAgentTaskRoot(panelIo($), await sid($), e.agentId, e.reason === 'answer' ? 'done' : 'dropped') }
         catch (err) { $.ui.log(`clm: could not clear task root for agent ${e.agentId}: ${String(err).slice(0, 120)}`, { to: 'debug' }) }
       }
     }
@@ -680,8 +680,7 @@ export const register: Register = (on, options) => {
     const spawned = await next(e)
     if (!spawned.agentId) return spawned
     const planned = await plannedAgentStep(io, origin.session, parent, e.description)
-    if (planned && !Object.values(await assignedTaskRoots(io, origin.session)).includes(planned)) await assignAgentTaskRoot(io, origin.session, spawned.agentId, planned)
-    else await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)
+    if (!planned || !await claimAgentTaskRoot(io, origin.session, spawned.agentId, planned)) await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)
     return spawned
   })
   on('tool.call', { tool: TASK_TOOL }, async ($, e) => {

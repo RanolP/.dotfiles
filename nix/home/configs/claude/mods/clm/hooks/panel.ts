@@ -51,7 +51,7 @@ const taskStatus: Record<string, Issue['status'] | undefined> = {
 const panelSubject = (issue: Issue) => `${issue.status === 'question' ? '질문: ' : ''}${issue.title}${issue.progress ? ` (${issue.progress.done}/${issue.progress.total})` : ''}`
 const panelDescription = (issue: Issue) => issue.notes.at(-1) ?? issue.title
 const agentTaskRootsKey = (session: string) => `agent-task-roots:${session}`
-const taskStatuses = new Set(['doing', 'done', 'uncertain', 'dropped'])
+const taskStatuses = new Set(['doing', 'done', 'dropped'])
 export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (!isRecord(value)) return false
   const input = value
@@ -74,6 +74,17 @@ export async function assignAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeS
     const roots = await assignedTaskRoots(io, session)
     roots[agentId] = root
     await io.storeSet(agentTaskRootsKey(session), roots)
+  })
+}
+
+/** Assigns `root` to the agent only when no other agent holds it, checked and written under one lock so parallel spawns cannot both claim it. */
+export async function claimAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeSet' | 'serialize'>, session: string, agentId: string, root: string): Promise<boolean> {
+  return io.serialize(session, async () => {
+    const roots = await assignedTaskRoots(io, session)
+    if (Object.values(roots).includes(root)) return false
+    roots[agentId] = root
+    await io.storeSet(agentTaskRootsKey(session), roots)
+    return true
   })
 }
 

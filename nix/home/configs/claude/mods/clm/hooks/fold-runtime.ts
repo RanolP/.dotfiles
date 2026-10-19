@@ -280,7 +280,7 @@ export async function fold(
   }
   const finishedEarlier = (op: Payload) => op.op === 'create' && op.status === 'done' && view.doneTitles.has(op.title.trim())
   ops = ops.filter(op => !finishedEarlier(op))
-  if (!fallback) ops = [...ops, ...confirmQuestion(claimed.filter(op => !finishedEarlier(op)), ops, view.issues)]
+  if (!fallback) ops = [...ops, ...confirmQuestion(claimed.filter(op => !finishedEarlier(op)), ops, view.issues, view.doneTitles)]
   notes = rememberFacts(notes, facts, retracted)
   const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await io.ledgerPath(), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)

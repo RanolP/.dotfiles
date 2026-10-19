@@ -9,7 +9,7 @@ import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
-import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
+import { focusOf, parseLog, parseOps, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
@@ -465,9 +465,27 @@ test('a spawn without focus asks for a clm_task plan, and after it the same spaw
   expect(seen.store['agent-task-roots:s1']).toEqual({ worker: step[0]?.id })
 })
 
-// Regression caught: a finished or aborted subagent left its root task open in the ledger and panel.
-for (const [isAborted, status] of [[false, 'done'], [true, 'dropped']] as const) {
-  test(`a subagent ending ${isAborted ? 'aborted' : 'normally'} closes its root as ${status}`, OPTS, async ($, on) => {
+// Regression caught: two parallel spawns with the same description both claimed the one planned step as their root.
+test('parallel spawns of one planned step give it to one agent and a new root to the other', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Delegate.')], replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
+    { op: 'create', issue: 's1-step', title: 'check', status: 'doing' },
+    { op: 'parent', issue: 's1-step', parent: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
+  ])
+  let n = 0
+  on('agent.spawn', () => ({ model: 'haiku', agentId: `worker-${++n}` }))
+  await Promise.all([$.agent.spawn({ prompt: 'Check.', description: 'check' }), $.agent.spawn({ prompt: 'Check.', description: 'check' })])
+  const roots = Object.values(seen.store['agent-task-roots:s1'] as Record<string, string>)
+  expect(roots.length).toBe(2)
+  expect(new Set(roots).size).toBe(2)
+  expect(roots).toContain('s1-step')
+})
+
+// Regression caught: a finished subagent left its root task open, or one that ended on an error or refusal closed it as done.
+for (const [reason, status] of [['answer', 'done'], ['aborted', 'dropped'], ['error', 'dropped']] as const) {
+  test(`a subagent ending with reason ${reason} closes its root as ${status}`, OPTS, async ($, on) => {
     const seen = bottoms(on, { rows: [M('user', 'Delegate.')], replies: [] })
     seedTracker(seen, [
       { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
@@ -475,7 +493,7 @@ for (const [isAborted, status] of [[false, 'done'], [true, 'dropped']] as const)
     ])
     on('agent.spawn', () => ({ model: 'haiku', agentId: 'worker' }))
     await $.agent.spawn({ prompt: 'Check.', description: 'worker check' })
-    await $.turn.complete(turnInput('worker-end', { agentId: 'worker', isAborted }))
+    await $.turn.complete(turnInput('worker-end', { agentId: 'worker', reason, isAborted: reason === 'aborted' }))
     expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'worker check')?.status).toBe(status)
   })
 }
@@ -566,6 +584,20 @@ test('clm_task refuses drop and re-open without a quote from the user', OPTS, as
   const reopened = await $.tool.call({ tool: TASK_TOOL, id: 's1-child', status: 'doing', evidence: authorization } satisfies ToolCallInput)
   if ('deny' in reopened) throw new Error(reopened.deny)
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-child')?.status).toBe('doing')
+})
+
+// Regression caught: clm_task or a fold op could still write the retired uncertain status.
+test('neither clm_task nor a fold op can write uncertain', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Investigate.')], replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-task', title: 'verify command', status: 'doing' },
+    { op: 'focus', stack: ['s1-task'], pending: [], intent: 'handoff' },
+  ])
+  const result = await $.tool.call({ tool: TASK_TOOL, id: 's1-task', status: 'uncertain' } as unknown as ToolCallInput)
+  expect('deny' in result).toBe(true)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-task')?.status).toBe('doing')
+  const parsed = parseOps(JSON.stringify([{ op: 'create', title: 'x', status: 'uncertain' }, { op: 'status', issue: 's1-task', status: 'uncertain' }]), new Set(['s1-task']))
+  expect(typeof parsed !== 'string' && parsed.ops.length === 0 && parsed.rejected).toBe(2)
 })
 
 // Regression caught: an agent's own done report without a citation was recorded as uncertain, so finished work stayed open.

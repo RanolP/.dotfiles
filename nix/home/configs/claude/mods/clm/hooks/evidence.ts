@@ -186,20 +186,36 @@ const CONFIRM_SEP = ' · '
 // prove goes to the user as one question per fold, extended rather than
 // duplicated while it stays open; the user's answer then lands the dones
 // through a later fold's user-quoted ops.
-export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[]): Payload[] {
-  const key = (o: Payload) => o.op === 'status' ? `status:${o.issue}` : o.op === 'create' ? `create:${o.title.trim()}` : ''
-  const landedDone = new Set(landed.filter(isDoneClaim).map(key))
-  const title = (id: string) => issues.find(issue => issue.id === id)?.title
+export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>): Payload[] {
+  type Item = { id?: string; title: string }
+  const statusAfter = new Map(issues.map(issue => [issue.id, issue.status]))
+  for (const o of landed) if (o.op === 'status') statusAfter.set(o.issue, o.status)
+  const closed = (status: string | undefined) => status === 'done' || status === 'dropped'
+  const finishedTitles = new Set([
+    ...doneTitles,
+    ...landed.flatMap(o => o.op === 'create' && o.status === 'done' ? [o.title.trim()] : []),
+    ...issues.filter(issue => closed(statusAfter.get(issue.id))).map(issue => issue.title.trim()),
+  ])
+  const stillOpen = (item: Item) => !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id)))
+  const title = (id: string) => issues.find(issue => issue.id === id)?.title.trim() ?? ''
   // A done on a dropped or finished issue is a re-open the user's own words decide, not a completion to confirm.
-  const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && issue.status !== 'dropped' && issue.status !== 'done')
-  const items = claimed.filter(o => isDoneClaim(o) && asksAbout(o) && !landedDone.has(key(o)))
-    .map(o => o.op === 'status' ? `${o.issue} "${title(o.issue) ?? ''}"` : o.op === 'create' ? `"${o.title.trim()}"` : '')
-  if (!items.length) return []
-  const open = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX))
-  if (!open) return [{ op: 'create', title: CONFIRM_PREFIX + [...new Set(items)].join(CONFIRM_SEP), status: 'question', note: '사용자 확인 대기' }]
-  const asked = open.title.slice(CONFIRM_PREFIX.length).split(CONFIRM_SEP)
-  const fresh = [...new Set(items)].filter(item => !asked.includes(item))
-  return fresh.length ? [{ op: 'retitle', issue: open.id, title: CONFIRM_PREFIX + [...asked, ...fresh].join(CONFIRM_SEP) }] : []
+  const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && !closed(issue.status))
+  const claims = claimed.filter(o => isDoneClaim(o) && asksAbout(o))
+    .map((o): Item => o.op === 'status' ? { id: o.issue, title: title(o.issue) } : { title: o.op === 'create' ? o.title.trim() : '' })
+    .filter(stillOpen)
+  const open = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX) && statusAfter.get(issue.id) === 'question')
+  const asked = (open?.title.slice(CONFIRM_PREFIX.length).split(CONFIRM_SEP) ?? []).flatMap((text): Item[] => {
+    const match = /^(?:(\S+) )?"(.*)"$/.exec(text)
+    return match ? [{ ...(match[1] ? { id: match[1] } : {}), title: match[2] ?? '' }] : []
+  })
+  const items: Item[] = []
+  for (const item of [...asked.filter(stillOpen), ...claims]) if (!items.some(seen => seen.title === item.title)) items.push(item)
+  const text = (item: Item) => `${item.id ? `${item.id} ` : ''}"${item.title}"`
+  let body = items.map(text).join(CONFIRM_SEP)
+  if (CONFIRM_PREFIX.length + body.length > 200) body = `${body.slice(0, 200 - CONFIRM_PREFIX.length)}…`
+  if (!open) return items.length ? [{ op: 'create', title: CONFIRM_PREFIX + body, status: 'question', note: '사용자 확인 대기' }] : []
+  if (!items.length) return [{ op: 'status', issue: open.id, status: 'done' }]
+  return CONFIRM_PREFIX + body === open.title ? [] : [{ op: 'retitle', issue: open.id, title: CONFIRM_PREFIX + body }]
 }
 
 /** Appends the first held quote to a done create's note, so 한 일 shows what proved it. */

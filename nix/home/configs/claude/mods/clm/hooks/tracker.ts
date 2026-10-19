@@ -223,9 +223,10 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
   for (const o of list as Record<string, unknown>[]) {
     const before = ops.length
     const title = text(o?.title, 200), note = text(o?.note ?? o?.text, 300)
-    if (o?.op === 'create' && title && isStatus(o.status) && o.status !== 'dropped')
+    // `uncertain` stays parseable in stored events, but no new op may produce it.
+    if (o?.op === 'create' && title && isStatus(o.status) && o.status !== 'dropped' && o.status !== 'uncertain')
       ops.push({ op: 'create', title, status: o.status, ...(note ? { note } : {}) })
-    else if (o?.op === 'status' && typeof o.issue === 'string' && known.has(o.issue) && isStatus(o.status))
+    else if (o?.op === 'status' && typeof o.issue === 'string' && known.has(o.issue) && isStatus(o.status) && o.status !== 'uncertain')
       ops.push({ op: 'status', issue: o.issue, status: o.status })
     else if (o?.op === 'retitle' && typeof o.issue === 'string' && known.has(o.issue) && title)
       ops.push({ op: 'retitle', issue: o.issue, title })

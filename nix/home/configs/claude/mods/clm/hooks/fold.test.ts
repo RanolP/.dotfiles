@@ -10,7 +10,7 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint, stableAttachmentRow } from './fold'
+import { fingerprint, stableAttachmentOf, stableAttachmentRow } from './fold'
 import type { StableAttachmentType } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
@@ -25,7 +25,8 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   expect(section(out[1].text, 'learned')).toContain('a.ts:12 is the bad import')
   expect(storedLedger(seen)).toContain('a.ts:12 is the bad import')
   expect(shape(out.slice(2))).toEqual(['run tests', 'tu_c', 'tu_c', 'tests pass', 'commit it', 'done'])
-  expect(out.some((m: any) => m.handle !== undefined)).toBe(false)
+  expect(out[0].handle).toBe('h0')
+  expect(out.slice(1).some((m: any) => m.handle !== undefined)).toBe(false)
   expect(seen.prompts[0]).toContain('fixed a.ts:12')
   expect(seen.prompts[0]).not.toContain('tests pass')
   expect(seen.files[LEDGER_FILE]).toContain('## 핵심 사실·경로')
@@ -85,6 +86,26 @@ test('a mid-session CLAUDE.md edit is carried on the next fold', OPTS, async ($,
   expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
   await $.prompt.attachment(attachment('instructions', instructions))
   await $.prompt.attachment(attachment('instructions', 'Instruction files were re-read after an edit; these differ from their earlier copies.\nUpdated instruction text.'))
+})
+
+// Regression caught: a fold re-carried the first request's session-start attachments as user rows, so the UI showed them as typed by the user.
+test('head group with attachments does not re-carry them as user rows', OPTS, async ($, on) => {
+  const instructions = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const style = 'Use the selected response style exactly.'
+  const s: State = { rows: ROWS.slice(0, 1), replies: [ledger('first fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const attachment = (type: StableAttachmentType, text: string) => ({ type, text, origin: 'dynamic' })
+  await $.prompt.attachment(attachment('instructions', instructions))
+  await $.prompt.attachment(attachment('output_style_instructions', style))
+  s.rows = ROWS
+  await turnEnds($, s, seen)
+  const out = seen.results.at(0)?.messages ?? []
+  expect(out[0]).toEqual(handled(ROWS)[0]!)
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(out.filter(row => stableAttachmentOf(row) !== undefined)).toEqual([])
+  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
+  expect(await $.prompt.attachment(attachment('output_style_instructions', style))).toEqual({ text: null })
 })
 
 test('deleting a CLAUDE.md mid-session keeps the original full text carried on the next fold', OPTS, async ($, on) => {

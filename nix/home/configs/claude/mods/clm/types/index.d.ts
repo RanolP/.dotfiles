@@ -74,7 +74,7 @@ export type ClmResourceInput = {
 }
 
 export type ClmStableAttachmentType = StableAttachmentType
-export type ClmStableAttachmentValue = { full?: string; deltas: string[]; carriedAtSeq: number; droppedAtSeq: number }
+export type ClmStableAttachmentValue = { full?: string; inHead?: boolean; deltas: string[]; carriedAtSeq: number; droppedAtSeq: number }
 export type ClmStableAttachmentSession = Partial<Record<ClmStableAttachmentType, ClmStableAttachmentValue>>
 export type ClmStableAttachmentState = Record<string, ClmStableAttachmentSession>
 

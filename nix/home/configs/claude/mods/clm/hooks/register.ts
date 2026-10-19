@@ -149,7 +149,7 @@ const INSTRUCTIONS_PREAMBLE = 'Codebase and user instructions are shown below.'
 const isInstructionDelta = (text: string) => !text.startsWith(INSTRUCTIONS_PREAMBLE)
 const appendStableDelta = (deltas: string[], text: string) => [...deltas, text].slice(-MAX_STABLE_ATTACHMENT_DELTAS)
 const isStableAttachmentValue = (value: unknown): value is StableAttachmentValue =>
-  isRecord(value) && (value.full === undefined || typeof value.full === 'string') && Array.isArray(value.deltas)
+  isRecord(value) && (value.full === undefined || typeof value.full === 'string') && (value.inHead === undefined || typeof value.inHead === 'boolean') && Array.isArray(value.deltas)
   && value.deltas.every(item => typeof item === 'string') && typeof value.carriedAtSeq === 'number' && typeof value.droppedAtSeq === 'number'
 const isStableAttachmentSession = (value: unknown): value is StableAttachmentSession =>
   isRecord(value) && Object.entries(value).every(([type, item]) => isStableAttachmentType(type) && isStableAttachmentValue(item))
@@ -208,6 +208,8 @@ async function stableAttachmentSession($: StableAttachmentIo): Promise<{ session
 export async function handleStableAttachment($: StableAttachmentIo, input: StableAttachmentInput): Promise<{ text: null } | undefined> {
   if (input.agentId !== undefined) return
   const { session } = await stableAttachmentSession($)
+  // Announced before any reply, it sits in the first request's transcript group.
+  const inHead = !(await $.session.messages()).some(m => m.role === 'assistant')
   return updateStableAttachmentStore($, sessions => {
     const state = sessions[session] ?? {}
     const current = state[input.type]
@@ -223,24 +225,24 @@ export async function handleStableAttachment($: StableAttachmentIo, input: Stabl
       }
       return { next: { ...sessions, [session]: state }, result: undefined }
     }
-    state[input.type] = { full: input.text, deltas: [], carriedAtSeq: 0, droppedAtSeq: 0 }
+    state[input.type] = { full: input.text, ...(inHead ? { inHead } : {}), deltas: [], carriedAtSeq: 0, droppedAtSeq: 0 }
     return { next: { ...sessions, [session]: state }, result: undefined }
   })
 }
 
-const stableAttachmentRows = async ($: StableAttachmentIo): Promise<SessionMessage[]> => {
+const stableAttachmentRows = async ($: StableAttachmentIo, headKept: boolean): Promise<SessionMessage[]> => {
   const { session } = await stableAttachmentSession($)
   return updateStableAttachmentStore($, sessions => {
     const state = sessions[session] ?? {}
     const rows = STABLE_ATTACHMENT_TYPES.flatMap(type => {
       const value = state[type]
-      return value ? [...(value.full === undefined ? [] : [stableAttachmentRow(type, value.full)]), ...value.deltas.map(text => stableAttachmentRow(type, text))] : []
+      return value ? [...(value.full === undefined || (headKept && value.inHead) ? [] : [stableAttachmentRow(type, value.full)]), ...value.deltas.map(text => stableAttachmentRow(type, text))] : []
     })
     return { next: sessions, result: rows }
   })
 }
 
-const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, rows: readonly SessionMessage[]) => {
+const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, rows: readonly SessionMessage[], headKept: boolean) => {
   const { session } = await stableAttachmentSession($)
   return updateStableAttachmentStore($, sessions => {
     const state = sessions[session] ?? {}
@@ -249,6 +251,7 @@ const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, 
       const value = attachment && state[attachment.type]
       if (value) value.carriedAtSeq = seq
     }
+    if (headKept) for (const value of Object.values(state)) if (value.inHead && value.full !== undefined) value.carriedAtSeq = seq
     return { next: { ...sessions, [session]: state }, result: undefined }
   })
 }
@@ -435,8 +438,8 @@ const rewindIo = ($: EngineInterface): RewindIo => ({
 const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   sessionId: () => $.session.id(),
   sessionMessages: () => $.session.messages(),
-  stableAttachments: () => stableAttachmentRows($),
-  markStableAttachmentsCarried: (seq, rows) => markStableAttachmentsCarried($, seq, rows),
+  stableAttachments: headKept => stableAttachmentRows($, headKept),
+  markStableAttachmentsCarried: (seq, rows, headKept) => markStableAttachmentsCarried($, seq, rows, headKept),
   sessionCompact: () => $.session.compact({}),
   now: () => $.clock.now(),
   after: (ms, fn) => $.clock.after(ms, fn),

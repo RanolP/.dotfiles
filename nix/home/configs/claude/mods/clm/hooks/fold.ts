@@ -174,8 +174,17 @@ const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMess
     ? m
     : { ...m, toolResults: m.toolResults.map(r => (cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) })) }
 
-export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = []): SessionMessage[] {
-  return [...plan.head.filter(m => !isLedgerRow(m) && !isCarriedAttachment(m)), ...attachments, ledgerRow, ...plan.tail.filter(m => !isCarriedAttachment(m))].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => strip(applyCuts(m, plan.cuts)))
+// A request row kept with its handle and unchanged text brings back its
+// transcript group, the session-start attachments that follow it, so they stay
+// attachments instead of carried user rows. Only row 0 qualifies: the restored
+// entry keeps its old parentUuid, and --resume walks back through every row
+// ahead of it.
+export const keepsHeadGroup = (msgs: readonly SessionMessage[], first: number): boolean =>
+  first === 0 && msgs[0] !== undefined && isPrompt(msgs[0]) && msgs[0].handle !== undefined
+
+export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
+  const kept = keepHead ? plan.head.find(isPrompt) : undefined
+  return [...plan.head.filter(m => !isLedgerRow(m) && !isCarriedAttachment(m)), ...attachments, ledgerRow, ...plan.tail.filter(m => !isCarriedAttachment(m))].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts))))
 }
 
 // clm-prompt

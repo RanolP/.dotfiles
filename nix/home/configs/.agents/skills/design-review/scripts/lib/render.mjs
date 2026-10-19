@@ -89,6 +89,7 @@ export async function renderGallery(review, reviewPath, outputPath, title, dupli
   const concernFilter = [];
   const platformFilter = [];
   const sections = [];
+  let rowIndex = 0;
   for (const concern of review.concerns) {
     concernFilter.push([concern.id, concern.name]);
     const rows = [];
@@ -124,7 +125,20 @@ export async function renderGallery(review, reviewPath, outputPath, title, dupli
         const asisView = `<div class="screen comparison-screen" style="aspect-ratio:${ratio}">${shotImage(asis, '기준 화면')}${rowMarkers}</div>`;
         const tobeView = `<div class="screen comparison-screen" style="aspect-ratio:${ratio}">${shotImage(tobe, '작업 후 화면')}${rowMarkers}</div>`;
         const onion = `<div class="screen comparison-screen onion-screen" style="aspect-ratio:${ratio}"><div class="onion-pair">${shotImage(asis, '기준 화면', 'onion-image onion-asis')}${shotImage(tobe, '작업 후 화면', 'onion-image onion-tobe')}</div><canvas class="sep-canvas" aria-label="색 분리 비교"></canvas>${rowMarkers}</div>`;
-        rows.push(`<article class="review-row" data-concern="${esc(concern.id)}" data-platform="${esc(platform.name)}"><header class="row-heading"><h3>${esc(state.name)} <span class="platform-tag">${esc(platform.name)}</span></h3>${textNotes(state.notes, 'state-notes')}</header>${warning}${duplicateBadges}<div class="comparison-grid"><figure class="shot"><figcaption>Figma <span>${numberText(state.frame.w)} × ${numberText(state.frame.h)}</span></figcaption>${figma}</figure><figure class="shot"><figcaption>기준</figcaption>${asisView}</figure><figure class="shot"><figcaption>작업 후</figcaption>${tobeView}</figure><figure class="shot"><figcaption>겹쳐 보기</figcaption>${onion}</figure></div>${table}</article>`);
+        // The opacity slider needs both captures to blend; colour separation still reads one capture against an empty channel.
+        const onionId = `onion-${++rowIndex}`;
+        const rowLabel = esc(`${state.name} ${platform.name}`);
+        const onionSlider = asis && tobe
+          ? `<label class="onion-slider" for="${onionId}"><span aria-hidden="true">겹침</span><input id="${onionId}" type="range" min="0" max="100" value="50" aria-label="${rowLabel} 작업 후 불투명도"></label><output class="onion-value" for="${onionId}">50%</output>`
+          : '';
+        const onionControls = asis || tobe
+          ? `<div class="onion-controls">${onionSlider}<button type="button" class="mode-toggle" aria-pressed="false" aria-label="${rowLabel} 색 분리">색 분리 켜기</button><span class="mode-notice" role="status" aria-live="polite" hidden>색 분리는 http(s)로 열었을 때만 동작한다</span></div>`
+          : '';
+        const allSettled = boxList.length > 0 && boxList.every(box => box.status === 'resolved' || box.status === 'accepted');
+        const settledToggle = allSettled
+          ? `<button type="button" class="row-toggle" aria-expanded="false">해결됨 · ${boxList.map(box => esc(box.id)).join(', ')}</button>`
+          : '';
+        rows.push(`<article class="review-row" data-concern="${esc(concern.id)}" data-platform="${esc(platform.name)}"><header class="row-heading"><h3>${esc(state.name)} <span class="platform-tag">${esc(platform.name)}</span></h3>${settledToggle}${textNotes(state.notes, 'state-notes')}</header>${warning}${duplicateBadges}<div class="comparison-grid"><figure class="shot"><figcaption>Figma <span>${numberText(state.frame.w)} × ${numberText(state.frame.h)}</span></figcaption>${figma}</figure><figure class="shot"><figcaption>기준</figcaption>${asisView}</figure><figure class="shot"><figcaption>작업 후</figcaption>${tobeView}</figure><figure class="shot"><figcaption>겹쳐 보기</figcaption>${onion}${onionControls}</figure></div>${table}</article>`);
       }
     }
     sections.push(`<section class="concern-section" data-concern-section="${esc(concern.id)}"><div class="concern-heading"><h2>${esc(concern.name)}</h2>${concern.nodeId ? `<span class="node-ref">Figma ${esc(concern.nodeId)}</span>` : ''}</div>${textNotes(concern.notes, 'concern-notes')}${rows.join('')}</section>`);
@@ -143,8 +157,6 @@ export async function renderGallery(review, reviewPath, outputPath, title, dupli
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(pageTitle)}</title><style>${css}</style></head>
 <body><main class="page"><header class="top"><div><h1>${esc(pageTitle)}</h1><p class="repo">저장소: ${esc(review.repo)}</p><div class="source-meta"><span><strong>Figma</strong> ${figmaLink(review.figma.url)}</span><span><strong>기준</strong> ${esc(`${review.base.branch}@${review.base.sha}`)}</span><span><strong>작업 중</strong> ${esc(`${review.tobe.branch}@${review.tobe.sha}${dirty}`)}</span></div></div></header>
 <div class="status-counts" aria-label="상태별 상자 수">${counts}</div>
-<div class="filters" aria-label="화면 필터"><label>화면 <select id="concern-filter"><option value="all">모든 화면</option>${concernOptions}</select></label><label>플랫폼 <select id="platform-filter"><option value="all">모든 플랫폼</option>${platformOptions}</select></label><label>종류 <select id="kind-filter"><option value="all">모든 종류</option><option value="fix">수정</option><option value="unintended">의도하지 않은 변경</option></select></label><label>상태 <select id="status-filter"><option value="all">모든 상태</option>${Object.entries(statusLabels).map(([status, label]) => `<option value="${status}">${label}</option>`).join('')}</select></label><button type="button" class="box-off" title="단축키 b">전부 끄기</button><button type="button" class="box-restore" title="단축키 b">전부 이전 상태로 돌리기</button><label class="only-open"><input id="show-settled" type="checkbox"> 해결된 박스도</label><span class="slider-wrap"><label for="onion-slider">겹침</label><input id="onion-slider" type="range" min="0" max="100" value="50"><output id="onion-value">50%</output></span><button type="button" class="mode-toggle" aria-pressed="false">색 분리 켜기</button><button type="button" class="theme-toggle" aria-label="색상 테마 전환">테마 전환</button></div>
-<span class="mode-notice" role="status" aria-live="polite" hidden>색 분리는 http(s)로 열었을 때만 동작한다</span>
-<div id="gallery">${sections.join('')}</div><div class="no-results" hidden>조건에 맞는 화면이 없습니다.</div></main><div class="toast" role="status" aria-live="polite">복사됨</div><script>${js}</script></body></html>`;
+<div class="filters" aria-label="화면 필터"><label>화면 <select id="concern-filter"><option value="all">모든 화면</option>${concernOptions}</select></label><label>플랫폼 <select id="platform-filter"><option value="all">모든 플랫폼</option>${platformOptions}</select></label><label>종류 <select id="kind-filter"><option value="all">모든 종류</option><option value="fix">수정</option><option value="unintended">의도하지 않은 변경</option></select></label><label>상태 <select id="status-filter"><option value="all">모든 상태</option>${Object.entries(statusLabels).map(([status, label]) => `<option value="${status}">${label}</option>`).join('')}</select></label><button type="button" class="box-off" title="단축키 b">전부 끄기</button><button type="button" class="box-restore" title="단축키 b">전부 이전 상태로 돌리기</button><label class="only-open"><input id="show-settled" type="checkbox"> 해결된 박스도</label><button type="button" class="theme-toggle" aria-label="색상 테마 전환">테마 전환</button></div><div id="gallery">${sections.join('')}</div><div class="no-results" hidden>조건에 맞는 화면이 없습니다.</div></main><div class="toast" role="status" aria-live="polite">복사됨</div><script>${js}</script></body></html>`;
   return { html, files: imageFiles };
 }

@@ -1,29 +1,35 @@
 (() => {
   const root = document.documentElement;
-  const slider = document.getElementById('onion-slider');
-  const output = document.getElementById('onion-value');
-  const modeButton = document.querySelector('.mode-toggle');
-  const modeNotice = document.querySelector('.mode-notice');
   const toast = document.querySelector('.toast');
   let toastTimer;
-  let colorSeparationBlocked = false;
 
-  slider.addEventListener('input', () => {
-    root.style.setProperty('--tobe-opacity', String(Number(slider.value) / 100));
-    output.value = `${slider.value}%`;
-    output.textContent = `${slider.value}%`;
+  document.querySelectorAll('.onion-controls').forEach(controls => {
+    const row = controls.closest('.review-row');
+    const slider = controls.querySelector('input[type="range"]');
+    const output = controls.querySelector('.onion-value');
+    const modeButton = controls.querySelector('.mode-toggle');
+    const modeNotice = controls.querySelector('.mode-notice');
+    slider?.addEventListener('input', () => {
+      row.style.setProperty('--tobe-opacity', String(Number(slider.value) / 100));
+      output.value = `${slider.value}%`;
+      output.textContent = `${slider.value}%`;
+    });
+    modeButton.addEventListener('click', async () => {
+      if (row.dataset.sepBlocked === 'true') {
+        modeNotice.hidden = false;
+        return;
+      }
+      const enabled = row.classList.toggle('color-mode');
+      setModeButton(row, enabled);
+      modeNotice.hidden = true;
+      if (enabled) await renderSeparation(row);
+    });
   });
-  modeButton.addEventListener('click', async () => {
-    if (colorSeparationBlocked) {
-      modeNotice.hidden = false;
-      return;
-    }
-    const enabled = document.body.classList.toggle('color-mode');
+  function setModeButton(row, enabled) {
+    const modeButton = row.querySelector('.mode-toggle');
     modeButton.setAttribute('aria-pressed', String(enabled));
     modeButton.textContent = enabled ? '색 분리 끄기' : '색 분리 켜기';
-    modeNotice.hidden = true;
-    if (enabled) await Promise.all([...document.querySelectorAll('.review-row')].map(renderSeparation));
-  });
+  }
   document.querySelector('.theme-toggle').addEventListener('click', () => {
     root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
   });
@@ -75,11 +81,10 @@
       canvas.dataset.error = error.name || 'error';
       canvas.setAttribute('aria-label', '색 분리 처리 실패');
       if (error.name === 'SecurityError') {
-        colorSeparationBlocked = true;
-        document.body.classList.remove('color-mode');
-        modeButton.setAttribute('aria-pressed', 'false');
-        modeButton.textContent = '색 분리 켜기';
-        modeNotice.hidden = false;
+        row.dataset.sepBlocked = 'true';
+        row.classList.remove('color-mode');
+        setModeButton(row, false);
+        row.querySelector('.mode-notice').hidden = false;
       }
     }
   }
@@ -235,6 +240,14 @@
         && (platform === 'all' || row.dataset.platform === platform)
         && (!boxFilterActive || visibleBoxes > 0);
       row.hidden = !match;
+      const toggle = row.querySelector('.row-toggle');
+      if (toggle) {
+        const collapsed = !showSettled && !row.classList.contains('expanded');
+        row.classList.toggle('collapsed', collapsed);
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        // The checkbox forces every settled row open, so the button would toggle nothing visible.
+        toggle.disabled = showSettled;
+      }
       if (match) visibleRows++;
     });
     document.querySelectorAll('.concern-section').forEach(section => {
@@ -244,5 +257,9 @@
     document.querySelector('.no-results').hidden = visibleRows !== 0;
     placeAll();
   }
+  document.querySelectorAll('.row-toggle').forEach(toggle => toggle.addEventListener('click', () => {
+    toggle.closest('.review-row').classList.toggle('expanded');
+    applyFilters();
+  }));
   applyFilters();
 })();

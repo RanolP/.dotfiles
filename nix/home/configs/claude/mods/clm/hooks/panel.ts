@@ -56,6 +56,7 @@ const taskStatus: Record<string, Issue['status'] | undefined> = {
 const panelSubject = (issue: Issue) => `${issue.status === 'question' ? '질문: ' : ''}${issue.title}${issue.progress ? ` (${issue.progress.done}/${issue.progress.total})` : ''}`
 const panelDescription = (issue: Issue) => shownNote(issue) ?? issue.title
 const agentTaskRootsKey = (session: string) => `agent-task-roots:${session}`
+const agentTaskStepClaimsKey = (session: string) => `agent-task-step-claims:${session}`
 const taskStatuses = new Set(['todo', 'doing', 'done', 'dropped'])
 export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (!isRecord(value)) return false
@@ -76,6 +77,12 @@ export async function assignedTaskRoots(io: Pick<PanelIo, 'storeGet'>, session: 
   return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
 
+async function claimedAgentTaskSteps(io: Pick<PanelIo, 'storeGet'>, session: string): Promise<Record<string, string>> {
+  const value = await io.storeGet(agentTaskStepClaimsKey(session))
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+}
+
 export async function assignAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeSet' | 'serialize'>, session: string, agentId: string, root: string): Promise<void> {
   await io.serialize(session, async () => {
     const roots = await assignedTaskRoots(io, session)
@@ -89,8 +96,11 @@ export async function claimAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeSe
   return io.serialize(session, async () => {
     const roots = await assignedTaskRoots(io, session)
     if (Object.values(roots).includes(root)) return false
+    const claimed = await claimedAgentTaskSteps(io, session)
     roots[agentId] = root
+    claimed[agentId] = root
     await io.storeSet(agentTaskRootsKey(session), roots)
+    await io.storeSet(agentTaskStepClaimsKey(session), claimed)
     return true
   })
 }
@@ -98,9 +108,15 @@ export async function claimAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeSe
 export async function removeAgentTaskRoot(io: Pick<PanelIo, 'storeGet' | 'storeSet' | 'serialize'>, session: string, agentId: string): Promise<void> {
   await io.serialize(session, async () => {
     const roots = await assignedTaskRoots(io, session)
-    if (!(agentId in roots)) return
-    delete roots[agentId]
-    await io.storeSet(agentTaskRootsKey(session), roots)
+    const claimed = await claimedAgentTaskSteps(io, session)
+    if (agentId in roots) {
+      delete roots[agentId]
+      await io.storeSet(agentTaskRootsKey(session), roots)
+    }
+    if (agentId in claimed) {
+      delete claimed[agentId]
+      await io.storeSet(agentTaskStepClaimsKey(session), claimed)
+    }
   })
 }
 
@@ -109,10 +125,8 @@ export async function closeAgentTaskRoot(io: PanelIo, session: string, agentId: 
   const root = (await assignedTaskRoots(io, session))[agentId]
   const issues = snapshot(await io.readAll())
   const issue = root === undefined ? undefined : issues.find(item => item.id === root)
-  const byId = new Map(issues.map(item => [item.id, item]))
-  const goal = issue && outermostSteppedRootOf(issue.id, byId)
-  const isSteppedStep = goal !== undefined && stepForTask(issue.id, goal, byId)?.id === issue.id
-  if (issue && isOpen(issue) && !isSteppedStep) await io.append([{ op: 'status', issue: issue.id, status }], await io.captureOrigin())
+  const isClaimedStep = issue !== undefined && (await claimedAgentTaskSteps(io, session))[agentId] === issue.id
+  if (issue && isOpen(issue) && !isClaimedStep) await io.append([{ op: 'status', issue: issue.id, status }], await io.captureOrigin())
   await removeAgentTaskRoot(io, session, agentId)
 }
 

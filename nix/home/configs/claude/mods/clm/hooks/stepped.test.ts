@@ -3,9 +3,9 @@ import { test, expect } from 'claude-code/testing'
 import { parseStepped } from './intent'
 import { attemptState, debateRubric, judgeRubric, parseRubric, steppedRootOf, type JudgeIo, type ModelIo } from './stepped'
 import { describe, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { M, seedTracker, TRACKER } from './clm-test-support'
+import { M, seedTracker, TRACKER, turnInput } from './clm-test-support'
 import { renderRange } from './evidence'
-import { closeAgentTaskRoot, type PanelIo } from './panel'
+import { claimAgentTaskRoot, closeAgentTaskRoot, type PanelIo } from './panel'
 import type { Worktree } from './worktree'
 
 const origin = { session: 'step-session', repo: 'github.com/o/repo', cwd: '/w' }
@@ -239,13 +239,42 @@ test('a Stop event with background tasks passes through without judging or chang
   const fixture = steppedStopFixture(on, stepPayloads([
     { op: 'rubric', issue: 's1-step-1', items: [{ id: 'tests', kind: 'command', argv: ['false'] }] },
   ]), defaultProcessResult, { modelComplete: () => { judgeCalls++; return { isAnswered: true, text: '{"pass":true}', reason: '' } } })
-  const result = await $.classic.Stop({ stop_hook_active: false, background_tasks: ['worker-1'] })
+  const result = await $.classic.Stop({ stop_hook_active: false, background_tasks: [{ task_id: 'worker-1', type: 'subagent' }] })
   expect(result.block).toBeUndefined()
   expect(judgeCalls).toBe(0)
-  expect(fixture.stopEvents[0]?.background_tasks).toEqual(['worker-1'])
+  expect(fixture.stopEvents[0]?.background_tasks).toEqual([{ task_id: 'worker-1', type: 'subagent' }])
+  expect(fixture.logs).toContain('clm stepped: judge deferred; 1 background worker(s) running')
   const events = parseLog(fixture.files[TRACKER] ?? '')
   expect(events.some(event => event.op === 'attempt' && event.issue === 's1-step-1')).toBe(false)
   expect(fixture.commands).toEqual([])
+})
+
+// Regression caught: a shell or monitor task kept the stepped rubric judge deferred after its workers had ended.
+test('a background shell task does not defer the Stop judge', async ($, on) => {
+  const fixture = steppedStopFixture(on, stepPayloads([
+    { op: 'rubric', issue: 's1-step-1', items: [{ id: 'tests', kind: 'command', argv: ['false'] }] },
+  ]))
+  const result = await $.classic.Stop({ stop_hook_active: false, background_tasks: [{ task_id: 'shell-1', type: 'shell' }] })
+  expect(result.block).toContain('The rubric failed for issue s1-step-1')
+  expect(fixture.commands.some(argv => argv[0] === 'false')).toBe(true)
+  expect(parseLog(fixture.files[TRACKER] ?? '').some(event => event.op === 'attempt' && event.issue === 's1-step-1')).toBe(true)
+})
+
+// Regression caught: an ad-hoc agent root under a stepped goal stayed open and became the next planned step.
+test('an ad-hoc agent under a focused stepped goal closes before Stop chooses the next step', async ($, on) => {
+  const fixture = steppedStopFixture(on, stepPayloads())
+  on('agent.spawn', () => ({ model: 'haiku', agentId: 'ad-hoc-worker' }))
+  on('turn.complete', async () => ({ text: '' }))
+  const spawned = await $.agent.spawn({ prompt: 'Check an unrelated issue.', description: 'Ad-hoc check' })
+  expect(spawned.agentId).toBe('ad-hoc-worker')
+  const beforeEnd = snapshot(parseLog(fixture.files[TRACKER] ?? ''))
+  const adHoc = beforeEnd.find(issue => issue.title === 'Ad-hoc check')
+  expect(adHoc?.parent).toBe('s1-step-1')
+  await $.turn.complete(turnInput('ad-hoc-worker-end', { agentId: 'ad-hoc-worker', reason: 'answer' }))
+  expect(snapshot(parseLog(fixture.files[TRACKER] ?? '')).find(issue => issue.id === adHoc?.id)?.status).toBe('done')
+  const result = await $.classic.Stop({ stop_hook_active: false })
+  expect(result.block).toContain('All steps for goal s1-root passed')
+  expect(result.block).not.toContain('Next step: Ad-hoc check')
 })
 
 // Regression caught: a rubric debate error left an active step permanently unclosable without a Stop checkpoint.
@@ -263,7 +292,7 @@ test('an active step without a settled rubric passes fail-soft and is checkpoint
 // Regression caught: an agent turn closed its claimed stepped task before Stop could judge and checkpoint it.
 test('a delegated stepped step stays open until the Stop judge closes it', async () => {
   let events = toEvents(stepPayloads(), origin, 0, '2026-10-19T00:00:00Z')
-  const store: Record<string, unknown> = { 'agent-task-roots:step-session': { 'agent-1': 's1-step-1' } }
+  const store: Record<string, unknown> = {}
   const io = {
     readAll: async () => events,
     captureOrigin: async () => origin,
@@ -277,9 +306,11 @@ test('a delegated stepped step stays open until the Stop judge closes it', async
     storeSet: async (key: string, value: unknown) => { store[key] = value },
     serialize: async (_session: string, action: () => Promise<unknown>) => action(),
   } as unknown as PanelIo
+  await claimAgentTaskRoot(io, origin.session, 'agent-1', 's1-step-1')
   await closeAgentTaskRoot(io, origin.session, 'agent-1', 'done')
   expect(snapshot(events).find(issue => issue.id === 's1-step-1')?.status).toBe('doing')
   expect(store['agent-task-roots:step-session']).toEqual({})
+  expect(store['agent-task-step-claims:step-session']).toEqual({})
 })
 
 // Regression caught: a broken process runner turned an internal judge error into a Stop loop the user could not leave.

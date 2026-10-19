@@ -833,13 +833,17 @@ export const register: Register = (on, options) => {
     const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
     const steppedGoal = outermostSteppedRootOf(parent, new Map(issues.map(issue => [issue.id, issue])))
     const goal = steppedGoal && isOpen(steppedGoal) && !steppedGoal.landCommandsShown ? steppedGoal : undefined
+    const activeStep = goal?.id === parent
+      ? issues.filter(issue => issue.parent === goal.id && issue.status === 'doing').at(-1)
+      : undefined
     const spawnInput = goal?.worktree
       ? { ...e, cwd: goal.worktree.dir, prompt: `${STEPPED_WORKTREE_CONTEXT(goal.worktree)}\n\n${e.prompt}` }
       : e
     const spawned = await next(spawnInput)
     if (!spawned.agentId) return spawned
     const planned = await plannedAgentStep(io, origin.session, parent, e.description)
-    if (!planned || !await claimAgentTaskRoot(io, origin.session, spawned.agentId, planned)) await createAgentTaskRoot(io, origin.session, spawned.agentId, parent, e.description || e.prompt)
+    if (!planned || !await claimAgentTaskRoot(io, origin.session, spawned.agentId, planned))
+      await createAgentTaskRoot(io, origin.session, spawned.agentId, activeStep?.id ?? parent, e.description || e.prompt)
     return spawned
   })
   on('tool.call', { tool: TASK_TOOL }, async ($, e) => {
@@ -849,7 +853,11 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
   on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
   on('classic.Stop', async ($, e, next) => {
-    if (e.background_tasks?.length) return next(e)
+    const backgroundWorkers = e.background_tasks?.filter(task => task.type === 'subagent' || task.type === 'workflow') ?? []
+    if (backgroundWorkers.length) {
+      $.ui.log(`clm stepped: judge deferred; ${backgroundWorkers.length} background worker(s) running`, { to: 'debug' })
+      return next(e)
+    }
     const result = await handleSteppedStop($, e.last_assistant_message)
     if (result === undefined) return next(e)
     return { ...(await next(e)), ...result }

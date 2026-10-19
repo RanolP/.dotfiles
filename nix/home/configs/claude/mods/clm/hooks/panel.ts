@@ -5,7 +5,8 @@ import { checkEvidence, describeOp, renderRange, type Evidence, type Source, typ
 import { compose } from './intent'
 import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, shownNote, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { FocusState } from './tracker'
-import { debateRubric, rubricText, steppedRootOf, type ModelIo } from './stepped'
+import { debateRubric, outermostSteppedRootOf, rubricText, type ModelIo } from './stepped'
+import { WorktreeError, startWorktree, type Worktree } from './worktree'
 
 export const TASK_TOOL = 'mcp__clm__clm_task'
 
@@ -42,6 +43,8 @@ export type PanelIo = {
   now: () => string
   log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
   complete: ModelIo['complete']
+  run: (argv: readonly string[], options: { cwd?: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string; stderr: string }>
+  home: () => Promise<string | undefined>
 }
 
 const panelStatus: Record<Issue['status'], 'pending' | 'in_progress' | 'completed' | 'deleted'> = {
@@ -53,7 +56,7 @@ const taskStatus: Record<string, Issue['status'] | undefined> = {
 const panelSubject = (issue: Issue) => `${issue.status === 'question' ? '질문: ' : ''}${issue.title}${issue.progress ? ` (${issue.progress.done}/${issue.progress.total})` : ''}`
 const panelDescription = (issue: Issue) => shownNote(issue) ?? issue.title
 const agentTaskRootsKey = (session: string) => `agent-task-roots:${session}`
-const taskStatuses = new Set(['doing', 'done', 'dropped'])
+const taskStatuses = new Set(['todo', 'doing', 'done', 'dropped'])
 export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (!isRecord(value)) return false
   const input = value
@@ -61,6 +64,8 @@ export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (input.id !== undefined && typeof input.id !== 'string') return false
   if (input.title !== undefined && typeof input.title !== 'string') return false
   if (input.note !== undefined && typeof input.note !== 'string') return false
+  if (input.method !== undefined && (typeof input.method !== 'string' || !input.method.trim() || input.method.length > 300)) return false
+  if (input.method !== undefined && input.status !== 'doing') return false
   return input.evidence === undefined || (isRecord(input.evidence)
     && typeof input.evidence.ref === 'string' && typeof input.evidence.quote === 'string')
 }
@@ -223,6 +228,13 @@ async function createChildTask(
 }
 
 export const FOCUS_HINT = 'Call clm_task with status "doing" and a title, or the id of an open task, to focus one.'
+export const STEPPED_PLANNER_CONTEXT = [
+  'This task is a stepped goal with no recorded steps yet. Before editing, spawn the `planner` agent using `subagent_type: "planner"`.',
+  'Give the planner this input: `goal` is the user request from the current prompt verbatim, `repo` is the repository path, and `context` holds the task constraints and known files. Wait for its ordered JSON plan.',
+  'Record each returned step in order with `clm_task` using `status: "todo"` and its title. Then start the first step with `status: "doing"`, its issue id, and a short `method` describing the approach.',
+  'Do the goal work only after the ordered steps have been recorded.',
+].join('\n')
+export const STEPPED_WORKTREE_CONTEXT = (worktree: Worktree) => `Use ${worktree.dir} as the working directory for every edit and verification command for this stepped goal.`
 export const SPAWN_PLAN_REQUEST = [
   'clm: report your plan as clm tasks first, then spawn the agent.',
   '1. Load the tool: ToolSearch with query "select:mcp__clm__clm_task".',
@@ -236,6 +248,69 @@ export async function plannedAgentStep(io: Pick<PanelIo, 'readAll'>, session: st
   const title = description.trim()
   if (!title) return undefined
   return snapshot(await io.readAll()).find(issue => issue.origin.session === session && issue.parent === parent && isOpen(issue) && issue.title === title)?.id
+}
+
+const failureDetails = (err: unknown) => err instanceof WorktreeError
+  ? `argv=${JSON.stringify(err.argv)} exitCode=${err.exitCode ?? 'unavailable'} stderr=${JSON.stringify(err.stderr)}`
+  : `argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`
+
+export async function steppedPromptContext(io: Pick<PanelIo, 'captureOrigin' | 'readAll'>): Promise<string | undefined> {
+  const origin = await io.captureOrigin()
+  const events = await io.readAll()
+  const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
+  const byId = new Map(issues.map(issue => [issue.id, issue]))
+  const focusId = focusOf(events, origin.session).stack.at(-1)
+  if (!focusId) return undefined
+  const root = outermostSteppedRootOf(focusId, byId)
+  if (!root) return undefined
+  const children = issues.filter(issue => issue.parent === root.id)
+  if (children.length === 0)
+    return `${STEPPED_PLANNER_CONTEXT}\nGoal title: ${root.title}\nRepository: ${origin.cwd}`
+  if (root.worktree) return `Stepped goal ${root.id} is using a worktree. ${STEPPED_WORKTREE_CONTEXT(root.worktree)}`
+  return undefined
+}
+
+function stepForTask(taskId: string, root: Issue, byId: ReadonlyMap<string, Issue>): Issue | undefined {
+  let current = byId.get(taskId)
+  const seen = new Set<string>()
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id)
+    if (current.parent === root.id) return current
+    current = current.parent ? byId.get(current.parent) : undefined
+  }
+  return undefined
+}
+
+async function ensureGoalWorktree(io: PanelIo, origin: Origin, root: Issue): Promise<Worktree | undefined> {
+  if (root.worktree) return root.worktree
+  const argv = ['git', 'rev-parse', '--show-toplevel']
+  let repoRoot: string
+  try {
+    const result = await io.run(argv, { cwd: origin.cwd, timeoutMs: 5000 })
+    if (result.exitCode !== 0 || !result.stdout.trim().startsWith('/')) {
+      const reason = `issue=${root.id} argv=${JSON.stringify(argv)} exitCode=${result.exitCode} stderr=${JSON.stringify(result.stderr || 'git toplevel was not an absolute path')}`
+      io.log(`clm stepped: worktree skipped (${reason})`, { to: 'debug' })
+      return undefined
+    }
+    repoRoot = result.stdout.trim()
+  } catch (err) {
+    io.log(`clm stepped: worktree skipped issue=${root.id} ${failureDetails(err)}`, { to: 'debug' })
+    return undefined
+  }
+  let worktree: Worktree
+  try {
+    worktree = await startWorktree(io, { repoRoot, sessionId: origin.session, goalId: root.id })
+  } catch (err) {
+    io.log(`clm stepped: worktree start failed issue=${root.id} ${failureDetails(err)}`, { to: 'debug' })
+    return undefined
+  }
+  try {
+    await io.append([{ op: 'worktree', issue: root.id, ...worktree }], origin)
+  } catch (err) {
+    io.log(`clm stepped: worktree tracker write failed issue=${root.id} ${failureDetails(err)}`, { to: 'debug' })
+    return undefined
+  }
+  return worktree
 }
 
 // The intent classifier writes main's focus only from a user prompt it can
@@ -295,6 +370,13 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
     : undefined
   if (directionProblem) return { deny: `clm_task: ${directionProblem}` }
   const status = input.status
+  if (status === 'done') {
+    const goal = outermostSteppedRootOf(target?.id ?? ownRoot, byId)
+    const step = goal && stepForTask(target?.id ?? ownRoot, goal, byId)
+    const closesGoal = goal !== undefined && (goal.id === target?.id || (!target && goal.id === ownRoot))
+    if (closesGoal || (target && step?.id === target.id))
+      return { result: `clm_task: stepped issue ${target?.id ?? ownRoot} stays open until the Stop hook passes its rubric and checkpoints it.` }
+  }
   const audit = status === 'done' && input.evidence ? `cited ${input.evidence.ref}: ${input.evidence.quote}` : undefined
   const note = [input.note?.trim(), audit].filter((line): line is string => Boolean(line)).join('\n')
   const createdTask = input.id === undefined && title ? await createChildTask(io, origin, title, status, note, ownRoot) : undefined
@@ -312,28 +394,80 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   }
   const current = await sessionIssues(io, { issue: taskId })
   const actualStatus = current[0]?.status ?? status
+  const context: string[] = []
+  if (status === 'doing') {
+    try {
+      const currentEvents = await io.readAll()
+      const currentIssues = snapshot(currentEvents).filter(issue => issue.origin.session === origin.session)
+      const currentById = new Map(currentIssues.map(issue => [issue.id, issue]))
+      const goal = outermostSteppedRootOf(taskId, currentById)
+      const step = goal && stepForTask(taskId, goal, currentById)
+      if (goal && step) {
+        if (step.stepped && step.id !== goal.id)
+          io.log(`clm stepped: nested goal issue=${step.id} is a step of outer goal issue=${goal.id}; no nested worktree will start`, { to: 'debug' })
+        let worktree = goal.worktree
+        if (!worktree) worktree = await ensureGoalWorktree(io, origin, goal)
+        if (worktree) context.push(STEPPED_WORKTREE_CONTEXT(worktree))
+        if (input.method !== undefined) {
+          const method = input.method.trim()
+          const alreadyFailed = currentById.get(step.id)?.methods?.some(item => item.text === method && item.failed) ?? false
+          try {
+            await io.append([{ op: 'method', issue: step.id, text: method, failed: false }], origin)
+            context.push(`Method for issue ${step.id}: ${method}.${alreadyFailed ? ' This methodology has failed before; it remains counted as failed if it fails again.' : ''}`)
+          } catch (err) {
+            const details = `issue=${step.id} argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`
+            io.log(`clm stepped: method tracker write failed ${details}`, { to: 'debug' })
+            context.push(`The method for issue ${step.id} could not be recorded (${details}); the Stop check will use the last recorded method or its default.`)
+          }
+        }
+      }
+    } catch (err) {
+      const details = `issue=${taskId} argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`
+      io.log(`clm stepped: step setup failed ${details}`, { to: 'debug' })
+      context.push(`Stepped-goal setup for issue ${taskId} failed (${details}); the Stop hook will release the session if it cannot verify the step.`)
+    }
+  }
   const rubric = status === 'doing' ? await settleStepRubric(io, origin, taskId) : undefined
-  return { result: `clm_task: ${taskId} ${actualStatus}.${rubric ? `\n${rubric}` : ''}` }
+  return { result: `clm_task: ${taskId} ${actualStatus}.${[...context, rubric].filter(Boolean).map(text => `\n${text}`).join('')}` }
 }
 
 /** A step of a stepped goal started without a rubric gets one from the debate; the tool result carries it or why it is missing. */
 async function settleStepRubric(io: PanelIo, origin: Origin, taskId: string): Promise<string | undefined> {
-  const issues = snapshot(await io.readAll()).filter(issue => issue.origin.session === origin.session)
-  const byId = new Map(issues.map(issue => [issue.id, issue]))
-  const step = byId.get(taskId)
-  const root = step && steppedRootOf(step.id, byId)
-  if (!step || !root) return undefined
-  if (step.rubric) return `Rubric for this step:\n${rubricText(step.rubric)}`
-  const items = await debateRubric(io, {
-    goal: root.title, step: step.title, notes: step.notes, cwd: origin.cwd,
-    siblings: issues.filter(issue => issue.parent === step.parent && issue.id !== step.id).map(issue => issue.title),
-  })
-  if (typeof items === 'string') {
-    io.log(`clm stepped: rubric debate failed for ${taskId} (${items})`, { to: 'debug' })
-    return `No rubric settled for this step (${items}); the step has no done check yet.`
+  try {
+    const issues = snapshot(await io.readAll()).filter(issue => issue.origin.session === origin.session)
+    const byId = new Map(issues.map(issue => [issue.id, issue]))
+    const step = byId.get(taskId)
+    const root = outermostSteppedRootOf(taskId, byId)
+    const goalStep = root && stepForTask(taskId, root, byId)
+    if (!step || !root || goalStep?.id !== taskId) return undefined
+    const citationHint = step.rubric?.some(item => item.kind === 'evidence')
+      ? '\nFor each evidence item, include a <clm-step-citations> JSON array in your final response with {"id":"<rubric id>","ref":"<transcript row ref>","quote":"<verbatim quote>"}.'
+      : ''
+    if (step.rubric) return `Rubric for this step:\n${rubricText(step.rubric)}${citationHint}`
+    const items = await debateRubric(io, {
+      goal: root.title, step: step.title, notes: step.notes, cwd: root.worktree?.dir ?? origin.cwd,
+      siblings: issues.filter(issue => issue.parent === step.parent && issue.id !== step.id).map(issue => issue.title),
+    })
+    if (typeof items === 'string') {
+      const reason = `issue=${taskId} argv=[] exitCode=unavailable stderr=${JSON.stringify(items)}`
+      io.log(`clm stepped: rubric debate failed ${reason}`, { to: 'debug' })
+      return `No rubric settled for issue ${taskId} (${reason}); the step has no done check yet.`
+    }
+    try { await io.append([{ op: 'rubric', issue: taskId, items }], origin) }
+    catch (err) {
+      const reason = `issue=${taskId} argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`
+      io.log(`clm stepped: rubric tracker write failed ${reason}`, { to: 'debug' })
+      return `The rubric for issue ${taskId} could not be stored (${reason}); the step has no done check yet.`
+    }
+    const evidenceHint = items.some(item => item.kind === 'evidence')
+      ? '\nFor each evidence item, include a <clm-step-citations> JSON array in your final response with {"id":"<rubric id>","ref":"<transcript row ref>","quote":"<verbatim quote>"}.'
+      : ''
+    return `Rubric for this step, settled after two review rounds:\n${rubricText(items)}${evidenceHint}`
+  } catch (err) {
+    const reason = `issue=${taskId} argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`
+    io.log(`clm stepped: rubric setup failed ${reason}`, { to: 'debug' })
+    return `No rubric settled for issue ${taskId} (${reason}); the step has no done check yet.`
   }
-  await io.append([{ op: 'rubric', issue: taskId, items }], origin)
-  return `Rubric for this step, settled after two review rounds:\n${rubricText(items)}`
 }
 
 export async function mirrorModelTask(io: Pick<PanelIo, 'captureOrigin' | 'readAll' | 'append'>, event: ModelTaskCall): Promise<Mirrored> {

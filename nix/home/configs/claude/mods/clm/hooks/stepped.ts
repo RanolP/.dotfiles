@@ -22,7 +22,7 @@ export type JudgeIo = ModelIo & {
   /** Citable rows of the live transcript, as `renderRange(transcript).sources` builds them. */
   sources: () => Promise<Sources>
 }
-export type ItemVerdict = { id: string; pass: boolean; reason: string }
+export type ItemVerdict = { id: string; pass: boolean; reason: string; internal?: boolean }
 
 /** The stepped root a step belongs to: its nearest ancestor carrying the marker. The root itself is no step. */
 export function steppedRootOf(id: string, byId: ReadonlyMap<string, Issue>): Issue | undefined {
@@ -36,6 +36,19 @@ export function steppedRootOf(id: string, byId: ReadonlyMap<string, Issue>): Iss
     current = issue.parent
   }
   return undefined
+}
+
+/** The outermost active stepped goal containing an issue; nested markers stay steps of this goal. */
+export function outermostSteppedRootOf(id: string, byId: ReadonlyMap<string, Issue>): Issue | undefined {
+  const seen = new Set<string>()
+  let current = byId.get(id)
+  let root: Issue | undefined
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id)
+    if (current.stepped) root = current
+    current = current.parent ? byId.get(current.parent) : undefined
+  }
+  return root
 }
 
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/
@@ -142,42 +155,62 @@ export async function judgeRubric(issue: Pick<Issue, 'rubric'>, io: JudgeIo, cit
   const items = issue.rubric ?? []
   let sources: Sources | undefined
   const out: ItemVerdict[] = []
+  const diagnostic = (argv: readonly string[], exitCode: number | 'unavailable', stderr: string, reason?: string) =>
+    `argv=${JSON.stringify(argv)} exitCode=${exitCode} stderr=${JSON.stringify(stderr.slice(-400))}${reason ? ` reason=${reason}` : ''}`
   for (const item of items) {
-    try {
-      if (item.kind === 'command') {
+    if (item.kind === 'command') {
+      try {
         const r = await io.run(item.argv, { ...(item.cwd ? { cwd: item.cwd } : {}), timeoutMs: 300_000 })
-        const tail = (r.stderr.trim() || r.stdout.trim()).slice(-200)
-        out.push({ id: item.id, pass: r.exitCode === 0, reason: `exit ${r.exitCode}${tail ? `: ${tail}` : ''}` })
+        out.push({ id: item.id, pass: r.exitCode === 0, reason: r.exitCode === 0 ? 'exit 0' : diagnostic(item.argv, r.exitCode, r.stderr) })
+      } catch (err) {
+        out.push({ id: item.id, pass: false, internal: true, reason: diagnostic(item.argv, 'unavailable', String(err)) })
+      }
+      continue
+    }
+    try {
+      const evidence = cited[item.id]
+      if (!evidence) { out.push({ id: item.id, pass: false, reason: diagnostic([], 'unavailable', '', 'no {ref, quote} cited for this criterion') }); continue }
+      if (!sources) {
+        try { sources = await io.sources() }
+        catch (err) { out.push({ id: item.id, pass: false, internal: true, reason: diagnostic([], 'unavailable', String(err), 'could not read cited transcript') }); continue }
+      }
+      const checked = checkEvidence([evidence], sources, ['user', 'tool_result'], true)
+      if (!checked.held.length) { out.push({ id: item.id, pass: false, reason: diagnostic([], 'unavailable', '', checked.problems.join('; ')) }); continue }
+      let r: Awaited<ReturnType<ModelIo['complete']>>
+      try {
+        r = await io.complete({
+          model: 'haiku', system: JUDGE_SYSTEM, maxTokens: 300, timeoutMs: 30_000,
+          prompt: `${tag('criterion', item.criterion)}\n\n${tag('quote', evidence.quote)}`,
+        })
+      } catch (err) {
+        out.push({ id: item.id, pass: false, internal: true, reason: diagnostic([], 'unavailable', String(err), 'judge model call failed') })
         continue
       }
-      const evidence = cited[item.id]
-      if (!evidence) { out.push({ id: item.id, pass: false, reason: 'no {ref, quote} cited for this criterion' }); continue }
-      sources ??= await io.sources()
-      const checked = checkEvidence([evidence], sources, ['user', 'tool_result'], true)
-      if (!checked.held.length) { out.push({ id: item.id, pass: false, reason: checked.problems.join('; ') }); continue }
-      const r = await io.complete({
-        model: 'haiku', system: JUDGE_SYSTEM, maxTokens: 300, timeoutMs: 30_000,
-        prompt: `${tag('criterion', item.criterion)}\n\n${tag('quote', evidence.quote)}`,
-      })
-      if (!r.isAnswered) { out.push({ id: item.id, pass: false, reason: `judge did not answer (${r.reason})` }); continue }
-      const body = normalizeLedger(r.text)
-      const v: unknown = JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1))
-      if (!isRecord(v) || typeof v.pass !== 'boolean') { out.push({ id: item.id, pass: false, reason: 'judge reply has no boolean pass' }); continue }
+      if (!r.isAnswered) { out.push({ id: item.id, pass: false, internal: true, reason: diagnostic([], 'unavailable', r.reason, 'judge did not answer') }); continue }
+      let v: unknown
+      try {
+        const body = normalizeLedger(r.text)
+        v = JSON.parse(body.slice(body.indexOf('{'), body.lastIndexOf('}') + 1))
+      } catch (err) {
+        out.push({ id: item.id, pass: false, internal: true, reason: diagnostic([], 'unavailable', String(err), 'judge reply could not be parsed') })
+        continue
+      }
+      if (!isRecord(v) || typeof v.pass !== 'boolean') { out.push({ id: item.id, pass: false, internal: true, reason: diagnostic([], 'unavailable', r.text, 'judge reply has no boolean pass') }); continue }
       out.push({ id: item.id, pass: v.pass, reason: typeof v.reason === 'string' ? v.reason.slice(0, 200) : '' })
     } catch (err) {
-      out.push({ id: item.id, pass: false, reason: String(err).slice(0, 160) })
+      out.push({ id: item.id, pass: false, internal: true, reason: diagnostic([], 'unavailable', String(err), 'judge failed internally') })
     }
   }
   return out
 }
 
 /** Counts B reads to decide on rollback and stop: tries since the current methodology started, and failed methodologies. */
-export function attemptState(issue: Pick<Issue, 'attempts' | 'methods'>): { method?: string; triesWithMethod: number; failedMethods: number; rollback: boolean; stop: boolean } {
+export function attemptState(issue: Pick<Issue, 'attempts' | 'methods' | 'activeMethod'>): { method?: string; triesWithMethod: number; failedMethods: number; rollback: boolean; stop: boolean } {
   const attempts = issue.attempts ?? []
-  const method = attempts.at(-1)?.method
+  const method = issue.activeMethod ?? attempts.at(-1)?.method
   let triesWithMethod = 0
   for (let i = attempts.length - 1; i >= 0 && attempts[i]?.method === method && attempts[i]?.verdict === 'fail'; i--) triesWithMethod++
-  const failedMethods = (issue.methods ?? []).filter(m => m.failed).length
+  const failedMethods = (issue.methods ?? []).reduce((count, method) => count + (method.failed ? Math.max(1, method.failures ?? 0) : 0), 0)
   return { ...(method === undefined ? {} : { method }), triesWithMethod, failedMethods, rollback: triesWithMethod >= TRIES_PER_METHOD, stop: failedMethods >= METHODS_PER_STEP }
 }
 

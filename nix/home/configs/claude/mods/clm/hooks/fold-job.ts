@@ -3,23 +3,23 @@ import {
   buildCleared, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, keepsHeadGroup, kst, ledgerRowText, liveRows, planClear,
   protectedIndex, sum, visibleTokens, type ClearPlan,
 } from './fold'
-import { renderRange } from './evidence'
+import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import {
   composeLedger, EMPTY_LEDGER, factLines, instructionValues, mergeableNotes, notesOf, parseChanges, parseMerge,
   fallbackLedger, oversizeLines, preserveInstructions, preservedLines, rememberOversize, rememberPreserved, renderTurns,
   LESSON_SYSTEM, SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
 } from './ledger'
-import { focusOf, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
+import { focusOf, injected, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held } from './held'
 import type { Fold, FoldPreview, Meta, Opts, PreparedFold, TopicState, TrackerView } from './fold-runtime'
 import { parseSplitAnswer } from './fold-runtime'
 import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type RewindIo, type RewindPlan } from './rewind'
 import { xmlText } from './intent'
-import type { LogEvent, LogFields } from './events'
+import type { LogEvent, LogFields, Payloads } from './events'
 import type { SentAt } from './address'
 
 type Pending = {
-  notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
+  notes: string; fullNotes: string; ops: Payload[]; asks?: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: TopicState[]
   rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]; coveredRows?: string[]
 }
@@ -63,7 +63,7 @@ export type FoldJobIo = {
   updateHeld(settled: readonly string[], hold: readonly Held[]): Promise<void>
   ensureInstructionIndex(key: string, notes: string): Promise<void>
   residentLedger(key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview?: FoldPreview): Promise<string>
-  append(payloads: readonly Payload[], origin: Origin, project: boolean, knownTitles: boolean): Promise<TrackerEvent[]>
+  append(payloads: Payloads, origin: Origin, project: boolean, knownTitles: boolean): Promise<TrackerEvent[]>
   projectPanel(origin: Origin, events: readonly TrackerEvent[]): Promise<void>
   readRewindIo(): RewindIo
   observeTranscript(key: string, rows: readonly SessionMessage[]): Promise<void>
@@ -215,7 +215,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
     extractLessons(io, folded.plan.dropped, folded.seq)
     const summaryMs = Math.max(0, (await io.now()) - startedAt)
     return {
-      notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, seq: folded.seq,
+      notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, asks: folded.asks, seq: folded.seq,
       ...(folded.plan.tail[0] ? { keepFp: fingerprint(folded.plan.tail[0]) } : {}),
       keepFrom: rows.length - folded.plan.tail.length,
       dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
@@ -231,7 +231,7 @@ function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryM
   const keepFrom = rows.length - folded.plan.tail.length
   const keptRow = rows[keepFrom]
   return {
-    notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, seq: folded.seq,
+    notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, asks: folded.asks, seq: folded.seq,
     ...(keptRow ? { keepFp: fingerprint(keptRow) } : {}), keepFrom,
     dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
     cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics,
@@ -363,13 +363,26 @@ export async function maybeClear(io: FoldJobIo, opts: Opts): Promise<void> {
   void startFoldJob(io, opts, rows, meta, key, true).catch(err => io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' }))
 }
 
+// The confirm question is asked against the tracker as it stands when the fold
+// lands, not when it started: the user may have answered or closed the
+// question while the merge ran. Closed confirm questions stay in view so their
+// stored denials keep holding.
+function landedAsks(asks: readonly Payload[], landing: readonly Payload[], before: readonly Issue[], here: Origin): Payload[] {
+  const session = before.filter(issue => issue.origin.session === here.session)
+  const shown = injected(before, here)
+  const issues = [...shown, ...session.filter(issue => issue.title.startsWith(CONFIRM_PREFIX) && !shown.includes(issue))]
+  const doneTitles = new Set(session.filter(issue => issue.status === 'done').map(issue => issue.title.trim()))
+  return confirmQuestion(asks, landing, issues, doneTitles)
+}
+
 async function applyFoldPlan(
   io: FoldJobIo, workingRows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, escaped: boolean,
   startedAt: number, key: string, opts: Opts,
 ): Promise<SessionCompactResult> {
   const rewind = io.readRewindIo()
   const here = await io.captureOrigin()
-  const appended = await io.append([...use.ops, ...(use.promoted ?? [])], here, false, true)
+  const landing = [...use.ops, ...(use.promoted ?? [])]
+  const appended = await io.append(use.asks ? before => [...landing, ...landedAsks(use.asks ?? [], landing, before, here)] : landing, here, false, true)
   await io.updateHeld(use.settled ?? [], use.hold ?? [])
   await io.ensureInstructionIndex(key, use.fullNotes)
   const stateEvents = await io.readAll()

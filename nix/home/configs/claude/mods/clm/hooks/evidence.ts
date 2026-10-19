@@ -185,7 +185,8 @@ const CONFIRM_TITLE_MAX = 200
 /** Prefix of the note holding a confirm question's items as JSON; the ledger line hides it. */
 export const CONFIRM_ITEMS = '확인 대기 항목 '
 
-export type ConfirmItem = { id?: string; title: string; opaque?: true }
+/** `denied` marks an item the user said is not finished: kept in the stored list so no later fold asks it again. */
+export type ConfirmItem = { id?: string; title: string; opaque?: true; denied?: true }
 const confirmText = (item: ConfirmItem) => item.opaque ? item.title : `${item.id ? `${item.id} ` : ''}"${item.title}"`
 
 export const storedItems = (note: string): ConfirmItem[] | undefined => {
@@ -229,8 +230,9 @@ function confirmTitle(items: readonly ConfirmItem[]): string {
 // duplicated while it stays open; the user's answer then lands the dones
 // through a later fold's user-quoted ops. The items live in a note rather
 // than the title, because the title is clipped for display and cannot be
-// read back.
-export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>, answered: ReadonlySet<string> = new Set()): Payload[] {
+// read back. `denied` titles join the question's stored denials, which every
+// confirm question of the session, open or closed, keeps out of later asks.
+export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>, denied: ReadonlySet<string> = new Set()): Payload[] {
   type Item = ConfirmItem
   const statusAfter = new Map(issues.map(issue => [issue.id, issue.status]))
   for (const o of landed) if (o.op === 'status') statusAfter.set(o.issue, o.status)
@@ -240,22 +242,28 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
     ...landed.flatMap(o => o.op === 'create' && o.status === 'done' ? [o.title.trim()] : []),
     ...issues.filter(issue => closed(statusAfter.get(issue.id))).map(issue => issue.title.trim()),
   ])
-  const stillOpen = (item: Item) => !answered.has(item.title) && (item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id))))
+  const questions = issues.filter(issue => issue.title.startsWith(CONFIRM_PREFIX))
+  const deniedTitles = new Set([...denied, ...questions.flatMap(q => askedItems(q).filter(item => item.denied).map(item => item.title))])
+  const stillOpen = (item: Item) => !deniedTitles.has(item.title) && (item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id))))
   const title = (id: string) => issues.find(issue => issue.id === id)?.title.trim() ?? ''
   // A done on a dropped or finished issue is a re-open the user's own words decide, not a completion to confirm.
   const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && !closed(issue.status))
   const claims = claimed.filter(o => isDoneClaim(o) && asksAbout(o))
     .map((o): Item => o.op === 'status' ? { id: o.issue, title: title(o.issue) } : { title: o.op === 'create' ? o.title.trim() : '' })
     .filter(stillOpen)
-  const open = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX) && statusAfter.get(issue.id) === 'question')
+  const open = questions.find(issue => issue.status === 'question' && statusAfter.get(issue.id) === 'question')
   const asked = open ? askedItems(open) : []
   const items: Item[] = []
   for (const item of [...asked.filter(stillOpen), ...claims]) if (!items.some(seen => seen.title === item.title)) items.push(item)
-  const note = CONFIRM_ITEMS + JSON.stringify(items)
+  const denials = asked.filter(item => !item.opaque && (item.denied || denied.has(item.title))).map((item): Item => ({ ...item, denied: true }))
+  const stored = [...items, ...denials]
+  const note = CONFIRM_ITEMS + JSON.stringify(stored)
   if (!open) return items.length ? [{ op: 'create', title: confirmTitle(items), status: 'question', note }] : []
-  if (!items.length) return [{ op: 'status', issue: open.id, status: 'done' }]
-  if (items.length === asked.length && items.every((item, i) => confirmText(item) === confirmText(asked[i]!))) return []
-  return [{ op: 'note', issue: open.id, text: note }, { op: 'retitle', issue: open.id, title: confirmTitle(items) }]
+  const changed = stored.length !== asked.length || stored.some((item, i) => JSON.stringify(item) !== JSON.stringify(asked[i]))
+  const noted: Payload[] = changed ? [{ op: 'note', issue: open.id, text: note }] : []
+  if (!items.length) return [...(denials.length ? noted : []), { op: 'status', issue: open.id, status: 'done' }]
+  const retitled = confirmTitle(items)
+  return [...noted, ...(retitled === open.title ? [] : [{ op: 'retitle' as const, issue: open.id, title: retitled }])]
 }
 
 const CONFIRM_YES = /^(?:네|예|응|ㅇㅇ|맞아요?|다?\s?끝났어요?|다?\s?됐어요?|yes|y|yep|yeah|ok|okay|done)$/i
@@ -270,6 +278,8 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  * when `askedInReply`, since otherwise it most likely answers the agent.
  */
 export function confirmAnswer(reply: string, items: readonly ConfirmItem[], askedInReply: boolean): { confirmed: ConfirmItem[]; denied: ConfirmItem[] } | undefined {
+  // A reply that asks something ("s1-a?") is a question back, not an answer.
+  if (/[?？]/.test(reply)) return undefined
   const verdict = (text: string) => {
     const tidy = text.replace(/[\s,·.!?"'`~]+/g, ' ').trim()
     return tidy === '' ? 'bare' : CONFIRM_YES.test(tidy) ? 'yes' : CONFIRM_NO.test(tidy) ? 'no' : undefined

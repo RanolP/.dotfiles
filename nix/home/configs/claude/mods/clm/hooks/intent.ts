@@ -402,7 +402,6 @@ async function parseAndApplyLater(io: PromptIntentIo, raw: string, prompt: strin
   }
 }
 
-/** `address` is the one clm coined for this prompt at prompt.submit, absent when recording it failed. */
 /**
  * Lands the user's plain answer to the open confirm question without a model:
  * confirmed items become done citing the reply, denied items leave the
@@ -419,8 +418,10 @@ export async function resolveConfirmAnswer(io: PromptIntentIo, origin: Origin, r
     if (!answer) return
     const note = `cited ${address ?? 'user'}: ${reply.replace(/\s+/g, ' ').trim().slice(0, 200)}`
     const ops: Payload[] = answer.confirmed.flatMap((item): Payload[] => {
-      const issue = issues.find(i => isOpen(i) && (item.id ? i.id === item.id : i.title.trim() === item.title))
-      return issue ? [{ op: 'status', issue: issue.id, status: 'done' }, { op: 'note', issue: issue.id, text: note }] : [{ op: 'create', title: item.title, status: 'done', note }]
+      // An id names one issue; once it is closed elsewhere the answer has nothing left to land.
+      const issue = item.id ? issues.find(i => i.id === item.id) : issues.find(i => isOpen(i) && i.title.trim() === item.title) ?? issues.find(i => i.title.trim() === item.title)
+      if (issue) return isOpen(issue) ? [{ op: 'status', issue: issue.id, status: 'done' }, { op: 'note', issue: issue.id, text: note }] : []
+      return item.id ? [] : [{ op: 'create', title: item.title, status: 'done', note }]
     })
     const doneTitles = new Set(issues.filter(issue => issue.status === 'done').map(issue => issue.title.trim()))
     ops.push(...confirmQuestion([], ops, issues, doneTitles, new Set(answer.denied.map(item => item.title))))
@@ -430,6 +431,7 @@ export async function resolveConfirmAnswer(io: PromptIntentIo, origin: Origin, r
   })
 }
 
+/** `address` is the one clm coined for this prompt at prompt.submit, absent when recording it failed. */
 export async function recordPromptIntent(io: PromptIntentIo, text: string, promptSeq: number, address?: string): Promise<void> {
   const userPrompt = stripReminders(text)
   if (!userPrompt || isHarnessText(userPrompt)) return

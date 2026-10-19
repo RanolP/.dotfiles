@@ -1,5 +1,5 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
-import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields } from './events'
+import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields, type Payloads } from './events'
 import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
@@ -319,7 +319,7 @@ const captureOrigin = ($: EngineInterface) => captureEventsOrigin(eventsIo($))
 const readAll = ($: EngineInterface) => readAllEvents(eventsIo($))
 const serialized = <T>(session: string, run: () => Promise<T>) => serializeEvents(session, run)
 const writeEvents = ($: EngineInterface, payloads: readonly Payload[], origin: Origin) => writeTrackerEvents(eventsIo($), payloads, origin)
-const append = ($: EngineInterface, payloads: readonly Payload[], origin?: Origin, project = true, knownTitles = false) => appendEvents(eventsIo($), payloads, origin, project, knownTitles)
+const append = ($: EngineInterface, payloads: Payloads, origin?: Origin, project = true, knownTitles = false) => appendEvents(eventsIo($), payloads, origin, project, knownTitles)
 const logEvent = ($: EngineInterface, event: LogEvent, fields: LogFields) => writeLogEvent(eventsIo($), event, fields)
 
 const panelIo = ($: EngineInterface): PanelIo => ({

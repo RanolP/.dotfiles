@@ -157,7 +157,6 @@ test('a rebuild request without a question mark is stored', OPTS, async ($, on) 
   ])
 })
 
-// Regression caught: one assistant response could answer several queued requests, but only the last one was closed.
 // Regression caught: the user's plain answer to the confirm question landed nothing until a later fold happened to read it, and a reply that did not answer it could still change it.
 for (const [name, assistant, reply, want] of [
   ['a bare yes after the agent relayed the question confirms all', 'Did you push the tag and tag the release?', '네', { a: 'done', b: 'done', q: 'done' }],
@@ -165,6 +164,8 @@ for (const [name, assistant, reply, want] of [
   ['naming one item with a no denies it and keeps it open', 'Fixed the lint.', '"push the tag" 아직', { a: 'todo', b: 'todo', q: 'question', left: '"tag the release"' }],
   ['an unrelated reply changes nothing', 'Did you push the tag?', 'run the tests again', { a: 'todo', b: 'todo', q: 'question' }],
   ['a bare yes the agent did not ask for changes nothing', 'Shall I run the tests?', '네', { a: 'todo', b: 'todo', q: 'question' }],
+  ['an id asked about is not confirmed', 'Did you push the tag?', 's1-a?', { a: 'todo', b: 'todo', q: 'question' }],
+  ['a yes for an item dropped meanwhile neither reopens nor recreates it', 'Did you push the tag and tag the release?', '네', { a: 'dropped', b: 'done', q: 'done', drop: true }],
 ] as const) {
   test(`confirm answer: ${name}`, OPTS, async ($, on) => {
     const seen = bottoms(on, { rows: [M('user', 'Ship it.'), M('assistant', assistant)], replies: [] })
@@ -173,18 +174,21 @@ for (const [name, assistant, reply, want] of [
       { op: 'create', issue: 's1-a', title: 'push the tag', status: 'todo' },
       { op: 'create', issue: 's1-b', title: 'tag the release', status: 'todo' },
       { op: 'create', issue: 's1-q', title, status: 'question', note: `${CONFIRM_ITEMS}[{"id":"s1-a","title":"push the tag"},{"title":"tag the release"}]` },
+      ...('drop' in want ? [{ op: 'status' as const, issue: 's1-a', status: 'dropped' as const }] : []),
     ])
     await $.prompt.submit(promptInput(reply))
     for (let i = 0; i < 200 && !seen.intentPrompts.length; i++) await new Promise(resolve => setTimeout(resolve, 2))
     const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
     const status = (id: string) => issues.find(issue => issue.id === id)?.status
     expect({ a: status('s1-a'), b: status('s1-b'), q: status('s1-q') }).toEqual({ a: want.a, b: want.b, q: want.q })
+    expect(issues.map(issue => issue.id)).toEqual(['s1-a', 's1-b', 's1-q'])
     const q = issues.find(issue => issue.id === 's1-q')
     expect(q?.title).toBe('left' in want ? `${CONFIRM_PREFIX}${want.left}` : title)
     if (want.a === 'done') expect(issues.find(issue => issue.id === 's1-a')?.notes.at(-1)).toContain(reply)
   })
 }
 
+// Regression caught: one assistant response could answer several queued requests, but only the last one was closed.
 test('one assistant answer resolves every matching open request', OPTS, async ($, on) => {
   const quote = 'The configuration was rebuilt and the docs were updated'
   const seen = bottoms(on, {

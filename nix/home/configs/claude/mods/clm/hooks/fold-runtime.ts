@@ -23,7 +23,7 @@ export type TopicDraft = { topic: string; summary: string }
 export type SplitAnswer = { split: number; mergeReply: string; topics: TopicDraft[] }
 export type PreparedFold = { plan: ClearPlan; mergeReply: string; topics: TopicDraft[] }
 export type TrackerView = { issues: Issue[]; dropped: Issue[]; finished: Issue[]; doneTitles: Set<string> }
-export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; tailTokens: number }
+export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; asks: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; tailTokens: number }
 export type FoldPreview = { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: FocusState }
 
 export type FoldRuntimeIo = {
@@ -280,13 +280,15 @@ export async function fold(
   }
   const finishedEarlier = (op: Payload) => op.op === 'create' && op.status === 'done' && view.doneTitles.has(op.title.trim())
   ops = ops.filter(op => !finishedEarlier(op))
-  if (!fallback) ops = [...ops, ...confirmQuestion(claimed.filter(op => !finishedEarlier(op)), ops, view.issues, view.doneTitles)]
+  // The confirm ops are recomputed when the fold lands (fold-job), since the user may answer the question while this fold runs.
+  const asks = fallback ? [] : claimed.filter(op => !finishedEarlier(op))
+  const asking = confirmQuestion(asks, ops, view.issues, view.doneTitles)
   notes = rememberFacts(notes, facts, retracted)
   const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await io.ledgerPath(), withdrawn)
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
   let fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
   const seq = meta.seq + 1
-  const currentView = await io.trackerView(here, [...ops, ...promoted])
+  const currentView = await io.trackerView(here, [...ops, ...asking, ...promoted])
   const currentEvents = await io.readAll()
   const focusState = focusOf(currentEvents, here.session)
   const focusIssue = focusState.stack.at(-1) ?? null
@@ -321,5 +323,5 @@ export async function fold(
   }
   if (Object.keys(plan.cuts).length) await io.logEvent('truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
   if (calib !== undefined) meta.overhead = Math.max(0, calib - estimated)
-  return { plan, notes, fullNotes, ops, seq, fallback, promoted, hold, settled, topics, tailTokens }
+  return { plan, notes, fullNotes, ops, asks, seq, fallback, promoted, hold, settled, topics, tailTokens }
 }

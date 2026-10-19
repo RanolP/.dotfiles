@@ -226,6 +226,36 @@ test('fold uncited dones become one confirm question, not uncertain', OPTS, asyn
   expect(tracker().filter(issue => issue.status === 'question').map(issue => issue.title)).toEqual(['이 항목들이 끝났는지 확인: "verify the package checksum" · "tag the release" · "push the tag"'])
 })
 
+// Regression caught: a fold landed confirm ops computed before the user answered the question mid-fold, retitling the closed question with the answered items instead of asking the new claim.
+test('a confirm answer given while a fold runs is not undone when the fold lands', OPTS, async ($, on) => {
+  const ops = JSON.stringify([{ op: 'create', title: 'verify the package checksum', status: 'done' }, { op: 'create', title: 'tag the release', status: 'done' }])
+  const s: State = { rows: ROWS, replies: [`## 목표\n- build summary\n\n<ops>${ops}</ops>`] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
+  s.replies.push(`## 목표\n- build summary\n\n<ops>${JSON.stringify([{ op: 'create', title: 'push the tag', status: 'done' }])}</ops>`)
+  s.mergeBlock = async () => {
+    s.mergeBlock = undefined
+    const log = seen.files[TRACKER] ?? ''
+    const answer: Payload[] = tracker().filter(issue => issue.status !== 'done').map(issue => ({ op: 'status', issue: issue.id, status: 'done' }))
+    const lastSeq = parseLog(log).reduce((n, event) => Math.max(n, event.seq), 0)
+    seen.files[TRACKER] = log + toEvents(answer, { session: 's1', repo: 'github.com/o/repo', cwd: '/work/repo' }, lastSeq, new Date().toISOString()).map(event => `${JSON.stringify(event)}\n`).join('')
+  }
+  await turnEnds($, s, seen)
+  const questions = tracker().filter(issue => issue.title.startsWith(CONFIRM_PREFIX)).map(issue => [issue.title, issue.status])
+  expect(questions).toEqual([
+    [`${CONFIRM_PREFIX}"verify the package checksum" · "tag the release"`, 'done'],
+    [`${CONFIRM_PREFIX}"push the tag"`, 'question'],
+  ])
+})
+
+// Regression caught: an item the user denied came back in the next fold's question once the question holding the denial had closed.
+test('a denied confirm item is not asked again after its question closes', () => {
+  const closed = { ...confirmIssue('s1-q', `${CONFIRM_PREFIX}"tag the release"`, 'done'), notes: [`${CONFIRM_ITEMS}[{"title":"tag the release","denied":true}]`] }
+  expect(confirmQuestion([{ op: 'create', title: 'tag the release', status: 'done' }], [], [closed], new Set())).toEqual([])
+})
+
 // Regression caught: a new merge kept sending already-small old topics back to the model.
 test('age decay leaves a floor-sized old topic untouched on the next merge', async () => {
   const topics = [

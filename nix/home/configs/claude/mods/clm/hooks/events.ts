@@ -1,6 +1,6 @@
 import {
   describe, normalizeRemote, parseLog, toEvents,
-  type Origin, type Payload, type TrackerEvent,
+  type Issue, type Origin, type Payload, type TrackerEvent,
 } from './tracker'
 import { snapshot } from './tracker'
 import { describeOp } from './evidence'
@@ -82,13 +82,17 @@ export async function writeEvents(io: EventsIo, payloads: readonly Payload[], or
   return events
 }
 
+/** The ops to append, or a function that builds them from the tracker as it stands inside the write lock. */
+export type Payloads = readonly Payload[] | ((before: readonly Issue[]) => readonly Payload[])
+
 export async function append(
-  io: EventsIo, payloads: readonly Payload[], origin?: Origin, project = true, knownTitles = false,
+  io: EventsIo, ops: Payloads, origin?: Origin, project = true, knownTitles = false,
 ): Promise<TrackerEvent[]> {
-  if (payloads.length === 0) return []
+  if (typeof ops !== 'function' && ops.length === 0) return []
   const captured = origin ?? (await captureOrigin(io))
   return serialized(captured.session, async () => {
     const before = snapshot(await readAll(io))
+    const payloads = typeof ops === 'function' ? ops(before) : ops
     const titles = new Set(knownTitles ? before.filter(issue => issue.origin.session === captured.session).map(issue => issue.title.trim()) : [])
     const known = payloads.filter(payload => payload.op === 'create' && titles.has(payload.title.trim()))
     if (known.length) io.log(`clm: create skipped, this session already has the title: ${known.map(payload => describeOp(payload)).join('; ')}`, { to: 'debug' })

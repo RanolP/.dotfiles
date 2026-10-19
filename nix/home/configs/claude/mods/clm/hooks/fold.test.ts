@@ -108,6 +108,27 @@ test('head group with attachments does not re-carry them as user rows', OPTS, as
   expect(await $.prompt.attachment(attachment('output_style_instructions', style))).toEqual({ text: null })
 })
 
+// Regression caught: after --resume the head-held attachments were missing from the memory-only state, so the re-announced CLAUDE.md reached the model twice and the next fold carried it as a user row.
+test('a resumed session still drops the head-held re-announcement and carries no user row on the next fold', OPTS, async ($, on) => {
+  const instructions = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const s: State = { rows: ROWS.slice(0, 1), replies: [ledger('first fold'), ledger('second fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const attachment = { type: 'instructions' as const, text: instructions, origin: 'dynamic' }
+  await $.prompt.attachment(attachment)
+  s.rows = ROWS
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput)
+  expect(await $.prompt.attachment(attachment)).toEqual({ text: null })
+  s.rows = [...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+  expect(seen.results).toHaveLength(2)
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second[1]?.text).toMatch(/^\[clm ledger #2 · /)
+  expect(second.filter(row => stableAttachmentOf(row) !== undefined)).toEqual([])
+})
+
 test('deleting a CLAUDE.md mid-session keeps the original full text carried on the next fold', OPTS, async ($, on) => {
   const instructions = 'Codebase and user instructions are shown below.\n# Stable instructions\nKeep the exact bytes.'
   const deletion = 'Instructions no longer present: /w/CLAUDE.md'

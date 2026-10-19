@@ -142,14 +142,14 @@ async function readMeta($: StoreReader): Promise<Meta> {
 }
 const writeMeta = async ($: EngineInterface, m: Meta) => $.store.set(await metaKey($), m)
 export type StableAttachmentInput = { type: StableAttachmentType; text: string; origin: unknown; agentId?: string; detail?: unknown }
-export type StableAttachmentIo = { session: Pick<EngineInterface['session'], 'id' | 'messages'>; state: Pick<EngineInterface['state'], 'get' | 'update'> }
+export type StableAttachmentIo = { session: Pick<EngineInterface['session'], 'id' | 'messages'>; state: Pick<EngineInterface['state'], 'get' | 'update'>; store: Pick<EngineInterface['store'], 'get' | 'set'> }
 const STABLE_ATTACHMENTS = { plugin: 'clm', key: 'stableAttachments' } as const
 const MAX_STABLE_ATTACHMENT_DELTAS = 32
 const INSTRUCTIONS_PREAMBLE = 'Codebase and user instructions are shown below.'
 const isInstructionDelta = (text: string) => !text.startsWith(INSTRUCTIONS_PREAMBLE)
 const appendStableDelta = (deltas: string[], text: string) => [...deltas, text].slice(-MAX_STABLE_ATTACHMENT_DELTAS)
 const isStableAttachmentValue = (value: unknown): value is StableAttachmentValue =>
-  isRecord(value) && (value.full === undefined || typeof value.full === 'string') && (value.inHead === undefined || typeof value.inHead === 'boolean') && Array.isArray(value.deltas)
+  isRecord(value) && (value.full === undefined || typeof value.full === 'string') && (value.inHead === undefined || typeof value.inHead === 'boolean') && (value.headDigest === undefined || typeof value.headDigest === 'string') && Array.isArray(value.deltas)
   && value.deltas.every(item => typeof item === 'string') && typeof value.carriedAtSeq === 'number' && typeof value.droppedAtSeq === 'number'
 const isStableAttachmentSession = (value: unknown): value is StableAttachmentSession =>
   isRecord(value) && Object.entries(value).every(([type, item]) => isStableAttachmentType(type) && isStableAttachmentValue(item))
@@ -194,11 +194,31 @@ function attachmentSessionFromMessages(rows: readonly SessionMessage[]): StableA
   return state
 }
 
+// $.state does not survive a resume, and attachments the kept head row holds
+// leave no carried row to restore from. Their digests (never the text) persist
+// so the resumed harness's re-announcement is still recognised and dropped.
+type HeadAttachments = { seq: number; digests: Partial<Record<StableAttachmentType, string>> }
+const headAttachmentsKey = async ($: StableAttachmentIo) => `headAttachments:${await $.session.id()}`
+const isHeadAttachments = (value: unknown): value is HeadAttachments =>
+  isRecord(value) && typeof value.seq === 'number' && isRecord(value.digests)
+  && Object.entries(value.digests).every(([type, digest]) => isStableAttachmentType(type) && typeof digest === 'string')
+const textDigest = (text: string) => {
+  let hash = 0xcbf29ce484222325n
+  for (let i = 0; i < text.length; i++) hash = ((hash ^ BigInt(text.charCodeAt(i))) * 0x100000001b3n) & 0xffffffffffffffffn
+  return `${text.length}:${hash.toString(16)}`
+}
+
 async function stableAttachmentSession($: StableAttachmentIo): Promise<{ session: string; state: StableAttachmentSession }> {
   const session = await $.session.id()
   const current = stableAttachmentStore((await $.state.get(STABLE_ATTACHMENTS)).value)[session]
   if (current) return { session, state: current }
   const restored = attachmentSessionFromMessages(await $.session.messages())
+  const head = await $.store.get(await headAttachmentsKey($))
+  if (isHeadAttachments(head)) for (const [type, digest] of Object.entries(head.digests)) {
+    if (!isStableAttachmentType(type) || digest === undefined) continue
+    const value = restored[type] ?? (restored[type] = { deltas: [], carriedAtSeq: head.seq, droppedAtSeq: 0 })
+    if (value.full === undefined) Object.assign(value, { inHead: true, headDigest: digest })
+  }
   return updateStableAttachmentStore($, sessions => {
     const state = sessions[session] ?? restored
     return { next: { ...sessions, [session]: state }, result: { session, state } }
@@ -218,6 +238,7 @@ export async function handleStableAttachment($: StableAttachmentIo, input: Stabl
       value.deltas = appendStableDelta(value.deltas, input.text)
       return { next: { ...sessions, [session]: state }, result: undefined }
     }
+    if (current && current.full === undefined && current.headDigest === textDigest(input.text)) current.full = input.text
     if (current?.full === input.text) {
       if (current.carriedAtSeq > current.droppedAtSeq) {
         current.droppedAtSeq = current.carriedAtSeq
@@ -244,16 +265,23 @@ const stableAttachmentRows = async ($: StableAttachmentIo, headKept: boolean): P
 
 const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, rows: readonly SessionMessage[], headKept: boolean) => {
   const { session } = await stableAttachmentSession($)
-  return updateStableAttachmentStore($, sessions => {
+  const marked = await updateStableAttachmentStore($, sessions => {
     const state = sessions[session] ?? {}
     for (const row of rows) {
       const attachment = stableAttachmentOf(row)
       const value = attachment && state[attachment.type]
       if (value) value.carriedAtSeq = seq
     }
-    if (headKept) for (const value of Object.values(state)) if (value.inHead && value.full !== undefined) value.carriedAtSeq = seq
-    return { next: { ...sessions, [session]: state }, result: undefined }
+    if (headKept) for (const value of Object.values(state)) if (value.inHead) value.carriedAtSeq = seq
+    return { next: { ...sessions, [session]: state }, result: state }
   })
+  const digests: HeadAttachments['digests'] = {}
+  if (headKept) for (const type of STABLE_ATTACHMENT_TYPES) {
+    const value = marked[type]
+    const digest = value?.inHead ? (value.full === undefined ? value.headDigest : textDigest(value.full)) : undefined
+    if (digest !== undefined) digests[type] = digest
+  }
+  await $.store.set(await headAttachmentsKey($), { seq, digests } satisfies HeadAttachments)
 }
 
 const clearStableAttachmentSession = ($: StableAttachmentIo, session: string) => updateStableAttachmentStore($, sessions => {

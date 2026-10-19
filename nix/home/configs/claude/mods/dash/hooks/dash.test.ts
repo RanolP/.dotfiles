@@ -386,6 +386,8 @@ test('the head line shows the start-time dotfiles HEAD and no behind part until 
   on('session.start', () => ({ cwd: '/work' }))
   withClm(on, async () => emptyStatus)
   const git = withDotfiles(on)
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true, agentId: 'agent-1' })
+  expect(git.runs).toEqual([])
   await start($)
 
   await clock.advance(15_000)
@@ -407,10 +409,17 @@ test('pressing refresh counts commits since the baseline and shows behind N, inc
   await ui.press({ key: 'refresh' })
   expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind 3' }))).toBeDefined()
   expect(git.runs.at(-1)).toEqual(['git', '-C', '/home/me/.dotfiles', 'rev-list', '--count', `${BASELINE}..HEAD`])
+  await ui.unmount()
+
+  // Regression: clipping the whole head line at the default width cut the version label first.
+  const narrow = await mountPane($)
+  expect(await narrow.find({ type: 'Text', text: /^▸ no focus.*… · @29096c9 · behind 3$/ })).toBeDefined()
+  await narrow.unmount()
+  const again = await mountPane($, 80)
 
   git.setCount({ exitCode: 0, stdout: '0\n', stderr: '' })
-  await ui.press({ key: 'refresh' })
-  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind 0' }))).toBeDefined()
+  await again.press({ key: 'refresh' })
+  expect(await settle(() => again.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind 0' }))).toBeDefined()
 })
 
 // Regression: a failed count read as "not behind", or failed without a log naming the command, exit code and stderr.

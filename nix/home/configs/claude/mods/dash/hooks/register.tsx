@@ -102,11 +102,16 @@ async function refreshUsage($: EngineInterface): Promise<void> {
 }
 
 async function dotfilesGit($: EngineInterface, args: string[]): Promise<string | undefined> {
-  let argv = ['git', '-C', '$HOME/.dotfiles', ...args]
+  let home: string | undefined
   try {
-    const home = await $.env.get('HOME')
+    home = await $.env.get('HOME')
     if (!home) throw new Error('HOME is unset')
-    argv = ['git', '-C', `${home}/.dotfiles`, ...args]
+  } catch (error) {
+    await log($, `env.get HOME for git ${args.join(' ')}`, error)
+    return undefined
+  }
+  const argv = ['git', '-C', `${home}/.dotfiles`, ...args]
+  try {
     const { exitCode, stdout, stderr } = await $.process.run(argv)
     if (exitCode !== 0) throw new Error(`exit ${exitCode}: ${stderr.trim()}`)
     return stdout
@@ -282,14 +287,14 @@ function clmHead(state: DashDashboardState): { text: string, dim: boolean, statu
 
 function headRow({ Box, Text, Button }: Elements, state: DashDashboardState, width: number, onRefresh: (baseline: string) => void) {
   const head = clmHead(state)
-  const text = `${head.text}${versionLabel(state.baseline, state.behind)}`
   const { baseline } = state
-  if (baseline === undefined) return <Text dimColor={head.dim}>{clip(text, width)}</Text>
-  // The terminal draws a Button as `[ label ]`, and one space separates it from the text.
+  if (baseline === undefined) return <Text dimColor={head.dim}>{clip(head.text, width)}</Text>
+  // The version is the reason to look at this row, so the clm head gives way first; the terminal draws a Button as `[ label ]` after one space.
+  const version = versionLabel(baseline, state.behind)
   const buttonWidth = REFRESH_LABEL.length + 5
   return (
     <Box flexDirection="row">
-      <Text dimColor={head.dim}>{clip(text, width - buttonWidth)}</Text>
+      <Text dimColor={head.dim}>{`${clip(head.text, width - buttonWidth - version.length)}${version}`}</Text>
       <Text> </Text>
       <Button key="refresh" label={REFRESH_LABEL} dimColor onPress={() => onRefresh(baseline)} />
     </Box>

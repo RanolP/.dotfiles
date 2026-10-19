@@ -266,6 +266,13 @@ test('a done claimed again after the denied issue moved is asked again', () => {
   expect(made?.op === 'create' && made.title).toBe(`${CONFIRM_PREFIX}s1-a "push the tag"`)
 })
 
+// Regression caught: a create-as-done denied by title was asked again once withhold landed it as a todo and the next fold claimed it by id.
+test('a title denial still holds when the same claim returns by id', () => {
+  const q = { ...confirmIssue('s1-q', `${CONFIRM_PREFIX}"ship X"`, 'done'), notes: [`${CONFIRM_ITEMS}[{"title":"ship X","denied":true,"at":"2026-10-06T00:00:01.000Z"}]`] }
+  const b = { ...confirmIssue('s1-b', 'ship X', 'todo'), updated: '2026-10-06T00:00:00.000Z' }
+  expect(confirmQuestion([{ op: 'status', issue: 's1-b', status: 'done' }], [], [q, b], new Set())).toEqual([])
+})
+
 // Regression caught: a new merge kept sending already-small old topics back to the model.
 test('age decay leaves a floor-sized old topic untouched on the next merge', async () => {
   const topics = [

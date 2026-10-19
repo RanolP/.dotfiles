@@ -250,7 +250,9 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
   for (const item of questions.flatMap(askedItems)) if (item.denied) deniedAt.set(keyOf(item), [deniedAt.get(keyOf(item)) ?? '', item.at ?? ''].sort().at(-1) ?? '')
   const issueOf = (item: Item) => item.id ? issues.find(issue => issue.id === item.id) : issues.find(issue => issue.title.trim() === item.title && !issue.title.startsWith(CONFIRM_PREFIX))
   const stillDenied = (item: Item) => {
-    const at = deniedAt.get(keyOf(item))
+    // A title denial still covers the issue a withheld create became, now claimed by id.
+    const ats = [item.id === undefined ? undefined : deniedAt.get(item.id), deniedAt.get(`"${item.title}"`)].filter((at): at is string => at !== undefined)
+    const at = ats.sort().at(-1)
     return at !== undefined && !((issueOf(item)?.updated ?? '') > at)
   }
   const stillOpen = (item: Item) => !denied.has(item.title) && !stillDenied(item) && (item.opaque || !finishedTitles.has(item.title) && !(item.id !== undefined && closed(statusAfter.get(item.id))))
@@ -265,7 +267,7 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
   const items: Item[] = []
   for (const item of [...asked.filter(item => !item.denied && stillOpen(item)), ...claims]) if (!items.some(seen => seen.title === item.title)) items.push(item)
   const denials = [
-    ...asked.filter(item => item.denied && !items.some(seen => keyOf(seen) === keyOf(item))),
+    ...asked.filter(item => item.denied && !items.some(seen => keyOf(seen) === keyOf(item) || seen.title === item.title)),
     ...asked.filter(item => !item.denied && !item.opaque && denied.has(item.title)).map((item): Item => ({ ...item, denied: true, at: now })),
   ]
   const stored = [...items, ...denials]

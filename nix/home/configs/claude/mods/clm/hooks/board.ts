@@ -5,7 +5,8 @@ import { kst } from './fold'
 // `/clm board` writes this page and opens it in the browser. Everything is
 // embedded, so the page works from a file:// URL with no network.
 
-const COLUMNS = [['todo', 'To do'], ['doing', 'Doing'], ['done', 'Done'], ['question', 'Question']] as const
+// Status order with done last; within a column issues keep snapshot order, which is creation order.
+const COLUMNS = [['todo', 'To do'], ['doing', 'Doing'], ['question', 'Question'], ['done', 'Done']] as const
 
 export const shortRepo = (repo: string) => repo.split('/').slice(-2).join('/')
 
@@ -58,7 +59,7 @@ function card(i: ClmBoardIssue): string {
 
 export function boardHtml(issues: ClmBoardIssue[], repo: string, generatedAt: string): string {
   const columns = COLUMNS.map(([status, label]) => {
-    const items = issues.filter(i => i.status === status).sort((x, y) => (x.updated < y.updated ? 1 : -1))
+    const items = issues.filter(i => i.status === status)
     return `<section><h2>${label} (<span class="count">${items.length}</span>)</h2>${items.map(card).join('')}<div class="empty">-</div></section>`
   }).join('')
   return `<!doctype html>

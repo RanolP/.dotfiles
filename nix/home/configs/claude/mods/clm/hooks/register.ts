@@ -47,7 +47,13 @@ export { TASK_TOOL }
 
 type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value: unknown }> } }
 type SessionReader = { session: { id: () => Promise<string> } }
-type StoreReader = SessionReader & { store: { get: (key: string) => Promise<unknown> } }
+type StoreReader = SessionReader & {
+  env: { get: (name: string) => Promise<string | undefined> }
+  fs: { exists: (path: string) => Promise<boolean>; read: (path: string) => Promise<string>; write: (path: string, text: string) => Promise<void> }
+  store: { get: (key: string) => Promise<unknown>; set: (key: string, value: unknown) => Promise<void>; delete: (key: string) => Promise<void>; keys: () => Promise<string[]> }
+  ui: { log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void }
+}
+type StoreWriter = StoreReader
 type HomeReader = SessionReader & { env: { get: (name: string) => Promise<string | undefined> } }
 type TrackerReader = {
   env: { get: (name: string) => Promise<string | undefined> }
@@ -143,18 +149,180 @@ const topicsKey = async ($: EngineInterface, key?: string) => {
 }
 const requestsKey = (key: string) => `requests:${key}`
 
+const SESSION_STORE_PREFIXES = new Set([
+  'address-index', 'agent-task-roots', 'agent-task-step-claims', 'headAttachments', 'held', 'instruction-index', 'issue-addresses',
+  'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows',
+])
+const SESSION_STATE_MAX_CHARS = 4_194_304
+const SESSION_STATE_MIGRATION_KEY = 'migrated:session-files:v1'
+const sessionStateWrites = new Map<string, Promise<void>>()
+let sessionStateMigration: Promise<void> | undefined
+let sessionStateMigrationFailed = false
+
+function sessionStoreOwner(key: string): string | undefined {
+  const separator = key.indexOf(':')
+  if (separator < 0 || !SESSION_STORE_PREFIXES.has(key.slice(0, separator))) return
+  const session = key.slice(separator + 1).split(':', 1)[0]
+  return session || undefined
+}
+
+async function sessionStatePath($: HomeReader, session: string): Promise<string> {
+  return `${await sessionBasePath($, session)}.state.json`
+}
+
+async function readSessionState($: StoreReader, session: string, enforceLimit = true): Promise<Record<string, unknown>> {
+  const path = await sessionStatePath($, session)
+  if (!(await $.fs.exists(path))) return {}
+  const text = await $.fs.read(path)
+  if (enforceLimit && text.length > SESSION_STATE_MAX_CHARS) throw new Error(`clm: session state exceeds ${SESSION_STATE_MAX_CHARS} characters`)
+  let value: unknown
+  try { value = JSON.parse(text) }
+  catch (error) { return recoverSessionState($, session, path, text, `invalid JSON (${String(error).slice(0, 300)})`) }
+  if (!isRecord(value)) return recoverSessionState($, session, path, text, 'state file is not an object')
+  return value
+}
+
+async function recoverSessionState($: StoreReader, session: string, path: string, text: string, problem: string): Promise<Record<string, unknown>> {
+  const backup = `${await sessionBasePath($, session)}.state.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`
+  await logEvent($, 'session-state-migration', { reason: `malformed session state for ${session}: ${problem}; preserving at ${backup}` })
+  try {
+    await $.fs.write(backup, text)
+    await $.fs.write(path, '{}')
+  } catch (error) {
+    await logEvent($, 'session-state-migration', { reason: `could not recover malformed session state for ${session}: ${String(error).slice(0, 500)}` })
+  }
+  return {}
+}
+
+function serializeSessionState<T>(session: string, run: () => Promise<T>): Promise<T> {
+  const result = (sessionStateWrites.get(session) ?? Promise.resolve()).then(run, run)
+  const tail = result.then(() => undefined, () => undefined)
+  sessionStateWrites.set(session, tail)
+  void tail.then(() => { if (sessionStateWrites.get(session) === tail) sessionStateWrites.delete(session) })
+  return result
+}
+
+async function sessionStoreGet($: StoreReader, key: string): Promise<unknown> {
+  const session = sessionStoreOwner(key)
+  if (!session) return $.store.get(key)
+  await ensureSessionStateMigration($)
+  return serializeSessionState(session, async () => (await readSessionState($, session))[key])
+}
+
+async function writeSessionState($: StoreWriter, session: string, state: Record<string, unknown>, droppedKey?: string): Promise<void> {
+  const text = JSON.stringify(state)
+  if (text.length > SESSION_STATE_MAX_CHARS) {
+    await logEvent($, 'session-state-migration', { reason: `session state write for ${session} exceeded ${SESSION_STATE_MAX_CHARS} characters; dropped ${droppedKey ?? 'updated state'}` })
+    return
+  }
+  await $.fs.write(await sessionStatePath($, session), text)
+}
+
+async function sessionStoreSet($: StoreWriter, key: string, value: unknown): Promise<void> {
+  const session = sessionStoreOwner(key)
+  if (!session) return $.store.set(key, value)
+  await ensureSessionStateMigration($)
+  await serializeSessionState(session, async () => {
+    const state = await readSessionState($, session)
+    state[key] = value
+    await writeSessionState($, session, state, key)
+  })
+}
+
+async function sessionStoreDelete($: StoreWriter, key: string): Promise<void> {
+  const session = sessionStoreOwner(key)
+  if (!session) return $.store.delete(key)
+  await ensureSessionStateMigration($)
+  await serializeSessionState(session, async () => {
+    const path = await sessionStatePath($, session)
+    if (await $.fs.exists(path)) {
+      const state = await readSessionState($, session)
+      if (Object.prototype.hasOwnProperty.call(state, key)) {
+        delete state[key]
+        await writeSessionState($, session, state)
+      }
+    }
+  })
+}
+
+async function migrateSessionStore($: StoreWriter, report: (reason: string) => Promise<void>): Promise<void> {
+  if (await $.store.get(SESSION_STATE_MIGRATION_KEY) === true) return
+  const sessions = new Map<string, string[]>()
+  for (const key of await $.store.keys()) {
+    const session = sessionStoreOwner(key)
+    if (!session) continue
+    const keys = sessions.get(session) ?? []
+    keys.push(key)
+    sessions.set(session, keys)
+  }
+  let failures = 0
+  for (const [session, keys] of sessions) {
+    try {
+      await serializeSessionState(session, async () => {
+        const state = await readSessionState($, session, false)
+        let text = JSON.stringify(state)
+        const dropped: string[] = []
+        if (text.length > SESSION_STATE_MAX_CHARS) {
+          dropped.push(...keys.filter(key => !Object.prototype.hasOwnProperty.call(state, key)))
+          await report(`session state for ${session} already exceeds ${SESSION_STATE_MAX_CHARS} characters; dropped ${dropped.length} legacy key(s)`)
+        }
+        else {
+          for (const key of keys) {
+            if (Object.prototype.hasOwnProperty.call(state, key)) continue
+            const value = await $.store.get(key)
+            if (value === undefined) continue
+            const candidate = { ...state, [key]: value }
+            const candidateText = JSON.stringify(candidate)
+            if (candidateText.length > SESSION_STATE_MAX_CHARS) {
+              dropped.push(key)
+              continue
+            }
+            state[key] = value
+            text = candidateText
+          }
+        }
+        if (dropped.length && text.length <= SESSION_STATE_MAX_CHARS) {
+          await report(`session state for ${session} exceeded ${SESSION_STATE_MAX_CHARS} characters; dropped ${dropped.length} legacy key(s): ${dropped.slice(0, 12).join(', ')}`)
+        }
+        await $.fs.write(await sessionStatePath($, session), text)
+        for (const key of keys) await $.store.delete(key)
+      })
+    } catch (error) {
+      failures++
+      await report(`session state migration failed for ${session}: ${String(error).slice(0, 1000)}`)
+    }
+  }
+  if (failures > 0) throw new Error(`session state migration failed for ${failures} session(s)`)
+  await $.store.set(SESSION_STATE_MIGRATION_KEY, true)
+}
+
+async function ensureSessionStateMigration($: StoreWriter): Promise<void> {
+  if (!sessionStateMigration) {
+    const report = async (reason: string) => {
+      try { await logEvent($, 'session-state-migration', { reason }) }
+      catch { try { $.ui.log(`clm: ${reason}`, { to: 'debug' }) } catch { /* state access still proceeds */ } }
+    }
+    sessionStateMigration = migrateSessionStore($, report).catch(async error => {
+      sessionStateMigrationFailed = true
+      const reason = `session state migration failed: ${String(error).slice(0, 1000)}`
+      await report(reason)
+    })
+  }
+  await sessionStateMigration
+}
+
 const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) && Object.values(v).every(n => typeof n === 'number')
 const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
 const isMeta = (v: unknown): v is Partial<Meta> =>
   isRecord(v) && optional(v.seq, 'number') && optional(v.fails, 'number') && optional(v.ratio, 'number') && optional(v.overhead, 'number')
   && optional(v.foldTokens, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
 async function readMeta($: StoreReader): Promise<Meta> {
-  const stored = await $.store.get(await metaKey($))
+  const stored = await sessionStoreGet($, await metaKey($))
   return { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
 }
-const writeMeta = async ($: EngineInterface, m: Meta) => $.store.set(await metaKey($), m)
+const writeMeta = async ($: EngineInterface, m: Meta) => sessionStoreSet($, await metaKey($), m)
 export type StableAttachmentInput = { type: StableAttachmentType; text: string; origin: unknown; agentId?: string; detail?: unknown }
-export type StableAttachmentIo = { session: Pick<EngineInterface['session'], 'id' | 'messages'>; state: Pick<EngineInterface['state'], 'get' | 'update'>; store: Pick<EngineInterface['store'], 'get' | 'set'> }
+export type StableAttachmentIo = Pick<EngineInterface, 'state'> & StoreWriter
 const STABLE_ATTACHMENTS = { plugin: 'clm', key: 'stableAttachments' } as const
 const MAX_STABLE_ATTACHMENT_DELTAS = 32
 const INSTRUCTIONS_PREAMBLE = 'Codebase and user instructions are shown below.'
@@ -265,7 +433,7 @@ async function stableAttachmentSession($: StableAttachmentIo): Promise<{ session
   const current = stableAttachmentStore((await $.state.get(STABLE_ATTACHMENTS)).value)[session]
   if (current) return { session, state: current }
   const restored = attachmentSessionFromMessages(await $.session.messages())
-  const head = await $.store.get(await headAttachmentsKey($))
+  const head = await sessionStoreGet($, await headAttachmentsKey($))
   if (isHeadAttachments(head)) for (const [type, digest] of Object.entries(head.digests)) {
     if (!isStableAttachmentType(type) || digest === undefined) continue
     const value = restored[type] ?? (restored[type] = { deltas: [], carriedAtSeq: head.seq })
@@ -335,7 +503,7 @@ const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, 
     const digest = value?.inHead ? (value.full === undefined ? value.headDigest : textDigest(value.full)) : undefined
     if (digest !== undefined) digests[type] = digest
   }
-  await $.store.set(await headAttachmentsKey($), { seq, digests } satisfies HeadAttachments)
+  await sessionStoreSet($, await headAttachmentsKey($), { seq, digests } satisfies HeadAttachments)
 }
 
 const clearStableAttachmentSession = ($: StableAttachmentIo, session: string) => updateStableAttachmentStore($, sessions => {
@@ -344,12 +512,13 @@ const clearStableAttachmentSession = ($: StableAttachmentIo, session: string) =>
   return { next, result: undefined }
 })
 
-async function basePath($: HomeReader): Promise<string> {
+async function sessionBasePath($: HomeReader, session: string): Promise<string> {
   const home = await $.env.get('HOME')
-  return `${home ?? '.'}/.claude-work/plans/clm-${await sid($)}`
+  return `${home ?? '.'}/.claude-work/plans/clm-${session}`
 }
+async function basePath($: HomeReader): Promise<string> { return sessionBasePath($, await sid($)) }
 const ledgerPath = async ($: HomeReader) => `${await basePath($)}.md`
-const logPath = async ($: EngineInterface) => `${await basePath($)}.log.jsonl`
+const logPath = async ($: HomeReader) => `${await basePath($)}.log.jsonl`
 async function readText($: EngineInterface, p: string): Promise<string | undefined> {
   return (await $.fs.exists(p)) ? await $.fs.read(p) : undefined
 }
@@ -373,7 +542,12 @@ const readAll = ($: EngineInterface) => readAllEvents(eventsIo($))
 const serialized = <T>(session: string, run: () => Promise<T>) => serializeEvents(session, run)
 const writeEvents = ($: EngineInterface, payloads: readonly Payload[], origin: Origin) => writeTrackerEvents(eventsIo($), payloads, origin)
 const append = ($: EngineInterface, payloads: Payloads, origin?: Origin, project = true, knownTitles = false) => appendEvents(eventsIo($), payloads, origin, project, knownTitles)
-const logEvent = ($: EngineInterface, event: LogEvent, fields: LogFields) => writeLogEvent(eventsIo($), event, fields)
+const logEvent = ($: StoreWriter, event: LogEvent, fields: LogFields) => writeLogEvent({
+  generalLogPath: () => logPath($),
+  exists: path => $.fs.exists(path),
+  read: path => $.fs.read(path),
+  write: (path, text) => $.fs.write(path, text),
+}, event, fields)
 
 const panelIo = ($: EngineInterface): PanelIo => ({
   captureOrigin: () => captureOrigin($),
@@ -387,8 +561,8 @@ const panelIo = ($: EngineInterface): PanelIo => ({
   readWorkflow: () => readWorkflow($),
   readMeta: () => readMeta($),
   ledgerPath: () => ledgerPath($),
-  storeGet: key => $.store.get(key),
-  storeSet: (key, value) => $.store.set(key, value),
+  storeGet: key => sessionStoreGet($, key),
+  storeSet: (key, value) => sessionStoreSet($, key, value),
   toolCall: input => $.tool.call(input),
   writeBoard: (path, html) => $.fs.write(path, html),
   boardPath: async () => `${await basePath($)}.board.html`,
@@ -546,7 +720,7 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
 }
 const clmStatusIo = ($: StatusReader) => ({
   readWorkflow: () => readWorkflow($), readMeta: () => readMeta($), readAll: () => readAll($),
-  sessionId: () => $.session.id(), ledgerPath: () => ledgerPath($), storeGet: (key: string) => $.store.get(key),
+  sessionId: () => $.session.id(), ledgerPath: () => ledgerPath($), storeGet: (key: string) => sessionStoreGet($, key),
 })
 const syncPanelSafely = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => syncPanelDomain(panelIo($), origin, events)
 const projectPanel = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => panelIo($).serialize(origin.session, () => syncPanelSafely($, origin, events))
@@ -557,9 +731,9 @@ export { isHeld, type Held }
 
 const heldIo = ($: EngineInterface): HeldIo => ({
   now: () => $.clock.now(),
-  get: key => $.store.get(key),
-  set: (key, value) => $.store.set(key, value),
-  delete: key => $.store.delete(key),
+  get: key => sessionStoreGet($, key),
+  set: (key, value) => sessionStoreSet($, key, value),
+  delete: key => sessionStoreDelete($, key),
   logEvent: (event, fields) => logEvent($, event, fields),
   complete: request => $.model.complete(request),
 })
@@ -581,7 +755,7 @@ const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
   storedTopics: (notes, seq, key) => storedTopics($, notes, seq, key),
   ledgerPath: () => ledgerPath($),
-  topics: async key => $.store.get(await topicsKey($, key)),
+  topics: async key => sessionStoreGet($, await topicsKey($, key)),
   usageReading: () => usageReading($),
   sentAt: () => sentAt($),
   complete: request => $.model.complete(request),
@@ -593,23 +767,23 @@ const fold = ($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], m
 const trackerView = ($: EngineInterface, origin: Origin, ops: readonly Payload[] = []) =>
   trackerViewDomain({ readAll: () => readAll($) }, origin, ops)
 
-const addressIo = ($: EngineInterface): AddressIo => ({ get: key => $.store.get(key), set: (key, value) => $.store.set(key, value) })
+const addressIo = ($: EngineInterface): AddressIo => ({ get: key => sessionStoreGet($, key), set: (key, value) => sessionStoreSet($, key, value) })
 const sentAt = async ($: EngineInterface): Promise<SentAt> => sentAtOf(addressIo($), transcriptKey(await sid($)))
 const nowIso = async ($: EngineInterface) => new Date(await $.clock.now()).toISOString()
 
 async function readRequests($: EngineInterface, key: string): Promise<RequestRecord[]> {
-  const value = await $.store.get(requestsKey(key))
+  const value = await sessionStoreGet($, requestsKey(key))
   return Array.isArray(value) ? value.filter(isRequestRecord) : []
 }
 
 async function storedTopics($: EngineInterface, notes: string, seq: number, key?: string): Promise<Topic[]> {
   const resolvedKey = key ?? transcriptKey(await sid($))
-  return storedTopicsDomain({ topics: async target => $.store.get(await topicsKey($, target)) }, notes, seq, resolvedKey)
+  return storedTopicsDomain({ topics: async target => sessionStoreGet($, await topicsKey($, target)) }, notes, seq, resolvedKey)
 }
 
 const residentIo = ($: EngineInterface): ResidentIo => ({
-  get: key => $.store.get(key),
-  set: (key, value) => $.store.set(key, value),
+  get: key => sessionStoreGet($, key),
+  set: (key, value) => sessionStoreSet($, key, value),
   addressRows: key => addressRows(addressIo($), key),
   readLedger: async () => readText($, await ledgerPath($)),
   readMeta: () => readMeta($),
@@ -627,8 +801,8 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   changeWorkflow: change => changeWorkflow($, change),
   sessionMessages: () => $.session.messages(),
   complete: request => $.model.complete(request),
-  get: key => $.store.get(key),
-  set: (key, value) => $.store.set(key, value),
+  get: key => sessionStoreGet($, key),
+  set: (key, value) => sessionStoreSet($, key, value),
   writeEvents: (payloads, origin) => writeEvents($, payloads, origin),
   serialize: (session, run) => serialized(session, run),
   syncPanel: (origin, events) => syncPanelSafely($, origin, events),
@@ -652,9 +826,9 @@ async function usageReading($: EngineInterface): Promise<number | undefined> {
   }
 }
 const rewindIo = ($: EngineInterface): RewindIo => ({
-  storeGet: key => $.store.get(key),
-  storeSet: (key, value) => $.store.set(key, value),
-  storeDelete: key => $.store.delete(key),
+  storeGet: key => sessionStoreGet($, key),
+  storeSet: (key, value) => sessionStoreSet($, key, value),
+  storeDelete: key => sessionStoreDelete($, key),
   writeFile: (path, text) => $.fs.write(path, text),
   ledgerPath: () => ledgerPath($),
   topicsKey: key => topicsKey($, key),
@@ -664,7 +838,7 @@ const rewindIo = ($: EngineInterface): RewindIo => ({
   readyFoldDropFps: key => foldJobDropFps(key),
   clearReadyFold: async key => {
     clearFoldJob(key)
-    await $.store.delete(await pendingKey($, key))
+    await sessionStoreDelete($, await pendingKey($, key))
   },
   setRewindReady: (key, plan, fingerprints) => setRewindFoldJob(key, plan, fingerprints),
   logEvent: fields => logEvent($, 'rewind', fields),
@@ -696,8 +870,8 @@ const foldJobIo = ($: EngineInterface): FoldJobIo => ({
   fileExists: path => $.fs.exists(path),
   fileList: path => $.fs.list(path),
   run: (args, options) => $.process.run(args, options),
-  storeSet: (key, value) => $.store.set(key, value),
-  storeDelete: key => $.store.delete(key),
+  storeSet: (key, value) => sessionStoreSet($, key, value),
+  storeDelete: key => sessionStoreDelete($, key),
   pendingKey: key => pendingKey($, key),
   topicsKey: key => topicsKey($, key),
   captureOrigin: () => captureOrigin($),
@@ -788,6 +962,11 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     if (e.agentId === undefined) {
+      if (sessionStateMigrationFailed) {
+        sessionStateMigration = undefined
+        sessionStateMigrationFailed = false
+      }
+      await ensureSessionStateMigration($)
       const session = await $.session.id()
       await clearStableAttachmentSession($, session)
     }

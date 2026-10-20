@@ -79,6 +79,25 @@ const WITHHELD = '.withheld-'
 // The engine kills session.compact at 10 s; the rest leaves room for the swap after the deadline.
 const COMPACT_DEADLINE_MS = 7000
 const shownChanges = new Map<string, Set<string>>()
+const logFoldOutcome = async (io: FoldJobIo, reason: string) => {
+  try { await io.logEvent('fold-job', { reason }) } catch { /* decisions must not block compaction */ }
+}
+async function logPersistenceFailure(io: FoldJobIo, error: unknown): Promise<void> {
+  const reason = String(error).slice(0, 1000)
+  try { await io.logEvent('fold-persist-failed', { reason }) } catch { /* compaction must remain fail-open */ }
+  try { io.log(`clm: fold result returned after persistence failed (${reason})`, { to: 'debug' }) } catch { /* the result still belongs to the engine */ }
+}
+async function persistStep<T>(io: FoldJobIo, fallback: T, run: () => Promise<T>): Promise<T> {
+  try { return await run() }
+  catch (error) { await logPersistenceFailure(io, error); return fallback }
+}
+async function persistCompactResult(
+  io: FoldJobIo, result: SessionCompactResult, persist: () => Promise<void>,
+): Promise<SessionCompactResult> {
+  try { await persist() }
+  catch (error) { await logPersistenceFailure(io, error) }
+  return result
+}
 const changeHash = (line: string): string => {
   let h = 2166136261
   for (let i = 0; i < line.length; i++) h = Math.imul(h ^ line.charCodeAt(i), 16777619)
@@ -199,6 +218,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
     const prepared: PreparedFold = { plan, mergeReply: answer.mergeReply, topics: answer.topics.map(({ topic, summary }) => ({ topic, summary })) }
     const folded = await io.fold(opts, rows, meta, false, undefined, true, prepared, key)
     if (typeof folded === 'string') {
+      await logFoldOutcome(io, `background fold skipped (${folded})`)
       await saveMeta(meta)
       io.log(`clm: background fold skipped (${folded})`, { to: 'debug' })
       return undefined
@@ -206,6 +226,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
     if (folded.tailTokens > opts.tailTarget) {
       retryRule = `The previous split=${answer.split} produced ${folded.tailTokens} tokens for the new ledger plus B, above tailTarget=${opts.tailTarget}; choose an earlier whole-topic boundary or shorter summaries.`
       if (attempt === 1) {
+        await logFoldOutcome(io, `background fold dropped (${retryRule})`)
         io.log(`clm: split summary dropped (${retryRule}); the next turn end may retry`, { to: 'debug' })
         return undefined
       }
@@ -223,6 +244,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
     }
   }
+  await logFoldOutcome(io, `background fold gave up for ${session}`)
   io.log(`clm: background fold gave up for ${session}`, { to: 'debug' })
   return undefined
 }
@@ -245,6 +267,7 @@ async function prepareSingleFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
   try { folded = await io.fold(opts, rows, meta, true, undefined, true, undefined, key) }
   catch (err) { folded = `fold failed: ${String(err)}` }
   if (typeof folded === 'string') {
+    await logFoldOutcome(io, `background fold skipped (${folded})`)
     io.log(`clm: background fold skipped (${folded})`, { to: 'debug' })
     return undefined
   }
@@ -320,6 +343,7 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
   foldJobs.set(key, job)
   void job.promise.then(plan => {
     if (foldJobs.get(key) !== job) {
+      void logFoldOutcome(io, `background fold plan dropped after its job was replaced for ${key}`)
       io.log('clm: background fold finished after its job was replaced; plan discarded', { to: 'debug' })
       return
     }
@@ -328,11 +352,12 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
       const pending = await io.pendingKey(key)
       if (plan) await io.storeSet(pending, plan)
       else await io.storeDelete(pending)
-    })()
+    })().catch(async err => { await logPersistenceFailure(io, err) })
   }, err => {
     if (foldJobs.get(key) !== job) return
     foldJobs.delete(key)
-    void io.pendingKey(key).then(pending => io.storeDelete(pending))
+    void io.pendingKey(key).then(pending => io.storeDelete(pending)).catch(storeError => logPersistenceFailure(io, storeError))
+    void logFoldOutcome(io, `background fold failed (${String(err).slice(0, 1000)})`)
     io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' })
   })
   return job
@@ -343,7 +368,10 @@ async function applyReadyIfAtThreshold(io: FoldJobIo, opts: Opts, key: string): 
   if (job?.state !== 'ready') return false
   if (!job.plan.rewindOnly && (await io.usageReading() ?? 0) < opts.budget - opts.reserve) return false
   try { await io.sessionCompact() }
-  catch (err) { io.log(`clm: ready fold swap deferred (${String(err)})`, { to: 'debug' }) }
+  catch (err) {
+    await logFoldOutcome(io, `ready fold swap deferred (${String(err).slice(0, 1000)})`)
+    io.log(`clm: ready fold swap deferred (${String(err)})`, { to: 'debug' })
+  }
   return true
 }
 
@@ -362,7 +390,10 @@ export async function maybeClear(io: FoldJobIo, opts: Opts): Promise<void> {
   if (sum(queue) < opts.queueTarget) return
   const used = await io.usageReading()
   if (used !== undefined && used < opts.budget - opts.reserve) return
-  void startFoldJob(io, opts, rows, meta, key, true).catch(err => io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' }))
+  void startFoldJob(io, opts, rows, meta, key, true).catch(async err => {
+    await logFoldOutcome(io, `background fold failed (${String(err).slice(0, 1000)})`)
+    io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' })
+  })
 }
 
 // The confirm question is asked against the tracker as it stands when the fold
@@ -384,47 +415,50 @@ async function applyFoldPlan(
   const rewind = io.readRewindIo()
   const here = await io.captureOrigin()
   const landing = [...use.ops, ...(use.promoted ?? [])]
-  const appended = await io.append(use.asks ? before => [...landing, ...landedAsks(use.asks ?? [], landing, before, here)] : landing, here, false, true)
-  await io.updateHeld(use.settled ?? [], use.hold ?? [])
-  await io.ensureInstructionIndex(key, use.fullNotes)
+  const appended = await persistStep<TrackerEvent[]>(io, [], () => io.append(use.asks ? before => [...landing, ...landedAsks(use.asks ?? [], landing, before, here)] : landing, here, false, true))
+  await persistStep<void>(io, undefined, () => io.updateHeld(use.settled ?? [], use.hold ?? []))
+  await persistStep<void>(io, undefined, () => io.ensureInstructionIndex(key, use.fullNotes))
   const stateEvents = await io.readAll()
   const currentView = await io.trackerView(here)
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
   const liveFocus = focusOf(stateEvents, here.session)
-  const ledger = await io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus })
   const fileLedger = composeLedger(use.fullNotes, currentView.issues)
+  const ledger = await persistStep(io, fileLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus }))
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
-  const { rows: attachments, headKept } = await io.stableAttachments(keepsHeadGroup(workingRows, first))
+  const headGroup = keepsHeadGroup(workingRows, first)
+  const { rows: attachments, headKept } = await persistStep(io, { rows: [], headKept: headGroup }, () => io.stableAttachments(headGroup))
   const messages = buildCleared({ head: headRows(workingRows, first), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow, attachments, headKept)
   const tokensBefore = sum(workingRows)
   const tokensAfter = sum(messages)
-  await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
-  const topicKey = await io.topicsKey(key)
-  if (use.topics) await io.storeSet(topicKey, use.topics)
-  else await io.storeDelete(topicKey)
-  const previousSnapshot = (await readLedgerSnapshots(rewind, key)).at(-1)
-  await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(ledgerRow), fileLedger, use.topics, [
-    ...(use.coveredRows ?? previousSnapshot?.coveredRows ?? []), ...use.dropFps,
-  ])
-  await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))
-  await pruneWithheld(io, escaped ? workingRows : messages, fileLedger)
   const offset = messages.findIndex(message => message.text === text)
-  const foldedAt = await io.now()
-  const swapMs = Math.max(0, foldedAt - startedAt)
-  await io.writeMeta({
-    ...meta, seq: use.seq, lastClear: kst(), lastFoldAt: foldedAt,
-    foldDurationsMs: { ...meta.foldDurationsMs, [String(use.seq)]: swapMs }, foldTokens: await io.usageReading(),
-    lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset },
+  const result = { messages, tokensBefore, tokensAfter }
+  return persistCompactResult(io, result, async () => {
+    await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
+    const topicKey = await io.topicsKey(key)
+    if (use.topics) await io.storeSet(topicKey, use.topics)
+    else await io.storeDelete(topicKey)
+    const previousSnapshot = (await readLedgerSnapshots(rewind, key)).at(-1)
+    await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(ledgerRow), fileLedger, use.topics, [
+      ...(use.coveredRows ?? previousSnapshot?.coveredRows ?? []), ...use.dropFps,
+    ])
+    await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))
+    await pruneWithheld(io, escaped ? workingRows : messages, fileLedger)
+    const foldedAt = await io.now()
+    const swapMs = Math.max(0, foldedAt - startedAt)
+    await io.writeMeta({
+      ...meta, seq: use.seq, lastClear: kst(), lastFoldAt: foldedAt,
+      foldDurationsMs: { ...meta.foldDurationsMs, [String(use.seq)]: swapMs }, foldTokens: await io.usageReading(),
+      lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset },
+    })
+    await io.markStableAttachmentsCarried(use.seq, attachments, headKept)
+    await io.logEvent('clear', {
+      tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1,
+      durationMs: swapMs, ...(use.summaryMs === undefined ? {} : { summaryMs: use.summaryMs }),
+      reason: `${escaped ? 'escape' : 'clm'}${use.fallback ? ', fallback ledger' : ''}`,
+    })
+    await io.projectPanel(here, appended)
   })
-  await io.markStableAttachmentsCarried(use.seq, attachments, headKept)
-  await io.logEvent('clear', {
-    tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1,
-    durationMs: swapMs, ...(use.summaryMs === undefined ? {} : { summaryMs: use.summaryMs }),
-    reason: `${escaped ? 'escape' : 'clm'}${use.fallback ? ', fallback ledger' : ''}`,
-  })
-  await io.projectPanel(here, appended)
-  return { messages, tokensBefore, tokensAfter }
 }
 
 async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, key: string, opts: Opts): Promise<SessionCompactResult> {
@@ -434,25 +468,28 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
   const view = await io.trackerView(here)
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
   const liveFocus = focusOf(stateEvents, here.session)
-  const ledger = await io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus })
   const fullLedger = composeLedger(use.fullNotes, view.issues)
+  const ledger = await persistStep(io, fullLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus }))
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const row: SessionMessage = { role: 'user', text, toolUses: [] }
   const plan: ClearPlan = {
     head: rows.slice(0, first + 1).filter(message => !isLedgerRow(message)), dropped: [],
     tail: rows.slice(first + 1).filter(message => !isLedgerRow(message)), keptTurns: 0, cuts: {},
   }
-  const { rows: attachments, headKept } = await io.stableAttachments(keepsHeadGroup(rows, first))
+  const headGroup = keepsHeadGroup(rows, first)
+  const { rows: attachments, headKept } = await persistStep(io, { rows: [], headKept: headGroup }, () => io.stableAttachments(headGroup))
   const messages = buildCleared(plan, row, attachments, headKept)
-  await io.writeFile(await io.ledgerPath(), fullLedger + '\n')
-  const topicKey = await io.topicsKey(key)
-  if (use.topics) await io.storeSet(topicKey, use.topics)
-  await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(row), fullLedger, use.topics, use.coveredRows ?? [])
+  const result = { messages, tokensBefore: sum(rows), tokensAfter: sum(messages) }
   const offset = messages.findIndex(message => message.text === text)
-  await io.writeMeta({ ...meta, seq: use.seq, lastClear: kst(), boundary: { fp: fingerprint(row), offset } })
-  await io.markStableAttachmentsCarried(use.seq, attachments, headKept)
-  await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))
-  return { messages, tokensBefore: sum(rows), tokensAfter: sum(messages) }
+  return persistCompactResult(io, result, async () => {
+    await io.writeFile(await io.ledgerPath(), fullLedger + '\n')
+    const topicKey = await io.topicsKey(key)
+    if (use.topics) await io.storeSet(topicKey, use.topics)
+    await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(row), fullLedger, use.topics, use.coveredRows ?? [])
+    await io.writeMeta({ ...meta, seq: use.seq, lastClear: kst(), boundary: { fp: fingerprint(row), offset } })
+    await io.markStableAttachmentsCarried(use.seq, attachments, headKept)
+    await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))
+  })
 }
 
 export async function showTurnChanges(io: FoldJobIo, answer: string): Promise<void> {
@@ -500,11 +537,11 @@ export async function handleSessionCompact(
   io: FoldJobIo, opts: Opts, all: readonly SessionMessage[], trigger: string,
 ): Promise<SessionCompactResult | { skip: string }> {
   const compactStartedAt = await io.now()
-  const meta = await io.readMeta()
+  const meta = await persistStep(io, { seq: 0, fails: 0 }, () => io.readMeta())
   const workingRows = liveRows(all, meta.boundary)
   const first = protectedIndex(workingRows)
   const key = transcriptKey(await io.sessionId())
-  await io.observeTranscript(key, all)
+  await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))
   const existing = foldJobs.get(key)
   if (existing?.state === 'swapping') return existing.promise
   if (trigger === 'plugin' && (!existing || existing.state === 'idle')) return { messages: [...all] }
@@ -524,9 +561,11 @@ export async function handleSessionCompact(
   const sameDropped = expectedDropped.length === plan.dropFps.length && expectedDropped.every((fp, index) => fp === plan.dropFps[index])
   const sameKept = plan.keepFp === undefined ? keepFrom === workingRows.length : row !== undefined && fingerprint(row) === plan.keepFp
   if (keepFrom < first + 1 || keepFrom > workingRows.length || !sameKept || !sameDropped) {
+    await logFoldOutcome(io, 'background fold plan dropped because the transcript changed before swap')
     io.log('clm: compaction job input changed before swap; transcript left untouched', { to: 'debug' })
     foldJobs.set(key, { state: 'idle' })
-    await io.storeDelete(await io.pendingKey(key))
+    try { await io.storeDelete(await io.pendingKey(key)) }
+    catch (err) { await logPersistenceFailure(io, err) }
     return { messages: [...all] }
   }
   const use = { ...plan, keepFrom }
@@ -537,7 +576,8 @@ export async function handleSessionCompact(
         : await applyFoldPlan(io, workingRows, meta, first, use, false, compactStartedAt, key, opts)
     } finally {
       foldJobs.set(key, { state: 'idle' })
-      await io.storeDelete(await io.pendingKey(key))
+      try { await io.storeDelete(await io.pendingKey(key)) }
+      catch (err) { await logPersistenceFailure(io, err) }
     }
   })
   foldJobs.set(key, { state: 'swapping', promise: swap })

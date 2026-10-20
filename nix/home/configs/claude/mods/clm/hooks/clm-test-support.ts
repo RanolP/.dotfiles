@@ -9,7 +9,7 @@ import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, LESSON_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
-import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
+import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
 
 export const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
@@ -74,14 +74,61 @@ export const metaIn = (seen: { store: Record<string, unknown> }): Meta => {
   return value
 }
 
-export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[] }
+export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; storeKeysBlock?: () => Promise<void> }
+const readFixtureState = (files: Record<string, string>, path: string): Record<string, unknown> => {
+  try {
+    const value: unknown = JSON.parse(files[path] ?? '{}')
+    return isRecord(value) ? value : {}
+  } catch { return {} }
+}
 export function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
-  const seen = { clock, store: {} as Record<string, unknown>, files: {} as Record<string, string>, prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[] }
-  on('store.get', (_$: any, e: any) => ({ value: seen.store[e.key] }))
-  on('store.set', (_$: any, e: any) => { seen.store[e.key] = e.value; return { value: undefined } })
-  on('store.delete', (_$: any, e: any) => { delete seen.store[e.key]; return { value: undefined } })
-  on('session.id', () => ({ value: 's1' }))
+  const engineStore: Record<string, unknown> = {}
+  const files: Record<string, string> = {}
+  const sessionStorePrefixes = new Set(['address-index', 'agent-task-roots', 'agent-task-step-claims', 'headAttachments', 'held', 'instruction-index', 'issue-addresses', 'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows'])
+  const sessionStorePath = (key: string) => {
+    const separator = key.indexOf(':')
+    if (separator < 0 || !sessionStorePrefixes.has(key.slice(0, separator))) return undefined
+    const session = key.slice(separator + 1).split(':', 1)[0]
+    return session ? `/home/t/.claude-work/plans/clm-${session}.state.json` : undefined
+  }
+  const store = new Proxy(engineStore, {
+    get(target, property) {
+      if (typeof property !== 'string') return Reflect.get(target, property)
+      const path = sessionStorePath(property)
+      if (path) {
+        const state = readFixtureState(files, path)
+        return Object.prototype.hasOwnProperty.call(state, property) ? state[property] : undefined
+      }
+      return Reflect.get(target, property)
+    },
+    set(target, property, value) {
+      if (typeof property !== 'string') return Reflect.set(target, property, value)
+      const path = sessionStorePath(property)
+      if (!path) return Reflect.set(target, property, value)
+      const state = readFixtureState(files, path)
+      state[property] = value
+      files[path] = JSON.stringify(state)
+      delete target[property]
+      return true
+    },
+    deleteProperty(target, property) {
+      if (typeof property !== 'string') return Reflect.deleteProperty(target, property)
+      const path = sessionStorePath(property)
+      if (!path) return Reflect.deleteProperty(target, property)
+      const state = readFixtureState(files, path)
+      delete state[property]
+      files[path] = JSON.stringify(state)
+      delete target[property]
+      return true
+    },
+  })
+  const seen = { clock, store, engineStore, files, prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[] }
+  on('store.get', (_$: any, e: any) => ({ value: seen.engineStore[e.key] }))
+  on('store.set', (_$: any, e: any) => { seen.engineStore[e.key] = e.value; return { value: undefined } })
+  on('store.delete', (_$: any, e: any) => { delete seen.engineStore[e.key]; return { value: undefined } })
+  on('store.keys', async () => { await s.storeKeysBlock?.(); return { value: Object.keys(seen.engineStore) } })
+  on('session.id', () => ({ value: s.sessionId ?? 's1' }))
   on('session.messages', (_$: any, e: any) => ({ value: e.agentId === undefined ? s.rows : s.agentRows?.[e.agentId] ?? [] }))
   on('session.usage', () => ({ value: s.usage ?? { startedAt: 0, context: { window: 200000, tokens: 6000 }, rateLimits: [] } }))
   on('env.get', () => ({ value: '/home/t' }))

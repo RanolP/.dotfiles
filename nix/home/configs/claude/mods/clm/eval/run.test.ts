@@ -17,8 +17,8 @@ test('the folded ledger retains or can resolve every declared fact', { options: 
     const callsBefore = harness.splitCalls()
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `turn-${fixture.id}`, reason: 'answer' })
     const pendingKey = `pending:${fixture.sessionId}`
-    for (let i = 0; i < 2_000 && harness.store[pendingKey] === undefined; i++) await new Promise(resolve => setTimeout(resolve, 1))
-    if (harness.store[pendingKey] === undefined) throw new Error(`${fixture.id} did not produce a queued fold; split calls=${harness.splitCalls() - callsBefore}; logs=${harness.logs.slice(-8).join(' | ')}`)
+    for (let i = 0; i < 2_000 && harness.sessionValue(fixture.sessionId, pendingKey) === undefined; i++) await new Promise(resolve => setTimeout(resolve, 1))
+    if (harness.sessionValue(fixture.sessionId, pendingKey) === undefined) throw new Error(`${fixture.id} did not produce a queued fold; split calls=${harness.splitCalls() - callsBefore}; logs=${harness.logs.slice(-8).join(' | ')}`)
     const messages = fixture.rows.map((row, index) => ({ ...row, handle: `eval-${index}` } satisfies SessionMessage))
     const compacted = await $.session.compact({ trigger: 'plugin', messages })
     if (!compacted || !Array.isArray(compacted.messages)) throw new Error(`${fixture.id} compaction returned no messages`)

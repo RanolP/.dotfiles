@@ -9,11 +9,158 @@ import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
-import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint, stableAttachmentOf, stableAttachmentRow } from './fold'
+import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
+import { fingerprint, foldedRows, protectedIndex, stableAttachmentOf, stableAttachmentRow } from './fold'
+import { clearFoldJob, handleSessionCompact, setRewindFoldJob } from './fold-job'
+import type { FoldJobIo } from './fold-job'
+import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
+
+const readStateFile = (files: Record<string, string>, path: string): Record<string, unknown> => {
+  const value: unknown = JSON.parse(files[path] ?? '{}')
+  if (!isRecord(value)) throw new Error(`state file is not an object: ${path}`)
+  return value
+}
+
+// Regression caught: an engine-store limit failure after the fold was computed discarded the compact result.
+test('a compact returns folded messages when store persistence exceeds its limit', OPTS, async () => {
+  const rows = handled(ROWS)
+  const files: Record<string, string> = {}
+  const rewindValues = new Map<string, unknown>()
+  const rewind: RewindIo = {
+    storeGet: async key => rewindValues.get(key), storeSet: async (key, value) => { rewindValues.set(key, value) },
+    storeDelete: async key => { rewindValues.delete(key) }, writeFile: async (path, text) => { files[path] = text },
+    ledgerPath: async () => LEDGER_FILE, topicsKey: async key => `topics:${key}`, pendingKey: async key => `pending:${key}`,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined,
+    readyFoldDropFps: () => undefined, clearReadyFold: async () => undefined, setRewindReady: () => undefined,
+    logEvent: async () => undefined, log: () => undefined,
+  }
+  const io: FoldJobIo = {
+    sessionId: async () => 's1', sessionMessages: async () => rows,
+    stableAttachments: async () => { throw new Error('attachment read failed') }, markStableAttachmentsCarried: async () => undefined,
+    sessionCompact: async () => ({ messages: rows }), now: async () => Date.parse('2026-10-06T00:00:00Z'),
+    after: () => ({ cancel: () => undefined }), usageReading: async () => 6000, sentAt: async () => () => undefined,
+    readMeta: async () => { throw new Error('malformed session state') }, writeMeta: async () => undefined,
+    readLedger: async () => undefined, ledgerPath: async () => LEDGER_FILE, basePath: async () => '/home/t/.claude-work/plans/clm-s1',
+    readFile: async () => undefined, writeFile: async (path, text) => { files[path] = text }, appendFile: async () => undefined,
+    lessonsPath: async () => '', fileExists: async () => false, fileList: async () => [],
+    run: async () => ({ exitCode: 0, stderr: '' }),
+    storeSet: async () => { throw new Error('HooksError: $.store.set: the store would be 4194305 characters, over the 4194304 limit') },
+    storeDelete: async () => undefined, pendingKey: async () => 'pending:s1', topicsKey: async () => 'topics:s1:main',
+    captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
+    readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
+    updateHeld: async () => { throw new Error('held store full') }, ensureInstructionIndex: async () => { throw new Error('instruction index write failed') },
+    residentLedger: async () => { throw new Error('resident index write failed') },
+    append: async () => { throw new Error('tracker write failed') }, projectPanel: async () => undefined, readRewindIo: () => rewind,
+    observeTranscript: async () => { throw new Error('transcript write failed') }, fold: async () => { throw new Error('ready plan should bypass fold summary') },
+    complete: async () => ({ isAnswered: false, text: '', reason: 'unused' }),
+    logEvent: async (event, fields) => {
+      const line = JSON.stringify({ ts: '2026-10-06T00:00:00.000Z', event, ...fields })
+      files[LOG_FILE] = `${files[LOG_FILE] ?? ''}${line}\n`
+    },
+    log: () => undefined,
+  }
+  const first = protectedIndex(rows)
+  const keepFrom = first + 2
+  const keepRow = rows[keepFrom]
+  if (!keepRow) throw new Error(`fold plan has no kept row at ${keepFrom}`)
+  const plan: RewindPlan = {
+    notes: '## 목표\n- keep the task', fullNotes: '## 목표\n- keep the task', ops: [], seq: 1,
+    keepFp: fingerprint(keepRow), keepFrom,
+    dropFps: foldedRows(rows, first, keepFrom).map(fingerprint), cuts: {}, keptTurns: 1, fallback: false, rewindOnly: false,
+    topics: [{ topic: 'build', summary: 'build summary', seq: 1 }],
+  }
+  clearFoldJob('s1:main')
+  setRewindFoldJob('s1:main', plan, rows.map(fingerprint))
+  const result = await handleSessionCompact(io, OPTS.options, rows, 'manual')
+  clearFoldJob('s1:main')
+  expect(compactedMessages(result).some(message => message.text.includes('clm ledger #1'))).toBe(true)
+  const failures = logEvents({ files }).filter(event => event.event === 'fold-persist-failed').map(event => String(event.reason))
+  for (const reason of ['malformed session state', 'transcript write failed', 'tracker write failed', 'held store full', 'instruction index write failed', 'resident index write failed', 'attachment read failed', 'over the 4194304 limit']) {
+    expect(failures.some(failure => failure.includes(reason))).toBe(true)
+  }
+})
+
+// Regression caught: session-owned transcript indexes kept increasing the engine-wide store.
+test('session-scoped store keys land in the session state file', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  await $.prompt.submit(promptInput('Start the migration'))
+  const key = 'address-index:s1:main'
+  const state = readStateFile(seen.files, '/home/t/.claude-work/plans/clm-s1.state.json')
+  expect(state[key]).toBeDefined()
+  expect(seen.engineStore).not.toHaveProperty(key)
+})
+
+// Regression caught: one-shot migration includes old sessions and keeps file values when merging.
+test('plugin load migrates session keys for every session, including old sessions', OPTS, async ($, on) => {
+  const keysStarted = Promise.withResolvers<void>()
+  const keysGate = Promise.withResolvers<void>()
+  const state: State = { rows: [], replies: [], sessionId: 's1', storeKeysBlock: async () => { keysStarted.resolve(); await keysGate.promise } }
+  const seen = bottoms(on, state)
+  const firstKey = 'address-index:s1:main'
+  const oldSessionKey = 'requests:s2:main'
+  const oldSessionPath = '/home/t/.claude-work/plans/clm-s2.state.json'
+  const existingFileKey = 'held:s2'
+  const marker = 'migrated:session-files:v1'
+  seen.engineStore[firstKey] = { rows: [{ address: '@first' }] }
+  seen.engineStore[oldSessionKey] = ['legacy value']
+  // This old ledger stays eligible because migration covers every session.
+  seen.files['/home/t/.claude-work/plans/clm-s2.md'] = 'old ledger'
+  seen.files[oldSessionPath] = JSON.stringify({ [existingFileKey]: ['file value'] })
+
+  const input = { cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput
+  const firstStart = $.session.start(input)
+  await keysStarted.promise
+  state.sessionId = 's2'
+  const secondStart = $.session.start(input)
+  keysGate.resolve()
+  await Promise.all([firstStart, secondStart])
+
+  const firstState = readStateFile(seen.files, '/home/t/.claude-work/plans/clm-s1.state.json')
+  const oldState = readStateFile(seen.files, oldSessionPath)
+  expect(firstState[firstKey]).toEqual({ rows: [{ address: '@first' }] })
+  expect(oldState[oldSessionKey]).toEqual(['legacy value'])
+  expect(oldState[existingFileKey]).toEqual(['file value'])
+  expect(seen.engineStore).toEqual({ [marker]: true })
+})
+
+// Regression caught: a failed migration must not rerun and rewrite the log on every state access.
+test('a failed migration retries only at the next root session start', OPTS, async ($, on) => {
+  let attempts = 0
+  const seen = bottoms(on, {
+    rows: [], replies: [],
+    storeKeysBlock: async () => {
+      attempts++
+      if (attempts === 1) throw new Error('store enumeration failed')
+    },
+  })
+  const input = { cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput
+  await $.session.start(input)
+  for (let index = 0; index < 3; index++) await $.prompt.submit(promptInput(`state access ${index}`))
+  expect(attempts).toBe(1)
+  await $.session.start(input)
+  expect(attempts).toBe(2)
+  expect(seen.engineStore['migrated:session-files:v1']).toBe(true)
+})
+
+// Regression caught: malformed session state aborted compaction before the fold could reach the engine.
+test('a corrupt session state file is preserved and compaction still folds', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: ROWS, replies: [ledger('RECOVERED-FROM-CORRUPT-STATE')] })
+  const statePath = '/home/t/.claude-work/plans/clm-s1.state.json'
+  const corruptText = '{not json'
+  seen.files[statePath] = corruptText
+
+  const messages = compactedMessages(await $.session.compact(compactInput('manual', handled(ROWS))))
+  const backupPath = Object.keys(seen.files).find(path => path.startsWith('/home/t/.claude-work/plans/clm-s1.state.corrupt-'))
+
+  expect(messages[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(backupPath).toBeDefined()
+  if (!backupPath) throw new Error('corrupt session state backup was not written')
+  expect(seen.files[backupPath]).toBe(corruptText)
+  expect(seen.files[statePath]).not.toBe(corruptText)
+})
 // Regression caught: the automatic fold keeps the wrong rows (drops the request, keeps folded turns, or cuts between a tool_use and its tool_result).
 test('over budget, a fold keeps [first request, ledger, newest turns] with tool pairs intact', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('a.ts:12 is the bad import')] }

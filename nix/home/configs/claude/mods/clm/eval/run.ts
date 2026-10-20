@@ -1,6 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 import { isLedgerRow, isSystemRow, isUserTyped, protectedIndex, sum } from '../hooks/fold'
 import { LEDGER_COMPACT_SYSTEM, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from '../hooks/ledger'
+import { isRecord } from '../hooks/tracker'
 
 type Kind = 'instruction' | 'decision' | 'focus' | 'fact' | 'stack'
 export type Probe = { id: string; fixture: string; kind: Kind; expect: string; mustBe: 'resident' | 'resident-or-recall'; forbid?: string }
@@ -34,6 +35,7 @@ function installHarness(
   on('store.get', (_: unknown, event: { key: string }) => ({ value: store[event.key] }))
   on('store.set', (_: unknown, event: { key: string; value: unknown }) => { store[event.key] = event.value; return { value: undefined } })
   on('store.delete', (_: unknown, event: { key: string }) => { delete store[event.key]; return { value: undefined } })
+  on('store.keys', () => ({ value: Object.keys(store) }))
   on('env.get', async (_: unknown, event: { name: string }, next: (e: unknown) => Promise<unknown>) => event.name === 'HOME'
     ? { value: '/home/t' }
     : next(event))
@@ -93,6 +95,13 @@ export function createHarness(on: On, fixtures: readonly Fixture[], replies: Rea
   const splitCalls = installHarness(on, () => active, files, store, logs, replies, recorded, evalMode())
   return {
     files, store, logs, recorded, splitCalls,
+    sessionValue(session: string, key: string) {
+      try {
+        const value: unknown = JSON.parse(files[`/home/t/.claude-work/plans/clm-${session}.state.json`] ?? '{}')
+        if (isRecord(value) && Object.prototype.hasOwnProperty.call(value, key)) return value[key]
+      } catch { /* malformed fixture state reads as absent */ }
+      return undefined
+    },
     select: (fixture: Fixture) => { active = fixture },
     queueTokens: (fixture: Fixture) => sum(fixture.rows.slice(protectedIndex(fixture.rows) + 1)),
     score: (fixture: Fixture, probes: readonly Probe[], messages: readonly SessionMessage[]) => probes

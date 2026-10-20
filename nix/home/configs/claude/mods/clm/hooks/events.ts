@@ -7,6 +7,7 @@ import { describeOp } from './evidence'
 
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
   | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost' | 'ledger-over-budget' | 'rewind'
+  | 'fold-job' | 'fold-persist-failed' | 'session-state-migration'
 export type LogFields = { tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; durationMs?: number; summaryMs?: number; reason?: string }
 
 type FsEntry = { name: string; kind: string; size: number; mtimeMs: number; isLink: boolean }
@@ -107,7 +108,7 @@ export async function append(
   })
 }
 
-export async function logEvent(io: EventsIo, event: LogEvent, fields: LogFields): Promise<void> {
+export async function logEvent(io: Pick<EventsIo, 'generalLogPath' | 'exists' | 'read' | 'write'>, event: LogEvent, fields: LogFields): Promise<void> {
   try {
     const path = await io.generalLogPath()
     const lines = ((await io.exists(path)) ? await io.read(path) : '').split('\n').filter(Boolean)

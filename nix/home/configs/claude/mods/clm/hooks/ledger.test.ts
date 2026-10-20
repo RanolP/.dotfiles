@@ -408,7 +408,7 @@ test('precompute skips and subagent compaction leaves the main ledger and metada
   const child = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS), { agentId: 'a1' })))
   expect(child.map(message => message.text)).toEqual(['ENGINE SUMMARY'])
   expect(seen.files[LEDGER_FILE]).toBe(beforeLedger)
-  expect(seen.store['ledger:s1']).toBe(beforeMeta)
+  expect(seen.store['ledger:s1']).toEqual(beforeMeta)
   expect(seen.engineCompactions).toBe(1)
 })
 

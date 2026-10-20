@@ -160,9 +160,55 @@ const MAX_STABLE_ATTACHMENT_DELTAS = 32
 const INSTRUCTIONS_PREAMBLE = 'Codebase and user instructions are shown below.'
 const isInstructionDelta = (text: string) => !text.startsWith(INSTRUCTIONS_PREAMBLE)
 const appendStableDelta = (deltas: string[], text: string) => [...deltas, text].slice(-MAX_STABLE_ATTACHMENT_DELTAS)
+// The descriptions Claude Code 2.1.288 emits; a quoted header with any other
+// description stays file content instead of starting a fake section.
+const INSTRUCTION_KINDS = ["project instructions, checked into the codebase", "user's private project instructions, not checked in", "user's auto-memory, persists across conversations", 'organization-managed policy instructions', "user's private global instructions for all projects"]
+const INSTRUCTION_FILE = new RegExp(`(?:^|\\n\\n)Contents of (.+) \\((?:${INSTRUCTION_KINDS.join('|')})\\):\\n\\n`, 'g')
+const instructionSections = (text: string) => {
+  const heads = [...text.matchAll(INSTRUCTION_FILE)].map(m => ({ path: m[1] ?? '', at: m.index + m[0].indexOf('Contents of ') }))
+  return { lead: text.slice(0, heads[0]?.at ?? text.length), sections: heads.map((head, i) => ({ path: head.path, text: text.slice(head.at, heads[i + 1]?.at ?? text.length) })) }
+}
+const uniquePaths = (sections: readonly { path: string }[]) => new Set(sections.map(section => section.path)).size === sections.length
+// The harness re-announces a changed file after every compact boundary, each
+// section replacing "its earlier copy"; folding it into the full text keeps one
+// latest instructions row. undefined when either side has no file sections.
+export const mergeInstructions = (full: string, delta: string): string | undefined => {
+  const changed = instructionSections(delta).sections
+  const { lead, sections } = instructionSections(full)
+  // A path seen twice, or one the full text lacks, means file content quoted the
+  // header shape; keeping the delta as its own row loses nothing.
+  if (!changed.length || !uniquePaths(changed) || !uniquePaths(sections) || changed.some(c => !sections.some(section => section.path === c.path))) return undefined
+  const replace = new Map(changed.map(section => [section.path, section.text.trimEnd()]))
+  let differs = false
+  const merged = sections.map(section => {
+    const next = replace.get(section.path)
+    const body = section.text.trimEnd()
+    if (next === undefined || next === body) return section.text
+    differs = true
+    return next + section.text.slice(body.length)
+  })
+  return differs ? lead + merged.join('') : full
+}
+// Folds one announcement into the stored value; false when it adds nothing.
+const absorbStable = (value: StableAttachmentValue, type: StableAttachmentType, text: string): boolean => {
+  if (type === 'instructions' && isInstructionDelta(text)) {
+    const merged = value.full === undefined ? undefined : mergeInstructions(value.full, text)
+    if (merged !== undefined) {
+      if (merged === value.full) return false
+      value.full = merged
+      return true
+    }
+    if (value.deltas.includes(text)) return false
+    value.deltas = appendStableDelta(value.deltas, text)
+    return true
+  }
+  if (value.full === text) return false
+  Object.assign(value, { full: text, deltas: [] })
+  return true
+}
 const isStableAttachmentValue = (value: unknown): value is StableAttachmentValue =>
   isRecord(value) && (value.full === undefined || typeof value.full === 'string') && (value.inHead === undefined || typeof value.inHead === 'boolean') && (value.headDigest === undefined || typeof value.headDigest === 'string') && Array.isArray(value.deltas)
-  && value.deltas.every(item => typeof item === 'string') && typeof value.carriedAtSeq === 'number' && typeof value.droppedAtSeq === 'number'
+  && value.deltas.every(item => typeof item === 'string') && typeof value.carriedAtSeq === 'number'
 const isStableAttachmentSession = (value: unknown): value is StableAttachmentSession =>
   isRecord(value) && Object.entries(value).every(([type, item]) => isStableAttachmentType(type) && isStableAttachmentValue(item))
 const stableAttachmentStore = (value: unknown): StableAttachmentStore => {
@@ -196,13 +242,7 @@ function attachmentSessionFromMessages(rows: readonly SessionMessage[]): StableA
     if (!row) break
     carried.unshift(row)
   }
-  for (const row of carried) {
-    let value = state[row.type]
-    if (!value) value = state[row.type] = { deltas: [], carriedAtSeq: seq, droppedAtSeq: 0 }
-    if (row.type === 'instructions' && isInstructionDelta(row.text)) value.deltas = appendStableDelta(value.deltas, row.text)
-    else if (value.full === undefined) value.full = row.text
-    else value.deltas = appendStableDelta(value.deltas, row.text)
-  }
+  for (const row of carried) absorbStable(state[row.type] ?? (state[row.type] = { deltas: [], carriedAtSeq: seq }), row.type, row.text)
   return state
 }
 
@@ -228,7 +268,7 @@ async function stableAttachmentSession($: StableAttachmentIo): Promise<{ session
   const head = await $.store.get(await headAttachmentsKey($))
   if (isHeadAttachments(head)) for (const [type, digest] of Object.entries(head.digests)) {
     if (!isStableAttachmentType(type) || digest === undefined) continue
-    const value = restored[type] ?? (restored[type] = { deltas: [], carriedAtSeq: head.seq, droppedAtSeq: 0 })
+    const value = restored[type] ?? (restored[type] = { deltas: [], carriedAtSeq: head.seq })
     if (value.full === undefined) Object.assign(value, { inHead: true, headDigest: digest })
   }
   return updateStableAttachmentStore($, sessions => {
@@ -244,34 +284,33 @@ export async function handleStableAttachment($: StableAttachmentIo, input: Stabl
   const inHead = !(await $.session.messages()).some(m => m.role === 'assistant')
   return updateStableAttachmentStore($, sessions => {
     const state = sessions[session] ?? {}
-    const current = state[input.type]
-    if (input.type === 'instructions' && isInstructionDelta(input.text)) {
-      const value = current ?? (state[input.type] = { deltas: [], carriedAtSeq: 0, droppedAtSeq: 0 })
-      value.deltas = appendStableDelta(value.deltas, input.text)
-      return { next: { ...sessions, [session]: state }, result: undefined }
-    }
-    if (current && current.full === undefined && current.headDigest === textDigest(input.text)) current.full = input.text
-    if (current?.full === input.text) {
-      if (current.carriedAtSeq > current.droppedAtSeq) {
-        current.droppedAtSeq = current.carriedAtSeq
-        return { next: { ...sessions, [session]: state }, result: { text: null } }
-      }
-      return { next: { ...sessions, [session]: state }, result: undefined }
-    }
-    state[input.type] = { full: input.text, ...(inHead ? { inHead } : {}), deltas: [], carriedAtSeq: 0, droppedAtSeq: 0 }
-    return { next: { ...sessions, [session]: state }, result: undefined }
+    const value = state[input.type] ?? (state[input.type] = { deltas: [], carriedAtSeq: 0 })
+    const delta = input.type === 'instructions' && isInstructionDelta(input.text)
+    if (!delta && value.full === undefined && value.headDigest === textDigest(input.text)) value.full = input.text
+    const changed = absorbStable(value, input.type, input.text)
+    if (inHead && !delta) Object.assign(value, { inHead, headDigest: textDigest(input.text) })
+    if (changed) value.carriedAtSeq = 0
+    // Once carried before the ledger, every identical re-announcement is a second copy.
+    return { next: { ...sessions, [session]: state }, result: !changed && value.carriedAtSeq > 0 ? { text: null } : undefined }
   })
 }
 
-const stableAttachmentRows = async ($: StableAttachmentIo, headKept: boolean): Promise<SessionMessage[]> => {
+// The kept head group brings back the session-start copy; once a newer text
+// replaced it, that copy is stale, so the head is rebuilt without its handle
+// and the latest text is carried instead. A head copy known only by digest
+// (after a resume) cannot be carried, so it keeps the head.
+const stableAttachmentRows = async ($: StableAttachmentIo, headKept: boolean): Promise<{ rows: SessionMessage[]; headKept: boolean }> => {
   const { session } = await stableAttachmentSession($)
   return updateStableAttachmentStore($, sessions => {
     const state = sessions[session] ?? {}
+    const stale = (value: StableAttachmentValue) => value.inHead === true && value.full !== undefined && textDigest(value.full) !== value.headDigest
+    const held = Object.values(state).filter(value => value.inHead)
+    const keep = headKept && !(held.every(value => value.full !== undefined) && held.some(stale))
     const rows = STABLE_ATTACHMENT_TYPES.flatMap(type => {
       const value = state[type]
-      return value ? [...(value.full === undefined || (headKept && value.inHead) ? [] : [stableAttachmentRow(type, value.full)]), ...value.deltas.map(text => stableAttachmentRow(type, text))] : []
+      return value ? [...(value.full === undefined || (keep && value.inHead && !stale(value)) ? [] : [stableAttachmentRow(type, value.full)]), ...value.deltas.map(text => stableAttachmentRow(type, text))] : []
     })
-    return { next: sessions, result: rows }
+    return { next: sessions, result: { rows, headKept: keep } }
   })
 }
 
@@ -284,7 +323,10 @@ const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, 
       const value = attachment && state[attachment.type]
       if (value) value.carriedAtSeq = seq
     }
-    if (headKept) for (const value of Object.values(state)) if (value.inHead) value.carriedAtSeq = seq
+    for (const value of Object.values(state)) {
+      if (headKept && value.inHead) value.carriedAtSeq = seq
+      if (!headKept) { delete value.inHead; delete value.headDigest }
+    }
     return { next: { ...sessions, [session]: state }, result: state }
   })
   const digests: HeadAttachments['digests'] = {}

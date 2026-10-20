@@ -34,7 +34,7 @@ const TURN_CHANGE_SYSTEM = 'Summarize only concrete non-task context changes fro
 export type FoldJobIo = {
   sessionId(): Promise<string>
   sessionMessages(): Promise<SessionMessage[]>
-  stableAttachments(headKept: boolean): Promise<SessionMessage[]>
+  stableAttachments(headKept: boolean): Promise<{ rows: SessionMessage[]; headKept: boolean }>
   markStableAttachmentsCarried(seq: number, rows: readonly SessionMessage[], headKept: boolean): Promise<void>
   sessionCompact(): Promise<SessionCompactResult>
   now(): Promise<number>
@@ -395,8 +395,7 @@ async function applyFoldPlan(
   const fileLedger = composeLedger(use.fullNotes, currentView.issues)
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
-  const headKept = keepsHeadGroup(workingRows, first)
-  const attachments = await io.stableAttachments(headKept)
+  const { rows: attachments, headKept } = await io.stableAttachments(keepsHeadGroup(workingRows, first))
   const messages = buildCleared({ head: headRows(workingRows, first), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow, attachments, headKept)
   const tokensBefore = sum(workingRows)
   const tokensAfter = sum(messages)
@@ -443,8 +442,7 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
     head: rows.slice(0, first + 1).filter(message => !isLedgerRow(message)), dropped: [],
     tail: rows.slice(first + 1).filter(message => !isLedgerRow(message)), keptTurns: 0, cuts: {},
   }
-  const headKept = keepsHeadGroup(rows, first)
-  const attachments = await io.stableAttachments(headKept)
+  const { rows: attachments, headKept } = await io.stableAttachments(keepsHeadGroup(rows, first))
   const messages = buildCleared(plan, row, attachments, headKept)
   await io.writeFile(await io.ledgerPath(), fullLedger + '\n')
   const topicKey = await io.topicsKey(key)

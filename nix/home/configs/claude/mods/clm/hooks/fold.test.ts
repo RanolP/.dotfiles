@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, mergeInstructions, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -86,6 +86,99 @@ test('a mid-session CLAUDE.md edit is carried on the next fold', OPTS, async ($,
   expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
   await $.prompt.attachment(attachment('instructions', instructions))
   await $.prompt.attachment(attachment('instructions', 'Instruction files were re-read after an edit; these differ from their earlier copies.\nUpdated instruction text.'))
+})
+
+// Regression caught: the harness re-announced the same MEMORY.md delta after every fold and clm carried one more copy each time (49 identical 31KB rows in one session).
+test('MEMORY.md edits across folds leave one latest instructions row before the ledger', OPTS, async ($, on) => {
+  const file = (memory: string) => `Contents of /home/u/.claude/projects/w/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n${memory}`
+  const full = `Codebase and user instructions are shown below.\n\nContents of /w/CLAUDE.md (project instructions, checked into the codebase):\n\nKeep the exact bytes.\n\n${file('- memory v1')}`
+  const delta = (memory: string) => `Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:\n\n${file(memory)}`
+  const s: State = { rows: ROWS, replies: [ledger('first fold'), ledger('second fold'), ledger('third fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const announce = (text: string) => $.prompt.attachment({ type: 'instructions', text, origin: 'dynamic' })
+  const instructionRows = (rows: readonly SessionMessage[]) => rows.filter(row => stableAttachmentOf(row)?.type === 'instructions')
+  const more = [M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await announce(full)
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  expect(await announce(full)).toEqual({ text: null })
+  expect(await announce(delta('- memory v2'))).toEqual({ text: delta('- memory v2') })
+  s.rows = [...first, ...more]
+  await turnEnds($, s, seen)
+  const second = seen.results.at(1)?.messages ?? []
+  expect(instructionRows(second).map(row => stableAttachmentOf(row)?.text)).toEqual([full.replace('- memory v1', '- memory v2')])
+  const at = second.findIndex(row => stableAttachmentOf(row)?.type === 'instructions')
+  expect(second[at + 1]?.text).toMatch(/^\[clm ledger #2 · /)
+  expect(await announce(delta('- memory v2'))).toEqual({ text: null })
+  expect(await announce(delta('- memory v2'))).toEqual({ text: null })
+  expect(await announce(delta('- memory v3'))).toEqual({ text: delta('- memory v3') })
+  s.rows = [...second, ...more]
+  await turnEnds($, s, seen)
+  const third = seen.results.at(2)?.messages ?? []
+  expect(instructionRows(third).map(row => stableAttachmentOf(row)?.text)).toEqual([full.replace('- memory v1', '- memory v3')])
+})
+
+// Regression caught: the kept first request brought back its session-start CLAUDE.md beside the newer carried copy.
+test('a head-held instructions copy made stale by an edit is replaced, not kept beside the latest', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n\nContents of /w/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n- v1'
+  const delta = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies:\n\nContents of /w/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n- v2'
+  const s: State = { rows: ROWS.slice(0, 1), replies: [ledger('first fold'), ledger('second fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const announce = (text: string) => $.prompt.attachment({ type: 'instructions', text, origin: 'dynamic' })
+  await announce(full)
+  s.rows = ROWS
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  expect(first[0]?.handle).toBe('h0')
+  expect(await announce(delta)).toEqual({ text: delta })
+  s.rows = [...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second[0]?.handle).toBeUndefined()
+  expect(second[1]?.text).toBe(stableAttachmentRow('instructions', full.replace('- v1', '- v2')).text)
+  expect(second[2]?.text).toMatch(/^\[clm ledger #2 · /)
+  expect(await announce(delta)).toEqual({ text: null })
+})
+
+// Regression caught: a note quoting the harness's "Contents of x (y):" header split the file, so an edit left its stale tail in the latest full text.
+test('mergeInstructions splits only on harness file boundaries and declines ambiguous headers', () => {
+  const header = (path: string, kind = "user's auto-memory, persists across conversations") => `Contents of ${path} (${kind}):\n\n`
+  const full = (memory: string) => `Codebase and user instructions are shown below.\n\n${header('/w/CLAUDE.md', 'project instructions, checked into the codebase')}Keep.\n\n${header('/w/MEMORY.md')}${memory}`
+  const delta = (body: string) => `Instruction files were re-read:\n\n${body}`
+  const quoted = `- a\n\n${header('/x/notes.md', 'memory')}- tail v1`
+  expect(mergeInstructions(full(quoted), delta(header('/w/MEMORY.md') + '- c'))).toBe(full('- c'))
+  expect(mergeInstructions(full('- v1'), delta(header('/w/MEMORY.md') + quoted))).toBe(full(quoted))
+  expect(mergeInstructions(full(`- a\n\n${header('/w/CLAUDE.md', 'project instructions, checked into the codebase')}- b`), delta(header('/w/MEMORY.md') + '- c'))).toBeUndefined()
+  expect(mergeInstructions(full('- v1'), delta(`${header('/w/MEMORY.md')}- a\n\n${header('/w/MEMORY.md')}- b`))).toBeUndefined()
+  expect(mergeInstructions(full('- v1'), delta(header('/w/OTHER.md') + '- new'))).toBeUndefined()
+})
+
+// Regression caught: after a resume, a digest-only head attachment kept the head, and the changed instructions it also held were neither kept fresh nor carried, so the MEMORY.md edit vanished.
+test('after a resume a stale head instructions copy is carried even when another head attachment is digest-only', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n\nContents of /w/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n- v1'
+  const delta = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies:\n\nContents of /w/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n- v2'
+  const style = 'Use the selected response style exactly.'
+  const s: State = { rows: ROWS.slice(0, 1), replies: [ledger('first fold'), ledger('second fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const announce = (type: StableAttachmentType, text: string) => $.prompt.attachment({ type, text, origin: 'dynamic' })
+  await announce('instructions', full)
+  await announce('output_style_instructions', style)
+  s.rows = ROWS
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput)
+  expect(await announce('instructions', full)).toEqual({ text: null })
+  expect(await announce('instructions', delta)).toEqual({ text: delta })
+  s.rows = [...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+  const second = seen.results.at(1)?.messages ?? []
+  const carried = second.filter(row => stableAttachmentOf(row)?.type === 'instructions')
+  expect(carried.map(row => row.text)).toEqual([stableAttachmentRow('instructions', full.replace('- v1', '- v2')).text])
+  const at = second.findIndex(row => stableAttachmentOf(row)?.type === 'instructions')
+  expect(second[at + 1]?.text).toMatch(/^\[clm ledger #2 · /)
 })
 
 // Regression caught: a fold re-carried the first request's session-start attachments as user rows, so the UI showed them as typed by the user.

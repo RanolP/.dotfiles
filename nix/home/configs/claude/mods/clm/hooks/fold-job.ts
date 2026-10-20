@@ -360,6 +360,8 @@ export async function maybeClear(io: FoldJobIo, opts: Opts): Promise<void> {
   const first = protectedIndex(rows)
   const queue = rows.slice(first + 1)
   if (sum(queue) < opts.queueTarget) return
+  const used = await io.usageReading()
+  if (used !== undefined && used < opts.budget - opts.reserve) return
   void startFoldJob(io, opts, rows, meta, key, true).catch(err => io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' }))
 }
 

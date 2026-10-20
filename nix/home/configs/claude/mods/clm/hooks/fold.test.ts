@@ -436,10 +436,11 @@ test('the applied background fold is head plus ledger plus B verbatim', BG_OPTS,
 test('a ready fold waits below the escape threshold and swaps on the first crossing compaction', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
-  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(4800) }
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(4900) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   await waitForPending(seen)
+  s.usage = usage(4800)
   const belowThreshold = compactedMessages(await $.session.compact(compactInput('manual', handled(rows))))
   expect(belowThreshold).toEqual(handled(rows))
   expect(seen.store['pending:s1']).toBeDefined()
@@ -677,4 +678,19 @@ test('a non-shrinking auto job leaves the transcript unchanged after its escape 
   expect(r.messages?.map(m => m.text)).toEqual(rows.map(m => m.text))
   expect(seen.engineCompactions).toBe(0)
   expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
+})
+
+const FOLD_ROWS = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
+
+// Regression caught: the background fold started on queue size alone, far below the 60% point, or never started at it.
+test('an unset budget starts the background fold once usage crosses 60% of the window', { options: { tailTarget: 1200, queueTarget: 1, ledgerTarget: 300 } }, async ($, on) => {
+  const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 10000, tokens } })
+  const s: State = { rows: FOLD_ROWS, replies: [], splitReplies: [splitAnswer(2)], usage: usage(5900) }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  expect(seen.splitPrompts).toHaveLength(0)
+  s.usage = usage(6000)
+  await $.turn.complete({ ...TURN, turnId: 'crossed' })
+  await waitForPending(seen)
+  expect(seen.splitPrompts).toHaveLength(1)
 })

@@ -71,11 +71,21 @@ const changeWorkflow = <T>($: EngineInterface, change: (current: ClmWorkflow) =>
 // --- options -------------------------------------------------------------
 
 /** Reads userConfig, naming every value it could not use and the value used instead. */
-export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: string[] } {
+// An unset or 0 budget follows the live window: the fold escape point
+// (budget - reserve) sits at `threshold` of it, so the background fold starts
+// there and the targets below scale with it.
+export function readOpts(o: Record<string, unknown>, window?: number): { opts: Opts; problems: string[] } {
   const problems: string[] = []
   const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v)
-  let budget = 32000
-  if (o.budget !== undefined) {
+  let threshold = 0.6
+  if (o.threshold !== undefined && o.threshold !== 0) {
+    if (typeof o.threshold === 'number' && o.threshold > 0 && o.threshold < 1) threshold = o.threshold
+    else problems.push(`threshold=${JSON.stringify(o.threshold)} must be a fraction between 0 and 1; using 0.6`)
+  }
+  const target = typeof window === 'number' && Number.isFinite(window) && window > 0 ? Math.floor(window * threshold) : 0
+  const followsWindow = target >= 2000 && (o.budget === undefined || o.budget === 0)
+  let budget = followsWindow ? target + Math.min(2048, Math.floor(target / 4)) : 32000
+  if (!followsWindow && o.budget !== undefined && o.budget !== 0) {
     if (isInt(o.budget) && o.budget >= 2000) budget = o.budget
     else {
       budget = typeof o.budget === 'number' && Number.isFinite(o.budget) && o.budget > 0 ? Math.max(2000, Math.round(o.budget)) : 32000
@@ -99,7 +109,7 @@ export function readOpts(o: Record<string, unknown>): { opts: Opts; problems: st
     if (isInt(o.ledgerTarget) && o.ledgerTarget >= 0 && o.ledgerTarget < tailTarget) ledgerTarget = o.ledgerTarget
     else problems.push(`ledgerTarget=${JSON.stringify(o.ledgerTarget)} must be a non-negative integer under tailTarget (${tailTarget}); using ${defLedgerTarget}`)
   }
-  const defReserve = Math.min(2048, Math.floor(budget / 4))
+  const defReserve = followsWindow ? budget - target : Math.min(2048, Math.floor(budget / 4))
   let reserve = defReserve
   if (o.reserve !== undefined && o.reserve !== 0) {
     if (isInt(o.reserve) && o.reserve > 0 && o.reserve < budget) reserve = o.reserve
@@ -584,6 +594,12 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
 })
 const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number, address?: string) => classifyPrompt(intentIo($), text, promptSeq, address)
 
+/** Options resolved against the live context window, so the threshold point follows the model in use. */
+async function liveOpts($: EngineInterface, options: Record<string, unknown>): Promise<Opts> {
+  let window: number | undefined
+  try { window = (await $.session.usage()).context.window } catch { window = undefined }
+  return readOpts(options, window).opts
+}
 /** The engine's live context tokens, when it has a reading. */
 async function usageReading($: EngineInterface): Promise<number | undefined> {
   try {
@@ -704,7 +720,8 @@ const GUIDE = [
 
 export const register: Register = (on, options) => {
   const promptIntentJobs = new Map<string, Promise<void>>()
-  const { opts, problems } = readOpts(options as Record<string, unknown>)
+  const { problems } = readOpts(options as Record<string, unknown>)
+  const userOptions = options as Record<string, unknown>
 
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
@@ -781,7 +798,7 @@ export const register: Register = (on, options) => {
     const meta = await readMeta($)
     const rows = liveRows(await $.session.messages(), meta.boundary)
     const log = ((await readText($, await logPath($))) ?? '').split('\n').filter(Boolean).slice(-5)
-    $.ui.log(foldJobReport(await readText($, await ledgerPath($)), rows, opts, meta, log))
+    $.ui.log(foldJobReport(await readText($, await ledgerPath($)), rows, await liveOpts($, userOptions), meta, log))
     return {}
   })
 
@@ -802,7 +819,7 @@ export const register: Register = (on, options) => {
     const res = await next(e)
     try { await stampMessages(addressIo($), transcriptKey(await sid($)), await $.session.messages(), await nowIso($)) }
     catch (err) { $.ui.log(`clm: could not stamp turn rows (${String(err).slice(0, 160)})`, { to: 'debug' }) }
-    await completeMainTurn(mainTurnCompletionIo($, opts), e.turnId, e.isAborted, e.answer)
+    await completeMainTurn(mainTurnCompletionIo($, await liveOpts($, userOptions)), e.turnId, e.isAborted, e.answer)
     return res
   })
 
@@ -811,12 +828,12 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
     if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
-    return compactFoldJob(foldJobIo($), opts, e.messages, e.trigger)
+    return compactFoldJob(foldJobIo($), await liveOpts($, userOptions), e.messages, e.trigger)
   })
 
   on('tool.call', async ($, e, next) => {
     if (e.agentId === undefined) {
-      void maybeClearFoldJob(foldJobIo($), opts).catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
+      void liveOpts($, userOptions).then(opts => maybeClearFoldJob(foldJobIo($), opts)).catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
     }
     return next(e)
   })

@@ -936,6 +936,7 @@ const GUIDE = [
 
 export const register: Register = (on, options) => {
   const promptIntentJobs = new Map<string, Promise<void>>()
+  const forceCompacts = new Set<string>()
   const { problems } = readOpts(options as Record<string, unknown>)
   const userOptions = options as Record<string, unknown>
 
@@ -1002,7 +1003,31 @@ export const register: Register = (on, options) => {
       description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session (shown to you only).',
       immediate: true,
     })
+    await $.command.register({ name: 'force-compact', description: 'Compact once with Claude Code\'s own summarizer instead of the clm fold; text after it becomes the summary instructions.', immediate: true })
     return next(e)
+  })
+
+  // The host refuses a compaction from inside command.run, so it runs once the command has returned.
+  on('command.run', { command: 'force-compact' }, async ($, e) => {
+    const key = transcriptKey(await sid($))
+    const instructions = e.args.trim()
+    $.clock.after(0, async () => {
+      forceCompacts.add(key)
+      try {
+        const result = await $.session.compact(instructions ? { instructions } : {})
+        if (result.skip !== undefined) $.ui.log(`clm: force-compact skipped (${result.skip})`)
+        const head = result.messages?.[0]
+        // The engine's summary heads the live chain now; a fold built on the old rows must never swap in.
+        if (head) {
+          clearFoldJob(key)
+          await sessionStoreDelete($, await pendingKey($, key))
+          await writeMeta($, { ...await readMeta($), boundary: { fp: fingerprint(head), offset: 0 } })
+        }
+      } catch (err) {
+        $.ui.log(`clm: force-compact failed (${String(err).slice(0, 160)})`)
+      } finally { forceCompacts.delete(key) }
+    })
+    return {}
   })
 
   // Printed through ui.log, which the engine draws as a notice and never sends
@@ -1047,6 +1072,7 @@ export const register: Register = (on, options) => {
   // The engine and the turn-end check share one per-transcript job.
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
+    if (e.trigger === 'plugin' && forceCompacts.delete(transcriptKey(await sid($)))) return next(e)
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
     if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
     return compactFoldJob(foldJobIo($), await liveOpts($, userOptions), e.messages, e.trigger)

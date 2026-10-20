@@ -934,3 +934,37 @@ test('an unset budget starts the background fold once usage crosses 60% of the w
   await waitForPending(seen)
   expect(seen.splitPrompts).toHaveLength(1)
 })
+
+// Regression caught: /force-compact was swallowed by the clm fold, so the engine summarizer never ran.
+test('/force-compact hands one compaction to the engine summarizer', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: ROWS, replies: [] })
+  await $.command.run(commandInput('force-compact', ' keep the plan '))
+  await seen.clock.advance(1)
+  expect(seen.engineCompactions).toBe(1)
+  expect(seen.prompts).toEqual([])
+})
+
+// Regression caught: the force flag stayed armed, so every later /compact or auto compaction bypassed clm too.
+test('after /force-compact, the next manual compaction is clm-owned again', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('a.ts:12 is the bad import')] }
+  const seen = bottoms(on, s)
+  await $.command.run(commandInput('force-compact'))
+  await seen.clock.advance(1)
+  const out = compactedMessages(await $.session.compact(compactInput('manual', handled(ROWS))))
+  expect(seen.engineCompactions).toBe(1)
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+})
+
+// Regression caught: meta.boundary kept pointing into the pre-compaction chain, so the next fold read rows the engine had already summarized.
+test('after /force-compact, clm folds from the engine summary onward', OPTS, async ($, on) => {
+  const live = [M('user', 'ENGINE SUMMARY'), ...ROWS]
+  const s: State = { rows: [...ROWS, ...live], replies: [ledger('a.ts:12 is the bad import')] }
+  const seen = bottoms(on, s)
+  await $.command.run(commandInput('force-compact'))
+  await seen.clock.advance(1)
+  expect(metaIn(seen).boundary).toEqual({ fp: fingerprint(M('user', 'ENGINE SUMMARY')), offset: 0 })
+  const out = compactedMessages(await $.session.compact(compactInput('manual', handled(live))))
+  expect(out[0]?.text).toBe('ENGINE SUMMARY')
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(seen.engineCompactions).toBe(1)
+})

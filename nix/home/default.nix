@@ -159,7 +159,11 @@ let
   # Skills, defined once and linked into both tools' skill trees below. Local
   # skills point at the whole directory (each holds SKILL.md plus optional
   # references/); vendored ones point into their fetched store paths.
-  localSkill = name: ./configs/.agents/skills + "/${name}";
+  # Every local skill is a subdirectory of ONE store copy of the skills tree,
+  # so a script that imports a sibling skill by relative path
+  # (design-review -> ../artificier-comparison) resolves after node follows
+  # the ~/.claude/skills symlink to its real path, exactly as it does in the repo.
+  localSkill = name: "${./configs/.agents/skills}/${name}";
   skills = {
     git-master = localSkill "git-master";
     copy-sync = localSkill "copy-sync";

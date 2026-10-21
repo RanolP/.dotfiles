@@ -1,7 +1,4 @@
-export function numberText(value) {
-  const rounded = Math.round(value * 1e6) / 1e6;
-  return Object.is(rounded, -0) ? '0' : String(rounded);
-}
+import { numberText } from '../../../artificier-comparison/formats/still-cut-onion/scripts/lib/onion.mjs';
 
 export function percent(value) {
   return `${numberText(value)}%`;

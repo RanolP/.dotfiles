@@ -17,7 +17,7 @@ import type { LogEvent } from './events'
 import { xmlText } from './intent'
 
 export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
-export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; estimatorVersion?: number }
+export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; firstObserved?: number; estimatorVersion?: number }
 export type TopicState = RewindTopic
 export type TopicDraft = { topic: string; summary: string }
 export type SplitAnswer = { split: number; mergeReply: string; topics: TopicDraft[] }
@@ -196,6 +196,33 @@ export function foldableTokens(rows: readonly SessionMessage[], reading: number 
   return overhead === undefined ? visibleTokens(rows) * ratio : Math.max(0, reading - overhead)
 }
 
+// Every fold gate reads this one scale, so the point the background fold
+// starts at is the point a ready plan applies at.
+export function atFoldPoint(rows: readonly SessionMessage[], reading: number | undefined, meta: Pick<Meta, 'estimatorVersion' | 'overhead' | 'ratio'>, opts: Pick<Opts, 'budget' | 'reserve'>): boolean {
+  return foldableTokens(rows, reading, meta) >= opts.budget - opts.reserve
+}
+
+// The first reading holds the fixed prefix plus a near-empty conversation, so
+// an overhead above it is an estimator miss and would push the fold point out
+// of reach.
+export const boundedOverhead = (overhead: number, meta: Pick<Meta, 'firstObserved'>): number =>
+  Math.max(0, Math.min(overhead, meta.firstObserved ?? overhead))
+
+const resetStaleEstimator = (meta: Meta) => {
+  if (meta.estimatorVersion === TOKEN_ESTIMATOR_VERSION) return
+  meta.overhead = undefined
+  meta.ratio = undefined
+  meta.estimatorVersion = TOKEN_ESTIMATOR_VERSION
+}
+
+// The first reading calibrates the prefix, so the rows-scale fold point holds
+// from the first turn instead of only after a first fold has measured it.
+export function calibrateFirstReading(meta: Meta, rows: readonly SessionMessage[], reading: number): void {
+  resetStaleEstimator(meta)
+  meta.firstObserved = reading
+  meta.overhead = boundedOverhead(meta.overhead ?? reading - sum(rows), meta)
+}
+
 export async function trackerView(io: Pick<FoldRuntimeIo, 'readAll'>, here: Origin, ops: readonly Payload[] = []): Promise<TrackerView> {
   const events = await io.readAll()
   const lastSeq = events.reduce((n, event) => event.origin.session === here.session ? Math.max(n, event.seq) : n, 0)
@@ -215,11 +242,7 @@ export async function fold(
   io: FoldRuntimeIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number,
   calibrate = true, prepared?: PreparedFold, transcript?: string,
 ): Promise<Fold | string> {
-  if (meta.estimatorVersion !== TOKEN_ESTIMATOR_VERSION) {
-    meta.overhead = undefined
-    meta.ratio = undefined
-    meta.estimatorVersion = TOKEN_ESTIMATOR_VERSION
-  }
+  resetStaleEstimator(meta)
   const observed = freshReal(reading ?? await io.usageReading(), meta)
   const calib = calibrate ? observed : undefined
   const estimated = sum(rows)
@@ -340,6 +363,6 @@ export async function fold(
     return why
   }
   if (Object.keys(plan.cuts).length) await io.logEvent('truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
-  if (calib !== undefined) meta.overhead = Math.max(0, calib - estimated)
+  if (calib !== undefined) meta.overhead = boundedOverhead(calib - estimated, meta)
   return { plan, notes, fullNotes, ops, asks, seq, fallback, promoted, hold, settled, topics, tailTokens }
 }

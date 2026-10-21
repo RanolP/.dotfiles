@@ -381,14 +381,13 @@ test('an escape retry leaves meta.overhead as it was', OPTS, async ($, on) => {
   expect(storedOverhead(seen.store['ledger:s1'])).toBe(100)
 })
 
-// Regression caught: when the merge failed twice, the escape retry delegated a second summary to the engine.
-test('a failed escape retry stays inside the compaction job', OPTS, async ($, on) => {
+// Regression caught: when the merge failed twice, the failed escape retry handed the rows back unchanged and the context never shrank.
+test('a failed escape retry hands off to exactly one engine summary', OPTS, async ($, on) => {
   const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), new Error('still down')] }
   const seen = bottoms(on, s)
   const messages = compactedMessages(await $.session.compact(compactInput('auto', handled(ESCAPE_ROWS))))
-  expect(seen.engineCompactions).toBe(0)
-  expect(messages.map(m => m.text)).toEqual(ESCAPE_ROWS.map(m => m.text))
-  expect(messages.some(m => m.toolResults?.some(result => result.tool_use_id === 'tu_a'))).toBe(true)
+  expect(seen.engineCompactions).toBe(1)
+  expect(messages.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
   expect(seen.files[WITHHELD_FILE]).toBe('r'.repeat(4000))
 })
 

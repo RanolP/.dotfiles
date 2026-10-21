@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, mergeInstructions, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, mergeInstructions, isHeld, readOpts, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -12,7 +12,7 @@ import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM,
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { estTokens, fingerprint, foldedRows, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
-import { foldableTokens } from './fold-runtime'
+import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens } from './fold-runtime'
 import type { Opts } from './fold-runtime'
 import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
@@ -28,20 +28,22 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
 
-// Regression caught: plugin-triggered engine compactions disappeared from latency attribution when clm passed them through.
-test('plugin compaction passthrough logs its entry state and wait time', OPTS, async () => {
+// Regression caught: a plugin compaction with no clm plan handed the rows back unchanged, so the context never shrank, and dropped out of latency attribution.
+test('a plugin compaction with no clm plan returns the engine summary and logs its entry state and wait time', OPTS, async () => {
   const logged = Promise.withResolvers<void>()
   const events: { event: string; fields: Record<string, unknown> }[] = []
   let time = 100
   const io = {
     sessionId: async () => 'compact-log-plugin', now: async () => time += 5,
-    readMeta: async () => ({ seq: 0, fails: 0 }), observeTranscript: async () => undefined,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
+    storeDelete: async () => undefined, pendingKey: async () => 'pending:s1',
     logEvent: async (event: string, fields: Record<string, unknown>) => { events.push({ event, fields }); logged.resolve() }, log: () => undefined,
   } as unknown as FoldJobIo
-  const result = await handleSessionCompact(io, OPTS.options, [], 'plugin')
+  const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
+  const result = await handleSessionCompact(io, OPTS.options, ROWS, 'plugin', async () => summary)
   await logged.promise
-  expect(result).toEqual({ messages: [] })
-  expect(events).toEqual([{ event: 'session-compact', fields: { trigger: 'plugin', state: 'none', outcome: 'plugin-passthrough', waitMs: 5, totalMs: 10 } }])
+  expect(result).toEqual(summary)
+  expect(events).toEqual([{ event: 'session-compact', fields: { trigger: 'plugin', state: 'none', outcome: 'plugin-handoff', waitMs: 5, totalMs: 10 } }])
 })
 
 // Regression caught: a fixed prompt prefix above the budget triggered a fold even when the conversation rows stayed below it.
@@ -88,6 +90,26 @@ test('compaction starts when foldable rows exceed budget despite the fixed prefi
   setRewindFoldJob(key, readyPlan, [])
   try { await applyReadyIfAtThreshold(io, thresholdOpts, transcriptKey(await io.sessionId())) } finally { clearFoldJob(key) }
   expect(compactions).toBe(1)
+})
+
+// Regression caught: with a 67k fixed prefix the window budget sat past the engine's own autocompact point (~166.7k of 200k), so the ready clm plan never applied before the engine summarized.
+test('with a 67k prefix in a 200k window the clm fold point sits below the engine autocompact point', OPTS, async () => {
+  const { opts } = readOpts({}, 200_000, 67_000)
+  const meta = { estimatorVersion: TOKEN_ESTIMATOR_VERSION, overhead: 67_000 }
+  const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(2400), toolUses: [] }]
+  expect(opts.budget - opts.reserve + 67_000).toBeLessThan(166_667)
+  expect(atFoldPoint(rows, 150_000, meta, opts)).toBe(true)
+  expect(atFoldPoint(rows, 100_000, meta, opts)).toBe(false)
+})
+
+// Regression caught: an undercounting estimator stored an overhead larger than the whole context, so foldable tokens read 0 and the fold point was never reached.
+test('an undercounting estimator never stores an overhead above the first observed reading', OPTS, async () => {
+  const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(2400), toolUses: [] }]
+  const meta: Meta = { seq: 0, fails: 0, estimatorVersion: TOKEN_ESTIMATOR_VERSION, overhead: 150_000 }
+  calibrateFirstReading(meta, rows, 70_000)
+  expect(meta.overhead).toBe(70_000)
+  expect(boundedOverhead(190_000, meta)).toBe(70_000)
+  expect(atFoldPoint(rows, 160_000, meta, { budget: 60_000, reserve: 4000 })).toBe(true)
 })
 
 test('foldable size ignores stale and implausible calibration', OPTS, async () => {
@@ -138,7 +160,8 @@ test('a compact returns folded messages when store persistence exceeds its limit
     log: () => undefined,
   }
   const first = protectedIndex(rows)
-  const keepFrom = first + 2
+  // Folding the large build log is what makes this swap shrink the context.
+  const keepFrom = first + 4
   const keepRow = rows[keepFrom]
   if (!keepRow) throw new Error(`fold plan has no kept row at ${keepFrom}`)
   const plan: RewindPlan = {
@@ -149,7 +172,7 @@ test('a compact returns folded messages when store persistence exceeds its limit
   }
   clearFoldJob('s1:main')
   setRewindFoldJob('s1:main', plan, rows.map(fingerprint))
-  const result = await handleSessionCompact(io, OPTS.options, rows, 'manual')
+  const result = await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => { throw new Error('the clm swap should have shrunk the rows') })
   clearFoldJob('s1:main')
   expect(compactedMessages(result).some(message => message.text.includes('clm ledger #1'))).toBe(true)
   const failures = logEvents({ files }).filter(event => event.event === 'fold-persist-failed').map(event => String(event.reason))
@@ -534,7 +557,7 @@ test('a resumed session applies new instruction deltas to sections restored from
   s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
   await turnEnds($, s, seen)
   const second = seen.results.at(1)?.messages ?? []
-  s.rows = [...second, M('user', 'resume work'), use('tu_e', 'Write'), res('tu_e', 'w ' + BIG), M('assistant', 'continued after resume')]
+  s.rows = [...second, M('user', 'resume work'), use('tu_e', 'Write'), res('tu_e', 'w ' + BIG), M('assistant', 'continued after resume'), M('user', 'wrap up'), M('assistant', 'wrapped')]
   await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput)
   await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
   await turnEnds($, s, seen)
@@ -814,7 +837,7 @@ test('a compact with no job and a silent model folds mechanically at the deadlin
 
 // Regression caught: queueTarget was checked only after turn completion, so long turns entered compact without a summary job.
 test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($, on) => {
-  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'working')]
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(14_000)), M('user', 'active B'), M('assistant', 'working')]
   let release!: () => void
   let summaryStarted = false
   const gate = new Promise<void>(resolve => { release = resolve })
@@ -833,8 +856,8 @@ test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($,
   await waitForPending(seen)
 })
 
-// Regression caught: a changed A row let the swap delete turns the summary never saw.
-test('a background plan whose A rows changed is discarded with rows untouched', BG_OPTS, async ($, on) => {
+// Regression caught: a changed A row let the swap delete turns the summary never saw, and the discarded plan then left the context unshrunk.
+test('a background plan whose A rows changed is discarded and the engine summary compacts instead', BG_OPTS, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(24_000)), M('user', 'active B'), M('assistant', 'B result')]
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)] }
   const seen = bottoms(on, s)
@@ -843,9 +866,9 @@ test('a background plan whose A rows changed is discarded with rows untouched', 
   s.rows[1] = M('user', 'A changed after summary')
   const unchanged = handled(s.rows)
   const result = compactedMessages(await $.session.compact(compactInput('plugin', unchanged)))
-  expect(result).toEqual(unchanged)
+  expect(result.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
   expect(seen.store['pending:s1']).toBeUndefined()
-  expect(seen.engineCompactions).toBe(0)
+  expect(seen.engineCompactions).toBe(1)
 })
 
 // Regression caught: a split between topics or a tail that cannot fit still produced a destructive plan.
@@ -892,22 +915,18 @@ test('the applied background fold is head plus ledger plus B verbatim', BG_OPTS,
   expect(metaIn(seen).foldDurationsMs?.['1']).toBe(clear.durationMs)
 })
 
-// Regression caught: a ready fold replaced the transcript before its summary reached the escape threshold.
-test('a ready fold waits below the escape threshold and swaps on the first crossing compaction', { options: { budget: 6000, tailTarget: 5000, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
+// Regression caught: a compaction below the escape threshold held the ready fold back and handed the rows back unchanged, so the engine kept re-firing.
+test('a ready fold swaps on the next compaction even below the escape threshold', { options: { budget: 6000, tailTarget: 5000, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(24_000)), M('user', 'active B'), M('assistant', 'B result')]
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
-  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(5900) }
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(11_000) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   await waitForPending(seen)
   s.usage = usage(5800)
-  const belowThreshold = compactedMessages(await $.session.compact(compactInput('manual', handled(rows))))
-  expect(belowThreshold).toEqual(handled(rows))
-  expect(seen.store['pending:s1']).toBeDefined()
-
-  s.usage = usage(5900)
-  const crossed = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
+  const crossed = compactedMessages(await $.session.compact(compactInput('manual', handled(rows))))
   expect(crossed[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(seen.engineCompactions).toBe(0)
   expect(seen.store['pending:s1']).toBeUndefined()
   expect(storedLedger(seen)).toContain('build summary')
   expect(seen.splitPrompts).toHaveLength(1)
@@ -941,7 +960,7 @@ test('a real rewind restores the prior folded ledger without another summary cal
 
 // Regression caught: a repeated short prompt fingerprint made an intact ledger look like an un-restorable rewind.
 test('a duplicated short prompt rewind leaves the ledger intact', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
-  const rows = [M('user', 'protected request'), M('user', 'continue'), M('assistant', 'A'.repeat(6000)), M('user', 'continue'), M('assistant', 'B work'), M('user', 'continue'), M('assistant', 'C work')]
+  const rows = [M('user', 'protected request'), M('user', 'continue'), M('assistant', 'A'.repeat(14_000)), M('user', 'continue'), M('assistant', 'B work'), M('user', 'continue'), M('assistant', 'C work')]
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'T1', 'durable ledger')] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
@@ -1043,15 +1062,15 @@ test('an engine manual compaction uses a mechanical ledger when the merge fails'
   expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-invalid', 'fallback', 'truncation', 'clear'])
 })
 
-// Regression caught: system prompt tokens in usage must not block a queue-triggered background summary.
-test('queueTarget schedules the background fold independently of the usage reading', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 600, reserve: 100 } }, async ($, on) => {
+// Regression caught: system prompt tokens in usage blocked a queue-triggered background summary, or inflated the ratio it calibrated.
+test('queueTarget schedules the background fold independently of the usage reading', { options: { budget: 3000, tailTarget: 2000, queueTarget: 1, ledgerTarget: 600, reserve: 100 } }, async ($, on) => {
   const rows = ROWS
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(6000) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   await waitForPending(seen)
-  expect(metaIn(seen).ratio).toBeUndefined()
+  expect(metaIn(seen).ratio ?? 1).toBeLessThan(1.1)
   expect(seen.store['pending:s1']).toBeDefined()
 })
 
@@ -1144,23 +1163,22 @@ test('auto compaction with no pending plan produces a clm ledger instead of an e
   expect(auto[1].text).toMatch(/^\[clm ledger #1 · /)
   expect(section(auto[1].text, 'learned')).toContain('INLINE-FACT')
   expect(storedLedger(seen)).toContain('INLINE-FACT')
-  // A failed merge still folds, mechanically, rather than handing over to the engine.
-  const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
-  expect(manual[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(manual.some(m => m.text.startsWith('[clm ledger #2'))).toBe(false)
-  expect(manual.some(m => m.text === 'ENGINE SUMMARY')).toBe(false)
   expect(seen.engineCompactions).toBe(0)
+  // Nothing is left for clm to fold here, so the engine summary is the only way the context still shrinks.
+  const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
+  expect(manual.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(seen.engineCompactions).toBe(1)
 })
 
-// Regression caught: a non-shrinking compaction job delegated a competing engine summary.
-test('a non-shrinking auto job leaves the transcript unchanged after its escape attempt', { options: { budget: 2000, tailTarget: 1990, reserve: 100 } }, async ($, on) => {
+// Regression caught: a non-shrinking compaction job handed the rows back unchanged, so autocompact re-fired every turn until the engine reported thrashing.
+test('a non-shrinking auto job hands off to the engine summary after its escape attempt', { options: { budget: 2000, tailTarget: 1990, reserve: 100 } }, async ($, on) => {
   const rows = [M('user', 'start'), M('user', 'a'), M('assistant', 'A'), M('user', 'b'), M('assistant', 'B'), M('user', 'go'), M('assistant', 'w'.repeat(7600))]
   const s: State = { rows, replies: [ledger('p'.repeat(1700))] }
   const seen = bottoms(on, s)
   const r = await $.session.compact({ trigger: 'auto', messages: handled(rows) })
   if (!('messages' in r)) throw new Error('compaction returned no messages')
-  expect(r.messages?.map(m => m.text)).toEqual(rows.map(m => m.text))
-  expect(seen.engineCompactions).toBe(0)
+  expect(r.messages?.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(seen.engineCompactions).toBe(1)
   expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
 })
 

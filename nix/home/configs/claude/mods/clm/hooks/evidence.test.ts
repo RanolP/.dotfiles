@@ -246,14 +246,14 @@ test('an Agent report, a failed result, or a short quote does not prove a done',
   expect(reason).toContain('too short to cite')
 })
 
-// Regression caught: a transcript too small to fold was handed to a competing engine summary.
-test('a small transcript stays unchanged when a compaction job has no fold plan', OPTS, async ($, on) => {
+// Regression caught: a transcript too small to fold came back unchanged, so the engine's compaction never shrank the context.
+test('a small transcript with no fold plan hands off to the engine summary', OPTS, async ($, on) => {
   const rows = [M('user', 'first request here'), M('user', 'AWS Transcribe도 검토 필요'), M('assistant', 'ok')]
   const s: State = { rows, replies: [] }
   const seen = bottoms(on, s)
   const result = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
-  expect(seen.engineCompactions).toBe(0)
-  expect(result.map(m => m.text)).toEqual(rows.map(m => m.text))
+  expect(seen.engineCompactions).toBe(1)
+  expect(result.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
 })
 
 // Regression caught (round 3, finding 1): a hand-back excluded from turn boundaries left a coordinator session (one typed prompt, then hand-backs) with a single turn, so it never folded and always escaped to the engine summarizer.

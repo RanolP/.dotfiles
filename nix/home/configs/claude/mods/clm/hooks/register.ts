@@ -29,7 +29,7 @@ import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type
 import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
-import { clearFoldJob, foldJobDropFps, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
+import { clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
 import { registerResources } from './resources'
 
 export { recallRows } from './address'
@@ -79,8 +79,11 @@ const changeWorkflow = <T>($: EngineInterface, change: (current: ClmWorkflow) =>
 /** Reads userConfig, naming every value it could not use and the value used instead. */
 // An unset or 0 budget follows the live window: the fold escape point
 // (budget - reserve) sits at `threshold` of it, so the background fold starts
-// there and the targets below scale with it.
-export function readOpts(o: Record<string, unknown>, window?: number): { opts: Opts; problems: string[] } {
+// there and the targets below scale with it. The gates compare conversation
+// rows alone (reading minus the fixed prefix), so the window point becomes a
+// rows budget here; left whole, a 67k prefix put it past the engine's own
+// autocompact point and the ready plan never applied.
+export function readOpts(o: Record<string, unknown>, window?: number, prefix = 0): { opts: Opts; problems: string[] } {
   const problems: string[] = []
   const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v)
   let threshold = 0.6
@@ -88,8 +91,9 @@ export function readOpts(o: Record<string, unknown>, window?: number): { opts: O
     if (typeof o.threshold === 'number' && o.threshold > 0 && o.threshold < 1) threshold = o.threshold
     else problems.push(`threshold=${JSON.stringify(o.threshold)} must be a fraction between 0 and 1; using 0.6`)
   }
-  const target = typeof window === 'number' && Number.isFinite(window) && window > 0 ? Math.floor(window * threshold) : 0
-  const followsWindow = target >= 2000 && (o.budget === undefined || o.budget === 0)
+  const point = typeof window === 'number' && Number.isFinite(window) && window > 0 ? Math.floor(window * threshold) : 0
+  const target = Math.max(Math.floor(point / 4), point - Math.max(0, prefix))
+  const followsWindow = point >= 2000 && (o.budget === undefined || o.budget === 0)
   let budget = followsWindow ? target + Math.min(2048, Math.floor(target / 4)) : 32000
   if (!followsWindow && o.budget !== undefined && o.budget !== 0) {
     if (isInt(o.budget) && o.budget >= 2000) budget = o.budget
@@ -315,7 +319,7 @@ const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) 
 const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
 const isMeta = (v: unknown): v is Partial<Meta> =>
   isRecord(v) && optional(v.seq, 'number') && optional(v.fails, 'number') && optional(v.ratio, 'number') && optional(v.overhead, 'number')
-  && optional(v.foldTokens, 'number') && optional(v.estimatorVersion, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
+  && optional(v.foldTokens, 'number') && optional(v.firstObserved, 'number') && optional(v.estimatorVersion, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
 async function readMeta($: StoreReader): Promise<Meta> {
   const stored = await sessionStoreGet($, await metaKey($))
   const meta = { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
@@ -868,7 +872,9 @@ const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number,
 async function liveOpts($: EngineInterface, options: Record<string, unknown>): Promise<Opts> {
   let window: number | undefined
   try { window = (await $.session.usage()).context.window } catch { window = undefined }
-  return readOpts(options, window).opts
+  let prefix: number | undefined
+  try { prefix = (await readMeta($)).overhead } catch { prefix = undefined }
+  return readOpts(options, window, prefix).opts
 }
 /** The engine's live context tokens, when it has a reading. */
 async function usageReading($: EngineInterface): Promise<number | undefined> {
@@ -1127,13 +1133,19 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     if (e.trigger === 'plugin' && forceCompacts.delete(transcriptKey(await sid($)))) return next(e)
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
-    if (!Array.isArray(e.messages)) return { skip: 'clm: the compaction carried no transcript' }
-    return compactFoldJob(foldJobIo($), await liveOpts($, userOptions), e.messages, e.trigger)
+    if (!Array.isArray(e.messages)) return next(e)
+    return compactFoldJob(foldJobIo($), await liveOpts($, userOptions), e.messages, e.trigger, () => next(e))
   })
 
   on('tool.call', async ($, e, next) => {
     if (e.agentId === undefined) {
-      void liveOpts($, userOptions).then(opts => maybeClearFoldJob(foldJobIo($), opts)).catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
+      void (async () => {
+        // Read before the opts lookup: a check landing after a swap finished
+        // would fold the pre-swap rows again, and clm's own task-panel calls
+        // run inside that swap.
+        if (!foldJobIdle(transcriptKey(await sid($)))) return
+        await maybeClearFoldJob(foldJobIo($), await liveOpts($, userOptions), false)
+      })().catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
     }
     return next(e)
   })

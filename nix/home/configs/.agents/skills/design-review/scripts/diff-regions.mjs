@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { findChangedRegions } from './lib/pixeldiff.mjs';
 import { loadReview } from './lib/review.mjs';
-import { parseCliArgs, run, UsageError } from './lib/cli.mjs';
+import { parseCliArgs, run, UsageError } from '../../artificier-comparison/scripts/lib/cli.mjs';
 
 const usage = `Usage:
   node scripts/diff-regions.mjs --asis <image.png> --tobe <image.png> --width <logical-width> [--threshold <n>] [--min-area <n>] [--merge <n>]

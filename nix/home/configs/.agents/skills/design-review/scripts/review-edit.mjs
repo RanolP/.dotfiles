@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { editReview } from './lib/edits.mjs';
-import { parseCliArgs, run, UsageError } from './lib/cli.mjs';
+import { parseCliArgs, run, UsageError } from '../../artificier-comparison/scripts/lib/cli.mjs';
 import { encodePng } from './lib/png.mjs';
 import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';

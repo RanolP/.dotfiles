@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { parseArgs } from 'node:util';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { parseCliArgs, run, UsageError } from '../../../scripts/lib/cli.mjs';
 import { esc, imageCollector, numberText, onionAssets, onionCell, shotImage } from './lib/onion.mjs';
 
 const usage = `Usage:
@@ -16,7 +16,6 @@ stills.json: {"title": "<2-4 words>", "subtitle"?: "<str>", "notes"?: ["<str>"],
 Image paths are relative to stills.json and must sit under the --out directory.
 Prints one "<src>\\t<absolute path>" line per image: the Artifact files map.`;
 
-class UsageError extends Error {}
 
 function list(value, where) {
   if (value === undefined) return [];
@@ -119,12 +118,7 @@ async function selftest() {
 }
 
 async function main() {
-  let values;
-  try {
-    ({ values } = parseArgs({ options: { input: { type: 'string' }, out: { type: 'string' }, selftest: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } } }));
-  } catch (error) {
-    throw new UsageError(error.message);
-  }
+  const { values } = parseCliArgs({ input: { type: 'string' }, out: { type: 'string' }, selftest: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } });
   if (values.help) return void process.stdout.write(`${usage}\n`);
   if (values.selftest) return selftest();
   if (!values.input || !values.out) throw new UsageError('--input and --out are required');
@@ -132,8 +126,4 @@ async function main() {
   for (const file of files) console.log(`${file.src}\t${file.source}`);
 }
 
-main().catch(error => {
-  console.error(`build-still-cut: ${error.message}`);
-  if (error instanceof UsageError) console.error(usage);
-  process.exitCode = error instanceof UsageError ? 2 : 1;
-});
+run('build-still-cut', usage, main);

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { parseArgs } from 'node:util';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import { parseCliArgs, run, UsageError } from '../../../scripts/lib/cli.mjs';
 
 const usage = `Usage:
   node scripts/build-player.mjs --takes <path/takes.json> --out <path/index.html>
@@ -14,7 +14,6 @@ Fills the fixed player.html template with takes.json (schema in formats/synchron
 and writes --out. Clip paths are relative to takes.json and must sit under the --out directory.
 Prints one "<src>\\t<absolute path>" line per clip (the Artifact files map), then a WARN line per take without fps.`;
 
-class UsageError extends Error {}
 const template = new URL('../player.html', import.meta.url);
 
 function fail(where, message) {
@@ -123,12 +122,7 @@ async function selftest() {
 }
 
 async function main() {
-  let values;
-  try {
-    ({ values } = parseArgs({ options: { takes: { type: 'string' }, out: { type: 'string' }, selftest: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } } }));
-  } catch (error) {
-    throw new UsageError(error.message);
-  }
+  const { values } = parseCliArgs({ takes: { type: 'string' }, out: { type: 'string' }, selftest: { type: 'boolean', default: false }, help: { type: 'boolean', default: false } });
   if (values.help) return void process.stdout.write(`${usage}\n`);
   if (values.selftest) return selftest();
   if (!values.takes || !values.out) throw new UsageError('--takes and --out are required');
@@ -137,8 +131,4 @@ async function main() {
   for (const line of warnings) console.log(line);
 }
 
-main().catch(error => {
-  console.error(`build-player: ${error.message}`);
-  if (error instanceof UsageError) console.error(usage);
-  process.exitCode = error instanceof UsageError ? 2 : 1;
-});
+run('build-player', usage, main);

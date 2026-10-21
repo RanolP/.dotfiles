@@ -6,7 +6,7 @@ import { decodePng, encodePng } from './lib/png.mjs';
 import { changedPixelFraction, findChangedRegions } from './lib/pixeldiff.mjs';
 import { composeContactSheets } from './lib/image.mjs';
 import { editReview } from './lib/edits.mjs';
-import { parseCliArgs, run, UsageError } from './lib/cli.mjs';
+import { parseCliArgs, run, UsageError } from '../../artificier-comparison/scripts/lib/cli.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';

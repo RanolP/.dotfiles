@@ -60,6 +60,7 @@ th[aria-sort="ascending"] button::after{content:"▲"}
 th[aria-sort="descending"] button::after{content:"▼"}
 td.t{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right;width:1%}
 td.t button{font:inherit;padding:1px 6px}
+#tbl tbody tr{cursor:pointer}
 .dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
 .notes{margin:0;padding-left:18px;color:var(--fg);max-width:75ch;display:grid;gap:4px;font-size:.88rem}
 @media (max-width:560px){.vids{grid-template-columns:repeat(min(var(--n),2),minmax(0,1fr))}.lane{grid-template-columns:52px 1fr}.axis{margin-left:60px}}
@@ -180,7 +181,7 @@ let sort = { col: 'cond', dir: 1 };
 function renderTable() {
   const key = keys[sort.col];
   const sorted = [...rows].sort((a, b) => sort.dir * cmp(key(a), key(b)));
-  document.querySelector('#tbl tbody').innerHTML = sorted.map(r => `<tr><td class="t"><button type="button" data-t="${r.t}">${fmt(r.t)}${r.end != null ? ' – ' + fmt(r.end) : ''}</button></td>
+  document.querySelector('#tbl tbody').innerHTML = sorted.map(r => `<tr data-t="${r.t}"><td class="t"><button type="button">${fmt(r.t)}${r.end != null ? ' – ' + fmt(r.end) : ''}</button></td>
   <td>${esc(CONDS.get(r.tk.condition).title)}</td><td>${esc(r.tk.build)}</td><td><span class="dot" style="background:${color(r.kind)}"></span>${esc(r.text)}</td></tr>`).join('');
   document.querySelectorAll('#tbl th').forEach(th => th.setAttribute('aria-sort', th.dataset.col === sort.col ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none'));
 }

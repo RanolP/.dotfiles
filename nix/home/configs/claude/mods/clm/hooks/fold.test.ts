@@ -36,7 +36,7 @@ test('a plugin compaction with no clm plan returns the engine summary and logs i
   const io = {
     sessionId: async () => 'compact-log-plugin', now: async () => time += 5,
     readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
-    storeDelete: async () => undefined, pendingKey: async () => 'pending:s1',
+    storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:s1',
     logEvent: async (event: string, fields: Record<string, unknown>) => { events.push({ event, fields }); logged.resolve() }, log: () => undefined,
   } as unknown as FoldJobIo
   const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
@@ -44,6 +44,69 @@ test('a plugin compaction with no clm plan returns the engine summary and logs i
   await logged.promise
   expect(result).toEqual(summary)
   expect(events).toEqual([{ event: 'session-compact', fields: { trigger: 'plugin', state: 'none', outcome: 'plugin-handoff', waitMs: 5, totalMs: 10 } }])
+})
+
+// Regression caught: a swap whose io read rejected threw out of session.compact, so the engine's compactor never ran and the context stayed full.
+test('a swap whose io read rejects hands off to the engine summary exactly once', OPTS, async () => {
+  const rows = handled(ROWS)
+  let handoffs = 0
+  const io = {
+    sessionId: async () => 'swap-read-fails', now: async () => 0,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
+    storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:swap-read-fails',
+    readRewindIo: () => ({}), captureOrigin: async () => { throw new Error('origin read failed') },
+    logEvent: async () => undefined, log: () => undefined,
+  } as unknown as FoldJobIo
+  const key = transcriptKey(await io.sessionId())
+  const first = protectedIndex(rows)
+  const keepRow = rows[first + 4]!
+  clearFoldJob(key)
+  setRewindFoldJob(key, { ...readyPlan, keepFrom: first + 4, keepFp: fingerprint(keepRow), dropFps: foldedRows(rows, first, first + 4).map(fingerprint) }, rows.map(fingerprint))
+  const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
+  try {
+    const result = await handleSessionCompact(io, OPTS.options, rows, 'auto', async () => { handoffs++; return summary })
+    expect(result).toEqual(summary)
+    expect(handoffs).toBe(1)
+  } finally { clearFoldJob(key) }
+})
+
+// Regression caught: a ready plan whose ledger outweighed its dropped rows wrote the ledger, a snapshot and a new seq before the shrink check handed off, so the ledger history described a swap that never happened.
+test('a ready plan that would not shrink the context leaves the ledger, its snapshots and meta.seq unchanged', OPTS, async () => {
+  const rows = handled(ROWS)
+  const stored: Record<string, unknown> = {}
+  const files: Record<string, string> = {}
+  const metas: Meta[] = []
+  const logs: string[] = []
+  const io = {
+    sessionId: async () => 'swap-grows', now: async () => 0, usageReading: async () => undefined,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async (meta: Meta) => { metas.push(meta) }, observeTranscript: async () => undefined,
+    storeGet: async (key: string) => stored[key], storeSet: async (key: string, value: unknown) => { stored[key] = value }, storeDelete: async (key: string) => { delete stored[key] },
+    pendingKey: async () => 'pending:swap-grows', topicsKey: async () => 'topics:swap-grows', ledgerPath: async () => LEDGER_FILE,
+    writeFile: async (path: string, text: string) => { files[path] = text },
+    readRewindIo: () => ({ storeGet: async (key: string) => stored[key], storeSet: async (key: string, value: unknown) => { stored[key] = value } }),
+    captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
+    append: async () => [], updateHeld: async () => undefined, ensureInstructionIndex: async () => undefined, readAll: async () => [],
+    trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
+    residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
+    stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }),
+    logEvent: async () => undefined, log: (text: string) => { logs.push(text) },
+  } as unknown as FoldJobIo
+  const key = transcriptKey(await io.sessionId())
+  const first = protectedIndex(rows)
+  const keepRow = rows[first + 2]!
+  clearFoldJob(key)
+  setRewindFoldJob(key, {
+    ...readyPlan, notes: '## 목표\n- keep the task', fullNotes: '## 목표\n- keep the task', keepFrom: first + 2, keepFp: fingerprint(keepRow),
+    dropFps: foldedRows(rows, first, first + 2).map(fingerprint), keptTurns: 1, rewindOnly: false,
+  }, rows.map(fingerprint))
+  const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
+  try {
+    expect(await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => summary)).toEqual(summary)
+  } finally { clearFoldJob(key) }
+  expect(logs.some(text => text.includes('did not shrink'))).toBe(true)
+  expect(stored[`ledger-snapshots:${key}`]).toBeUndefined()
+  expect(metas.every(meta => meta.seq === 0)).toBe(true)
+  expect(files[LEDGER_FILE]).toBeUndefined()
 })
 
 // Regression caught: a fixed prompt prefix above the budget triggered a fold even when the conversation rows stayed below it.
@@ -1229,4 +1292,17 @@ test('after /force-compact, clm folds from the engine summary onward', OPTS, asy
   expect(out[0]?.text).toBe('ENGINE SUMMARY')
   expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
   expect(seen.engineCompactions).toBe(1)
+})
+
+// Regression caught: a handoff after a clm fold left the observed transcript on the pre-summary rows, so the next observation read the ledger row as rewound away and rolled the ledger back one snapshot per autocompact.
+test('a handoff after a clm fold keeps the ledger', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('INLINE-FACT'), 'not a ledger'] }
+  const seen = bottoms(on, s)
+  const auto = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
+  expect(storedLedger(seen)).toContain('INLINE-FACT')
+  const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
+  expect(manual.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  s.rows = [...manual, M('user', 'next'), M('assistant', 'done')]
+  await $.session.compact(compactInput('plugin', handled(s.rows)))
+  expect(storedLedger(seen)).toContain('INLINE-FACT')
 })

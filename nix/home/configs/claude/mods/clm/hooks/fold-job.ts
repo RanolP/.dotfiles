@@ -26,7 +26,10 @@ type Pending = {
 type PendingJob =
   | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[] }
   | { state: 'ready'; plan: Pending; fingerprints: string[] }
-type FoldJob = { state: 'idle' } | PendingJob | { state: 'swapping'; promise: Promise<SessionCompactResult> }
+// A swap that would not shrink the conversation reports why instead of a result, before it persists anything.
+type NotShrunk = { notShrunk: string }
+type SwapResult = SessionCompactResult | NotShrunk
+type FoldJob = { state: 'idle' } | PendingJob | { state: 'swapping'; promise: Promise<SwapResult> }
 type CompactEntryState = 'none' | FoldJob['state']
 type SaveMeta = (meta: Meta) => Promise<void>
 type QueueTurn = { number: number; start: number; rows: readonly SessionMessage[] }
@@ -127,6 +130,25 @@ const changeHash = (line: string): string => {
 const isPromptStart = (message: SessionMessage) => isPrompt(message) && !isHarnessText(message.text)
 
 export const foldJobIdle = (key: string): boolean => (foldJobs.get(key)?.state ?? 'idle') === 'idle'
+
+// Re-carried instruction attachments are context the engine re-injects after
+// any compaction, so only the conversation itself has to shrink.
+const conversation = (rows: readonly SessionMessage[]) => sum(rows.filter(row => stableAttachmentOf(row) === undefined))
+const notShrunk = (before: readonly SessionMessage[], after: readonly SessionMessage[]): NotShrunk | undefined =>
+  conversation(after) < conversation(before) ? undefined : { notShrunk: `the clm fold did not shrink the context (${conversation(before)} -> ${conversation(after)} est. tokens)` }
+
+/** After the engine summarized, its summary heads the live chain; a fold built on the old rows must never swap in. */
+export async function adoptEngineSummary(io: FoldJobIo, key: string, messages: readonly SessionMessage[] | undefined): Promise<void> {
+  const head = messages?.[0]
+  if (!messages || !head) return
+  foldJobs.set(key, { state: 'idle' })
+  await persistStep<void>(io, undefined, async () => {
+    await io.storeDelete(await io.pendingKey(key))
+    await io.writeMeta({ ...await io.readMeta(), boundary: { fp: fingerprint(head), offset: 0 } })
+    // Left on the pre-summary rows, the next observation read the clm ledger row as rewound away and rolled the ledger back.
+    await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))
+  })
+}
 
 export function foldJobDropFps(key: string): string[] | undefined {
   const job = foldJobs.get(key)
@@ -446,7 +468,7 @@ function landedAsks(asks: readonly Payload[], landing: readonly Payload[], befor
 async function applyFoldPlan(
   io: FoldJobIo, workingRows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, escaped: boolean,
   startedAt: number, key: string, opts: Opts,
-): Promise<SessionCompactResult> {
+): Promise<SwapResult> {
   const rewind = io.readRewindIo()
   const here = await io.captureOrigin()
   const landing = [...use.ops, ...(use.promoted ?? [])]
@@ -464,6 +486,8 @@ async function applyFoldPlan(
   const headGroup = keepsHeadGroup(workingRows, first)
   const { rows: attachments, headKept } = await persistStep(io, { rows: [], headKept: headGroup }, () => io.stableAttachments(headGroup))
   const messages = buildCleared({ head: headRows(workingRows, first), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow, attachments, headKept)
+  const declined = notShrunk(workingRows, messages)
+  if (declined) return declined
   const tokensBefore = sum(workingRows)
   const tokensAfter = sum(messages)
   const offset = messages.findIndex(message => message.text === text)
@@ -496,7 +520,7 @@ async function applyFoldPlan(
   })
 }
 
-async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, key: string, opts: Opts): Promise<SessionCompactResult> {
+async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, key: string, opts: Opts, mayGrow: boolean): Promise<SwapResult> {
   const rewind = io.readRewindIo()
   const here = await io.captureOrigin()
   const stateEvents = await io.readAll()
@@ -514,6 +538,8 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
   const headGroup = keepsHeadGroup(rows, first)
   const { rows: attachments, headKept } = await persistStep(io, { rows: [], headKept: headGroup }, () => io.stableAttachments(headGroup))
   const messages = buildCleared(plan, row, attachments, headKept)
+  const declined = mayGrow ? undefined : notShrunk(rows, messages)
+  if (declined) return declined
   const result = { messages, tokensBefore: sum(rows), tokensAfter: sum(messages) }
   const offset = messages.findIndex(message => message.text === text)
   return persistCompactResult(io, result, async () => {
@@ -572,21 +598,28 @@ async function awaitOrFallback(
 // that handed the rows back unchanged left autocompact firing on every turn
 // until it reported thrashing. Every decline goes to the engine summarizer.
 async function handOff(io: FoldJobIo, key: string, handoff: () => Promise<SessionCompactResult>, why: string): Promise<SessionCompactResult> {
-  io.log(`clm: ${why}; the engine summarizer compacts instead`, { to: 'debug' })
+  try { io.log(`clm: ${why}; the engine summarizer compacts instead`, { to: 'debug' }) } catch { /* logging never blocks compaction */ }
   const result = await handoff()
-  const head = result.messages?.[0]
-  // The engine's summary heads the live chain now; a fold built on the old rows must never swap in.
-  if (head) {
-    foldJobs.set(key, { state: 'idle' })
-    await persistStep<void>(io, undefined, async () => {
-      await io.storeDelete(await io.pendingKey(key))
-      await io.writeMeta({ ...await io.readMeta(), boundary: { fp: fingerprint(head), offset: 0 } })
-    })
-  }
+  await adoptEngineSummary(io, key, result.messages)
   return result
 }
 
 export async function handleSessionCompact(
+  io: FoldJobIo, opts: Opts, all: readonly SessionMessage[], trigger: string, handoff: () => Promise<SessionCompactResult>,
+): Promise<SessionCompactResult> {
+  // The engine's compactor runs at most once per event, however many paths decline.
+  let handed: Promise<SessionCompactResult> | undefined
+  const once = () => handed ??= handoff()
+  try { return await compactOrHandOff(io, opts, all, trigger, once) }
+  catch (err) {
+    if (handed) return handed
+    const key = await Promise.resolve().then(() => io.sessionId()).then(transcriptKey, () => undefined)
+    const why = `the clm compaction failed (${String(err).slice(0, 160)})`
+    return key === undefined ? once() : handOff(io, key, once, why)
+  }
+}
+
+async function compactOrHandOff(
   io: FoldJobIo, opts: Opts, all: readonly SessionMessage[], trigger: string, handoff: () => Promise<SessionCompactResult>,
 ): Promise<SessionCompactResult> {
   const compactStartedAt = await io.now()
@@ -596,13 +629,8 @@ export async function handleSessionCompact(
   const workingRows = liveRows(all, meta.boundary)
   const first = protectedIndex(workingRows)
   const decline = (outcome: string, why: string) => compactResult(io, compactStartedAt, trigger, entryState, outcome, handOff(io, key, handoff, why))
-  // Re-carried instruction attachments are context the engine re-injects after
-  // any compaction, so only the conversation itself has to shrink.
-  const conversation = (rows: readonly SessionMessage[] = []) => sum(rows.filter(row => stableAttachmentOf(row) === undefined))
-  const ensureShrunk = (result: Promise<SessionCompactResult>, mayGrow = false) => result.then(done =>
-    mayGrow || done.skip !== undefined || conversation(done.messages) < conversation(workingRows)
-      ? done : handOff(io, key, handoff, `the clm fold did not shrink the context (${conversation(workingRows)} -> ${conversation(done.messages)} est. tokens)`))
-  const joined = (result: Promise<SessionCompactResult>) => compactResult(io, compactStartedAt, trigger, entryState, 'joined-swap', ensureShrunk(result))
+  const ensureShrunk = (result: Promise<SwapResult>) => result.then(done => 'notShrunk' in done ? handOff(io, key, handoff, done.notShrunk) : done)
+  const joined = (result: Promise<SwapResult>) => compactResult(io, compactStartedAt, trigger, entryState, 'joined-swap', ensureShrunk(result))
   await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))
   const existing = foldJobs.get(key)
   if (existing?.state === 'swapping') return joined(existing.promise)
@@ -631,10 +659,11 @@ export async function handleSessionCompact(
   let waitMs: number | undefined
   try { waitMs = Math.max(0, (await io.now()) - compactStartedAt) }
   catch (err) { try { io.log(`clm: compaction timing failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* timing never blocks compaction */ } }
-  const swap = Promise.resolve().then(async (): Promise<SessionCompactResult> => {
+  const swap = Promise.resolve().then(async (): Promise<SwapResult> => {
     try {
+      // A rewind restore clm itself asked for may grow the rows; every other swap must shrink them.
       return use.rewindOnly
-        ? await applyRewindPlan(io, workingRows, meta, first, use, key, opts)
+        ? await applyRewindPlan(io, workingRows, meta, first, use, key, opts, trigger === 'plugin')
         : await applyFoldPlan(io, workingRows, meta, first, use, false, compactStartedAt, key, opts)
     } finally {
       foldJobs.set(key, { state: 'idle' })
@@ -643,8 +672,7 @@ export async function handleSessionCompact(
     }
   })
   foldJobs.set(key, { state: 'swapping', promise: swap })
-  // A rewind restore clm itself asked for may grow the rows; every other swap must shrink them.
-  return compactResult(io, compactStartedAt, trigger, entryState, use.fallback ? 'swap-mechanical' : 'swap', ensureShrunk(swap, use.rewindOnly && trigger === 'plugin'), waitMs)
+  return compactResult(io, compactStartedAt, trigger, entryState, use.fallback ? 'swap-mechanical' : 'swap', ensureShrunk(swap), waitMs)
 }
 
 export function report(ledger: string | undefined, rows: readonly SessionMessage[], opts: Opts, meta: Meta, logTail: readonly string[]): string {

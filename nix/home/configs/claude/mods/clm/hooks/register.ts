@@ -4,7 +4,7 @@ import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentT
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
-  buildCleared, fingerprint, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
+  buildCleared, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
   type Boundary, type ClearPlan, type StableAttachmentType,
 } from './fold'
 import {
@@ -29,7 +29,7 @@ import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type
 import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
-import { clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
+import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
 import { registerResources } from './resources'
 
 export { recallRows } from './address'
@@ -870,10 +870,8 @@ const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number,
 
 /** Options resolved against the live context window, so the threshold point follows the model in use. */
 async function liveOpts($: EngineInterface, options: Record<string, unknown>): Promise<Opts> {
-  let window: number | undefined
-  try { window = (await $.session.usage()).context.window } catch { window = undefined }
-  let prefix: number | undefined
-  try { prefix = (await readMeta($)).overhead } catch { prefix = undefined }
+  const window = await Promise.resolve().then(() => $.session.usage()).then(usage => usage.context.window, () => undefined)
+  const prefix = await readMeta($).then(meta => meta.overhead, () => undefined)
   return readOpts(options, window, prefix).opts
 }
 /** The engine's live context tokens, when it has a reading. */
@@ -1075,13 +1073,7 @@ export const register: Register = (on, options) => {
       try {
         const result = await $.session.compact(instructions ? { instructions } : {})
         if (result.skip !== undefined) $.ui.log(`clm: force-compact skipped (${result.skip})`)
-        const head = result.messages?.[0]
-        // The engine's summary heads the live chain now; a fold built on the old rows must never swap in.
-        if (head) {
-          clearFoldJob(key)
-          await sessionStoreDelete($, await pendingKey($, key))
-          await writeMeta($, { ...await readMeta($), boundary: { fp: fingerprint(head), offset: 0 } })
-        }
+        await adoptEngineSummary(foldJobIo($), key, result.messages)
       } catch (err) {
         $.ui.log(`clm: force-compact failed (${String(err).slice(0, 160)})`)
       } finally { forceCompacts.delete(key) }

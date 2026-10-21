@@ -109,6 +109,47 @@ test('a ready plan that would not shrink the context leaves the ledger, its snap
   expect(files[LEDGER_FILE]).toBeUndefined()
 })
 
+// Regression caught: an auto compaction that joined an in-flight plugin rewind swap got that swap's grown rows back, so the engine's compaction left the context larger.
+test('an auto compaction joining a plugin rewind swap whose rows grew hands off to the engine summary once', OPTS, async () => {
+  const rows = handled(ROWS)
+  const gate = Promise.withResolvers<void>()
+  const swapping = Promise.withResolvers<void>()
+  const stored: Record<string, unknown> = {}
+  const io = {
+    sessionId: async () => 'joined-rewind', now: async () => 0, usageReading: async () => undefined,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
+    storeGet: async (key: string) => stored[key], storeSet: async (key: string, value: unknown) => { stored[key] = value }, storeDelete: async (key: string) => { delete stored[key] },
+    pendingKey: async () => 'pending:joined-rewind', topicsKey: async () => 'topics:joined-rewind', ledgerPath: async () => LEDGER_FILE,
+    writeFile: async () => undefined, markStableAttachmentsCarried: async () => undefined,
+    readRewindIo: () => ({ storeGet: async (key: string) => stored[key], storeSet: async (key: string, value: unknown) => { stored[key] = value } }),
+    captureOrigin: async () => { swapping.resolve(); await gate.promise; return { session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' } },
+    readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
+    residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
+    stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }),
+    logEvent: async () => undefined, log: () => undefined,
+  } as unknown as FoldJobIo
+  const key = transcriptKey(await io.sessionId())
+  const first = protectedIndex(rows)
+  clearFoldJob(key)
+  setRewindFoldJob(key, {
+    ...readyPlan, notes: '## 목표\n- restored task', fullNotes: '## 목표\n- restored task', keepFrom: first + 1, keepFp: fingerprint(rows[first + 1]!),
+    dropFps: [], rewindOnly: true,
+  }, rows.map(fingerprint))
+  let pluginHandoffs = 0
+  let autoHandoffs = 0
+  const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
+  try {
+    const plugin = handleSessionCompact(io, OPTS.options, rows, 'plugin', async () => { pluginHandoffs++; return summary })
+    await swapping.promise
+    const auto = handleSessionCompact(io, OPTS.options, rows, 'auto', async () => { autoHandoffs++; return summary })
+    gate.resolve()
+    expect((await plugin).messages?.some(message => message.text.includes('clm ledger #1'))).toBe(true)
+    expect(await auto).toEqual(summary)
+    expect(pluginHandoffs).toBe(0)
+    expect(autoHandoffs).toBe(1)
+  } finally { clearFoldJob(key) }
+})
+
 // Regression caught: a fixed prompt prefix above the budget triggered a fold even when the conversation rows stayed below it.
 test('a large fixed prefix does not start compaction when foldable rows are below budget', OPTS, async () => {
   const session = 'fixed-prefix-small'

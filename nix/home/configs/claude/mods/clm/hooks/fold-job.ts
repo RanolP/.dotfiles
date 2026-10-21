@@ -609,7 +609,8 @@ export async function handleSessionCompact(
 ): Promise<SessionCompactResult> {
   // The engine's compactor runs at most once per event, however many paths decline.
   let handed: Promise<SessionCompactResult> | undefined
-  const once = () => handed ??= handoff()
+  // Set before the call, so even a synchronous throw from it leaves no path to a second call.
+  const once = () => handed ??= Promise.resolve().then(handoff)
   try { return await compactOrHandOff(io, opts, all, trigger, once) }
   catch (err) {
     if (handed) return handed
@@ -630,7 +631,11 @@ async function compactOrHandOff(
   const first = protectedIndex(workingRows)
   const decline = (outcome: string, why: string) => compactResult(io, compactStartedAt, trigger, entryState, outcome, handOff(io, key, handoff, why))
   const ensureShrunk = (result: Promise<SwapResult>) => result.then(done => 'notShrunk' in done ? handOff(io, key, handoff, done.notShrunk) : done)
-  const joined = (result: Promise<SwapResult>) => compactResult(io, compactStartedAt, trigger, entryState, 'joined-swap', ensureShrunk(result))
+  // The swap may belong to a plugin rewind that was allowed to grow; an engine event joining it still has to shrink.
+  const joined = (result: Promise<SwapResult>) => compactResult(io, compactStartedAt, trigger, entryState, 'joined-swap', ensureShrunk(result).then(done => {
+    const declined = trigger === 'plugin' || done.skip !== undefined ? undefined : notShrunk(workingRows, done.messages ?? [])
+    return declined ? handOff(io, key, handoff, declined.notShrunk) : done
+  }))
   await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))
   const existing = foldJobs.get(key)
   if (existing?.state === 'swapping') return joined(existing.promise)

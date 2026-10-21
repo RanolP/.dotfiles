@@ -29,7 +29,7 @@ The shared skill list in `nix/home/default.nix` links local skills into both Cla
 |--------|------|
 | `clm` | Folds earlier conversation turns into a ledger and provides the `/clm board` view |
 | `codex-subagent` | Starts a Codex app-server bridge for Codex-backed agent tools |
-| `time-budget` | Tracks estimated work budgets, requests checkpoint reports, and gates tools as a task approaches its limit |
+| `time-budget` | Gives estimate, checkpoint and overrun feedback; the `extend` tool records extra time in extensions.jsonl |
 
 ## Statusline
 

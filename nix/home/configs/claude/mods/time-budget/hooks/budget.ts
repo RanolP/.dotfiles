@@ -1,5 +1,4 @@
-// The time budget's arithmetic and its gate, with no `$`: what register.ts
-// asks of a unit at each tool call, timer and report.
+// The time budget's arithmetic and feedback formatting, with no `$`.
 //
 // WHY THE HARNESS MEASURES: a model's own time estimate runs 3-10x off, and a
 // mid-task "percent done" self-report is unreliable (arXiv 2609.08589). So the
@@ -25,22 +24,40 @@ const MIN_HISTORY = 5
 export const HISTORY_WINDOW = 50
 const FACTOR_MIN = 0.25
 const FACTOR_MAX = 10
-// After 6/6, a main turn that is still running gets this long to write its
-// report with every tool but `report` denied, then it is aborted.
-export const GRACE_MS = 2 * 60_000
-
 export const TOOL = {
   estimate: 'mcp__time-budget__estimate',
   report: 'mcp__time-budget__report',
+  extend: 'mcp__time-budget__extend',
   grant: 'mcp__time-budget__grant',
 } as const
-const HANDBACK = 'SubagentHandback'
-const BEFORE_ESTIMATE = new Set<string>([TOOL.estimate, 'ToolSearch', HANDBACK])
-const WHILE_REPORT_DUE = new Set<string>([TOOL.report, TOOL.estimate, 'ToolSearch', HANDBACK])
-const WHILE_HALTED = new Set<string>([TOOL.report, HANDBACK])
 
 /** One line of calibration.jsonl, as time-budget.py wrote it. */
-export type Pair = { kind: 'main' | 'sub'; agent_type: string | null; estimate_min: number; budget_min: number; actual_min: number; at: number }
+export type Pair = {
+  kind: 'main' | 'sub'
+  agent_type: string | null
+  estimate_min: number
+  budget_min: number
+  actual_min: number
+  at: number
+  extended_min?: number
+  extensions?: number
+}
+
+/** One line of extensions.jsonl, recording a deliberate time-budget change or request. */
+export type Extension = {
+  at: number
+  kind: 'main' | 'sub'
+  agent_type: string | null
+  task: string
+  scope: string
+  estimate_min: number
+  budget_before: number
+  budget_after: number
+  minutes: number
+  elapsed_min: number
+  reason: string
+  source: 'extend' | 'reestimate' | 'grant' | 'report'
+}
 
 export function parsePairs(text: string): Pair[] {
   const out: Pair[] = []
@@ -52,6 +69,37 @@ export function parsePairs(text: string): Pair[] {
     } catch { /* a torn line is skipped, as the python reader did */ }
   }
   return out
+}
+
+export function parseExtensions(text: string): Extension[] {
+  const out: Extension[] = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const value = JSON.parse(line) as unknown
+      if (value && typeof value === 'object' && !Array.isArray(value)) out.push(value as Extension)
+    } catch { /* a torn line is skipped, as the calibration reader does */ }
+  }
+  return out
+}
+
+export function extensionSummary(pairs: readonly Partial<Pair>[], extensions: readonly Partial<Extension>[]): string {
+  const recentPairs = pairs.slice(-20)
+  const needed = recentPairs.filter(pair => (pair.extended_min ?? 0) > 0)
+  const actualExtensions = extensions.filter(extension => (extension.source === 'extend' || extension.source === 'grant') && (extension.minutes ?? 0) > 0)
+  const amounts = actualExtensions.slice(-20).map(extension => extension.minutes!).sort((a, b) => a - b)
+  const middle = Math.floor(amounts.length / 2)
+  const median = amounts.length === 0 ? undefined : amounts.length % 2
+    ? amounts[middle]
+    : (amounts[middle - 1]! + amounts[middle]!) / 2
+  const reasons = extensions.slice(-3).map(extension => {
+    const reason = String(extension.reason ?? '').replace(/\s+/g, ' ').trim()
+    return reason.length > 100 ? `${reason.slice(0, 99)}…` : reason
+  }).filter(Boolean)
+  const unitHistory = recentPairs.length ? `${needed.length}/${recentPairs.length} recent units needed extra time` : 'no completed units yet'
+  const medianText = median === undefined ? 'no recorded extensions' : `median +${median} min per extension`
+  const reasonText = reasons.length ? ` Recent reasons: ${reasons.map(reason => `“${reason}”`).join('; ')}.` : ''
+  return `Extension history: ${unitHistory}; ${medianText}.${reasonText}`
 }
 
 export function calibrationFactor(pairs: readonly Partial<Pair>[]): number {
@@ -74,7 +122,7 @@ export const dueAt = (i: number, budgetMin: number) => Math.ceil(CHECKPOINTS[i]!
 /** How many checkpoints the elapsed time has passed. */
 export const crossed = (elapsedMs: number, budgetMin: number) => CHECKPOINTS.filter((_, i) => elapsedMs >= dueAt(i, budgetMin)).length
 
-/** `Budget: <N> min` as the prompt's first line: an optional spawner estimate; codex requires it because no gate reaches inside codex. */
+/** `Budget: <N> min` as the prompt's first line: an optional estimate for a spawned subagent. */
 export const budgetLine = (prompt: string): number | undefined => {
   const m = /^\s*Budget:\s*(\d+(?:\.\d+)?)\s*min\s*$/i.exec(prompt.split('\n', 1)[0] ?? '')
   const n = m ? Number(m[1]) : NaN
@@ -90,44 +138,12 @@ export function projectedMin(elapsedMs: number, report: Report): number {
 
 export const mins = (ms: number) => Math.round(ms / 60_000)
 
-const SHAPE = 'done (each item with the check that proved it), open (each item with its next action), and more_min when the open items need more time'
-
-export function gate(unit: Unit | undefined, tool: string, now: number): { deny: string } | undefined {
-  if (!unit) return undefined
-  if (unit.budgetMin === undefined) {
-    if (unit.kind === 'main') return undefined
-    if (BEFORE_ESTIMATE.has(tool)) return undefined
-    return { deny: `Call ${TOOL.estimate} first, with minutes (your estimate for the whole task), scope (one line) and steps (the plan). The user sees the calibrated budget; then call ${tool} again.` }
-  }
-  const elapsed = now - unit.start
-  if (unit.halted) {
-    if (WHILE_HALTED.has(tool)) return undefined
-    return { deny: `Stop here: ${unit.halted}. Call ${TOOL.report} with ${SHAPE}, then end the turn with that report; use an extension button above the prompt to continue.` }
-  }
-  if (unit.reportDue && !WHILE_REPORT_DUE.has(tool)) {
-    return { deny: `Checkpoint ${unit.reportDue} (${mins(elapsed)}/${Math.round(unit.budgetMin)} min): call ${TOOL.report} with ${SHAPE}, then call ${tool} again.` }
-  }
-  return undefined
-}
-
-/** `unlimited`: the user's unattended mode, where no budget ever stops the work. */
-export function haltReason(unit: Unit, now: number, unlimited = false): string | undefined {
-  if (unlimited || unit.budgetMin === undefined) return undefined
-  const elapsed = now - unit.start
-  if (elapsed >= unit.budgetMin * 60_000) return `the budget of ${Math.round(unit.budgetMin)} min is spent (${mins(elapsed)} min elapsed)`
-  if (unit.report) {
-    const p = projectedMin(unit.reportAt! - unit.start, unit.report)
-    if (p > unit.budgetMin) return `the last report projects ${Math.round(p)} min against a budget of ${Math.round(unit.budgetMin)} min`
-  }
-  return undefined
-}
-
 /** The line the user reads: in the status line and beneath a main answer. */
 export function statusText(unit: Unit, now: number): string {
   if (unit.budgetMin === undefined) return 'budget: no estimate yet'
   const elapsed = now - unit.start
   const base = `budget ${mins(elapsed)}/${Math.round(unit.budgetMin)}m`
-  if (unit.halted) return `${base} · stopped: ${unit.halted}`
+  if (elapsed > unit.budgetMin * 60_000) return `${base} · over by ${mins(elapsed - unit.budgetMin * 60_000)}m`
   if (unit.reportDue) return `${base} · checkpoint ${unit.reportDue} report due`
   const next = CHECKPOINTS[unit.fired]
   return next ? `${base} · next ${next.label} at ${mins(dueAt(unit.fired, unit.budgetMin))}m` : base
@@ -136,7 +152,7 @@ export function statusText(unit: Unit, now: number): string {
 export function reportText(r: Report): string {
   const done = r.done.map(d => `- ${d.item} (checked: ${d.check})`).join('\n') || '- (none)'
   const open = r.open.map(o => `- ${o.item} -> ${o.next}`).join('\n') || '- (none)'
-  return `Verified done:\n${done}\nOpen:\n${open}${r.more_min ? `\nAsks +${r.more_min} min` : ''}`
+  return `Verified done:\n${done}\nOpen:\n${open}${r.more_min ? `\nRequests +${r.more_min} min` : ''}`
 }
 
 export function isReport(x: unknown): x is Report {

@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { budgetFor, budgetLine, calibrationFactor, CHECKPOINTS, crossed, dueAt, FLOOR_MIN, gate, parsePairs, projectedMin, TOOL } from './budget'
+import { budgetFor, budgetLine, calibrationFactor, CHECKPOINTS, crossed, dueAt, extensionSummary, FLOOR_MIN, parseExtensions, parsePairs, projectedMin } from './budget'
 
 test('history that ran 3x over scales the next budget 3x, clamped to [0.25, 10]', () => {
   expect(calibrationFactor([])).toBe(1)
@@ -42,20 +42,34 @@ test('a report with zero done items still projects instead of dividing by zero',
   expect(p).toBe(12)
 })
 
-test('a codex prompt counts as budgeted only with "Budget: <N> min" as its first line', () => {
+test('a spawned unit reads an optional "Budget: <N> min" from its first line', () => {
   expect(budgetLine('Budget: 20 min\nDo the thing')).toBe(20)
   expect(budgetLine('Do the thing\nBudget: 20 min')).toBeUndefined()
   expect(budgetLine('Budget: 0 min\nx')).toBeUndefined()
 })
 
-// Regression: an unopen main task is ungated while unestimated subagents still need their estimate.
-test('an unopen main task is ungated; an unestimated subagent is gated', () => {
-  const u = { kind: 'main' as const, start: 0, fired: 0 }
-  expect(gate(u, TOOL.estimate, 0)).toBeUndefined()
-  expect(gate(u, 'ToolSearch', 0)).toBeUndefined()
-  expect(gate(u, 'SubagentHandback', 0)).toBeUndefined()
-  expect(gate(u, 'Read', 0)).toBeUndefined()
-  expect(gate({ kind: 'sub', start: 0, fired: 0 }, 'Read', 0)?.deny).toContain(TOOL.estimate)
+test('old calibration lines and extension history keep their compatible fields', () => {
+  const old = parsePairs('{"kind":"main","agent_type":null,"estimate_min":20,"budget_min":20,"actual_min":12,"at":10}')
+  const extended = parsePairs('{"kind":"sub","agent_type":"worker","estimate_min":10,"budget_min":25,"actual_min":20,"at":11,"extended_min":15,"extensions":2}')
+  expect(old[0]).toMatchObject({ estimate_min: 20, actual_min: 12 })
+  expect(old[0]?.extended_min).toBeUndefined()
+  expect(extended[0]).toMatchObject({ extended_min: 15, extensions: 2 })
+  expect(parseExtensions('{"at":12,"kind":"main","agent_type":null,"task":"task-1","scope":"fix","estimate_min":20,"budget_before":20,"budget_after":30,"minutes":10,"elapsed_min":5,"reason":"scope grew","source":"extend"}'))
+    .toHaveLength(1)
+})
+
+test('estimate feedback summarizes extension share, median minutes, and three recent reasons', () => {
+  const pairs = [{ extended_min: 10 }, { extended_min: 0 }, { extended_min: 20 }]
+  const extensions = [
+    { minutes: 10, reason: 'scope grew', source: 'extend' as const },
+    { minutes: 20, reason: 'verification took longer', source: 'grant' as const },
+    { minutes: 30, reason: 'not completed yet', source: 'report' as const },
+  ]
+  const summary = extensionSummary(pairs, extensions)
+  expect(summary).toContain('2/3 recent units needed extra time')
+  expect(summary).toContain('median +15 min per extension')
+  expect(summary).toContain('scope grew')
+  expect(summary).toContain('not completed yet')
 })
 
 // Regression: a 20 min budget put 5/6 at 999999.99… ms, so the timer fired with nothing crossed and spun at delay 0.

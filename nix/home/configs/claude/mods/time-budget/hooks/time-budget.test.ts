@@ -1,6 +1,7 @@
 import { test, expect, mock, type Engine, type MockClock } from 'claude-code/testing'
-import type { AgentSpawnInput, McpToolName, RenderPropsOf, ToolCallResult, TurnCompleteInput } from 'claude-code'
-import { GRACE_MS, TOOL } from './budget'
+import type { AgentSpawnInput, McpToolName, TurnCompleteInput } from 'claude-code'
+import { TOOL } from './budget'
+import { AWAKE_TOOL } from './awake'
 
 const MIN = 60_000
 const T0 = 1_000_000_000
@@ -20,6 +21,7 @@ function world(on: any, env: Record<string, string> = {}, persistedState: Record
     goalOutput: undefined as string | undefined,
     goalThrows: false,
     toasts: [] as string[],
+    downstreamDeny: undefined as string | undefined,
   }
   const clock: MockClock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/home/t', ...env })
@@ -44,9 +46,10 @@ function world(on: any, env: Record<string, string> = {}, persistedState: Record
     : next(e))
   on('process.run', (_$: any, e: any) => {
     if (e.argv[0] === 'rm') delete seen.files[e.argv[2]]
-    if (e.argv[0] === 'mv') {
-      seen.files[e.argv[2]] = seen.files[e.argv[1]]
-      delete seen.files[e.argv[1]]
+    if (e.argv[0] === 'sh' && e.argv[1] === '-c') {
+      const line = e.argv[4]
+      const path = e.argv[5]
+      seen.files[path] = `${seen.files[path] ?? ''}${line}\n`
     }
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
@@ -84,7 +87,10 @@ function world(on: any, env: Record<string, string> = {}, persistedState: Record
   on('turn.start', (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', (_$: any, e: any) => ({ text: e.answer }))
   on('agent.spawn', (_$: any, e: any) => ({ model: 'm', agentId: e.description }))
-  on('tool.call', (_$: any, e: any) => { seen.ran.push(e.tool); return { result: 'ran' } })
+  on('tool.call', (_$: any, e: any) => {
+    seen.ran.push(e.tool)
+    return seen.downstreamDeny ? { deny: seen.downstreamDeny } : { result: 'ran' }
+  })
   on('turn.step', async function* (_$: any, e: any) {
     seen.steps++
     yield { kind: 'text', index: 0, text: 'model' }
@@ -115,10 +121,6 @@ const ENGINE_SPAWN: SpawnVia = { subagentType: 'general-purpose', provider: { pl
 const CODEX_SOL: SpawnVia = { subagentType: 'codex-subagent:sol', provider: { plugin: 'codex-subagent', tier: 'user' } }
 const spawn = ($: Engine, tool_use_id: string, prompt: string, description: string, via = ENGINE_SPAWN) =>
   $.agent.spawn({ tool_use_id, prompt, description, ...via, parentModel: 'm', background: false, fork: false } satisfies AgentSpawnInput)
-const denied = (r: ToolCallResult): string | undefined => r.deny ?? (r.isError ? r.text : undefined)
-const ABOVE_PROMPT_PROPS: RenderPropsOf['AbovePrompt'] = {
-  hasSurvey: false, isWorking: false, maxRows: 5, bodyColumns: 80, scroll: { offset: 0, bodyRows: 5 }, view: {},
-}
 const onlyIssue = (seen: ReturnType<typeof world>['seen']) => {
   const entries = Object.entries(seen.clm)
   if (entries.length !== 1) throw new Error(`expected one clm issue, found ${entries.length}`)
@@ -128,7 +130,9 @@ const onlyIssue = (seen: ReturnType<typeof world>['seen']) => {
 }
 
 const CAL = '/home/t/.local/share/claude-time-budget/calibration.jsonl'
+const EXT = '/home/t/.local/share/claude-time-budget/extensions.jsonl'
 const pairs = (seen: { files: Record<string, string> }) => (seen.files[CAL] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
+const extensions = (seen: { files: Record<string, string> }) => (seen.files[EXT] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
 
 // Regression: a main turn with no doing clm issue remains ungated until estimate opens one.
 test('main tools remain ungated until an estimate opens a clm task', async ($, on) => {
@@ -138,6 +142,14 @@ test('main tools remain ungated until an estimate opens a clm task', async ($, o
   expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
   await estimate($, 30)
   expect(seen.ran).toEqual(['Bash'])
+})
+
+test('a downstream tool denial passes through unchanged', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  seen.downstreamDeny = 'denied by another plugin'
+  const result = await run($, { tool: 'Bash', command: 'ls' })
+  expect(result).toEqual({ deny: 'denied by another plugin' })
 })
 
 // Regression: deferred tool schemas could never load before the estimate, a deadlock.
@@ -150,32 +162,55 @@ test('ToolSearch passes before estimate', async ($, on) => {
 })
 
 // Regression: a subagent rides on main's estimate, or main is blocked by a subagent's missing one.
-test("a subagent's Budget line opens its own unit without an estimate call", async ($, on) => {
+test("a subagent's optional Budget line seeds its unit and an unestimated subagent remains ungated", async ($, on) => {
   world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
   const unbudgeted = await spawn($, 'tu0', 'work', 'ag0')
   expect(unbudgeted.agentId).toBe('ag0')
-  expect(denied(await call($, 'mcp__x__y', { agentId: 'ag0' }))).toContain(TOOL.estimate)
+  const unestimatedCall = await call($, 'mcp__x__y', { agentId: 'ag0' })
+  expect(unestimatedCall.deny).toBeUndefined()
+  expect(unestimatedCall.result).toBe('ran')
   await spawn($, 'tu1', 'Budget: 10 min\nwork', 'ag1')
   expect((await call($, 'mcp__x__y', { agentId: 'ag1' })).result).toBe('ran')
 })
 
 // Regression: checkpoints fired only from PostToolUse, so a long silent step skipped them,
 // and the report they asked for was optional.
-test('advancing past 1/3 with no tool call marks the report due; Edit waits on the report', async ($, on) => {
+test('checkpoint feedback asks for a report once and leaves the next tool available', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
   await clock.advance(10 * MIN + 1)
   expect(seen.status.at(-1)).toContain('checkpoint 1/3 report due')
+  const first = await run($, { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' })
+  expect(first.deny).toBeUndefined()
+  expect(first.result).toBe('ran')
+  expect((first.context ?? []).join('\n')).toContain('Checkpoint 1/3 is due')
+  const next = await run($, { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' })
+  expect((next.context ?? []).join('\n')).not.toContain('Checkpoint 1/3')
   await clock.advance(5 * MIN)
   expect(seen.status.at(-1)).toContain('checkpoint 1/2 report due')
-  expect(denied(await run($, { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' }))).toContain('Checkpoint 1/2')
+  const second = await run($, { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' })
+  expect(second.result).toBe('ran')
+  expect((second.context ?? []).join('\n')).toContain('Checkpoint 1/2 is due')
   expect((await report($, 2, 1)).result).toContain('Report recorded')
   expect((await run($, { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' })).result).toBe('ran')
+})
+
+test('stay_awake returns a due checkpoint nudge once', async ($, on) => {
+  const { clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 30)
+  await clock.advance(10 * MIN + 1)
+  const first = await call($, AWAKE_TOOL, { minutes: 5 })
+  expect(first.deny).toBeUndefined()
+  expect(first.result).toContain('Checkpoint 1/3 is due')
+  const next = await run($, { tool: 'Read', file_path: '/x' })
+  expect((next.context ?? []).join('\n')).not.toContain('Checkpoint 1/3')
 })
 
 // Regression: a subagent's report is lost on the way to main, or injected on every call.
@@ -193,29 +228,19 @@ test("a subagent's report reaches main's next tool result exactly once", async (
 })
 
 // Regression: "likely to overrun" went undetected until the budget was spent.
-test('a projected overrun denies the next tool with the stop text', async ($, on) => {
+test('a projected overrun gives extension feedback and leaves the next tool available', async ($, on) => {
   const { clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
   await clock.advance(15 * MIN + 1)
-  expect((await report($, 2, 4)).result).toContain('Stop here')
-  const r = denied(await run($, { tool: 'Bash', command: 'ls' }))
-  expect(r).toContain('Stop here')
-  expect(r).toContain(TOOL.report)
-})
-
-// Regression: a report's requested extension appears as a button and recalculates the budget from the press time.
-test('a projected halt +35m button updates the status budget', async ($, on) => {
-  const { seen, clock } = world(on)
-  await start($)
-  await prompt($, 'go')
-  await estimate($, 20)
-  await clock.advance(10 * MIN + 1)
-  expect((await report($, 2, 4, undefined, 35)).result).toContain('Stop here')
-  const ui = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
-  await ui.press({ key: 'time-budget:+35m' })
-  expect(seen.status.at(-1)).toMatch(/budget 10\/45m/)
+  const reportResult = await report($, 2, 4)
+  expect(reportResult.result).toContain('Continue at the same depth')
+  expect(reportResult.result).toContain(TOOL.extend)
+  const r = await run($, { tool: 'Bash', command: 'ls' })
+  expect(r.deny).toBeUndefined()
+  expect(r.result).toBe('ran')
+  expect((r.context ?? []).join('\n')).not.toContain(TOOL.extend)
 })
 
 // Regression: a follow-up user prompt does not reset the open task's budget clock.
@@ -227,53 +252,40 @@ test('a follow-up prompt keeps the open task budget clock', async ($, on) => {
   await clock.advance(5 * MIN)
   await prompt($, 'follow-up')
   await clock.advance(25 * MIN + 1)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 30 min is spent')
+  const result = await run($, { tool: 'Bash', command: 'ls' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toBe('ran')
 })
 
-// Regression: pressing +20m on a halted unit re-arms its clock and submits the user's continuation asUser.
-test('the +20m button extends a halted unit and submits asUser directly', async ($, on) => {
-  const { seen, clock } = world(on)
+test('overrun reminders repeat at most once per checkpoint-sized interval', async ($, on) => {
+  const { clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
   await clock.advance(30 * MIN + 1)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 30 min is spent')
-  const ui = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
-  await ui.press({ key: 'time-budget:+20m' })
-  expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
-  expect(seen.prompts.at(-1)).toBe('Continue this task.')
-  expect(seen.promptSubmissions.at(-1)?.origin?.asUser).toBe(true)
+  const first = await run($, { tool: 'Bash', command: 'ls' })
+  expect(first.deny).toBeUndefined()
+  expect((first.context ?? []).join('\n')).toContain(TOOL.extend)
+  await clock.advance(4 * MIN)
+  expect((await run($, { tool: 'Bash', command: 'ls' })).context ?? []).not.toContain(expect.stringContaining(TOOL.extend))
+  await clock.advance(MIN)
+  const repeated = await run($, { tool: 'Bash', command: 'ls' })
+  expect((repeated.context ?? []).join('\n')).toContain(TOOL.extend)
 })
 
-// Regression: a main turn that keeps going past the stop is never cut off.
-test('a main turn still running GRACE_MS after 6/6 is aborted, and not before', async ($, on) => {
-  const { seen, clock } = world(on)
-  await start($)
-  await prompt($, 'go')
-  await $.turn.start({ text: 'go', turnId: 'turn-1' })
-  await estimate($, 15)
-  await clock.advance(15 * MIN + 1)
-  await clock.advance(GRACE_MS - 1000)
-  expect(seen.aborted).toEqual([])
-  await clock.advance(1000)
-  expect(seen.aborted).toEqual(['turn-1'])
-})
-
-// Regression: a stopped subagent keeps making model requests until it decides to stop.
-test("a halted subagent's step past the grace sends no model request and hands back the report", async ($, on) => {
+test('an overrun never aborts a turn or replaces a subagent model request', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 60)
   await spawn($, 'tu1', 'Budget: 15 min\nwork', 'ag1')
-  await clock.advance(15 * MIN + 1)
-  await clock.advance(GRACE_MS)
+  await clock.advance(20 * MIN)
   const chunks: any[] = []
   const stream = $.turn.step({ turnId: 'ts', index: 3, model: 'm', messageCount: 4, agentId: 'ag1' })
   for await (const c of stream) chunks.push(c)
-  expect(seen.steps).toBe(0)
-  expect(chunks.find(c => c.kind === 'tool')?.name).toBe('SubagentHandback')
-  expect(chunks.find(c => c.kind === 'input')?.json).toContain('Stopped by the time budget')
+  expect(seen.steps).toBe(1)
+  expect(chunks.find(c => c.kind === 'text')?.text).toBe('model')
+  expect(seen.aborted).toEqual([])
 })
 
 // Regression: changing the estimate does not replace the original calibration pair when the clm task closes.
@@ -303,45 +315,71 @@ test('an estimate without task starts a new task', async ($, on) => {
   expect(pairs(seen)[0]).toMatchObject({ estimate_min: 30, actual_min: 10 })
 })
 
-test('a smaller re-estimate cannot bypass a report already due', async ($, on) => {
+test('estimate remains available when a checkpoint report is due', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
   await clock.advance(10 * MIN + 1)
-  await report($, 1, 0)
   const task = onlyIssue(seen).id
-  expect((await estimate($, 10, undefined, task)).result).toContain('estimate 10 min')
-  expect(denied(await run($, { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' }))).toContain('Checkpoint 2/3')
+  const estimateResult = await estimate($, 10, undefined, task)
+  expect(estimateResult.deny).toBeUndefined()
+  expect(estimateResult.result).toContain('estimate 10 min')
+  const result = await run($, { tool: 'Edit', file_path: '/x', old_string: 'a', new_string: 'b' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toBe('ran')
 })
 
-// Regression: a halted main task escaped its stop by opening a fresh task, bypassing the extension buttons.
-test('a halted main task cannot open a new task with estimate', async ($, on) => {
+test('opening a new task and tools remain available after the estimated budget', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
   await clock.advance(30 * MIN + 1)
-  expect(denied(await estimate($, 60))).toContain('Stop here')
-  expect(Object.keys(seen.clm)).toHaveLength(1)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 30 min is spent')
+  expect((await estimate($, 60)).result).toContain('Budget 60 min')
+  expect(Object.keys(seen.clm)).toHaveLength(2)
+  const result = await run($, { tool: 'Bash', command: 'ls' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toBe('ran')
 })
 
-// Regression: an open task raised its own budget by re-estimating itself upward.
-test('re-estimating the open task upward is denied', async ($, on) => {
+test('an upward re-estimate is allowed and recorded while calibration keeps the first estimate', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
+  const task = onlyIssue(seen).id
   await clock.advance(5 * MIN)
-  expect(denied(await estimate($, 120, undefined, onlyIssue(seen).id))).toContain('extension button')
-  await report($, 1, 0)
-  await clock.advance(25 * MIN + 1)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 30 min is spent')
+  expect((await estimate($, 120, undefined, task)).result).toContain('estimate 120 min')
+  expect(extensions(seen)[0]).toMatchObject({
+    kind: 'main', task, estimate_min: 120, budget_before: 30, budget_after: 120, minutes: 90,
+    source: 'reestimate', reason: 'Estimate refined for the task.',
+  })
+  onlyIssue(seen).status = 'done'
+  await complete($, 't1', 'close')
+  expect(pairs(seen)[0]).toMatchObject({ estimate_min: 30, extended_min: 0, extensions: 0 })
 })
 
-// Regression: parking a task with a no-task estimate, then resuming it by id, raised its budget from a fresh start.
-test('resuming a parked task cannot raise its budget', async ($, on) => {
+test('a lower re-estimate keeps extended minutes without an immediate overrun nudge', async ($, on) => {
+  const { seen, clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 10)
+  const task = onlyIssue(seen).id
+  await call($, TOOL.extend, { minutes: 20, reason: 'Additional verification remains.' })
+  await clock.advance(MIN)
+  const lower = await estimate($, 5, undefined, task)
+  expect(lower.result).toContain('Budget 35 min')
+  expect(lower.result).not.toContain('Budget feedback:')
+  const higher = await estimate($, 20, undefined, task)
+  expect(higher.result).toContain('Budget 40 min')
+  expect(extensions(seen).at(-1)).toMatchObject({ source: 'reestimate', minutes: 5, budget_before: 35, budget_after: 40 })
+  const repeated = await estimate($, 20, undefined, task)
+  expect(repeated.result).toContain('Budget 40 min')
+  expect(extensions(seen)).toHaveLength(2)
+})
+
+test('resuming a parked task can refine its budget and records the additional minutes', async ($, on) => {
   const { seen } = world(on)
   await start($)
   await prompt($, 'go')
@@ -349,7 +387,10 @@ test('resuming a parked task cannot raise its budget', async ($, on) => {
   const first = Object.keys(seen.clm)[0] ?? ''
   await report($, 1, 0)
   await estimate($, 20)
-  expect(denied(await estimate($, 120, undefined, first))).toContain('extension button')
+  const result = await estimate($, 120, undefined, first)
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toContain('Budget 120 min')
+  expect(extensions(seen)[0]).toMatchObject({ task: first, source: 'reestimate', budget_before: 30, budget_after: 120, minutes: 90 })
 })
 
 // Regression: a resumed task restarted its clock at the resume and logged a second calibration pair.
@@ -370,19 +411,20 @@ test('resuming a parked task at a lower budget keeps its start and logs one pair
   expect(pairs(seen).map(p => p.estimate_min)).toEqual([30, 20])
 })
 
-// Regression: resuming a parked task rebuilt the unit without halted, so a stopped task came back un-stopped.
-test('a task stopped before session end stays stopped when resumed', async ($, on) => {
-  const { seen, clock } = world(on)
+test('legacy persisted halt fields are ignored when a task loads', async ($, on) => {
+  const { seen } = world(on, {}, {
+    units: {
+      'persisted-task': {
+        kind: 'main', start: T0 - 15 * MIN - 1, budgetMin: 15, fired: 5,
+        halted: 'the budget of 15 min is spent (15 min elapsed)', haltedAt: T0,
+      },
+    },
+  })
   await start($)
-  await prompt($, 'go')
-  await estimate($, 30)
-  const first = Object.keys(seen.clm)[0] ?? ''
-  await clock.advance(15 * MIN + 1)
-  expect((await report($, 2, 4)).result).toContain('Stop here')
-  await end($)
-  await start($)
-  await estimate($, 30, undefined, first)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('Stop here')
+  const result = await run($, { tool: 'Bash', command: 'ls' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toBe('ran')
+  expect((result.context ?? []).join('\n')).toContain(TOOL.extend)
 })
 
 // Regression: resuming a parked task dropped reportDue, so an owed checkpoint report was forgotten.
@@ -393,81 +435,80 @@ test('a report due before session end is still due when resumed', async ($, on) 
   await estimate($, 30)
   const first = Object.keys(seen.clm)[0] ?? ''
   await clock.advance(11 * MIN)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('Checkpoint 1/3')
+  const firstCall = await run($, { tool: 'Bash', command: 'ls' })
+  expect((firstCall.context ?? []).join('\n')).toContain('Checkpoint 1/3 is due')
   await end($)
   await start($)
   await estimate($, 30, undefined, first)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('Checkpoint 1/3')
+  const resumed = await run($, { tool: 'Bash', command: 'ls' })
+  expect(resumed.result).toBe('ran')
+  expect((resumed.context ?? []).join('\n')).not.toContain('Checkpoint 1/3')
 })
 
-// Regression: extending a halted main task cancels its old abort timer before re-arming grace.
-test('a button extension cancels a pending main abort timer', async ($, on) => {
-  const { seen, clock } = world(on)
+test('extend adds minutes to the current budget and writes every extension record field', async ($, on) => {
+  const { seen, clock } = world(on, { TIME_BUDGET_DIR: '/custom/time-budget' })
   await start($)
   await prompt($, 'go')
-  await $.turn.start({ text: 'go', turnId: 'turn-1' })
-  await estimate($, 15)
-  await clock.advance(15 * MIN + 1)
-  const ui = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
-  await ui.press({ key: 'time-budget:+10m' })
-  // Move past the old 17-minute abort point, then past the new 25-minute budget.
-  await clock.advance(3 * MIN)
-  expect(seen.aborted).toEqual([])
-  await clock.advance(7 * MIN)
-  await clock.advance(GRACE_MS - 1000)
-  expect(seen.aborted).toEqual([])
-  await clock.advance(1000)
-  expect(seen.aborted).toEqual(['turn-1'])
+  await estimate($, 30)
+  const task = onlyIssue(seen).id
+  await clock.advance(5 * MIN)
+  const file = '/custom/time-budget/extensions.jsonl'
+  seen.files[file] = `${JSON.stringify({ at: 1, kind: 'sub', agent_type: 'worker', task: 'old-task', scope: 'old', estimate_min: 10, budget_before: 10, budget_after: 15, minutes: 5, elapsed_min: 2, reason: 'prior extension', source: 'extend' })}\n`
+  const result = await call($, TOOL.extend, { minutes: 10, reason: 'More verification is needed.' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toContain('now 40 min')
+  const records = (seen.files[file] ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line))
+  expect(records).toHaveLength(2)
+  const record = records[1]
+  expect(record).toMatchObject({
+    at: Math.floor((T0 + 5 * MIN) / 1000), kind: 'main', agent_type: null, task, scope: 'the task', estimate_min: 30,
+    budget_before: 30, budget_after: 40, minutes: 10, elapsed_min: 5, reason: 'More verification is needed.', source: 'extend',
+  })
 })
 
-// Regression: calibration actual excludes the idle gap after an extension button press.
-test('calibration actual excludes the idle gap after an extension', async ($, on) => {
+test('calibration pairs include the total extension and count', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 10)
   await clock.advance(15 * MIN + 1)
   await complete($, 't1', 'done')
-  await clock.advance(60 * MIN)
-  await report($, 1, 0, undefined, 5)
-  const ui = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
-  await ui.press({ key: 'time-budget:+5m' })
+  await call($, TOOL.extend, { minutes: 5, reason: 'The open item needs another check.' })
   await clock.advance(5 * MIN)
   await complete($, 't2', 'continued')
   onlyIssue(seen).status = 'done'
   await complete($, 't3', 'close')
-  expect(pairs(seen)[0]?.actual_min).toBe(20)
+  expect(pairs(seen)[0]).toMatchObject({ extended_min: 5, extensions: 1, actual_min: 20 })
 })
 
-// Regression: a grant resumes a stopped subagent and recalculates its budget from the grant time.
-test('grant clears a stopped subagent report before resuming it', async ($, on) => {
-  const { clock } = world(on)
+test('grant adds time to a subagent budget and records source grant', async ($, on) => {
+  const { clock, seen } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 60)
   await spawn($, 'tu1', 'Budget: 15 min\nwork', 'ag1')
   await clock.advance(11 * MIN)
   await report($, 1, 3, 'ag1')
-  expect(denied(await call($, 'mcp__x__y', { agentId: 'ag1' }))).toContain('Stop here')
-  expect((await call($, TOOL.grant, { agent_id: 'ag1', minutes: 5 })).result).toContain('Granted +5 min from now')
+  expect((await call($, 'mcp__x__y', { agentId: 'ag1' })).result).toBe('ran')
+  expect((await call($, TOOL.grant, { agent_id: 'ag1', minutes: 5 })).result).toContain('now 20 min')
+  expect(extensions(seen)[0]).toMatchObject({ task: 'ag1', kind: 'sub', budget_before: 15, budget_after: 20, minutes: 5, source: 'grant' })
   expect((await call($, 'mcp__x__y', { agentId: 'ag1' })).result).toBe('ran')
 })
 
-// Regression: a grant to a running subagent recomputed its budget from now and shortened it.
-test('a grant never lowers a running subagent budget', async ($, on) => {
+test('a grant adds time to the current subagent budget', async ($, on) => {
   const { clock } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 60)
   await spawn($, 'tu1', 'Budget: 30 min\nwork', 'ag1')
   await clock.advance(5 * MIN)
-  expect((await call($, TOOL.grant, { agent_id: 'ag1', minutes: 10 })).result).toContain('budget stays 30 min')
+  expect((await call($, TOOL.grant, { agent_id: 'ag1', minutes: 10 })).result).toContain('now 40 min')
   await clock.advance(16 * MIN)
-  expect((await report($, 1, 0, 'ag1')).result).toContain('of 30 min')
+  expect((await report($, 1, 0, 'ag1')).result).toContain('against 40 min')
 })
 
 // Regression: closing a clm task appends its pair without trimming calibration history.
-test('calibration rewrites retain the full history beyond the factor window', async ($, on) => {
+test('calibration appends retain the full history beyond the factor window', async ($, on) => {
   const { seen } = world(on)
   seen.files[CAL] = `${Array.from({ length: 50 }, (_, i) => JSON.stringify({ kind: 'main', agent_type: null, estimate_min: 10, budget_min: 15, actual_min: 10, at: i })).join('\n')}\n`
   await start($)
@@ -479,31 +520,69 @@ test('calibration rewrites retain the full history beyond the factor window', as
   const logged = pairs(seen)
   expect(logged).toHaveLength(51)
   expect(logged[0]?.at).toBe(0)
-  expect(Object.keys(seen.files).filter(path => path.includes('.tmp-'))).toEqual([])
+  expect(logged.at(-1)?.estimate_min).toBe(20)
 })
 
-test('a subagent cannot ask the user for time when re-estimating upward', async ($, on) => {
-  world(on)
+test('a subagent can refine its own estimate upward and the refinement is recorded', async ($, on) => {
+  const { seen } = world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 60)
   await spawn($, 'tu1', 'Budget: 10 min\nwork', 'ag1')
-  const r = denied(await estimate($, 20, 'ag1'))
-  expect(r).toContain(`Put more_min in your ${TOOL.report} call; main can grant time.`)
-  expect(r).not.toContain('Ask the user')
+  const result = await estimate($, 20, 'ag1')
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toContain('estimate 20 min')
+  expect(extensions(seen)[0]).toMatchObject({ task: 'ag1', source: 'reestimate', budget_before: 15, budget_after: 20, minutes: 5 })
 })
 
-// Regression: a codex agent runs with no estimate because no gate reaches inside codex.
-test('a codex spawn without a Budget line is denied, and one with it starts budgeted', async ($, on) => {
+test('a codex spawn without a Budget line is allowed and its tools remain available', async ($, on) => {
   world(on)
   await start($)
   await prompt($, 'go')
   await estimate($, 30)
   const no = await spawn($, 'tu1', 'fix it', 'cx1', CODEX_SOL)
-  expect(no.deny).toContain('Budget: <N> min')
+  expect(no.agentId).toBe('cx1')
+  expect((await call($, 'mcp__x__y', { agentId: 'cx1' })).result).toBe('ran')
   const yes = await spawn($, 'tu1', 'Budget: 20 min\nfix it', 'cx2', CODEX_SOL)
   expect(yes.agentId).toBe('cx2')
   expect((await call($, 'mcp__x__y', { agentId: 'cx2' })).result).toBe('ran')
+})
+
+test('a subagent can extend its own budget with an explicit reason', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 60)
+  await spawn($, 'tu1', 'Budget: 10 min\nwork', 'ag1')
+  const result = await call($, TOOL.extend, { agentId: 'ag1', minutes: 5, reason: 'The implementation needs a compatibility check.' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toContain('now 20 min')
+  expect(extensions(seen)[0]).toMatchObject({ task: 'ag1', kind: 'sub', budget_before: 15, budget_after: 20, source: 'extend' })
+})
+
+test('report records a projection request without changing the budget and names extend', async ($, on) => {
+  const { seen, clock } = world(on)
+  await start($)
+  await prompt($, 'go')
+  await estimate($, 30)
+  await clock.advance(15 * MIN)
+  const result = await report($, 2, 4, undefined, 20)
+  expect(result.result).toContain(`call ${TOOL.extend} with minutes 20 and a reason`)
+  expect(extensions(seen)[0]).toMatchObject({ source: 'report', minutes: 20, budget_before: 30, budget_after: 30 })
+  expect(pairs(seen)).toEqual([])
+})
+
+test('estimate feedback includes extension history and suggests smaller steps for a long single step', async ($, on) => {
+  const { seen } = world(on)
+  seen.files[CAL] = `${JSON.stringify({ kind: 'main', agent_type: null, estimate_min: 20, budget_min: 30, actual_min: 45, at: 10, extended_min: 10, extensions: 1 })}\n`
+  seen.files[EXT] = `${JSON.stringify({ at: 11, kind: 'main', agent_type: null, task: 'old-task', scope: 'fix', estimate_min: 20, budget_before: 30, budget_after: 40, minutes: 10, elapsed_min: 30, reason: 'The fixture exposed another edge case.', source: 'extend' })}\n`
+  await start($)
+  await prompt($, 'go')
+  const result = await call($, TOOL.estimate, { minutes: 40, scope: 'the task', steps: [] })
+  expect(result.result).toContain('1/1 recent units needed extra time')
+  expect(result.result).toContain('median +10 min per extension')
+  expect(result.result).toContain('The fixture exposed another edge case.')
+  expect(result.result).toContain('split this estimate into smaller steps')
 })
 
 // Regression: calibration logged one turn per unit (actual 0.55 min against 30), or a pair per Stop.
@@ -521,7 +600,7 @@ test('a main unit logs one pair at close, measured to its last turn end', async 
   await complete($, 't3', 'close')
   const logged = pairs(seen)
   expect(logged.length).toBe(1)
-  expect(logged[0]).toEqual({ kind: 'main', agent_type: null, estimate_min: 20, budget_min: 20, actual_min: 12, at: Math.floor((T0 + 12 * MIN) / 1000) })
+  expect(logged[0]).toEqual({ kind: 'main', agent_type: null, estimate_min: 20, budget_min: 20, actual_min: 12, at: Math.floor((T0 + 12 * MIN) / 1000), extended_min: 0, extensions: 0 })
 })
 
 // Regression: a clm issue reaching done closes its unit and appends exactly one calibration pair.
@@ -559,26 +638,21 @@ const append = ($: Engine, row: Record<string, unknown>) => $.session.append({ u
 const goalRow = ($: Engine) => append($, { message: { type: 'attachment', name: 'goal_status', content: [] }, door: 'attachment', origin: { kind: 'engine' } })
 const responseRow = ($: Engine) => append($, { message: { type: 'assistant', role: 'assistant', content: [{ type: 'text', text: 'working' }] }, door: 'response', origin: { kind: 'model', model: 'm' } })
 
-// Regression: a typed goal left a halted task and its grace abort in place, or failed to keep the Mac awake.
-test('a typed /goal turns unlimited on, lifts an existing halt, and keeps the Mac awake', async ($, on) => {
+test('a typed /goal keeps the Mac awake and suppresses overrun feedback', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await $.turn.start({ text: 'go', turnId: 'turn-1' })
   await estimate($, 15)
   await clock.advance(15 * MIN + 1)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 15 min is spent')
   await goal($, 'all tests pass')
   expect(seen.goalRuns).toEqual(['all tests pass'])
   expect(seen.state.goal).toBe('all tests pass')
   expect(seen.files[AWAKE]).toBe(awakeAt(T0 + 15 * MIN + 1))
-  await clock.advance(GRACE_MS * 3)
-  expect(seen.aborted).toEqual([])
-  expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
-  // The plugin draws no extension band, so the render falls through to the (absent) engine drawing.
-  const drawn = await $.ui.mount({ plugin: 'time-budget', surface: 'terminal', component: 'AbovePrompt', props: ABOVE_PROMPT_PROPS })
-    .then(() => 'drawn', (err: unknown) => String(err))
-  expect(drawn).toContain('no implementation for ui.render')
+  await clock.advance(3 * MIN)
+  const result = await run($, { tool: 'Bash', command: 'ls' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toBe('ran')
+  expect((result.context ?? []).join('\n')).not.toContain('Budget feedback:')
 })
 
 // Regression: the goal's evaluator writes a final row before turn.complete; only that end turns the mode off.
@@ -657,8 +731,7 @@ test('the unlimited environment setting survives goal end', async ($, on) => {
   expect((await run($, { tool: 'Bash', command: 'ls' })).result).toBe('ran')
 })
 
-// Regression: a persisted goal must survive session end and restart with its awake lease and halted unit lifted.
-test('a persisted goal survives session end and restart', async ($, on) => {
+test('a persisted goal survives session end and restart with legacy unit fields ignored', async ($, on) => {
   const startAt = T0 - 15 * MIN - 1
   const { seen, clock } = world(on, {}, {
     goal: 'finish the task',
@@ -696,13 +769,16 @@ test('a cleared goal stays asleep after session restart', async ($, on) => {
 })
 
 // Regression: a legacy unlimited=true value without a goal must not bypass an exhausted budget.
-test('legacy unlimited state without a goal loads as off', async ($, on) => {
-  const { clock } = world(on, {}, { unlimited: true })
+test('the unlimited environment setting suppresses overrun reminders', async ($, on) => {
+  const { clock } = world(on, { CLAUDE_TIME_BUDGET_UNLIMITED: '1' })
   await start($)
   await prompt($, 'go')
   await estimate($, 15)
   await clock.advance(15 * MIN + 1)
-  expect(denied(await run($, { tool: 'Bash', command: 'ls' }))).toContain('budget of 15 min is spent')
+  const result = await run($, { tool: 'Bash', command: 'ls' })
+  expect(result.deny).toBeUndefined()
+  expect(result.result).toBe('ran')
+  expect((result.context ?? []).join('\n')).not.toContain('Budget feedback:')
 })
 
 // Regression: `/goal` without arguments must leave an empty session without a tracked goal or awake lease.

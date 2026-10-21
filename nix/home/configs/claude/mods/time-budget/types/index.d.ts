@@ -11,25 +11,26 @@ export type Unit = {
   /** `$.clock.now()` milliseconds when the unit began. */
   start: number
   estimateMin?: number
-  /** Calibrated budget; undefined until the estimate is declared, which is what the gate waits on. */
+  /** Calibrated budget; undefined until the estimate is declared. */
   budgetMin?: number
   scope?: string
   steps?: string[]
   /** How many of CHECKPOINTS have fired. */
   fired: number
-  /** The label of the checkpoint whose report every other tool waits on. */
+  /** The latest checkpoint label, shown as a report reminder. */
   reportDue?: string
-  /** Why the unit stopped; every tool but the report is denied while set. */
-  halted?: string
-  haltedAt?: number
+  /** Highest checkpoint index whose reminder has reached the model. */
+  lastNudge?: number
+  /** Time of the last overrun reminder, used to space reminders by one sixth of the budget. */
+  lastOverrunNudgeAt?: number
   report?: Report
   reportAt?: number
+  extendedMin?: number
+  extensions?: number
   /** A subagent report main has not been shown yet. */
   unread?: boolean
   /** The last time a main turn of this unit ended: the unit's actual end for calibration. */
   lastEnd?: number
-  /** Wall-clock time spent waiting for the user after a main turn ended. */
-  pausedMs?: number
   /** The unit's calibration pair is already logged; a resumed main task logs none again. */
   calibrated?: boolean
 }

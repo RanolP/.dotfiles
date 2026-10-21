@@ -57,10 +57,10 @@ test('stay_awake with 0 minutes removes the until file', async ($, on) => {
 })
 
 // Regression: a negative or non-numeric minutes would write a garbage deadline.
-test('stay_awake denies minutes that are not a non-negative number', async ($, on) => {
+test('stay_awake reports invalid minutes without denying the model request', async ($, on) => {
   const { files } = world(on)
   await start($)
-  expect((await awake($, -5)).deny).toContain('minutes')
-  expect((await awake($, 'lots')).deny).toContain('minutes')
+  expect((await awake($, -5)).isError).toBe(true)
+  expect((await awake($, 'lots')).isError).toBe(true)
   expect(FILE in files).toBe(false)
 })

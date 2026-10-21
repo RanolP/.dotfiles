@@ -1,27 +1,18 @@
-import type { EngineInterface, Register, Timer, ToolSpec, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { EngineInterface, Register, Timer, ToolSpec, ToolCallResult } from 'claude-code'
 import type { Report, Unit } from '../types'
 import {
-  CHECKPOINTS, GRACE_MS, LAST, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt, gate, haltReason,
-  isReport, mins, parsePairs, projectedMin, reportText, statusText, type Pair,
+  CHECKPOINTS, LAST, TOOL, budgetFor, budgetLine, calibrationFactor, crossed, dueAt,
+  extensionSummary, isReport, mins, parseExtensions, parsePairs, projectedMin, reportText, statusText,
+  type Extension, type Pair,
 } from './budget'
 import { AWAKE_DEF, AWAKE_TOOL, MAX_AWAKE_MIN, awakeFile, awakeUntil } from './awake'
 
-// time-budget: the user's rule, enforced rather than requested --
-// "작업을 시작하기 전에 시간을 추정하고, 보고하라. 추정 시간 기준 1/3, 1/2, 2/3,
-// 5/6 지점에 중간 보고하라. 추정 시간을 넘을 것 같다면 즉시 작업을 중단하고 보고하라."
-//
-// A unit is one clm tracker task on the main thread, or one subagent run. A
-// main thread with no doing task is ungated; once a task has a budget, each
-// checkpoint marks a report due and every other tool waits on it. A report
-// that projects past the budget, or the budget running out, denies every tool
-// but the report, and GRACE_MS after 6/6 a main turn still running is aborted.
-// The calibration history is time-budget.py's file, read and written in the
-// same shape, one pair per unit.
+// time-budget provides feedback on plans and estimates. Checkpoints and
+// overruns add reminders to tool results; the model records added time with
+// `extend`, and work continues while those reminders are shown.
 
 const UNITS = { plugin: 'time-budget', key: 'units' } as const
 const PARKED = { plugin: 'time-budget', key: 'parked' } as const
-const CODEX = 'codex-subagent:'
-const MAIN_ABORT = 'main-abort'
 const STATUS_REFRESH_MS = 60_000
 
 const GOAL = { plugin: 'time-budget', key: 'goal' } as const
@@ -38,7 +29,7 @@ const minutes = { type: 'number', exclusiveMinimum: 0 }
 const TOOLS = [
   {
     name: 'estimate',
-    description: 'Open a new clm tracker task and declare how long it will take, or pass task with an existing issue id to resume or re-estimate that task. The harness scales the estimate by how far past estimates ran, shows the budget to the user, and asks for a report at 1/3, 1/2, 2/3 and 5/6 of it.',
+    description: 'Open a clm tracker task and estimate its duration, or pass task with an existing issue id to resume or refine that estimate. The result shows the calibrated budget, checkpoint reminders, and recent extension history.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -52,7 +43,7 @@ const TOOLS = [
   },
   {
     name: 'report',
-    description: 'File a progress report against the time budget: what is verified done, what is open, and the extra minutes the open items need. The harness projects the finish from it.',
+    description: 'Record verified work, open items, and a finish-time projection. If more time is needed, call extend with the minutes and reason.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -64,8 +55,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'extend',
+    description: 'Record extra time for your own unit and add those minutes to its current budget. Give a reason describing the remaining work or why the estimate was low.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        minutes: { ...minutes, description: 'Additional minutes to add to the current budget' },
+        reason: { type: 'string', minLength: 1, description: 'What the extra time is for or why the estimate was low' },
+      },
+      required: ['minutes', 'reason'],
+    },
+  },
+  {
     name: 'grant',
-    description: 'Give a running subagent more minutes from now on its time budget, after reading its report.',
+    description: 'Add minutes to a running subagent’s current budget after reviewing its report.',
     inputSchema: {
       type: 'object',
       properties: { agent_id: { type: 'string', description: 'The subagent id its report names' }, minutes },
@@ -79,11 +82,10 @@ type S = {
   units: Record<string, Unit>
   parked: Record<string, Unit>
   timers: Map<string, Timer>
-  handedBack: Map<string, boolean>
-  extending: Set<string>
-  runningTurn?: string
   pairs?: Pair[]
   calibrationWrite?: Promise<void>
+  extensions?: Extension[]
+  extensionWrite?: Promise<void>
   refresh?: Timer
   envUnlimited: boolean
   /** The condition of the user's active `/goal`, null when none runs; it alone turns unlimited on. */
@@ -101,6 +103,10 @@ const errText = (err: unknown) => (err instanceof Error ? err.message : String(e
 
 function log($: Ctx, text: string) {
   $.ui.log(`[time-budget] ${text}`, { to: 'debug' })
+}
+
+function toolError(text: string) {
+  return { result: text, isError: true, text }
 }
 
 async function save($: Ctx, s: S) {
@@ -137,6 +143,11 @@ async function calibrationFile($: Ctx) {
   return `${dir}/calibration.jsonl`
 }
 
+async function extensionsFile($: Ctx) {
+  const path = await calibrationFile($)
+  return path.replace(/calibration\.jsonl$/, 'extensions.jsonl')
+}
+
 async function loadPairs($: Ctx, s: S): Promise<Pair[]> {
   if (s.pairs) return s.pairs
   const path = await calibrationFile($)
@@ -149,26 +160,40 @@ async function loadPairs($: Ctx, s: S): Promise<Pair[]> {
   return s.pairs
 }
 
+async function loadExtensions($: Ctx, s: S): Promise<Extension[]> {
+  if (s.extensions) return s.extensions
+  const path = await extensionsFile($)
+  try {
+    s.extensions = (await $.fs.exists(path)) ? parseExtensions((await $.fs.read(path)) as string) : []
+  } catch (err) {
+    log($, `cannot read ${path}: ${errText(err)}; extension history starts empty`)
+    s.extensions = []
+  }
+  return s.extensions
+}
+
+async function appendJsonLine($: Ctx, path: string, value: unknown) {
+  const line = JSON.stringify(value)
+  const result = await $.process.run([
+    'sh', '-c', 'mkdir -p "$(dirname "$2")" && printf "%s\\n" "$1" >> "$2"', 'sh', line, path,
+  ], { timeoutMs: 5_000 })
+  if (result.exitCode !== 0) throw new Error(`append ${path} failed (${result.exitCode}): ${result.stderr}`)
+}
+
 // One pair per unit, logged when the unit closes; `end` is when its last turn ended.
 async function logPair($: Ctx, s: S, u: Unit, end: number) {
   if (u.estimateMin === undefined || u.budgetMin === undefined) return
   const pair: Pair = {
     kind: u.kind, agent_type: u.agentType ?? null, estimate_min: u.estimateMin, budget_min: u.budgetMin,
-    actual_min: Math.round(((end - u.start - (u.pausedMs ?? 0)) / 60_000) * 100) / 100, at: Math.floor(end / 1000),
+    actual_min: Math.round(((end - u.start) / 60_000) * 100) / 100, at: Math.floor(end / 1000),
+    extended_min: u.extendedMin ?? 0, extensions: u.extensions ?? 0,
   }
   const write = async () => {
     const path = await calibrationFile($)
     try {
-      const prev = (await $.fs.exists(path)) ? ((await $.fs.read(path)) as string) : ''
-      const existing = parsePairs(prev)
-      const next = [...existing, pair]
-      const text = `${next.map(p => JSON.stringify(p)).join('\n')}\n`
-      // A random temp avoids same-second collisions; separate sessions can still lose an update between read and rename.
-      const temp = `${path}.tmp-${pair.at}-${Math.random().toString(36).slice(2)}`
-      await $.fs.write(temp, text)
-      const moved = await $.process.run(['mv', temp, path], { timeoutMs: 5_000 })
-      if (moved.exitCode !== 0) throw new Error(`mv ${temp} ${path} failed (${moved.exitCode}): ${moved.stderr}`)
-      s.pairs = next
+      const existing = await loadPairs($, s)
+      await appendJsonLine($, path, pair)
+      s.pairs = [...existing, pair]
     } catch (err) {
       log($, `cannot append ${JSON.stringify(pair)} to ${path}: ${errText(err)}`)
     }
@@ -178,51 +203,36 @@ async function logPair($: Ctx, s: S, u: Unit, end: number) {
   await s.calibrationWrite
 }
 
+async function appendExtension($: Ctx, s: S, record: Extension) {
+  const write = async () => {
+    const path = await extensionsFile($)
+    try {
+      const existing = await loadExtensions($, s)
+      await appendJsonLine($, path, record)
+      s.extensions = [...existing, record]
+    } catch (err) {
+      log($, `cannot append ${JSON.stringify(record)} to ${path}: ${errText(err)}`)
+    }
+  }
+  const pending = s.extensionWrite ?? Promise.resolve()
+  s.extensionWrite = pending.catch(() => undefined).then(write)
+  await s.extensionWrite
+}
+
 function disarm(s: S, key: string) {
   s.timers.get(key)?.cancel()
   s.timers.delete(key)
 }
 
-function resume(s: S, key: string, u: Unit) {
-  disarm(s, key)
-  if (u.kind === 'main') disarm(s, MAIN_ABORT)
-  s.handedBack.delete(key)
-  u.halted = undefined
-  u.haltedAt = undefined
-  u.reportDue = undefined
-  u.report = undefined
-  u.reportAt = undefined
-  u.unread = undefined
-}
-
-// A main turn still running GRACE_MS after the stop has had its chance to report.
-function armAbort($: Ctx, s: S, key: string) {
-  disarm(s, MAIN_ABORT)
-  if (isUnlimited(s)) return
-  s.timers.set(MAIN_ABORT, $.clock.after(GRACE_MS, () => {
-    const turnId = s.runningTurn
-    if (isUnlimited(s) || !s.units[key]?.halted || !turnId) return
-    $.turn.abort({ turnId }).catch(err => log($, `turn.abort(${turnId}) failed: ${errText(err)}`))
-  }))
-}
-
 // Moves the unit to the checkpoint the clock has reached; the timer and every tool call run it.
 async function advance($: Ctx, s: S, key: string, now: number) {
   const u = s.units[key]
-  if (!u || u.budgetMin === undefined || u.halted) return
+  if (!u || u.budgetMin === undefined) return
   const c = crossed(now - u.start, u.budgetMin)
   let changed = false
   if (c > u.fired) {
     u.fired = c
     if (c < LAST) u.reportDue = CHECKPOINTS[c - 1]!.label
-    changed = true
-  }
-  const reason = haltReason(u, now, isUnlimited(s))
-  if (reason) {
-    u.halted = reason
-    u.haltedAt = now
-    u.reportDue = undefined
-    if (u.kind === 'main') armAbort($, s, key)
     changed = true
   }
   if (!changed) return
@@ -233,7 +243,7 @@ async function advance($: Ctx, s: S, key: string, now: number) {
 async function arm($: Ctx, s: S, key: string) {
   disarm(s, key)
   const u = s.units[key]
-  if (!u || u.budgetMin === undefined || u.halted || u.fired >= LAST) return
+  if (!u || u.budgetMin === undefined || u.fired >= LAST) return
   const delay = Math.max(0, u.start + dueAt(u.fired, u.budgetMin) - (await $.clock.now()))
   s.timers.set(key, $.clock.after(delay, () => {
     void (async () => {
@@ -248,7 +258,6 @@ async function closeMain($: Ctx, s: S, now: number, key = mainEntry(s)?.[0]) {
   const u = s.units[key]
   if (!u) return
   disarm(s, key)
-  if (u.kind === 'main') disarm(s, MAIN_ABORT)
   delete s.units[key]
   // Its clm issue can be resumed by id, so the start and budget it ran under are kept for that.
   if (u.kind === 'main') s.parked[key] = { ...u, calibrated: true }
@@ -270,57 +279,92 @@ async function syncMainTask($: Ctx, s: S, now: number) {
   }
 }
 
-function extend(s: S, key: string, u: Unit, extra: number, now: number): boolean {
-  if (u.budgetMin === undefined) return false
-  u.pausedMs = (u.pausedMs ?? 0) + Math.max(0, now - (u.lastEnd ?? now))
-  const fromNow = (now - u.start) / 60_000 + extra
-  // A halted unit restarts from now; a running one is never shortened by a grant.
-  u.budgetMin = u.halted ? fromNow : Math.max(u.budgetMin, fromNow)
-  resume(s, key, u)
-  u.fired = crossed(now - u.start, u.budgetMin)
-  return true
-}
-
-async function extendMain($: Ctx, s: S, extra: number): Promise<boolean> {
-  const entry = mainEntry(s)
-  if (!entry) return false
-  const [key, u] = entry
-  if (!u.halted || u.budgetMin === undefined || s.extending.has(key)) return false
-  s.extending.add(key)
-  const halted = u.halted
-  u.halted = 'extension in progress'
-  try {
-    const now = await $.clock.now()
-    const extended = extend(s, key, u, extra, now)
-    if (!extended) {
-      u.halted = halted
-      return false
-    }
-    await save($, s)
-    await arm($, s, key)
-    await showStatus($, s)
-    return true
-  } catch (err) {
-    u.halted = halted
-    throw err
-  } finally {
-    s.extending.delete(key)
-  }
-}
-
-function extensionMinutes(u: Unit): number[] {
-  const asked = u.report?.more_min
-  return [...new Set([10, 20, 30, ...(asked && asked > 0 ? [asked] : [])])]
-}
-
 function unreadReports(s: S, now: number): string[] {
   const out: string[] = []
   for (const [id, u] of Object.entries(s.units)) {
     if (!u.unread || !u.report) continue
     u.unread = false
-    out.push(`Subagent report (${u.agentType ?? 'subagent'} ${id}, ${mins(now - u.start)}/${Math.round(u.budgetMin ?? 0)} min${u.halted ? `, stopped: ${u.halted}` : ''}):\n${reportText(u.report)}\nGrant it time with ${TOOL.grant} {agent_id: "${id}", minutes}, or narrow its scope with SendMessage.`)
+    out.push(`Subagent report (${u.agentType ?? 'subagent'} ${id}, ${mins(now - u.start)}/${Math.round(u.budgetMin ?? 0)} min):\n${reportText(u.report)}\nReview the remaining work and use ${TOOL.grant} {agent_id: "${id}", minutes} to add time when needed.`)
   }
   return out
+}
+
+function withFeedback<T extends ToolCallResult>(result: T, feedback: string[]): T {
+  if (!feedback.length) return result
+  if ('result' in result && typeof result.result === 'string')
+    return { ...result, result: `${result.result}\n${feedback.join('\n')}` } as T
+  return { ...result, context: [...(result.context ?? []), ...feedback] } as T
+}
+
+function withContext<T extends ToolCallResult>(result: T, context: string[]): T {
+  if (!context.length) return result
+  return { ...result, context: [...('context' in result ? result.context ?? [] : []), ...context] } as T
+}
+
+function overrunReason(unit: Unit, now: number): string | undefined {
+  if (unit.budgetMin === undefined) return undefined
+  const budget = unit.budgetMin
+  if (now - unit.start >= budget * 60_000) return `${mins(now - unit.start)} min elapsed is beyond the ${Math.round(budget)} min budget`
+  if (unit.report && unit.reportAt !== undefined) {
+    const projected = projectedMin(unit.reportAt - unit.start, unit.report)
+    if (projected > budget) return `the latest report projects ${Math.round(projected)} min against the ${Math.round(budget)} min budget`
+  }
+  return undefined
+}
+
+async function unitFeedback($: Ctx, s: S, unit: Unit | undefined, now: number, reportFiled = false): Promise<string[]> {
+  if (!unit) return []
+  let changed = false
+  const through = Math.min(unit.fired, LAST - 1)
+  const notes: string[] = []
+  if (reportFiled) {
+    if ((unit.lastNudge ?? 0) < through) {
+      unit.lastNudge = through
+      changed = true
+    }
+  } else if ((unit.lastNudge ?? 0) < through) {
+    for (let index = unit.lastNudge ?? 0; index < through; index++) {
+      const label = CHECKPOINTS[index]?.label
+      if (label) notes.push(`Checkpoint ${label} is due. Record verified work and open items with ${TOOL.report}, then continue.`)
+    }
+    unit.lastNudge = through
+    changed = true
+  }
+
+  const reason = isUnlimited(s) ? undefined : overrunReason(unit, now)
+  const interval = (unit.budgetMin ?? 0) * 60_000 / 6
+  if (reason && (unit.lastOverrunNudgeAt === undefined || now - unit.lastOverrunNudgeAt >= interval)) {
+    notes.push(`Budget feedback: ${reason}. Record extra time with ${TOOL.extend} {minutes, reason} if more time is needed, then continue.`)
+    unit.lastOverrunNudgeAt = now
+    changed = true
+  }
+  if (changed) await save($, s)
+  return notes
+}
+
+async function recordExtension(
+  $: Ctx,
+  s: S,
+  unit: Unit,
+  task: string,
+  now: number,
+  minutes: number,
+  reason: string,
+  source: Extension['source'],
+  budgetBefore: number,
+  budgetAfter: number,
+  estimateMin = unit.estimateMin ?? 0,
+) {
+  const record: Extension = {
+    at: Math.floor(now / 1000), kind: unit.kind, agent_type: unit.agentType ?? null, task,
+    scope: unit.scope ?? '', estimate_min: estimateMin, budget_before: budgetBefore, budget_after: budgetAfter,
+    minutes, elapsed_min: Math.round(((now - unit.start) / 60_000) * 100) / 100, reason, source,
+  }
+  if (source === 'extend' || source === 'grant') {
+    unit.extendedMin = (unit.extendedMin ?? 0) + minutes
+    unit.extensions = (unit.extensions ?? 0) + 1
+  }
+  await appendExtension($, s, record)
 }
 
 async function saveGoal($: Ctx, s: S) {
@@ -390,22 +434,8 @@ async function endGoal($: Ctx, s: S, reason: string) {
   }
 }
 
-// Turning unlimited on lifts every stop already in force, and the abort waiting on it.
-async function liftHalts($: Ctx, s: S) {
-  const now = await $.clock.now()
-  for (const [key, u] of Object.entries(s.units)) {
-    if (!u.halted || u.budgetMin === undefined) continue
-    resume(s, key, u)
-    u.fired = crossed(now - u.start, u.budgetMin)
-    await arm($, s, key)
-  }
-  disarm(s, MAIN_ABORT)
-  await save($, s)
-  await showStatus($, s)
-}
-
 export const register: Register = (on) => {
-  const s: S = { units: {}, parked: {}, timers: new Map(), handedBack: new Map(), extending: new Set(), envUnlimited: false, goal: null, goalRowLast: false }
+  const s: S = { units: {}, parked: {}, timers: new Map(), envUnlimited: false, goal: null, goalRowLast: false }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -422,7 +452,6 @@ export const register: Register = (on) => {
     // The old prompt-scoped state used the literal key `main`; it cannot be tied to a clm issue.
     if (s.units.main?.kind === 'main') {
       disarm(s, 'main')
-      disarm(s, MAIN_ABORT)
       delete s.units.main
       await save($, s)
     }
@@ -434,7 +463,6 @@ export const register: Register = (on) => {
       }
     }
     for (const key of Object.keys(s.units)) await arm($, s, key)
-    if (isUnlimited(s)) await liftHalts($, s)
     if (s.goal !== null) await startAwakeRefresh($, s)
     s.refresh?.cancel()
     s.refresh = $.clock.every(STATUS_REFRESH_MS, () => { void showStatus($, s) })
@@ -446,11 +474,6 @@ export const register: Register = (on) => {
     stopAwakeRefresh(s)
     await closeMain($, s, await $.clock.now())
     await save($, s)
-    return next(e)
-  })
-
-  on('turn.start', async ($, e, next) => {
-    s.runningTurn = e.turnId
     return next(e)
   })
 
@@ -468,7 +491,6 @@ export const register: Register = (on) => {
       s.goalRowLast = false
       await saveGoal($, s)
       await startAwakeRefresh($, s)
-      await liftHalts($, s)
     }
     return r
   })
@@ -484,34 +506,6 @@ export const register: Register = (on) => {
     return next(e)
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const base = await next(e).catch(err => {
-      if (!String(err).includes('no implementation for ui.render')) throw err
-      return null
-    })
-    const entry = mainEntry(s)
-    const u = entry?.[1]
-    if (!u?.halted || isUnlimited(s) || e.props.hasSurvey) {
-      if (base) return base
-      throw new Error('no implementation for ui.render')
-    }
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const buttons = extensionMinutes(u).map(extra => Button({
-      key: `time-budget:+${extra}m`,
-      label: `+${extra}m`,
-      onPress: () => {
-        void (async () => {
-          if (await extendMain($, s, extra)) await $.prompt.submit({ text: 'Continue this task.', asUser: true })
-        })().catch(err => log($, `extension +${extra}m failed: ${errText(err)}`))
-      },
-    }))
-    const budget = Box({
-      gap: 1,
-      children: [Text({ children: `Time budget stopped: ${u.halted}` }), ...buttons],
-    })
-    return Box({ gap: 1, children: base === null ? [budget] : [base, budget] })
-  })
-
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined && !e.isAborted && s.goal !== null && s.goalRowLast) await endGoal($, s, 'goal ended (met, failed, or cleared after an error)')
     const r = await next(e)
@@ -520,21 +514,19 @@ export const register: Register = (on) => {
       const u = s.units[e.agentId]
       if (u) {
         disarm(s, e.agentId)
-        s.handedBack.delete(e.agentId)
         delete s.units[e.agentId]
         await logPair($, s, u, now)
         await save($, s)
       }
       return r
     }
-    if (s.runningTurn === e.turnId) s.runningTurn = undefined
     await syncMainTask($, s, now)
     const u = mainEntry(s)?.[1]
     if (!u) return r
     u.lastEnd = now
     await save($, s)
     // The status line already shows the budget; a line under every answer becomes a focus-view notice row.
-    if (u.budgetMin === undefined || !(u.halted || u.reportDue)) return r
+    if (u.budgetMin === undefined || (!u.reportDue && now - u.start < u.budgetMin * 60_000 && !overrunReason(u, now))) return r
     const head = `⏱ estimate ${u.estimateMin}m → ${statusText(u, now)}`
     const line = u.report ? `${head}\n${reportText(u.report)}` : head
     // A text other than the answer is shown beneath it; another plugin's line stays above ours.
@@ -542,11 +534,7 @@ export const register: Register = (on) => {
   })
 
   on('agent.spawn', async ($, e, next) => {
-    const codex = e.subagentType.startsWith(CODEX)
     const declared = budgetLine(e.prompt)
-    if (codex && declared === undefined) {
-      return { deny: `Start the prompt with the line "Budget: <N> min", N being your estimate in minutes for this ${e.subagentType} task, then call Agent again. Codex runs its own shell where no estimate gate reaches it, so the spawner's line is its budget.` }
-    }
     const r = await next(e)
     if (!r.agentId) return r
     const now = await $.clock.now()
@@ -562,17 +550,30 @@ export const register: Register = (on) => {
   })
 
   on('tool.call', { tool: AWAKE_TOOL }, async ($, e) => {
+    const key = e.agentId
+    const main = key === undefined
+    const now = await $.clock.now()
+    if (main) await syncMainTask($, s, now)
+    const unitKey = key ?? mainEntry(s)?.[0]
+    const unit = unitKey ? s.units[unitKey] : undefined
+    if (unit && unitKey) await advance($, s, unitKey, now)
+    const feedback = async (result: ToolCallResult) => {
+      const notes = await unitFeedback($, s, unit, now)
+      const reports = main ? unreadReports(s, now) : []
+      if (reports.length) await save($, s)
+      return withContext(withFeedback(result, notes), reports)
+    }
     const m = (e as unknown as Record<string, unknown>).minutes
-    if (typeof m !== 'number' || !Number.isFinite(m) || m < 0) return { deny: `Call ${AWAKE_TOOL} with minutes as a number from 0 to ${MAX_AWAKE_MIN}.` }
+    if (typeof m !== 'number' || !Number.isFinite(m) || m < 0) return feedback(toolError(`Call ${AWAKE_TOOL} with minutes as a number from 0 to ${MAX_AWAKE_MIN}.`))
     let until
     try {
       until = await setAwake($, m)
     } catch (err) {
-      return { isError: true, text: `stay_awake ${errText(err)}` }
+      return feedback(toolError(`stay_awake ${errText(err)}`))
     }
-    if (until === undefined) return { result: 'Stay-awake cleared; the Mac may sleep with the lid closed again within a minute.' }
+    if (until === undefined) return feedback({ result: 'Stay-awake cleared; the Mac may sleep with the lid closed again within a minute.' })
     const clamped = m > MAX_AWAKE_MIN ? ` (clamped from ${m} to ${MAX_AWAKE_MIN} min)` : ''
-    return { result: `Staying awake until ${new Date(until * 1000).toISOString()} (epoch ${until})${clamped}; call again before then to extend.` }
+    return feedback({ result: `Staying awake until ${new Date(until * 1000).toISOString()} (epoch ${until})${clamped}; call again before then to extend.` })
   })
 
   on('tool.call', async ($, e, next) => {
@@ -588,52 +589,53 @@ export const register: Register = (on) => {
 
     if (e.tool === TOOL.estimate) {
       const m = args.minutes
-      if (typeof m !== 'number' || !(m > 0)) return { deny: `Call ${TOOL.estimate} with minutes as a positive number, scope as one line and steps as a list.` }
+      if (typeof m !== 'number' || !Number.isFinite(m) || !(m > 0)) return toolError(`Call ${TOOL.estimate} with minutes as a positive number, scope as one line and steps as a list.`)
       const factor = calibrationFactor(await loadPairs($, s))
-      const budget = budgetFor(m, factor)
+      const baseBudget = budgetFor(m, factor)
       const scope = typeof args.scope === 'string' ? args.scope : ''
       if (main) {
         const requested = args.task
         if (requested !== undefined && (typeof requested !== 'string' || !requested.trim()))
-          return { deny: `Call ${TOOL.estimate} with task as an existing clm issue id when resuming one.` }
+          return toolError(`Call ${TOOL.estimate} with task as an existing clm issue id when resuming one.`)
         const targetKey = typeof requested === 'string' ? requested : undefined
-        // Opening, switching or raising a task would bypass the stop, the due report, or the user's extension buttons.
-        if (u?.halted) return { deny: `Stop here: ${u.halted}. Call ${TOOL.report}, then end the turn; the user extends with a button above the prompt.` }
-        if (u?.reportDue && targetKey !== unitKey) return { deny: `Checkpoint ${u.reportDue}: call ${TOOL.report} before opening or re-estimating a task.` }
-        const prior = targetKey === undefined ? undefined : targetKey === unitKey ? u : s.parked[targetKey]
-        if (prior?.budgetMin !== undefined && budget > prior.budgetMin)
-          return { deny: `The budget of ${Math.round(prior.budgetMin)} min only grows by the user's extension button; put more_min in your ${TOOL.report} call and the button appears when it projects past the budget.` }
         let issue
         try {
           issue = await $.clm.track({ title: scope, status: 'doing', ...(targetKey ? { issue: targetKey } : {}) })
         } catch (err) {
-          return { deny: `${TOOL.estimate}: ${errText(err)}` }
+          return toolError(`${TOOL.estimate}: ${errText(err)}`)
         }
         if (unitKey && unitKey !== issue.id) await closeMain($, s, now, unitKey)
         unitKey = issue.id
         u = s.units[unitKey]
         const parked = s.parked[unitKey]
         delete s.parked[unitKey]
-        // A resumed task keeps its first start and budget; a lower estimate applies below.
+        // A resumed task keeps its first start and calibration estimate.
         if (!u || u.kind !== 'main') u = s.units[unitKey] = parked
           ? { ...parked, lastEnd: undefined }
           : { kind: 'main', start: now, fired: 0 }
       } else {
         unitKey = key
         u = s.units[unitKey] ?? (s.units[unitKey] = { kind: 'sub', start: now, fired: 0 })
-        if (u.budgetMin !== undefined && budget > u.budgetMin)
-          return { deny: `Put more_min in your ${TOOL.report} call; main can grant time.` }
       }
-      if (!u || !unitKey) return { deny: `Could not open a time-budget unit for ${TOOL.estimate}.` }
+      if (!u || !unitKey) return toolError(`Could not open a time-budget unit for ${TOOL.estimate}.`)
       const unit = u
       const first = unit.budgetMin === undefined
+      const before = unit.budgetMin
+      const extended = unit.extendedMin ?? 0
+      const beforeBase = before === undefined ? undefined : before - extended
+      const budget = baseBudget + extended
       if (first) unit.estimateMin = m
       unit.budgetMin = budget
       unit.scope = scope || undefined
-      unit.steps = Array.isArray(args.steps) ? args.steps.filter((s): s is string => typeof s === 'string') : undefined
+      unit.steps = Array.isArray(args.steps) ? args.steps.filter((step): step is string => typeof step === 'string') : undefined
+      if (before !== undefined && beforeBase !== undefined && baseBudget > beforeBase) {
+        await recordExtension($, s, unit, unitKey, now, budget - before,
+          `Estimate refined for ${scope || unit.scope || 'the task'}.`, 'reestimate', before, budget, m)
+      }
       if (first) {
         unit.fired = crossed(now - unit.start, unit.budgetMin)
         unit.reportDue = undefined
+        unit.lastNudge = 0
       } else {
         await advance($, s, unitKey, now)
       }
@@ -641,82 +643,81 @@ export const register: Register = (on) => {
       await arm($, s, unitKey)
       if (main) await showStatus($, s)
       const at = CHECKPOINTS.slice(0, LAST - 1).map((c, i) => `${c.label} at ${mins(dueAt(i, unit.budgetMin!))}m`).join(', ')
-      return { result: `Budget ${Math.round(unit.budgetMin)} min (estimate ${m} min × calibration ${factor.toFixed(2)}, floor 15); ${mins(now - unit.start)} min elapsed. Reports are due at ${at}; the budget ends at ${Math.round(unit.budgetMin)}m. State this budget and the steps to the user in your reply as you start.` }
+      const history = extensionSummary(await loadPairs($, s), await loadExtensions($, s))
+      const planFeedback = (unit.steps?.length ?? 0) <= 1 && m > 30 ? ' Plan feedback: split this estimate into smaller steps.' : ''
+      const result = { result: `Budget ${Math.round(unit.budgetMin)} min (estimate ${m} min × calibration ${factor.toFixed(2)}, floor 15); ${mins(now - unit.start)} min elapsed. Reports are due at ${at}; the budget ends at ${Math.round(unit.budgetMin)}m. ${history}${planFeedback} Use this budget and the planned steps to guide the work.` }
+      return withFeedback(result, await unitFeedback($, s, unit, now))
     }
 
-    const denied = gate(u, e.tool, now)
-    if (denied) return denied
-
     if (e.tool === TOOL.report) {
-      if (!u) return { deny: `Call ${TOOL.estimate} first; a report measures against its budget.` }
-      if (!isReport(args)) return { deny: `Call ${TOOL.report} with done as [{item, check}], open as [{item, next}], and more_min as a number of minutes when the open items need more time.` }
+      if (!u || !unitKey) return toolError(`Call ${TOOL.estimate} to associate a report with a unit.`)
+      if (!isReport(args)) return toolError(`Call ${TOOL.report} with done as [{item, check}], open as [{item, next}], and more_min as a number when open items need extra time.`)
       const report: Report = { done: args.done, open: args.open, ...(args.more_min !== undefined ? { more_min: args.more_min } : {}) }
       u.report = report
       u.reportAt = now
       u.reportDue = undefined
       if (!main) u.unread = true
-      if (unitKey) await advance($, s, unitKey, now)
+      await advance($, s, unitKey, now)
       await save($, s)
       if (main) await showStatus($, s)
-      const projected = Math.round(projectedMin(now - u.start, report))
-      if (u.halted) {
-        const close = main
-          ? 'End the turn now with this report; use an extension button above the prompt to continue.'
-          : `End your run now: call SubagentHandback with this report; main reads it and can grant time.`
-        return { result: `Report recorded. Stop here: ${u.halted}. ${close}` }
+      const projection = projectedMin(now - u.start, report)
+      const projected = Math.round(projection)
+      const budgetNow = u.budgetMin
+      const needsMore = budgetNow !== undefined && projection > budgetNow && (report.more_min ?? 0) > 0
+      if (needsMore) {
+        const reason = `Report projects ${projected} min for the remaining work: ${report.open.map(item => item.item).join(', ') || 'no open items listed'}.`
+        await recordExtension($, s, u, unitKey, now, report.more_min!, reason, 'report', budgetNow!, budgetNow!)
       }
-      return { result: `Report recorded: projected ${projected} of ${Math.round(u.budgetMin!)} min. Continue at the same depth; verification stays part of the work.` }
+      const budgetText = budgetNow === undefined ? 'no estimate yet' : `${Math.round(budgetNow)} min`
+      const extra = needsMore ? ` If you still need the requested extra time, call ${TOOL.extend} with minutes ${report.more_min} and a reason.` : ''
+      const result = { result: `Report recorded: projected ${projected} min against ${budgetText}. Continue at the same depth; verification stays part of the work.${extra}` }
+      return withFeedback(result, await unitFeedback($, s, u, now, true))
+    }
+
+    if (e.tool === TOOL.extend) {
+      const extra = args.minutes
+      const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+      if (typeof extra !== 'number' || !Number.isFinite(extra) || !(extra > 0) || !reason)
+        return toolError(`Call ${TOOL.extend} with positive minutes and a reason for the additional time.`)
+      if (!u || !unitKey || u.budgetMin === undefined)
+        return toolError(`Call ${TOOL.estimate} first so ${TOOL.extend} can add time to your unit's budget.`)
+      const before = u.budgetMin
+      const after = before + extra
+      u.budgetMin = after
+      u.lastOverrunNudgeAt = now
+      u.fired = Math.max(u.fired, crossed(now - u.start, after))
+      await recordExtension($, s, u, unitKey, now, extra, reason, 'extend', before, after)
+      await save($, s)
+      await arm($, s, unitKey)
+      if (main) await showStatus($, s)
+      const result = { result: `Added ${extra} min to this unit's budget; it is now ${Math.round(after)} min. Continue the task and report at the next checkpoint.` }
+      return withFeedback(result, await unitFeedback($, s, u, now))
     }
 
     if (e.tool === TOOL.grant) {
-      if (e.agentId) return { deny: `Ask the main thread for time: put more_min in your ${TOOL.report} call.` }
+      if (e.agentId) return toolError(`Use ${TOOL.extend} to add time to your own unit.`)
       const id = String(args.agent_id ?? '')
       const extra = args.minutes
       const sub = s.units[id]
-      if (!sub || sub.kind === 'main' || sub.budgetMin === undefined) return { deny: `Call ${TOOL.grant} with the agent_id of a running subagent that has a budget (one of: ${Object.entries(s.units).filter(([, candidate]) => candidate.kind === 'sub').map(([candidateId]) => candidateId).join(', ') || 'none'}).` }
-      if (typeof extra !== 'number' || !(extra > 0)) return { deny: `Call ${TOOL.grant} with minutes as a positive number.` }
+      if (!sub || sub.kind === 'main' || sub.budgetMin === undefined) return toolError(`Call ${TOOL.grant} with the id of a running subagent that has a budget.`)
+      if (typeof extra !== 'number' || !Number.isFinite(extra) || !(extra > 0)) return toolError(`Call ${TOOL.grant} with minutes as a positive number.`)
       const before = sub.budgetMin
-      const wasHalted = Boolean(sub.halted)
-      extend(s, id, sub, extra, now)
+      const after = before + extra
+      sub.budgetMin = after
+      sub.lastOverrunNudgeAt = now
+      sub.fired = Math.max(sub.fired, crossed(now - sub.start, after))
+      await recordExtension($, s, sub, id, now, extra, 'Main added time after reviewing the subagent report.', 'grant', before, after)
       await save($, s)
       await arm($, s, id)
-      const after = Math.round(sub.budgetMin)
-      return { result: wasHalted || sub.budgetMin > before
-        ? `Granted +${extra} min from now to ${id}; its budget is now ${after} min.`
-        : `${id} already has more than +${extra} min left; its budget stays ${after} min.` }
+      const result = { result: `Added ${extra} min to ${id}'s budget; it is now ${Math.round(after)} min.` }
+      return withFeedback(result, await unitFeedback($, s, u, now))
     }
 
-    const r = await next(e)
-    if (!main || 'deny' in r && r.deny !== undefined) return r
-    const reports = unreadReports(s, now)
-    if (!reports.length) return r
-    await save($, s)
-    return { ...r, context: [...(r.context ?? []), ...reports] } as typeof r
+    const result = await next(e)
+    if ('deny' in result && result.deny !== undefined) return result
+    const feedback = await unitFeedback($, s, u, now)
+    const reports = main ? unreadReports(s, now) : []
+    if (reports.length) await save($, s)
+    return withContext(result, [...feedback, ...reports])
   })
-
-  // A Claude subagent that keeps stepping GRACE_MS after its stop hands back
-  // the harness's report instead of making another request. A codex agent's
-  // steps are codex-subagent's to answer, so it is left to the tool gate.
-  on('turn.step', async function* ($, e, next) {
-    const id = e.agentId
-    const u = id ? s.units[id] : undefined
-    if (!id || !u?.halted || u.agentType?.startsWith(CODEX)) return yield* next(e)
-    const now = await $.clock.now()
-    if (now - (u.haltedAt ?? now) < GRACE_MS) return yield* next(e)
-    const text = `Stopped by the time budget: ${u.halted} (${mins(now - u.start)}/${Math.round(u.budgetMin ?? 0)} min).\n${u.report ? reportText(u.report) : 'No report was filed.'}`
-    if (s.handedBack.get(id)) return yield* endTurn(e, text)
-    s.handedBack.set(id, true)
-    const toolUseId = `toolu_time_budget_${id.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
-    const input = { message: text }
-    yield { kind: 'tool', index: 0, id: toolUseId, name: 'SubagentHandback' }
-    yield { kind: 'input', index: 0, json: JSON.stringify(input) }
-    yield { kind: 'stop', stopReason: 'tool_use', usage: null }
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [{ name: 'SubagentHandback', input }], stopReason: 'tool_use', usage: null } satisfies TurnStepResult
-  })
-}
-
-async function* endTurn(e: { turnId: string; index: number }, text: string): AsyncGenerator<TurnStepChunk, TurnStepResult> {
-  yield { kind: 'text', index: 0, text }
-  yield { kind: 'stop', stopReason: 'end_turn', usage: null }
-  return { turnId: e.turnId, index: e.index, answer: text, toolUses: [], stopReason: 'end_turn', usage: null }
 }

@@ -1,0 +1,39 @@
+{
+  "title": "Detail Entry Timeline",
+  "subtitle": "Tapping a list card and opening the detail screen, recorded on the base branch (as-is) and the working tree (to-be). 0 ms is the first screen change after the tap; every clip plays on one shared clock.",
+  "axis": { "min": -1000, "max": 4000, "lead": 1.0 },
+  "kinds": [
+    { "id": "skel", "label": "Skeleton", "color": "#8a8f99", "dark": "#9aa1ae" },
+    { "id": "content", "label": "Content", "color": "#2f5fd0", "dark": "#7ea2ff" },
+    { "id": "image", "label": "First image", "color": "#0f9d58", "dark": "#4ad08a" },
+    { "id": "issue", "label": "Flicker or layout shift", "color": "#dc2626", "dark": "#ff6b6b" }
+  ],
+  "conditions": [
+    { "id": "normal", "title": "Normal network", "desc": "No added API latency" },
+    { "id": "slow", "title": "Slow network", "desc": "Responses delayed by a mock proxy",
+      "delays": [ { "target": "GET /api/items/:id", "ms": 1500 }, { "target": "every other API", "ms": 500 } ] }
+  ],
+  "takes": [
+    { "id": "asis-normal", "condition": "normal", "build": "as-is", "label": "as-is: main@abc1234", "src": "asis-normal.mp4", "fps": 30, "events": [
+      { "t": 0, "kind": "skel", "text": "Text skeleton, no image slot", "end": 600 },
+      { "t": 600, "kind": "content", "text": "Title and body appear" },
+      { "t": 700, "kind": "issue", "text": "Image slot pushes the body down" },
+      { "t": 900, "kind": "image", "text": "First image painted" } ] },
+    { "id": "tobe-normal", "condition": "normal", "build": "to-be", "label": "to-be: feat/detail@def5678", "src": "tobe-normal.mp4", "fps": 30, "events": [
+      { "t": 0, "kind": "skel", "text": "Skeleton with a reserved image slot", "end": 500 },
+      { "t": 500, "kind": "content", "text": "Title and body appear in place" },
+      { "t": 800, "kind": "image", "text": "First image painted" } ] },
+    { "id": "asis-slow", "condition": "slow", "build": "as-is", "label": "as-is: main@abc1234", "src": "asis-normal.mp4", "fps": 10, "events": [
+      { "t": 0, "kind": "skel", "text": "Text skeleton", "end": 2100 },
+      { "t": 2100, "kind": "content", "text": "Title and body appear" },
+      { "t": 2200, "kind": "issue", "text": "Image slot pushes the body down" } ] },
+    { "id": "tobe-slow", "condition": "slow", "build": "to-be", "label": "to-be: feat/detail@def5678", "src": "tobe-normal.mp4", "fps": 10, "events": [
+      { "t": 0, "kind": "skel", "text": "Skeleton with a reserved image slot", "end": 2000 },
+      { "t": 2000, "kind": "content", "text": "Title and body appear in place" },
+      { "t": 2600, "kind": "image", "text": "First image painted" } ] }
+  ],
+  "notes": [
+    "to-be reserves the image slot from the first frame, so the body no longer moves when the image arrives.",
+    "Times were read frame by frame: ±33 ms at 30 fps, ±100 ms at 10 fps."
+  ]
+}

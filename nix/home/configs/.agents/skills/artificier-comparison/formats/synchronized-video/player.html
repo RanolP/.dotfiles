@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* layout: sticky transport bar, then one block per condition = its clips side by side over per-take event lanes on one shared ms axis */
+:root{
+  color-scheme:light;
+  --bg:#f3f4f6; --panel:#ffffff; --fg:#16181d; --muted:#5d6472; --line:#d9dce3; --accent:#2f5fd0;
+  --sans:"IBM Plex Sans KR",system-ui,-apple-system,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#111318; --panel:#1a1d24; --fg:#e8eaef; --muted:#9aa1ae; --line:#2c313b; --accent:#7ea2ff; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111318; --panel:#1a1d24; --fg:#e8eaef; --muted:#9aa1ae; --line:#2c313b; --accent:#7ea2ff; color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px);background:var(--bg);color:var(--fg);font:14px/1.5 var(--sans)}
+[hidden]{display:none!important}
+.wrap{max-width:1100px;margin:0 auto;padding-inline:16px;padding-block:20px 48px;display:grid;gap:20px}
+h1{font-size:1.45rem;margin:0;text-wrap:balance}
+h2{font-size:1.05rem;margin:0}
+.sub{color:var(--muted);margin:4px 0 0;max-width:68ch}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:grid;gap:8px}
+.row1{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row1 label{font-size:.85rem;color:var(--muted)}
+button,select{font:inherit;font-size:.9rem;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--panel);font-weight:600;min-width:84px}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.clock{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:600;font-size:1.05rem;margin-left:auto}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.78rem;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+section.cond{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:12px;min-width:0}
+.cond-head{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline}
+.cond-head p{margin:0;color:var(--muted);font-size:.85rem}
+.delays{margin:0;padding-left:18px;color:var(--muted);font-size:.8rem;flex-basis:100%}
+.vids{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:12px;max-width:calc(var(--n) * 310px)}
+figure{margin:0;display:grid;gap:6px;min-width:0;align-content:start}
+figcaption{font-size:.82rem;font-weight:600;display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap}
+figcaption span{font-weight:400;color:var(--muted);font-family:var(--mono);font-size:.72rem}
+video{width:100%;max-width:100%;aspect-ratio:9/16;background:#000;border-radius:6px;display:block}
+.lanes{display:grid;gap:4px}
+.lane{display:grid;grid-template-columns:72px 1fr;gap:8px;align-items:center}
+.lane b{font-size:.75rem;color:var(--muted);font-weight:600;overflow-wrap:anywhere}
+.track{position:relative;height:30px;background:var(--bg);border-radius:4px;cursor:pointer}
+.span{position:absolute;top:4px;bottom:4px;border-radius:3px;opacity:.28}
+.mk{position:absolute;top:2px;bottom:2px;width:3px;margin-left:-1px;border-radius:2px;border:0;padding:0;cursor:pointer}
+.mk:hover,.mk:focus-visible{width:5px;margin-left:-2px}
+.head{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--fg);pointer-events:none}
+.axis{position:relative;height:16px;margin-left:80px;font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+.axis span{position:absolute;transform:translateX(-50%);white-space:nowrap}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.84rem;min-width:520px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:.76rem;letter-spacing:.03em}
+th button{all:unset;cursor:pointer;display:inline-flex;gap:4px}
+th button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+th[aria-sort="ascending"] button::after{content:"▲"}
+th[aria-sort="descending"] button::after{content:"▼"}
+td.t{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right;width:1%}
+td.t button{font:inherit;padding:1px 6px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+.notes{margin:0;padding-left:18px;color:var(--fg);max-width:75ch;display:grid;gap:4px;font-size:.88rem}
+@media (max-width:560px){.vids{grid-template-columns:repeat(min(var(--n),2),minmax(0,1fr))}.lane{grid-template-columns:52px 1fr}.axis{margin-left:60px}}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style>
+<style id="kind-colors"></style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 id="title"></h1>
+    <p class="sub" id="subtitle"></p>
+  </header>
+
+  <div class="bar" role="group" aria-label="재생 제어">
+    <div class="row1">
+      <button id="play" class="primary" type="button">재생</button>
+      <button id="back" type="button" aria-label="0.1초 뒤로">−0.1s</button>
+      <button id="fwd" type="button" aria-label="0.1초 앞으로">+0.1s</button>
+      <button id="zero" type="button">0 ms로</button>
+      <label for="rate">속도</label>
+      <select id="rate"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+      <span class="clock" id="clock"></span>
+    </div>
+    <input id="scrub" type="range" step="10" aria-label="공통 타임라인 (ms)">
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div id="conds" style="display:grid;gap:20px"></div>
+
+  <section class="cond" id="notes-section">
+    <h2>관찰 요약</h2>
+    <ul class="notes" id="notes"></ul>
+  </section>
+
+  <section class="cond">
+    <h2>이벤트 표</h2>
+    <div class="tablewrap"><table id="tbl"><thead><tr>
+      <th data-col="t"><button type="button">시점</button></th>
+      <th data-col="cond"><button type="button">조건</button></th>
+      <th data-col="build"><button type="button">빌드</button></th>
+      <th data-col="kind"><button type="button">이벤트</button></th>
+    </tr></thead><tbody></tbody></table></div>
+  </section>
+</div>
+
+<script id="takes-data" type="application/json">__TAKES_JSON__</script>
+<script>
+(() => {
+const DATA = JSON.parse(document.getElementById('takes-data').textContent);
+const { min: MIN, max: MAX, lead: LEAD } = DATA.axis;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const KINDS = new Map(DATA.kinds.map((k, i) => [k.id, { ...k, v: `--k${i}` }]));
+const CONDS = new Map(DATA.conditions.map((c, i) => [c.id, { ...c, order: i }]));
+const pct = t => ((t - MIN) / (MAX - MIN) * 100) + '%';
+const color = k => `var(${KINDS.get(k).v})`;
+const fmt = t => (t < 0 ? '−' : '') + Math.abs(Math.round(t)).toLocaleString('en-US') + ' ms';
+const readError = fps => fps ? `±${Math.round(1000 / fps)} ms` : '';
+
+const light = DATA.kinds.map((k, i) => `--k${i}:${k.color}`).join(';');
+const dark = DATA.kinds.map((k, i) => `--k${i}:${k.dark || k.color}`).join(';');
+document.getElementById('kind-colors').textContent = `:root{${light}}@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){${dark}}}:root[data-theme="dark"]{${dark}}`;
+
+document.title = DATA.title;
+document.getElementById('title').textContent = DATA.title;
+const sub = document.getElementById('subtitle');
+if (DATA.subtitle) sub.textContent = DATA.subtitle; else sub.hidden = true;
+const notes = DATA.notes || [];
+document.getElementById('notes').innerHTML = notes.map(n => `<li>${esc(n)}</li>`).join('');
+document.getElementById('notes-section').hidden = !notes.length;
+document.getElementById('legend').innerHTML = DATA.kinds.map(k => `<span><i style="background:${color(k.id)}"></i>${esc(k.label)}</span>`).join('');
+
+// Ticks: the smallest "nice" step that keeps the axis at 12 labels or fewer.
+function ticks() {
+  const steps = [100, 200, 250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000];
+  const step = steps.find(s => (MAX - MIN) / s <= 12) || steps.at(-1);
+  const out = [];
+  for (let t = Math.ceil(MIN / step) * step; t <= MAX; t += step) out.push(t);
+  return out.map(t => `<span style="left:${pct(t)}">${Number((t / 1000).toFixed(2))}s</span>`).join('');
+}
+const axis = ticks();
+
+const videos = [], heads = [];
+const condsEl = document.getElementById('conds');
+for (const cond of DATA.conditions) {
+  const takes = DATA.takes.filter(tk => tk.condition === cond.id);
+  const sec = document.createElement('section');
+  sec.className = 'cond';
+  const delays = cond.delays?.length ? `<ul class="delays">${cond.delays.map(d => `<li>${esc(d.target)}: +${(d.ms / 1000).toLocaleString('en-US')}초</li>`).join('')}</ul>` : '';
+  sec.innerHTML = `<div class="cond-head"><h2>${esc(cond.title)}</h2>${cond.desc ? `<p>${esc(cond.desc)}</p>` : ''}${delays}</div>
+  <div class="vids" style="--n:${takes.length}">${takes.map(tk => `<figure><figcaption>${esc(tk.label || tk.build)}<span>${esc(tk.id)}${tk.fps ? ` · ${tk.fps}fps ${readError(tk.fps)}` : ''}</span></figcaption>
+    <video data-id="${esc(tk.id)}" src="${esc(tk.src)}" muted playsinline preload="auto"${tk.aspect ? ` style="aspect-ratio:${esc(tk.aspect)}"` : ''}></video></figure>`).join('')}</div>
+  <div class="lanes">${takes.map(tk => `<div class="lane"><b>${esc(tk.build)}</b><div class="track">${
+    tk.events.map(e => (e.end != null ? `<span class="span" style="left:${pct(e.t)};width:calc(${pct(e.end)} - ${pct(e.t)});background:${color(e.kind)}"></span>` : '') +
+      `<button class="mk" type="button" style="left:${pct(e.t)};background:${color(e.kind)}" data-t="${e.t}" title="${fmt(e.t)} · ${esc(e.text)}" aria-label="${fmt(e.t)} ${esc(e.text)}"></button>`).join('')
+  }<div class="head"></div></div></div>`).join('')}
+  <div class="axis">${axis}</div></div>`;
+  condsEl.append(sec);
+  sec.querySelectorAll('video').forEach(v => {
+    videos.push(v);
+    // Without an aspect in the data, the clip's own frame size decides it once metadata arrives.
+    if (!v.style.aspectRatio) v.addEventListener('loadedmetadata', () => { if (v.videoWidth && v.videoHeight) v.style.aspectRatio = `${v.videoWidth} / ${v.videoHeight}`; });
+  });
+  sec.querySelectorAll('.head').forEach(h => heads.push(h));
+}
+
+const takeOrder = new Map(DATA.takes.map((tk, i) => [tk.id, i]));
+const rows = [];
+for (const tk of DATA.takes) for (const e of tk.events) rows.push({ ...e, tk });
+const keys = {
+  t: r => [r.t, CONDS.get(r.tk.condition).order, takeOrder.get(r.tk.id)],
+  cond: r => [CONDS.get(r.tk.condition).order, takeOrder.get(r.tk.id), r.t],
+  build: r => [r.tk.build, CONDS.get(r.tk.condition).order, r.t],
+  kind: r => [DATA.kinds.findIndex(k => k.id === r.kind), r.t],
+};
+const cmp = (a, b) => { for (let i = 0; i < a.length; i++) { if (a[i] < b[i]) return -1; if (a[i] > b[i]) return 1; } return 0; };
+let sort = { col: 'cond', dir: 1 };
+function renderTable() {
+  const key = keys[sort.col];
+  const sorted = [...rows].sort((a, b) => sort.dir * cmp(key(a), key(b)));
+  document.querySelector('#tbl tbody').innerHTML = sorted.map(r => `<tr><td class="t"><button type="button" data-t="${r.t}">${fmt(r.t)}${r.end != null ? ' – ' + fmt(r.end) : ''}</button></td>
+  <td>${esc(CONDS.get(r.tk.condition).title)}</td><td>${esc(r.tk.build)}</td><td><span class="dot" style="background:${color(r.kind)}"></span>${esc(r.text)}</td></tr>`).join('');
+  document.querySelectorAll('#tbl th').forEach(th => th.setAttribute('aria-sort', th.dataset.col === sort.col ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none'));
+}
+document.querySelectorAll('#tbl th button').forEach(b => b.addEventListener('click', () => {
+  const col = b.closest('th').dataset.col;
+  sort = { col, dir: sort.col === col ? -sort.dir : 1 };
+  renderTable();
+}));
+renderTable();
+
+let t = MIN, playing = false, rate = 1, last = 0;
+const scrub = document.getElementById('scrub'), clock = document.getElementById('clock'), playBtn = document.getElementById('play');
+scrub.min = MIN; scrub.max = MAX;
+function render() {
+  scrub.value = t; clock.textContent = fmt(t);
+  heads.forEach(h => h.style.left = pct(t));
+}
+function seekAll() {
+  const s = t / 1000 + LEAD;
+  videos.forEach(v => { const d = Math.max(0, Math.min(s, (v.duration || Infinity) - 0.05)); if (Math.abs(v.currentTime - d) > 0.03) v.currentTime = d; });
+}
+function setT(n) { t = Math.max(MIN, Math.min(MAX, n)); seekAll(); render(); }
+function tick(now) {
+  if (!playing) return;
+  t += (now - last) * rate; last = now;
+  if (t >= MAX) { t = MAX; pause(); render(); return; }
+  const s = t / 1000 + LEAD;
+  videos.forEach(v => { if (Math.abs(v.currentTime - s) > 0.12 && s < (v.duration || Infinity)) v.currentTime = s; });
+  render(); requestAnimationFrame(tick);
+}
+function play() {
+  if (t >= MAX) setT(MIN);
+  playing = true; playBtn.textContent = '일시정지';
+  videos.forEach(v => { v.playbackRate = rate; v.currentTime = Math.max(0, t / 1000 + LEAD); const p = v.play(); if (p) p.catch(() => {}); });
+  last = performance.now(); requestAnimationFrame(tick);
+}
+function pause() { playing = false; playBtn.textContent = '재생'; videos.forEach(v => v.pause()); seekAll(); }
+playBtn.onclick = () => playing ? pause() : play();
+document.getElementById('back').onclick = () => { pause(); setT(t - 100); };
+document.getElementById('fwd').onclick = () => { pause(); setT(t + 100); };
+document.getElementById('zero').onclick = () => { pause(); setT(0); };
+document.getElementById('rate').onchange = e => { rate = +e.target.value; videos.forEach(v => v.playbackRate = rate); };
+scrub.oninput = () => { if (playing) pause(); setT(+scrub.value); };
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-t]'); if (b) { pause(); setT(+b.dataset.t); return; }
+  const tr = e.target.closest('.track'); if (tr) { const r = tr.getBoundingClientRect(); pause(); setT(MIN + (e.clientX - r.left) / r.width * (MAX - MIN)); }
+});
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input,select')) return;
+  if (e.code === 'Space') { e.preventDefault(); playing ? pause() : play(); }
+  if (e.key === 'ArrowLeft') { pause(); setT(t - 100); } if (e.key === 'ArrowRight') { pause(); setT(t + 100); }
+});
+videos.forEach(v => v.addEventListener('loadedmetadata', seekAll));
+render();
+})();
+</script>
+</body></html>

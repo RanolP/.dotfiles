@@ -10,9 +10,10 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint, foldedRows, protectedIndex, stableAttachmentOf, stableAttachmentRow } from './fold'
-import { clearFoldJob, handleSessionCompact, setRewindFoldJob } from './fold-job'
-import type { FoldJobIo } from './fold-job'
+import { estTokens, fingerprint, foldedRows, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
+import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
+import { foldableTokens } from './fold-runtime'
+import type { Opts } from './fold-runtime'
 import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
@@ -23,6 +24,64 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
   if (!isRecord(value)) throw new Error(`state file is not an object: ${path}`)
   return value
 }
+
+const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
+const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
+
+// Regression caught: a fixed prompt prefix above the budget triggered a fold even when the conversation rows stayed below it.
+test('a large fixed prefix does not start compaction when foldable rows are below budget', OPTS, async () => {
+  const session = 'fixed-prefix-small'
+  const key = `${session}:main`
+  const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(5200), toolUses: [] }]
+  const meta = { seq: 0, fails: 0, overhead: 48_500, ratio: 1, estimatorVersion: TOKEN_ESTIMATOR_VERSION }
+  expect(foldableTokens(rows, 50_000, meta)).toBe(1500)
+  let compactions = 0
+  const io = {
+    sessionId: async () => session,
+    sessionMessages: async () => rows,
+    readMeta: async () => meta,
+    usageReading: async () => 50_000,
+    sessionCompact: async () => { compactions++; return { messages: rows } },
+    logEvent: async () => undefined,
+    log: () => undefined,
+  }
+  clearFoldJob(key)
+  setRewindFoldJob(key, readyPlan, [])
+  try { await applyReadyIfAtThreshold(io, thresholdOpts, transcriptKey(await io.sessionId())) } finally { clearFoldJob(key) }
+  expect(compactions).toBe(0)
+})
+
+// Regression caught: a foldable conversation above budget must still reach the engine compact path.
+test('compaction starts when foldable rows exceed budget despite the fixed prefix', OPTS, async () => {
+  const session = 'fixed-prefix-large'
+  const key = `${session}:main`
+  const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(12_000), toolUses: [] }]
+  const meta = { seq: 0, fails: 0, overhead: 47_000, ratio: 1, estimatorVersion: TOKEN_ESTIMATOR_VERSION }
+  expect(foldableTokens(rows, 50_000, meta)).toBe(3000)
+  let compactions = 0
+  const io = {
+    sessionId: async () => session,
+    sessionMessages: async () => rows,
+    readMeta: async () => meta,
+    usageReading: async () => 50_000,
+    sessionCompact: async () => { compactions++; return { messages: rows } },
+    logEvent: async () => undefined,
+    log: () => undefined,
+  }
+  clearFoldJob(key)
+  setRewindFoldJob(key, readyPlan, [])
+  try { await applyReadyIfAtThreshold(io, thresholdOpts, transcriptKey(await io.sessionId())) } finally { clearFoldJob(key) }
+  expect(compactions).toBe(1)
+})
+
+test('foldable size ignores stale and implausible calibration', OPTS, async () => {
+  const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(2400), toolUses: [] }]
+  expect(foldableTokens(rows, 50_000, { estimatorVersion: 0, overhead: 49_000, ratio: 1.5 })).toBe(1000)
+  expect(foldableTokens(rows, undefined, { estimatorVersion: TOKEN_ESTIMATOR_VERSION, ratio: 1.5 })).toBe(1500)
+  expect(foldableTokens(rows, 50_000, { estimatorVersion: TOKEN_ESTIMATOR_VERSION, overhead: 20_000, ratio: 1.5 })).toBe(30_000)
+  expect(foldableTokens(rows, 50_000, { estimatorVersion: TOKEN_ESTIMATOR_VERSION, overhead: 26_000, ratio: 1.5 })).toBe(24_000)
+  expect(foldableTokens(rows, 50_000, { estimatorVersion: TOKEN_ESTIMATOR_VERSION, overhead: 50_000, ratio: 1.5 })).toBe(1500)
+})
 
 // Regression caught: an engine-store limit failure after the fold was computed discarded the compact result.
 test('a compact returns folded messages when store persistence exceeds its limit', OPTS, async () => {
@@ -216,19 +275,23 @@ test('a mid-session CLAUDE.md edit is carried on the next fold', OPTS, async ($,
   expect(await $.prompt.attachment(attachment('output_style_instructions', style))).toEqual({ text: null })
 
   const instructionDelta = 'These instruction files changed — each replaces its earlier copy, and the instructions preamble above still applies:\n/work/CLAUDE.md\nNew instruction text.'
+  const secondInstructionDelta = 'Instruction files were re-read after compaction.\nThe new guard applies to generated files.'
   expect(await $.prompt.attachment(attachment('instructions', instructionDelta))).toEqual({ text: instructionDelta })
+  expect(await $.prompt.attachment(attachment('instructions', secondInstructionDelta))).toEqual({ text: secondInstructionDelta })
   s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
   await turnEnds($, s, seen)
   expect(seen.results).toHaveLength(2)
   const second = seen.results.at(1)?.messages ?? []
   expect(second[1]?.text).toBe(first[1]?.text)
   expect(second[2]?.text).toBe(stableAttachmentRow('instructions', instructionDelta).text)
-  expect(second[3]?.text).toBe(first[2]?.text)
-  expect(second[4]?.text).toBe(first[3]?.text)
-  expect(second[5]?.text).toBe(first[4]?.text)
-  expect(second[6]?.text).toBe(first[5]?.text)
-  expect(second[7]?.text).toMatch(/^\[clm ledger #2 · /)
+  expect(second[3]?.text).toBe(stableAttachmentRow('instructions', secondInstructionDelta).text)
+  expect(second[4]?.text).toBe(first[2]?.text)
+  expect(second[5]?.text).toBe(first[3]?.text)
+  expect(second[6]?.text).toBe(first[4]?.text)
+  expect(second[7]?.text).toBe(first[5]?.text)
+  expect(second[8]?.text).toMatch(/^\[clm ledger #2 · /)
   expect(second.filter(row => row.text === first[1]?.text)).toHaveLength(1)
+  expect(second.filter(row => stableAttachmentOf(row)?.type === 'instructions')).toHaveLength(3)
   expect(second.filter(row => row.text === first[5]?.text)).toHaveLength(1)
   expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
   await $.prompt.attachment(attachment('instructions', instructions))
@@ -328,6 +391,142 @@ test('after a resume a stale head instructions copy is carried even when another
   expect(second[at + 1]?.text).toMatch(/^\[clm ledger #2 · /)
 })
 
+test('the same re-read delta announced three times is carried once with the full instructions', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n# Stable instructions\nKeep the exact bytes.'
+  const text = 'Instruction files were re-read after the conversation was compacted.\nStable instruction text.'
+  const attachment = { type: 'instructions' as const, text, origin: 'dynamic' }
+  const s: State = { rows: [...ROWS], replies: [ledger('first')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+
+  await $.prompt.attachment({ ...attachment, text: full })
+  await $.prompt.attachment(attachment)
+  await $.prompt.attachment(attachment)
+  await $.prompt.attachment(attachment)
+  await turnEnds($, s, seen)
+  const result = seen.results.at(-1)
+  if (!result || !('messages' in result)) throw new Error('compaction returned no messages')
+  expect(result.messages.filter(row => row.text === stableAttachmentRow('instructions', full).text)).toHaveLength(1)
+  expect(result.messages.filter(row => row.text === stableAttachmentRow('instructions', text).text)).toHaveLength(1)
+})
+
+test('a newer instruction delta replaces the earlier copy of the same file', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const older = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:\n\nContents of /abs/path/MEMORY.md (user memory):\n\n# Memory Index\nold'
+  const latest = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:\n\nContents of /abs/path/MEMORY.md (user memory):\n\n# Memory Index\nlatest'
+  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+
+  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
+  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
+  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, latest])
+})
+
+test('a newer instruction delta removes only the matching file section from an older delta', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const header = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:'
+  const older = `${header}\n\nContents of /work/X.md:\n\nX old\n\nContents of /work/Y.md (project instructions):\n\nY retained`
+  const latest = `${header}\n\nContents of /work/X.md:\n\nX latest`
+  const retained = `${header}\n\nContents of /work/Y.md (project instructions):\n\nY retained`
+  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+
+  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
+  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
+  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
+})
+
+test('instruction removal notices supersede older file sections and survive later re-reads', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const header = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:'
+  const older = `${header}\n\nContents of /w/Q.md:\n\nQ rules`
+  const removal = `${header}\n\nContents of /w/P.md:\n\nP v1\n\nInstructions no longer present: /w/Q.md`
+  const latest = `${header}\n\nContents of /w/P.md:\n\nP v2`
+  const retained = `${header}\n\nInstructions no longer present: /w/Q.md`
+  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+
+  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
+  await $.prompt.attachment({ type: 'instructions', text: removal, origin: 'dynamic' })
+  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
+  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
+})
+
+test('instruction paths in parenthesized directories keep sibling files distinct', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const header = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:'
+  const a = '/U/My Docs (copy)/a/CLAUDE.md'
+  const b = '/U/My Docs (copy)/b/CLAUDE.md'
+  const details = ' (project instructions, checked into the codebase):'
+  const older = `${header}\n\nContents of ${a}${details}\n\nA v1\n\nContents of ${b}${details}\n\nB rules`
+  const latest = `${header}\n\nContents of ${a}${details}\n\nA v2`
+  const retained = `${header}\n\nContents of ${b}${details}\n\nB rules`
+  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+
+  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
+  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
+  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+
+  const second = seen.results.at(1)?.messages ?? []
+  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
+})
+
+test('a resumed session applies new instruction deltas to sections restored from carried rows', OPTS, async ($, on) => {
+  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const header = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:'
+  const older = `${header}\n\nContents of /w/X.md:\n\nX old\n\nContents of /w/Y.md (project instructions):\n\nY retained`
+  const latest = `${header}\n\nContents of /w/X.md:\n\nX latest`
+  const retained = `${header}\n\nContents of /w/Y.md (project instructions):\n\nY retained`
+  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second'), ledger('third')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+
+  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
+  await turnEnds($, s, seen)
+  const first = seen.results.at(0)?.messages ?? []
+  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
+  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
+  await turnEnds($, s, seen)
+  const second = seen.results.at(1)?.messages ?? []
+  s.rows = [...second, M('user', 'resume work'), use('tu_e', 'Write'), res('tu_e', 'w ' + BIG), M('assistant', 'continued after resume')]
+  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput)
+  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
+  await turnEnds($, s, seen)
+
+  const third = seen.results.at(2)?.messages ?? []
+  expect(third.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
+})
+
 // Regression caught: a fold re-carried the first request's session-start attachments as user rows, so the UI showed them as typed by the user.
 test('head group with attachments does not re-carry them as user rows', OPTS, async ($, on) => {
   const instructions = 'Codebase and user instructions are shown below.\n# Stable instructions'
@@ -389,6 +588,11 @@ test('deleting a CLAUDE.md mid-session keeps the original full text carried on t
   expect(second[2]?.text).toBe(stableAttachmentRow('instructions', deletion).text)
 })
 
+test('token estimates count CJK scripts and other text separately', () => {
+  expect(estTokens(M('user', '한ᄀ漢かカ'))).toBe(8)
+  expect(estTokens(M('user', 'x'.repeat(10)))).toBe(5)
+})
+
 test('an identical attachment is not dropped when the compact boundary has no carried row', OPTS, async ($, on) => {
   bottoms(on, { rows: [M('user', '[clm ledger #7 · 2026-10-16 12:00 KST]')], replies: [] })
   on('prompt.attachment', (_$, e) => ({ text: e.text }))
@@ -429,7 +633,7 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
   expect(out[1].text).toMatch(/^\[clm ledger #2 · /)
   expect(section(out[1].text, 'learned')).toContain('SECOND-FACT')
   expect(storedLedger(seen)).toContain('SECOND-FACT')
-  expect(out.map((m: any) => m.text).filter(Boolean)).toEqual(['please investigate the build', out[1].text, 'commit it', 'done', 'add docs', 'docs added', 'push', 'pushed'])
+  expect(out.map((m: any) => m.text).filter(Boolean)).toEqual(['please investigate the build', out[1].text, 'push', 'pushed'])
 })
 
 // Regression caught: a merged ledger missing a section replaces the memory anyway and silently drops that section.
@@ -439,7 +643,7 @@ test('a merged ledger without its 목표 header skips the fold', OPTS, async ($,
   const result = compactedMessages(await $.session.compact(compactInput('manual', handled(ROWS))))
   expect(result[1]?.text).toMatch(/^\[clm ledger #1 · /)
   expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('요약 없이 접힘:')
-  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-invalid', 'fallback', 'clear'])
+  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-invalid', 'fallback', 'truncation', 'clear'])
 })
 
 // Regression caught: after a fold, reads include the pre-boundary transcript so totals double-count rows the model no longer sees; and /clm output lands in the model's transcript.
@@ -489,7 +693,7 @@ test('a pending fold keeps both identical tail prompts and the turn between them
 
 // Regression caught: summary work blocks the turn, or an engine trigger races it with a duplicate summary.
 test('an engine trigger joins the turn-end summary and uses its single result', BG_OPTS, async ($, on) => {
-  const rows = [M('user', 'protected request'), M('assistant', 'done'), M('user', 'finished topic'), M('assistant', 'A'.repeat(6000)), M('user', 'active topic'), M('assistant', 'working')]
+  const rows = [M('user', 'protected request'), M('assistant', 'done'), M('user', 'finished topic'), M('assistant', 'A'.repeat(24_000)), M('user', 'active topic'), M('assistant', 'working')]
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   let summaryStarted = false
@@ -515,9 +719,9 @@ test('an engine trigger joins the turn-end summary and uses its single result', 
 })
 
 // Regression caught: compaction waited on a stalled summary past the engine's 10 s budget instead of folding mechanically at the deadline.
-test('a compact whose background summary never finishes folds mechanically at the deadline', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+test('a compact whose background summary never finishes folds mechanically at the deadline', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 200, reserve: 100 } }, async ($, on) => {
   const rows = [
-    M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'),
+    M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(24_000)), M('assistant', 'A done'),
     M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done'),
   ]
   const instruction = 'preserve this instruction exactly'
@@ -547,7 +751,7 @@ test('a compact whose background summary never finishes folds mechanically at th
 // Regression caught: a background plan finishing after the mechanical swap rolled meta back, stayed parked as stale pending, and blocked the next pre-summary.
 test('a background plan completed after a mechanical fold is discarded as stale', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
   const rows = [
-    M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'),
+    M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(24_000)), M('assistant', 'A done'),
     M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done'),
   ]
   let release!: () => void
@@ -615,7 +819,7 @@ test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($,
 
 // Regression caught: a changed A row let the swap delete turns the summary never saw.
 test('a background plan whose A rows changed is discarded with rows untouched', BG_OPTS, async ($, on) => {
-  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(24_000)), M('user', 'active B'), M('assistant', 'B result')]
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
@@ -642,7 +846,7 @@ test('a mid-topic split or tail overflow is rejected, retried once, then dropped
 
 // Regression caught: a session opened by an isMeta peer message kept its whole first turn in the head and re-emitted it after every fold.
 test('rows ahead of the first request are folded, leaving the ledger right after the request', BG_OPTS, async ($, on) => {
-  const fold = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
+  const fold = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(24_000)), M('user', 'active B'), M('assistant', 'B result')]
   const rows = [use('tu_p', 'Read'), res('tu_p', 'peer turn output'), ...fold]
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)] }
   const seen = bottoms(on, s)
@@ -656,7 +860,7 @@ test('rows ahead of the first request are folded, leaving the ledger right after
 
 // Regression caught: applying a precomputed summary changed B after the model selected its split.
 test('the applied background fold is head plus ledger plus B verbatim', BG_OPTS, async ($, on) => {
-  const rows = [M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(6000)), M('assistant', 'A done'), M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done')]
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), use('tu_a', 'Bash'), res('tu_a', 'A'.repeat(24_000)), M('assistant', 'A done'), M('user', 'active B'), use('tu_b', 'Edit'), res('tu_b', 'B result'), M('assistant', 'B done')]
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'B topic', 'B summary')], compressionReplies: [compressedTopics([{ topic: 'B topic', summary: 'B summary', seq: 1 }])] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
@@ -673,19 +877,19 @@ test('the applied background fold is head plus ledger plus B verbatim', BG_OPTS,
 })
 
 // Regression caught: a ready fold replaced the transcript before its summary reached the escape threshold.
-test('a ready fold waits below the escape threshold and swaps on the first crossing compaction', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
-  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
+test('a ready fold waits below the escape threshold and swaps on the first crossing compaction', { options: { budget: 6000, tailTarget: 5000, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(24_000)), M('user', 'active B'), M('assistant', 'B result')]
   const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
-  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(4900) }
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2)], usage: usage(5900) }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   await waitForPending(seen)
-  s.usage = usage(4800)
+  s.usage = usage(5800)
   const belowThreshold = compactedMessages(await $.session.compact(compactInput('manual', handled(rows))))
   expect(belowThreshold).toEqual(handled(rows))
   expect(seen.store['pending:s1']).toBeDefined()
 
-  s.usage = usage(4900)
+  s.usage = usage(5900)
   const crossed = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
   expect(crossed[1]?.text).toMatch(/^\[clm ledger #1 · /)
   expect(seen.store['pending:s1']).toBeUndefined()
@@ -694,14 +898,16 @@ test('a ready fold waits below the escape threshold and swaps on the first cross
 })
 
 // Regression caught: rewinding across an applied fold never restored the prior ledger snapshot.
-test('a real rewind restores the prior folded ledger without another summary call', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [], splitReplies: [splitAnswer(2, 'T1', 'A outcome'), splitAnswer(2, 'T2', 'B outcome')] }
+test('a real rewind restores the prior folded ledger without another summary call', { options: { budget: 6000, tailTarget: 5000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
+  const rows = [...ROWS]
+  rows[2] = res('tu_a', 'log: make fails at a.ts:12 ' + 'A'.repeat(24_000))
+  const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'T1', 'A outcome'), splitAnswer(2, 'T2', 'B outcome')] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
   await waitForPending(seen)
-  const first = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
+  const first = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
   expect(storedLedger(seen)).toContain('A outcome')
-  s.rows = [...first]
+  s.rows = [...first, M('user', 'continue with C'), M('assistant', 'C'.repeat(11_000))]
   await $.turn.complete(turnInput('second-fold'))
   await waitForPending(seen)
   const second = compactedMessages(await $.session.compact(compactInput('auto', handled(s.rows))))
@@ -735,11 +941,11 @@ test('a duplicated short prompt rewind leaves the ledger intact', { options: { b
 })
 
 // Regression caught: re-folding kept T1 at its old size or discarded an exact user instruction.
-test('ledger recompression shrinks the old topic and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 150, reserve: 100 } }, async ($, on) => {
+test('ledger recompression shrinks the old topic and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 250, reserve: 100 } }, async ($, on) => {
   const instruction = 'Keep the public API stable while changing the parser.'
   const oldSummary = 'T1 '.repeat(160)
   const oldLedger = `[clm ledger #1 · 2026-10-14 09:00 KST] Earlier turns of this session were folded into these notes by a Haiku summary (file: ${LEDGER_FILE}).\n\n## 목표\n- T1: ${oldSummary}\n\n## 사용자 지시\n- (none yet)\n\n## 한 일\n- (none yet)\n\n## 할 일\n- (none yet)\n\n## 미결 질문\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
-  const rows = [M('user', 'protected request'), M('user', oldLedger), M('user', instruction), M('assistant', 'A complete'), M('user', 'continue with B'), M('assistant', 'B result')]
+  const rows = [M('user', 'protected request'), M('user', oldLedger), M('user', instruction), M('assistant', 'A'.repeat(24_000)), M('user', 'continue with B'), M('assistant', 'B result')]
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'T2', 'new topic summary')], compressionReplies: [compressedTopics([
     { topic: 'T1', summary: 'T1 closed outcome', seq: 1 },
     { topic: 'T2', summary: 'new topic summary', seq: 2 },
@@ -758,12 +964,12 @@ test('ledger recompression shrinks the old topic and preserves each user instruc
   expect(ledgerRow).not.toContain(oldSummary)
   const ledgerMessage = result[1]
   if (!ledgerMessage) throw new Error('fold omitted the ledger message')
-  expect(est(ledgerMessage)).toBeLessThanOrEqual(150)
+  expect(est(ledgerMessage)).toBeLessThanOrEqual(250)
   expect(instructionValues(storedLedger(seen))).toContain(instruction)
 })
 
 // Regression caught (guards 2 and 6): a fold cut the tool result of the newest turn while that command was still in progress.
-test('an oversized result in an older kept turn is cut while the newest turn stays whole', { options: { budget: 5000, tailTarget: 3000, reserve: 100 } }, async ($, on) => {
+test('an oversized result in an older kept turn is cut while the newest turn stays whole', { options: { budget: 5000, tailTarget: 3000, queueTarget: 100_000, reserve: 100 } }, async ($, on) => {
   const olderResult = 'HEAD' + 'z'.repeat(16000) + 'TAIL'
   const rows = [...ROWS, M('user', 'dump logs'), use('tu_e', 'Bash'), res('tu_e', olderResult), M('assistant', 'dumped'), M('user', 'ok'), M('assistant', 'ok')]
   const s: State = { rows, replies: [ledger('x')] }
@@ -781,7 +987,7 @@ test('an oversized result in an older kept turn is cut while the newest turn sta
 })
 
 // Regression caught: oversize notes pile up in the ledger without bound across folds.
-test('only the last five oversize notes stay in the ledger', OPTS, async ($, on) => {
+test('only the last five oversize notes stay in the ledger', { options: { budget: 2000, tailTarget: 1600, queueTarget: 100000, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
   const old = ['a', 'b', 'c', 'd', 'e'].map(c => `- 출력 과다: Bash old-${c}`).join('\n')
   const rows = [...ROWS, M('user', 'dump logs'), use('tu_e', 'Bash'), res('tu_e', 'z'.repeat(16000)), M('assistant', 'dumped'), M('user', 'ok'), M('assistant', 'ok')]
   const s: State = { rows, replies: [ledger('new fact')] }
@@ -818,7 +1024,7 @@ test('an engine manual compaction uses a mechanical ledger when the merge fails'
   expect(row).toMatch(/^\[clm ledger #1 · /)
   expect(section(row, '핵심 사실·경로')).toBe('')
   expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('요약 없이 접힘:')
-  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-invalid', 'fallback', 'clear'])
+  expect(logEvents(seen).map(e => e.event)).toEqual(['merge-invalid', 'merge-invalid', 'fallback', 'truncation', 'clear'])
 })
 
 // Regression caught: system prompt tokens in usage must not block a queue-triggered background summary.
@@ -831,6 +1037,28 @@ test('queueTarget schedules the background fold independently of the usage readi
   await waitForPending(seen)
   expect(metaIn(seen).ratio).toBeUndefined()
   expect(seen.store['pending:s1']).toBeDefined()
+})
+
+// Regression caught: an overhead treated as implausible kept ratio at 1 forever.
+test('a second fold calibrates ratio from a usable fixed-prefix overhead', { options: { budget: 5000, tailTarget: 1000, queueTarget: 100000, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
+  const usage = (tokens: number) => ({ startedAt: 0, rateLimits: [], context: { window: 200000, tokens } })
+  const firstRows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(24_000)), M('user', 'active B'), M('assistant', 'B result')]
+  const s: State = { rows: firstRows, replies: [ledger('first'), ledger('second')], usage: usage(50_000) }
+  const seen = bottoms(on, s)
+  const first = compactedMessages(await $.session.compact(compactInput('manual', handled(firstRows))))
+  const overhead = metaIn(seen).overhead
+  expect(typeof overhead).toBe('number')
+  if (typeof overhead !== 'number') throw new Error('first fold did not store calibration overhead')
+
+  const added = [M('user', 'finished C'), M('assistant', 'C'.repeat(16_000)), M('user', 'active D'), M('assistant', 'D result')]
+  const visible = [...first, ...added]
+  const secondReading = overhead + visible.reduce((total, row) => total + est(row), 0) * 3
+  s.rows = [...firstRows, ...visible]
+  s.usage = usage(secondReading)
+  await $.session.compact(compactInput('manual', handled(s.rows)))
+
+  expect(typeof metaIn(seen).ratio).toBe('number')
+  expect(metaIn(seen).ratio).not.toBe(1)
 })
 
 // Regression caught: system usage alone scheduled a summary while the queue stayed below queueTarget.

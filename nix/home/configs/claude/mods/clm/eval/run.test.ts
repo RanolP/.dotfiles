@@ -3,7 +3,7 @@ import type { SessionMessage } from 'claude-code'
 import { createHarness, formatReport, type Fixture, type Probe } from './run'
 import { fixtures as fixtureData, probes as probeData, replies as replyData } from './data'
 
-const OPTIONS = { budget: 32_000, tailTarget: 1_800, queueTarget: 8_000, ledgerTarget: 900, reserve: 1_000, model: 'haiku', reviewModel: 'haiku' }
+const OPTIONS = { budget: 10_000, tailTarget: 1_800, queueTarget: 8_000, ledgerTarget: 900, reserve: 1_000, model: 'haiku', reviewModel: 'haiku' }
 
 test('the folded ledger retains or can resolve every declared fact', { options: OPTIONS }, async ($, on) => {
   const fixtures = [fixtureData.release, fixtureData.auth, fixtureData.migration] as unknown as Fixture[]
@@ -13,7 +13,7 @@ test('the folded ledger retains or can resolve every declared fact', { options: 
     harness.select(fixture)
     harness.seedResidentState(fixture)
     const tokens = harness.queueTokens(fixture)
-    if (tokens < 8_000 || tokens >= 16_000) throw new Error(`${fixture.id} queue has ${tokens} tokens; expected one crossing of queueTarget 8000`)
+    if (tokens < 8_000 || tokens >= 32_000) throw new Error(`${fixture.id} queue has ${tokens} tokens; expected one crossing of queueTarget 8000 below budget`)
     const callsBefore = harness.splitCalls()
     await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: `turn-${fixture.id}`, reason: 'answer' })
     const pendingKey = `pending:${fixture.sessionId}`

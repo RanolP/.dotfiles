@@ -4,7 +4,7 @@ import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentT
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
-  buildCleared, fingerprint, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens,
+  buildCleared, fingerprint, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
   type Boundary, type ClearPlan, type StableAttachmentType,
 } from './fold'
 import {
@@ -315,10 +315,16 @@ const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) 
 const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
 const isMeta = (v: unknown): v is Partial<Meta> =>
   isRecord(v) && optional(v.seq, 'number') && optional(v.fails, 'number') && optional(v.ratio, 'number') && optional(v.overhead, 'number')
-  && optional(v.foldTokens, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
+  && optional(v.foldTokens, 'number') && optional(v.estimatorVersion, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
 async function readMeta($: StoreReader): Promise<Meta> {
   const stored = await sessionStoreGet($, await metaKey($))
-  return { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
+  const meta = { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
+  if (meta.estimatorVersion !== TOKEN_ESTIMATOR_VERSION) {
+    meta.ratio = undefined
+    meta.overhead = undefined
+    meta.estimatorVersion = TOKEN_ESTIMATOR_VERSION
+  }
+  return meta
 }
 const writeMeta = async ($: EngineInterface, m: Meta) => sessionStoreSet($, await metaKey($), m)
 export type StableAttachmentInput = { type: StableAttachmentType; text: string; origin: unknown; agentId?: string; detail?: unknown }
@@ -327,7 +333,11 @@ const STABLE_ATTACHMENTS = { plugin: 'clm', key: 'stableAttachments' } as const
 const MAX_STABLE_ATTACHMENT_DELTAS = 32
 const INSTRUCTIONS_PREAMBLE = 'Codebase and user instructions are shown below.'
 const isInstructionDelta = (text: string) => !text.startsWith(INSTRUCTIONS_PREAMBLE)
-const appendStableDelta = (deltas: string[], text: string) => [...deltas, text].slice(-MAX_STABLE_ATTACHMENT_DELTAS)
+const textDigest = (text: string) => {
+  let hash = 0xcbf29ce484222325n
+  for (let i = 0; i < text.length; i++) hash = ((hash ^ BigInt(text.charCodeAt(i))) * 0x100000001b3n) & 0xffffffffffffffffn
+  return `${text.length}:${hash.toString(16)}`
+}
 // The descriptions Claude Code 2.1.288 emits; a quoted header with any other
 // description stays file content instead of starting a fake section.
 const INSTRUCTION_KINDS = ["project instructions, checked into the codebase", "user's private project instructions, not checked in", "user's auto-memory, persists across conversations", 'organization-managed policy instructions', "user's private global instructions for all projects"]
@@ -357,7 +367,38 @@ export const mergeInstructions = (full: string, delta: string): string | undefin
   })
   return differs ? lead + merged.join('') : full
 }
-// Folds one announcement into the stored value; false when it adds nothing.
+const stableDeltaSections = (text: string) => {
+  const matches = [...text.matchAll(/^(?:Contents of (.+?)(?: \(([^()\n]*)\))?:|Instructions no longer present: (.+))$/gm)]
+  const sections = matches.flatMap((match, i) => {
+    const path = match[1] ?? match[3]
+    const start = match.index
+    if (path === undefined || start === undefined) return []
+    const end = matches[i + 1]?.index ?? text.length
+    return [{ path, start, text: text.slice(start, end) }]
+  })
+  if (!sections.length) return undefined
+  return {
+    prefix: text.slice(0, sections[0]?.start ?? text.length),
+    sections,
+  }
+}
+const appendStableDelta = (deltas: string[], text: string, type: StableAttachmentType) => {
+  const incoming = type === 'instructions' ? stableDeltaSections(text) : undefined
+  const paths = new Set(incoming?.sections.map(section => section.path))
+  const retained = incoming ? deltas.flatMap(delta => {
+    const previous = stableDeltaSections(delta)
+    if (!previous) return [delta]
+    const sections = previous.sections.filter(section => !paths.has(section.path))
+    if (!sections.length) {
+      const remaining = previous.prefix.replace(/^Instruction files were re-read[^\n]*(?:\n|$)/, '').trim()
+      return remaining ? [remaining] : []
+    }
+    return [previous.prefix + sections.map(section => section.text).join('')]
+  }) : deltas
+  return [...retained.filter(delta => delta !== text), text].slice(-MAX_STABLE_ATTACHMENT_DELTAS)
+}
+type StableAttachmentProgress = StableAttachmentValue & { droppedAtSeq?: number }
+
 const absorbStable = (value: StableAttachmentValue, type: StableAttachmentType, text: string): boolean => {
   if (type === 'instructions' && isInstructionDelta(text)) {
     const merged = value.full === undefined ? undefined : mergeInstructions(value.full, text)
@@ -367,8 +408,10 @@ const absorbStable = (value: StableAttachmentValue, type: StableAttachmentType, 
       return true
     }
     if (value.deltas.includes(text)) return false
-    value.deltas = appendStableDelta(value.deltas, text)
-    return true
+    const deltas = appendStableDelta(value.deltas, text, type)
+    const changed = deltas.length !== value.deltas.length || deltas.some((delta, index) => delta !== value.deltas[index])
+    value.deltas = deltas
+    return changed
   }
   if (value.full === text) return false
   Object.assign(value, { full: text, deltas: [] })
@@ -377,6 +420,7 @@ const absorbStable = (value: StableAttachmentValue, type: StableAttachmentType, 
 const isStableAttachmentValue = (value: unknown): value is StableAttachmentValue =>
   isRecord(value) && (value.full === undefined || typeof value.full === 'string') && (value.inHead === undefined || typeof value.inHead === 'boolean') && (value.headDigest === undefined || typeof value.headDigest === 'string') && Array.isArray(value.deltas)
   && value.deltas.every(item => typeof item === 'string') && typeof value.carriedAtSeq === 'number'
+  && (value.droppedAtSeq === undefined || typeof value.droppedAtSeq === 'number')
 const isStableAttachmentSession = (value: unknown): value is StableAttachmentSession =>
   isRecord(value) && Object.entries(value).every(([type, item]) => isStableAttachmentType(type) && isStableAttachmentValue(item))
 const stableAttachmentStore = (value: unknown): StableAttachmentStore => {
@@ -410,7 +454,17 @@ function attachmentSessionFromMessages(rows: readonly SessionMessage[]): StableA
     if (!row) break
     carried.unshift(row)
   }
-  for (const row of carried) absorbStable(state[row.type] ?? (state[row.type] = { deltas: [], carriedAtSeq: seq }), row.type, row.text)
+  for (const row of carried) {
+    let value = state[row.type]
+    if (!value) value = state[row.type] = { deltas: [], carriedAtSeq: seq }
+    if (row.type === 'instructions' && isInstructionDelta(row.text)) {
+      const merged = value.full === undefined ? undefined : mergeInstructions(value.full, row.text)
+      if (merged !== undefined) value.full = merged
+      else value.deltas = appendStableDelta(value.deltas, row.text, row.type)
+    }
+    else if (value.full === undefined) value.full = row.text
+    else value.deltas = appendStableDelta(value.deltas, row.text, row.type)
+  }
   return state
 }
 
@@ -422,12 +476,6 @@ const headAttachmentsKey = async ($: StableAttachmentIo) => `headAttachments:${a
 const isHeadAttachments = (value: unknown): value is HeadAttachments =>
   isRecord(value) && typeof value.seq === 'number' && isRecord(value.digests)
   && Object.entries(value.digests).every(([type, digest]) => isStableAttachmentType(type) && typeof digest === 'string')
-const textDigest = (text: string) => {
-  let hash = 0xcbf29ce484222325n
-  for (let i = 0; i < text.length; i++) hash = ((hash ^ BigInt(text.charCodeAt(i))) * 0x100000001b3n) & 0xffffffffffffffffn
-  return `${text.length}:${hash.toString(16)}`
-}
-
 async function stableAttachmentSession($: StableAttachmentIo): Promise<{ session: string; state: StableAttachmentSession }> {
   const session = await $.session.id()
   const current = stableAttachmentStore((await $.state.get(STABLE_ATTACHMENTS)).value)[session]
@@ -457,9 +505,15 @@ export async function handleStableAttachment($: StableAttachmentIo, input: Stabl
     if (!delta && value.full === undefined && value.headDigest === textDigest(input.text)) value.full = input.text
     const changed = absorbStable(value, input.type, input.text)
     if (inHead && !delta) Object.assign(value, { inHead, headDigest: textDigest(input.text) })
-    if (changed) value.carriedAtSeq = 0
-    // Once carried before the ledger, every identical re-announcement is a second copy.
-    return { next: { ...sessions, [session]: state }, result: !changed && value.carriedAtSeq > 0 ? { text: null } : undefined }
+    if (changed) {
+      value.carriedAtSeq = 0
+      ;(value as StableAttachmentProgress).droppedAtSeq = 0
+    }
+    // Re-announced carried attachments must not create duplicate rows.
+    const progress = value as StableAttachmentProgress
+    const result = !changed && value.carriedAtSeq > 0 && (delta || value.carriedAtSeq > (progress.droppedAtSeq ?? 0)) ? { text: null } : undefined
+    if (result) progress.droppedAtSeq = value.carriedAtSeq
+    return { next: { ...sessions, [session]: state }, result }
   })
 }
 

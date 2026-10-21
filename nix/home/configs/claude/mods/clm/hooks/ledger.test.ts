@@ -12,7 +12,7 @@ import { ageDecayPlan, fallbackLedger, instructionValues, issueList, LEDGER_COMP
 import { recordPrompt, sentAtOf, stampMessages } from './address'
 import { askedItems, CONFIRM_ITEMS, CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import { describe, focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint, ledgerRowText } from './fold'
+import { estTokens, fingerprint, ledgerRowText, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 // Regression caught: a merge withdrawing an instruction the user never gave was counted as valid, or a reply without 사용자 지시 was refused.
@@ -54,7 +54,7 @@ test('instruction preservation has no character cap', async () => {
 // Regression caught: a session whose transcript exceeds the fs size cap lost every instruction address, so preserved instructions showed @unknown.
 test('an instruction given in a session whose transcript exceeds the fs size cap still gets a real address', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
   const full = 'Do not change generated files. Keep every existing lockfile byte-for-byte stable, including all metadata and ordering.'
-  const rows = [M('user', 'Begin project'), M('assistant', 'I will inspect it.'), M('user', full), M('assistant', 'A'.repeat(6000)), M('user', 'Fix the unrelated parser task.'), M('assistant', 'Done.')]
+  const rows = [M('user', 'Begin project'), M('assistant', 'I will inspect it.'), M('user', full), M('assistant', 'A'.repeat(24_000)), M('user', 'Fix the unrelated parser task.'), M('assistant', 'Done.')]
   const s: State = { rows, replies: [], intentReplies: [new Error('Haiku timeout'), new Error('Haiku timeout')], splitReplies: [splitAnswer(2, 'parser', 'parser outcome')] }
   // No transcript file exists anywhere in this test; the address comes from clm's own index.
   const seen = bottoms(on, s)
@@ -111,7 +111,7 @@ test('the seven-section ledger keeps actions under the focused task and resource
 test('the merge and review inputs exclude the verbatim tail after split selection', BG_OPTS, async ($, on) => {
   const rows = [
     M('user', 'protected request'),
-    M('user', 'A completed topic'), M('assistant', `A summary source ${'A'.repeat(6000)}`),
+    M('user', 'A completed topic'), M('assistant', `A summary source ${'A'.repeat(24_000)}`),
     M('user', 'B active topic'), M('assistant', 'B-TAIL-ONLY secret details'),
   ]
   const s: State = { rows, replies: [], splitReplies: [splitAnswer(2, 'A topic', 'A summary', 'A summary')] }
@@ -374,7 +374,7 @@ test('a tool result folded away on the escape path keeps its withheld file and a
 test('an escape retry leaves meta.overhead as it was', OPTS, async ($, on) => {
   const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
   const seen = bottoms(on, s)
-  seen.store['ledger:s1'] = { seq: 0, fails: 0, overhead: 100, ratio: 1 }
+  seen.store['ledger:s1'] = { seq: 0, fails: 0, overhead: 100, ratio: 1, estimatorVersion: TOKEN_ESTIMATOR_VERSION }
   const r = await $.session.compact({ trigger: 'auto', messages: handled(ESCAPE_ROWS) })
   if (!('messages' in r)) throw new Error('compaction returned no messages')
   expect(seen.engineCompactions).toBe(0)
@@ -542,7 +542,7 @@ test('a row built from oversized sections no longer exceeds ledgerTarget', async
     section('owned resources', items('owned resource', 8)),
   ].join('\n\n')
   const row = ledgerRowText(9, '2026-10-16 09:00 KST', '/ledger.md', ledger, 400)
-  expect(Math.ceil(row.length / 4)).toBeLessThanOrEqual(400)
+  expect(estTokens({ role: 'user', text: row, toolUses: [] })).toBeLessThanOrEqual(400)
   expect(row).toContain('keep the migration constraint')
   expect(row).not.toContain('old learned 0')
   expect(row).not.toContain('old learned 1')

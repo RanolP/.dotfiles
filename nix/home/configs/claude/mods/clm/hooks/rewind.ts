@@ -7,7 +7,7 @@ import { instructionIndexKey, issueAddressKey } from './resident'
 export type RewindTopic = { topic: string; summary: string; seq: number; sourceTokens?: number; focusIssue?: string | null }
 export type RewindMeta = {
   seq: number; fails: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>
-  foldTokens?: number; boundary?: Boundary; lastSkip?: string; ratio?: number; overhead?: number; lastObserved?: number
+  foldTokens?: number; boundary?: Boundary; lastSkip?: string; ratio?: number; overhead?: number; lastObserved?: number; estimatorVersion?: number
 }
 export type RewindPlan = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]

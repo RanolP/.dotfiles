@@ -1,7 +1,7 @@
 import type { SessionMessage, SessionCompactResult } from 'claude-code'
 import {
-  buildCleared, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, keepsHeadGroup, kst, ledgerRowText, liveRows, planClear,
-  protectedIndex, sum, visibleTokens, type ClearPlan,
+  buildCleared, estTokens, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, keepsHeadGroup, kst, ledgerRowText, liveRows, planClear,
+  protectedIndex, sum, type ClearPlan,
 } from './fold'
 import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import {
@@ -12,7 +12,7 @@ import {
 import { focusOf, injected, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held } from './held'
 import type { Fold, FoldPreview, Meta, Opts, PreparedFold, TopicState, TrackerView } from './fold-runtime'
-import { parseSplitAnswer } from './fold-runtime'
+import { foldableTokens, parseSplitAnswer } from './fold-runtime'
 import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type RewindIo, type RewindPlan } from './rewind'
 import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
@@ -79,7 +79,7 @@ const WITHHELD = '.withheld-'
 // The engine kills session.compact at 10 s; the rest leaves room for the swap after the deadline.
 const COMPACT_DEADLINE_MS = 7000
 const shownChanges = new Map<string, Set<string>>()
-const logFoldOutcome = async (io: FoldJobIo, reason: string) => {
+const logFoldOutcome = async (io: Pick<FoldJobIo, 'logEvent'>, reason: string) => {
   try { await io.logEvent('fold-job', { reason }) } catch { /* decisions must not block compaction */ }
 }
 async function logPersistenceFailure(io: FoldJobIo, error: unknown): Promise<void> {
@@ -303,7 +303,7 @@ async function prepareEngineFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
 async function prepareMechanicalFold(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string): Promise<Pending | undefined> {
   const previous = (await io.readLedger()) ?? EMPTY_LEDGER
   const notes = notesOf(previous)
-  const plan = planClear(rows, Math.max(0, opts.tailTarget / (meta.ratio ?? 1)), Math.ceil(notes.length / 4) + 60)
+  const plan = planClear(rows, Math.max(0, opts.tailTarget / (meta.ratio ?? 1)), estTokens({ role: 'user', text: notes, toolUses: [] }) + 60)
   if (!plan) return undefined
   const kept = [...preservedLines(notes), ...withheldLines(plan.dropped)]
   const preserved = preserveInstructions(fallbackLedger(notes, plan.dropped), instructionValues(notes), plan.dropped, await io.ledgerPath())
@@ -363,10 +363,16 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
   return job
 }
 
-async function applyReadyIfAtThreshold(io: FoldJobIo, opts: Opts, key: string): Promise<boolean> {
+type ReadyFoldIo = Pick<FoldJobIo, 'sessionId' | 'sessionMessages' | 'readMeta' | 'usageReading' | 'sessionCompact' | 'logEvent' | 'log'>
+
+export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: string): Promise<boolean> {
   const job = foldJobs.get(key)
   if (job?.state !== 'ready') return false
-  if (!job.plan.rewindOnly && (await io.usageReading() ?? 0) < opts.budget - opts.reserve) return false
+  if (!job.plan.rewindOnly) {
+    const meta = await io.readMeta()
+    const rows = liveRows(await io.sessionMessages(), meta.boundary)
+    if (foldableTokens(rows, await io.usageReading(), meta) < opts.budget - opts.reserve) return false
+  }
   try { await io.sessionCompact() }
   catch (err) {
     await logFoldOutcome(io, `ready fold swap deferred (${String(err).slice(0, 1000)})`)
@@ -554,7 +560,7 @@ export async function handleSessionCompact(
   const current = foldJobs.get(key)
   if (current?.state === 'swapping') return current.promise
   if (current?.state === 'ready' && current !== existing) plan = current.plan
-  if (!plan.rewindOnly && (reading ?? 0) < opts.budget - opts.reserve) return { messages: [...all] }
+  if (!plan.rewindOnly && foldableTokens(workingRows, reading, meta) < opts.budget - opts.reserve) return { messages: [...all] }
   const keepFrom = plan.keepFrom
   const row = keepFrom < workingRows.length ? workingRows[keepFrom] : undefined
   const expectedDropped = foldedRows(workingRows, first, keepFrom).map(fingerprint)
@@ -585,7 +591,7 @@ export async function handleSessionCompact(
 }
 
 export function report(ledger: string | undefined, rows: readonly SessionMessage[], opts: Opts, meta: Meta, logTail: readonly string[]): string {
-  const used = Math.round(visibleTokens(rows) * (meta.ratio ?? 1))
+  const used = Math.round(foldableTokens(rows, undefined, meta))
   return [
     `clm budget: ${used}/${opts.budget} tokens (${Math.round((used / opts.budget) * 100)}%); escape at ${opts.budget - opts.reserve}, queue target ${opts.queueTarget}, tail target ${opts.tailTarget}, ledger target ${opts.ledgerTarget}, ratio ${meta.ratio ?? 1}`,
     `rows: ${rows.filter(message => !isSystemRow(message)).length} kept, ${rows.filter(isSystemRow).length} hidden system rows`,

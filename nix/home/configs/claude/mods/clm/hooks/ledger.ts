@@ -2,7 +2,7 @@ import type { SessionMessage } from 'claude-code'
 
 import type { SentAt } from './address'
 import { readEvidence, sentStamp, type Evidence } from './evidence'
-import { isUserTyped, stripReminders } from './fold'
+import { estTokens, isUserTyped, stripReminders } from './fold'
 import { isTrackerSection, parseOps, sectionLines, shownNote, type Issue, type Payload } from './tracker'
 
 export const SECTIONS = ['목표', '사용자 지시', '한 일', '할 일', '미결 질문', '핵심 사실·경로'] as const
@@ -369,7 +369,8 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
   const notes = normalizeLedger(reply.slice(0, m.index))
   const heads = [...notes.matchAll(/^##\s+(.+?)\s*$/gm)].map(h => h[1])
   if (heads.join('|') !== NOTE_SECTIONS.join('|')) return `headers were [${heads.join(', ')}], expected the ${NOTE_SECTIONS.length} note sections in order`
-  if (Math.ceil(notes.length / 4) > maxTokens) return `notes are ~${Math.ceil(notes.length / 4)}t, over the ${maxTokens}t cap`
+  const notesTokens = estTokens({ role: 'user', text: notes, toolUses: [] })
+  if (notesTokens > maxTokens) return `notes are ~${notesTokens}t, over the ${maxTokens}t cap`
   let rawOps: unknown
   try { rawOps = JSON.parse(normalizeLedger(m[1] ?? '')) } catch (err) { return 'ops are not JSON (' + String(err).slice(0, 80) + ')' }
   if (!Array.isArray(rawOps)) return 'ops are not a JSON array'

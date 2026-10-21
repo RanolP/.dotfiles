@@ -4,14 +4,18 @@ import type { SessionMessage } from 'claude-code'
 // both header times: the KST stamp below and the UTC ISO time older rows carry.
 const LEDGER_ROW = /^\[clm ledger #(\d+) · [^\]]+\]/
 const RESULT_FLOOR = 1024 // tokens each older kept tool result may shrink to, at least
+export const TOKEN_ESTIMATOR_VERSION = 1
+const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
 
 // --- rows ----------------------------------------------------------------
 
 export const estTokens = (m: SessionMessage): number => {
-  let chars = m.text.length
-  for (const u of m.toolUses) chars += JSON.stringify(u.input ?? {}).length + u.tool.length
-  for (const r of m.toolResults ?? []) chars += r.text.length
-  return Math.ceil(chars / 4)
+  let chars = 0, cjk = 0
+  const count = (text: string) => { for (const char of text) { chars++; if (CJK.test(char)) cjk++ } }
+  count(m.text)
+  for (const u of m.toolUses) { count(JSON.stringify(u.input ?? {})); count(u.tool) }
+  for (const r of m.toolResults ?? []) count(r.text)
+  return Math.ceil(cjk * 1.5 + (chars - cjk) / 2.4)
 }
 export const sum = (rows: readonly SessionMessage[]) => rows.reduce((n, m) => n + estTokens(m), 0)
 
@@ -115,11 +119,11 @@ export type ClearPlan = {
   cuts: Record<string, number>
 }
 
-const sumAfterCuts = (rows: readonly SessionMessage[], cuts: Record<string, number>): number => rows.reduce((n, m) => {
-  const raw = (m.toolResults ?? []).reduce((total, r) => total + Math.ceil(r.text.length / 4), 0)
-  const clipped = (m.toolResults ?? []).reduce((total, r) => total + Math.min(Math.ceil(r.text.length / 4), cuts[r.tool_use_id] ?? Infinity), 0)
-  return n + estTokens(m) - raw + clipped
-}, 0)
+const sumAfterCuts = (rows: readonly SessionMessage[], cuts: Record<string, number>): number => rows.reduce((n, m) =>
+  n + estTokens({ ...m, toolResults: m.toolResults?.map(r => {
+    const share = cuts[r.tool_use_id]
+    return share === undefined ? r : { ...r, text: cutText(r.text, share) }
+  }) }), 0)
 
 // Turns open on a real user prompt, so whole turns never split a tool_use
 // from its tool_result. The tail is the newest turns that fit `target`
@@ -157,17 +161,27 @@ export function planClear(msgs: readonly SessionMessage[], target: number, ledge
 function shareResults(tail: readonly SessionMessage[], room: number, cuttableLength = tail.length): Record<string, number> {
   const results = tail.slice(0, cuttableLength).flatMap(m => m.toolResults ?? [])
   if (results.length === 0) return {}
-  const other = sum(tail) - results.reduce((n, r) => n + Math.ceil(r.text.length / 4), 0)
+  const other = sum(tail.map(m => ({ ...m, toolResults: [] })))
   const share = Math.max(RESULT_FLOOR, Math.floor((room - other) / results.length))
   const cuts: Record<string, number> = {}
-  for (const r of results) if (Math.ceil(r.text.length / 4) > share) cuts[r.tool_use_id] = share
+  for (const r of results) if (estTokens({ role: 'user', text: '', toolUses: [], toolResults: [r] }) > share) cuts[r.tool_use_id] = share
   return cuts
 }
 
 export function cutText(text: string, share: number): string {
-  const keep = share * 4
-  const headChars = Math.floor(keep * 0.6)
-  return `${text.slice(0, headChars)}\n…[clm: ${text.length - keep} of ${text.length} chars cut at fold time]…\n${text.slice(text.length - (keep - headChars))}`
+  const chars = [...text]
+  const render = (keep: number) => {
+    const headChars = Math.floor(keep * 0.6)
+    const tailChars = keep - headChars
+    return `${chars.slice(0, headChars).join('')}\n…[clm: ${chars.length - keep} of ${text.length} chars cut at fold time]…\n${chars.slice(chars.length - tailChars).join('')}`
+  }
+  let low = 0, high = chars.length
+  while (low < high) {
+    const keep = Math.ceil((low + high) / 2)
+    if (estTokens({ role: 'user', text: render(keep), toolUses: [] }) <= share) low = keep
+    else high = keep - 1
+  }
+  return render(low)
 }
 const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMessage =>
   !m.toolResults?.some(r => cuts[r.tool_use_id] !== undefined)
@@ -231,7 +245,7 @@ export const ledgerRowText = (seq: number, at: string, _path: string, ledger: st
   const footer = '\n\nPR, branch, deploy and ticket states may have moved since: re-query one before acting on it.'
   const sections = ledgerSections(ledger)
   const render = () => `${header}${renderLedgerSections(sections)}${footer}`
-  const fits = () => Math.ceil(render().length / 4) <= maxTokens
+  const fits = () => estTokens({ role: 'user', text: render(), toolUses: [] }) <= maxTokens
   if (fits()) return render()
   const byName = (name: string) => sections.find(section => section.name === name)
   const trimOrder = ['learned', 'where we are', 'owned resources', 'uncertain', 'open questions', 'what to do', 'what to request', 'constraints & preferences']

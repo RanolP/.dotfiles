@@ -1,6 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 import {
-  buildCleared, isLedgerRow, isSystemRow, isUserTyped, kst, ledgerRowText, planClear, stripReminders, sum, type Boundary, type ClearPlan,
+  buildCleared, estTokens, isLedgerRow, isSystemRow, isUserTyped, kst, ledgerRowText, planClear, stripReminders, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION, type Boundary, type ClearPlan,
 } from './fold'
 import { confirmQuestion, renderRange, type Evidence, type Source } from './evidence'
 import {
@@ -17,7 +17,7 @@ import type { LogEvent } from './events'
 import { xmlText } from './intent'
 
 export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
-export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number }
+export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; estimatorVersion?: number }
 export type TopicState = RewindTopic
 export type TopicDraft = { topic: string; summary: string }
 export type SplitAnswer = { split: number; mergeReply: string; topics: TopicDraft[] }
@@ -178,9 +178,22 @@ export async function compressTopics(
   return { topics: latest, ledgerTokens: latestTokens }
 }
 
-export function messageTokens(rows: readonly SessionMessage[], observed: number | undefined, meta: Pick<Meta, 'overhead'>): number {
+const usableOverhead = (reading: number, rows: readonly SessionMessage[], meta: Pick<Meta, 'estimatorVersion' | 'overhead'>) => {
+  const overhead = meta.estimatorVersion === TOKEN_ESTIMATOR_VERSION ? meta.overhead : undefined
+  return overhead === undefined || overhead >= reading || reading - overhead < visibleTokens(rows) * 0.5 ? undefined : overhead
+}
+
+export function messageTokens(rows: readonly SessionMessage[], observed: number | undefined, meta: Pick<Meta, 'estimatorVersion' | 'overhead'>): number {
   const estimated = sum(rows)
-  return observed === undefined || meta.overhead === undefined ? estimated : Math.max(estimated, observed - meta.overhead)
+  const overhead = observed === undefined ? undefined : usableOverhead(observed, rows, meta)
+  return observed === undefined || overhead === undefined ? estimated : Math.max(estimated, observed - overhead)
+}
+
+export function foldableTokens(rows: readonly SessionMessage[], reading: number | undefined, meta: Pick<Meta, 'estimatorVersion' | 'overhead' | 'ratio'>): number {
+  const ratio = meta.estimatorVersion === TOKEN_ESTIMATOR_VERSION ? meta.ratio ?? 1 : 1
+  if (reading === undefined) return visibleTokens(rows) * ratio
+  const overhead = usableOverhead(reading, rows, meta)
+  return overhead === undefined ? visibleTokens(rows) * ratio : Math.max(0, reading - overhead)
 }
 
 export async function trackerView(io: Pick<FoldRuntimeIo, 'readAll'>, here: Origin, ops: readonly Payload[] = []): Promise<TrackerView> {
@@ -202,17 +215,22 @@ export async function fold(
   io: FoldRuntimeIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number,
   calibrate = true, prepared?: PreparedFold, transcript?: string,
 ): Promise<Fold | string> {
+  if (meta.estimatorVersion !== TOKEN_ESTIMATOR_VERSION) {
+    meta.overhead = undefined
+    meta.ratio = undefined
+    meta.estimatorVersion = TOKEN_ESTIMATOR_VERSION
+  }
   const observed = freshReal(reading ?? await io.usageReading(), meta)
   const calib = calibrate ? observed : undefined
   const estimated = sum(rows)
-  const overhead = meta.overhead ?? 0
-  const ratio = calib === undefined || meta.overhead === undefined ? (meta.ratio ?? 1) : clampRatio(calib / Math.max(1, overhead + estimated))
+  const overhead = calib === undefined ? undefined : usableOverhead(calib, rows, meta)
+  const ratio = calib === undefined || overhead === undefined ? (meta.ratio ?? 1) : clampRatio(calib / Math.max(1, overhead + estimated))
   if (calib !== undefined) {
     if (meta.overhead !== undefined) meta.ratio = ratio
     meta.lastObserved = calib
   }
   const previous = (await io.readLedger()) ?? EMPTY_LEDGER
-  const plan = prepared?.plan ?? planClear(rows, Math.max(0, opts.tailTarget / ratio), Math.ceil(previous.length / 4) + 60)
+  const plan = prepared?.plan ?? planClear(rows, Math.max(0, opts.tailTarget / ratio), estTokens({ role: 'user', text: previous, toolUses: [] }) + 60)
   if (!plan) return 'nothing left to fold'
   const here = await io.captureOrigin()
   const view = await io.trackerView(here)
@@ -304,7 +322,7 @@ export async function fold(
     const goal = /^## 목표\s*\n([\s\S]*?)(?=\n## |$)/m.exec(notes)?.[1]?.trim() ?? ''
     if (goal && goal !== '- (none yet)') {
       const focus = currentView.issues.find(issue => issue.id === focusIssue)
-      const latest: TopicState = { topic: focus?.title ?? '현재 작업', summary: goal, seq, sourceTokens: Math.ceil(goal.length / 4), focusIssue }
+      const latest: TopicState = { topic: focus?.title ?? '현재 작업', summary: goal, seq, sourceTokens: estTokens({ role: 'user', text: goal, toolUses: [] }), focusIssue }
       topics = [...previousTopics.filter(topic => topic.focusIssue !== focusIssue), latest]
       notes = notesWithTopics(notes, topics)
       fullNotes = notesWithTopics(fullNotes, topics)
@@ -315,7 +333,7 @@ export async function fold(
   const tokensBefore = messageTokens(rows, observed, meta)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
   const tailTokens = sum([{ role: 'user', text, toolUses: [] }, ...plan.tail.filter(message => !isLedgerRow(message) && !isSystemRow(message))])
-  if (tokensAfter >= tokensBefore && (!prepared || tailTokens <= opts.tailTarget)) {
+  if (tokensAfter >= tokensBefore) {
     const why = `the fold would not shrink the context (${tokensBefore} -> ${tokensAfter} est. tokens)`
     io.log(`clm: ${why}`)
     await io.logEvent('skip-not-shrinking', { tokensBefore, tokensAfter, keptTurns: plan.keptTurns, ratio, reason: why })

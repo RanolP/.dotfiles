@@ -390,7 +390,7 @@ test('the ledger header carries a KST time and is still read as a ledger row', O
 // Regression caught: short pieces scattered across a row ("push…to…origin…main") each matched somewhere, so a quote the row never says held as evidence.
 test('a quote of short pieces scattered across a row is refused, a long piece ending in the clip ellipsis holds', OPTS, async ($, on) => {
   const rows = [...ROWS]
-  rows[2] = res('tu_a', 'error: failed to push some refs to origin; branch main is behind its remote counterpart')
+  rows[2] = res('tu_a', 'error: failed to push some refs to origin; branch main is behind its remote counterpart' + 'x'.repeat(4000))
   const ops = [
     { op: 'fact', text: 'FACT-SCATTERED', evidence: [{ ref: 'tu_a', quote: 'push…to…origin…main' }] },
     { op: 'fact', text: 'FACT-ONE-PIECE', evidence: [{ ref: 'tu_a', quote: 'failed to push some refs to origin…' }] },
@@ -645,9 +645,11 @@ test('an uncited clm_task done stays done', OPTS, async ($, on) => {
 })
 
 // Regression caught: a task update made before compaction caused the fold's own tracker ops to be discarded.
-test('a fold after an earlier clm_task update still applies its own ops', BG_OPTS, async ($, on) => {
+test('a fold after an earlier clm_task update still applies its own ops', { options: { ...BG_OPTS.options, tailTarget: 2500 } }, async ($, on) => {
+  const rows = [...ROWS]
+  rows[2] = res('tu_a', 'log: make fails at a.ts:12 ' + 'x'.repeat(24_000))
   const s: State = {
-    rows: ROWS, replies: [], splitReplies: [JSON.stringify({ split: 2, notes: '## 목표\n- build', ops: [{ op: 'create', title: 'fold-created issue', status: 'todo' }], topics: [{ topic: 'build', summary: 'build summary' }] })],
+    rows, replies: [], splitReplies: [JSON.stringify({ split: 2, notes: '## 목표\n- build', ops: [{ op: 'create', title: 'fold-created issue', status: 'todo' }], topics: [{ topic: 'build', summary: 'build summary' }] })],
   }
   const seen = bottoms(on, s)
   panelHandlers(on, seen)

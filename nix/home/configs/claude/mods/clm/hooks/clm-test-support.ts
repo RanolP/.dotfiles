@@ -10,7 +10,7 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, LESSON_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint } from './fold'
+import { estTokens, fingerprint } from './fold'
 
 export const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] } satisfies SessionMessage)
@@ -19,10 +19,10 @@ export const intentReply = (fields: Record<string, unknown> = {}) => JSON.string
 })
 export const use = (id: string, tool: string) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input: { id }, text: 'ok' }] })
 export const res = (id: string, text: string) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError: false }] })
-export const BIG = 'x'.repeat(4000) // ~1000 tokens
-export const MID = 'y'.repeat(800) // ~200 tokens
+export const BIG = 'x'.repeat(4000) // ~1667 tokens
+export const MID = 'y'.repeat(800) // ~334 tokens
 
-// ~2250 estimated tokens over four turns. With a 1200-token tail target the
+// ~3750 estimated tokens over four turns. With a 1200-token tail target the
 // newest two turns fit and the first request's tool work plus "now fix it" fold.
 export const ROWS = [
   M('user', 'please investigate the build'), use('tu_a', 'Bash'), res('tu_a', 'log: make fails at a.ts:12 ' + BIG), M('assistant', 'make fails at a.ts:12'),
@@ -47,7 +47,7 @@ export const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
 export const LOG_FILE = '/home/t/.claude-work/plans/clm-s1.log.jsonl'
 export const storedLedger = (seen: { files: Record<string, string> }) => seen.files[LEDGER_FILE] ?? ''
 export const ids = (m: any) => [...m.toolUses.map((u: any) => u.tool_use_id), ...(m.toolResults ?? []).map((r: any) => r.tool_use_id)]
-export const est = (m: any) => Math.ceil((m.text.length + m.toolUses.reduce((k: number, u: any) => k + JSON.stringify(u.input).length + u.tool.length, 0) + (m.toolResults ?? []).reduce((k: number, x: any) => k + x.text.length, 0)) / 4)
+export const est = (m: any) => estTokens(m)
 export const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 export const handled = (rows: readonly SessionMessage[]): SessionMessage[] => rows.map((m, i) => ({ ...m, handle: `h${i}` } satisfies SessionMessage))
 export const compactInput = (trigger: SessionCompactInput['trigger'], messages: readonly SessionMessage[], extra: Pick<SessionCompactInput, 'agentId' | 'instructions'> = {}) =>

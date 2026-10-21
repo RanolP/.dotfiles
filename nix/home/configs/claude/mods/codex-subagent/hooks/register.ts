@@ -21,8 +21,8 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, Time
 // JSON-RPC on stdio to `codex app-server`.
 
 export const TYPES = {
-  luna: { model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'implementer for well-planned code changes' },
-  sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast implementer for mechanical or small changes' },
+  luna: { model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'slow but cheap implementer, only for a task that may run slow but must run cheap' },
+  sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'default implementer for code changes from a settled plan' },
 } as const
 type TypeName = keyof typeof TYPES
 const PREFIX = 'codex-subagent:'

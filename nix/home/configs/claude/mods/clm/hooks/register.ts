@@ -989,7 +989,6 @@ const GUIDE = [
 ].join('\n')
 
 export const register: Register = (on, options) => {
-  const promptIntentJobs = new Map<string, Promise<void>>()
   const forceCompacts = new Set<string>()
   const { problems } = readOpts(options as Record<string, unknown>)
   const userOptions = options as Record<string, unknown>
@@ -1225,7 +1224,7 @@ export const register: Register = (on, options) => {
     if (e.traits.includes('bare')) return r
     const sections = [...r.sections, { id: 'clm:guide', text: GUIDE, scope: 'session' as const }]
     try {
-      await promptIntentJobs.get(await sid($))
+      // The intent job stays unawaited so the classifier never delays the main request; a focus change it makes reaches the next compose.
       const stepped = await steppedPromptContext(panelIo($))
       if (stepped) sections.push({ id: 'clm:stepped', text: stepped, scope: 'session' as const })
     } catch (err) {
@@ -1250,14 +1249,8 @@ export const register: Register = (on, options) => {
       }
     }
     if (promptSeq !== undefined) {
-      const session = await sid($)
-      const job = recordPromptIntent($, e.text, promptSeq, address)
-      promptIntentJobs.set(session, job)
-      void job.then(() => {
-        if (promptIntentJobs.get(session) === job) promptIntentJobs.delete(session)
-      }, err => {
+      void recordPromptIntent($, e.text, promptSeq, address).catch(err => {
         $.ui.log(`clm intent: classifier failed issue=unknown argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
-        if (promptIntentJobs.get(session) === job) promptIntentJobs.delete(session)
       })
     }
     return next(e)

@@ -27,6 +27,7 @@ type PendingJob =
   | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[] }
   | { state: 'ready'; plan: Pending; fingerprints: string[] }
 type FoldJob = { state: 'idle' } | PendingJob | { state: 'swapping'; promise: Promise<SessionCompactResult> }
+type CompactEntryState = 'none' | FoldJob['state']
 type SaveMeta = (meta: Meta) => Promise<void>
 type QueueTurn = { number: number; start: number; rows: readonly SessionMessage[] }
 const TURN_CHANGE_SYSTEM = 'Summarize only concrete non-task context changes from the finished coding turn. Reply with <changes>, at most three short Korean lines, or <changes></changes> when nothing changed.'
@@ -81,6 +82,26 @@ const COMPACT_DEADLINE_MS = 7000
 const shownChanges = new Map<string, Set<string>>()
 const logFoldOutcome = async (io: Pick<FoldJobIo, 'logEvent'>, reason: string) => {
   try { await io.logEvent('fold-job', { reason }) } catch { /* decisions must not block compaction */ }
+}
+const compactResult = async <T>(
+  io: Pick<FoldJobIo, 'now' | 'logEvent' | 'log'>, startedAt: number, trigger: string, state: CompactEntryState, outcome: string, result: T | Promise<T>, decidedWaitMs?: number,
+): Promise<T> => {
+  let waitMs = decidedWaitMs
+  if (waitMs === undefined) {
+    try { waitMs = Math.max(0, (await io.now()) - startedAt) }
+    catch (err) { try { io.log(`clm: compaction timing failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* timing never blocks compaction */ } }
+  }
+  const settled = Promise.resolve(result)
+  const log = async () => {
+    let totalMs = waitMs
+    try { totalMs = Math.max(waitMs ?? 0, (await io.now()) - startedAt) }
+    catch (err) { try { io.log(`clm: compaction timing failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* timing never blocks compaction */ } }
+    try {
+      await io.logEvent('session-compact', { trigger, state, outcome, ...(waitMs === undefined ? {} : { waitMs }), ...(totalMs === undefined ? {} : { totalMs }) })
+    } catch (err) { try { io.log(`clm: compaction event logging failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* logging never blocks compaction */ } }
+  }
+  void settled.then(log, log)
+  return result
 }
 async function logPersistenceFailure(io: FoldJobIo, error: unknown): Promise<void> {
   const reason = String(error).slice(0, 1000)
@@ -543,24 +564,25 @@ export async function handleSessionCompact(
   io: FoldJobIo, opts: Opts, all: readonly SessionMessage[], trigger: string,
 ): Promise<SessionCompactResult | { skip: string }> {
   const compactStartedAt = await io.now()
+  const key = transcriptKey(await io.sessionId())
+  const entryState: CompactEntryState = foldJobs.get(key)?.state ?? 'none'
   const meta = await persistStep(io, { seq: 0, fails: 0 }, () => io.readMeta())
   const workingRows = liveRows(all, meta.boundary)
   const first = protectedIndex(workingRows)
-  const key = transcriptKey(await io.sessionId())
   await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))
   const existing = foldJobs.get(key)
-  if (existing?.state === 'swapping') return existing.promise
-  if (trigger === 'plugin' && (!existing || existing.state === 'idle')) return { messages: [...all] }
+  if (existing?.state === 'swapping') return compactResult(io, compactStartedAt, trigger, entryState, 'joined-swap', existing.promise)
+  if (trigger === 'plugin' && (!existing || existing.state === 'idle')) return compactResult(io, compactStartedAt, trigger, entryState, 'plugin-passthrough', { messages: [...all] })
   const job = !existing || existing.state === 'idle' ? await startFoldJob(io, opts, workingRows, meta, key, false) : existing
-  if (job.state === 'swapping') return job.promise
+  if (job.state === 'swapping') return compactResult(io, compactStartedAt, trigger, entryState, 'joined-swap', job.promise)
   let plan = job.state === 'ready' ? job.plan
     : job.state === 'summarizing' ? await awaitOrFallback(io, opts, job, workingRows, meta, key, compactStartedAt) : undefined
-  if (!plan) return { messages: [...all] }
+  if (!plan) return compactResult(io, compactStartedAt, trigger, entryState, 'passthrough-unchanged', { messages: [...all] })
   const reading = plan.rewindOnly ? undefined : await io.usageReading()
   const current = foldJobs.get(key)
-  if (current?.state === 'swapping') return current.promise
+  if (current?.state === 'swapping') return compactResult(io, compactStartedAt, trigger, entryState, 'joined-swap', current.promise)
   if (current?.state === 'ready' && current !== existing) plan = current.plan
-  if (!plan.rewindOnly && foldableTokens(workingRows, reading, meta) < opts.budget - opts.reserve) return { messages: [...all] }
+  if (!plan.rewindOnly && foldableTokens(workingRows, reading, meta) < opts.budget - opts.reserve) return compactResult(io, compactStartedAt, trigger, entryState, 'passthrough-under-budget', { messages: [...all] })
   const keepFrom = plan.keepFrom
   const row = keepFrom < workingRows.length ? workingRows[keepFrom] : undefined
   const expectedDropped = foldedRows(workingRows, first, keepFrom).map(fingerprint)
@@ -572,9 +594,12 @@ export async function handleSessionCompact(
     foldJobs.set(key, { state: 'idle' })
     try { await io.storeDelete(await io.pendingKey(key)) }
     catch (err) { await logPersistenceFailure(io, err) }
-    return { messages: [...all] }
+    return compactResult(io, compactStartedAt, trigger, entryState, 'dropped-changed', { messages: [...all] })
   }
   const use = { ...plan, keepFrom }
+  let waitMs: number | undefined
+  try { waitMs = Math.max(0, (await io.now()) - compactStartedAt) }
+  catch (err) { try { io.log(`clm: compaction timing failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* timing never blocks compaction */ } }
   const swap = Promise.resolve().then(async (): Promise<SessionCompactResult> => {
     try {
       return use.rewindOnly
@@ -587,7 +612,7 @@ export async function handleSessionCompact(
     }
   })
   foldJobs.set(key, { state: 'swapping', promise: swap })
-  return swap
+  return compactResult(io, compactStartedAt, trigger, entryState, use.fallback ? 'swap-mechanical' : 'swap', swap, waitMs)
 }
 
 export function report(ledger: string | undefined, rows: readonly SessionMessage[], opts: Opts, meta: Meta, logTail: readonly string[]): string {

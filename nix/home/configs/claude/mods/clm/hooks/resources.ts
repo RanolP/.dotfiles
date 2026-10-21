@@ -865,13 +865,13 @@ export const touchResources = async (io: ResourceIo) => {
   if (!(await hasResourceHome(io))) return
   const session = await io.sessionId()
   const profile = await profileFor(io)
-  await transferPendingForSession(io, session)
-  const current = await readSession(io, session)
-  if (!current.owned.length && !current.mutexes.length) return
   const key = `${profile}/${session}`
   const currentTime = await now(io)
   const lastTouch = resourceTouches.get(key)
   if (lastTouch !== undefined && currentTime - lastTouch < 60_000) return
+  await transferPendingForSession(io, session)
+  const current = await readSession(io, session)
+  if (!current.owned.length && !current.mutexes.length) return
   const state = await ensureSessionIdentity(io, session, false)
   await refreshOwnedLocks(io, session, state)
   resourceTouches.set(key, currentTime)
@@ -1063,9 +1063,7 @@ export const registerResources: Register = (on) => {
   })
 
   on('tool.call', { tool: /.*/ }, async ($, e, next) => {
-    const io = activateResourceIo($)
-    try { await touchResources(io) }
-    catch (err) { $.ui.log(`clm resources: heartbeat failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+    if (e.agentId === undefined) void touchResources(activateResourceIo($)).catch(err => $.ui.log(`clm resources: heartbeat failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
     return next(e)
   })
 

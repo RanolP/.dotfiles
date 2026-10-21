@@ -28,6 +28,22 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
 
+// Regression caught: plugin-triggered engine compactions disappeared from latency attribution when clm passed them through.
+test('plugin compaction passthrough logs its entry state and wait time', OPTS, async () => {
+  const logged = Promise.withResolvers<void>()
+  const events: { event: string; fields: Record<string, unknown> }[] = []
+  let time = 100
+  const io = {
+    sessionId: async () => 'compact-log-plugin', now: async () => time += 5,
+    readMeta: async () => ({ seq: 0, fails: 0 }), observeTranscript: async () => undefined,
+    logEvent: async (event: string, fields: Record<string, unknown>) => { events.push({ event, fields }); logged.resolve() }, log: () => undefined,
+  } as unknown as FoldJobIo
+  const result = await handleSessionCompact(io, OPTS.options, [], 'plugin')
+  await logged.promise
+  expect(result).toEqual({ messages: [] })
+  expect(events).toEqual([{ event: 'session-compact', fields: { trigger: 'plugin', state: 'none', outcome: 'plugin-passthrough', waitMs: 5, totalMs: 10 } }])
+})
+
 // Regression caught: a fixed prompt prefix above the budget triggered a fold even when the conversation rows stayed below it.
 test('a large fixed prefix does not start compaction when foldable rows are below budget', OPTS, async () => {
   const session = 'fixed-prefix-small'

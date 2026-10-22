@@ -41,6 +41,7 @@
 - DO (commit): run `git log --oneline -30` first and match the dominant subject format, prefix scheme, and language of that repo
 - DO (language): reply in the language the user writes in, and give a PR body, a doc or a ticket the language that repo's existing artifacts of the same kind use, checked per artifact
 - DO (toolchain): read the manifest, the lockfile, or the config once up front, rather than probing for a tool after the code already depends on it
+- DO (manifest scope): keep a project manifest (`mise.toml`, `package.json`) to the project's own dev tools; a machine-wide runtime such as colima, lima, OrbStack or Docker Desktop is the user's choice and stays out of it
 - DO (premise): drop a refactor whose payoff needs a tool the repo lacks, and propose either the behavior change alone or installing that tool
 
 ## A name you do not recognize is probably a tool you already have
@@ -68,6 +69,7 @@
 ## The installed toolchain
 - WHEN: reaching for a capability -- a browser, a device, a second agent, an API client, a data query
 - NOTE: `~/.dotfiles/nix/home/mise-global.toml` declares the versions, and `mise ls` prints the live set
+- DO (python): run a one-off script that needs a library as `uv run --with <pkg> python <script>`, and give lasting dependencies a uv project (`uv init`, `uv add <pkg>`), so nothing lands in the shared Python environment
 - TOOLS: `agent-device` drives iOS, Android, macOS, TV and web app UI; `agent-browser` automates a browser from the CLI; `pi` and `codex` are second coding agents; `herdr` manages terminal workspaces for agents; `ntn` is the Notion CLI; `jira` is this repo's ADF-native Jira CLI; `slopless` strips prose slop; `grit` applies GritQL structural rewrites; `reuse` lints SPDX headers; `duckdb`, `delta`, `gh`, `jq`, `rg`, `fd`, `bat`, `eza`, `fzf` and `uv` fill out the shell
 
 ## Record the scenario to a file, then replay the file
@@ -82,6 +84,8 @@
 - DO: treat a throttled or `document.hidden` page as a launch-flag problem and relaunch with those flags, then drive the window's own active tab with `Page.navigate` -- a tab opened by `Target.createTarget {background: true}` or `/json/new` is inactive and reads `hidden` whatever the flags
 - DO: raise a window as one call at the step that needs it, then leave the front to the user -- keep `Page.bringToFront`, `Target.activateTarget`, `/json/activate`, `osascript ... activate` and `open` without `-g` out of every loop, timer, watcher and retry, because each re-raise takes the user's input away again; when a page has to stay in front, fix it with the flags and the active tab above, or stop and ask
 - DO (brief): copy this rule into every runtime-check worker's brief, because a worker told "finish fast" reads the urgency as license to take the screen -- [[focus-steal-activate-loop]]
+- DO (login): open a browser the user will log into with saving on from the first command -- `AGENT_BROWSER_HEADED=1 agent-browser open <url> --restore <key> --restore-save always` -- confirm `agent-browser session info` reads `Save status: saved` before asking them to log in, and keep `close` off a logged-in window, because a session opened without `--restore` loses the user's login on the first close
+- DO (GUI app): verify a desktop GUI app (Electron and the like) from a worker with its type-check and build only, and leave launching it to the user -- a launch from a sandbox with no WindowServer access aborts and pops a crash dialog on the user's screen that reads as an app bug; for a reported crash, read the `parentProc` field of `~/Library/Logs/DiagnosticReports/<App>-*.ips` first
 - DO: stop every loop and background process the check started before reporting, and name any that must keep running
 
 ## Plan after research, then act
@@ -202,6 +206,7 @@
 ## A command you hand the user runs the same from anywhere
 - WHEN: writing a command into a response for the user to run themselves
 - DO: put the location inside the command -- `git -C /absolute/path push origin <branch>`, or whatever path option the tool offers
+- DO: give each command its own one-line code fence, with the explanation as a separate sentence above or below and one fence per alternative, because inline backticks drag the surrounding particles and punctuation into the copy
 - NEVER: prefix a `cd`, whether as advice or as `cd A && B`, because it changes the shell of the person pasting it
 - EXCEPT: a command YOU run in your own Bash tool, where the working directory is known
 

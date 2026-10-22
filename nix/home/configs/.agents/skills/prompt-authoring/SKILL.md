@@ -64,6 +64,10 @@ The `WHY` exists so the reader can apply the rule to a case the author never saw
 
 The second tells the reader what to weigh next time. Write the second.
 
+## Cite a standard by name instead of restating it
+
+When a rule asks for what a well-known standard already defines, write the standard's name (`ISO 24495-1`, `W3C COGA`) and keep any gloss to a parenthetical. The name retrieves what the model already knows of that standard, while a restated clause list is longer and covers less. A numeric bound in the rule stays a filter the agent applies, never text it should emit.
+
 ## Write agent-facing prose in English
 
 Every file a model reads as behavior is written in English, because Hangul fragments into many BPE tokens and that cost is paid in every session that loads the file.

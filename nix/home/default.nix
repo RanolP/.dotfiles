@@ -314,6 +314,10 @@ in
         source = ./configs/claude/hooks/nsc-guard.py;
         executable = true;
       };
+      ".claude/hooks/gui-launch-guard.py" = {
+        source = ./configs/claude/hooks/gui-launch-guard.py;
+        executable = true;
+      };
       # Hard-deny ssh: promote it to the user's own TTY via `! ssh ...`.
       ".claude/hooks/ssh-guard.py" = {
         source = ./configs/claude/hooks/ssh-guard.py;

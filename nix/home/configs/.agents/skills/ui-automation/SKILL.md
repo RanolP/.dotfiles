@@ -129,7 +129,7 @@ Each of these produced a wrong verdict once. Check the matching one before repor
 ## A browser the user logs into, and a desktop app from a worker
 
 - **Keep the user's login.** Open a browser the user will log into with saving on from the first command -- `AGENT_BROWSER_HEADED=1 agent-browser open <url> --restore <key> --restore-save always` -- and confirm `agent-browser session info` reads `Save status: saved` before asking them to log in. Keep `close` off a logged-in window, because a session opened without `--restore` loses the user's login on the first close.
-- **Leave a desktop GUI app's launch to the user.** Verify an Electron or similar app from a worker with its type-check and build only. A launch from a sandbox with no WindowServer access aborts and pops a crash dialog on the user's screen that reads as an app bug; for a reported crash, read the `parentProc` field of `~/Library/Logs/DiagnosticReports/<App>-*.ips` first.
+- **Leave a desktop GUI app's launch to the user.** `gui-launch-guard.py` denies the launch and hands it back as a `! <command>` line; for a reported crash, read the `parentProc` field of `~/Library/Logs/DiagnosticReports/<App>-*.ips` first.
 
 ## Ordering facts
 

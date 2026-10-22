@@ -112,6 +112,7 @@ path = [
     "nix/home/configs/claude/hooks/subagent-model-guard.py",
     "nix/home/configs/claude/hooks/ssh-guard.py",
     "nix/home/configs/claude/hooks/nsc-guard.py",
+    "nix/home/configs/claude/hooks/gui-launch-guard.py",
     "nix/home/configs/claude/hooks/agent-tooling-guard.py",
     "nix/home/configs/claude/hooks/gh-guard.py",
     "nix/home/configs/claude/hooks/jira-guard.py",
@@ -280,6 +281,7 @@ path = [
     "scripts/leak-guard-test.py",
     "scripts/memory-review-nudge-test.py",
     "scripts/nsc-guard-test.py",
+    "scripts/gui-launch-guard-test.py",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

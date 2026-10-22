@@ -310,6 +310,10 @@ in
         source = ./configs/claude/hooks/git-integrity-guard.py;
         executable = true;
       };
+      ".claude/hooks/nsc-guard.py" = {
+        source = ./configs/claude/hooks/nsc-guard.py;
+        executable = true;
+      };
       # Hard-deny ssh: promote it to the user's own TTY via `! ssh ...`.
       ".claude/hooks/ssh-guard.py" = {
         source = ./configs/claude/hooks/ssh-guard.py;

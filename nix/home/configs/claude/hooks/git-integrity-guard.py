@@ -54,6 +54,9 @@ COMMIT_WRITERS = {"commit", "merge", "rebase", "cherry-pick", "revert", "am", "p
 # git's boolean false spellings; an empty value is false too.
 FALSY = {"false", "0", "no", "off", ""}
 GPGSIGN = "commit.gpgsign"
+# Variables that swap out the config file holding the user's commit.gpgsign
+# (~/.config/git/config), so a commit under them is unsigned.
+CONFIG_REDIRECT_ENV = {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "XDG_CONFIG_HOME", "HOME"}
 # Options of the commit writers whose value is the next token, so a message
 # that reads `--no-gpg-sign` is never taken for the flag.
 COMMIT_OPT_WITH_ARG = {"-m", "--message", "-F", "--file", "-C", "--reuse-message",
@@ -121,6 +124,13 @@ def commit_flags(args):
         elif a.startswith("-"):
             out.append(a)
     return out
+
+
+def is_no_gpg_sign(flag):
+    """git accepts an unambiguous prefix of a long option, so `--no-gpg` down
+    to `--no-g` is `--no-gpg-sign` too (measured on commit, rebase, merge and
+    cherry-pick; `--no-` is ambiguous)."""
+    return flag.startswith("--no-g") and "--no-gpg-sign".startswith(flag)
 
 
 def unsigns_by_config(configs):
@@ -305,9 +315,12 @@ def violation(toks, cwd=".", lookup=gh_open_prs, head=current_branch):
     invocations = list(git_invocations(toks, cwd))
     if invocations and unsigns_by_env(toks):
         return SIGNING_REASON, []
+    if any(sub in COMMIT_WRITERS for sub, _, _, _ in invocations) \
+            and any("=" in t and t.partition("=")[0] in CONFIG_REDIRECT_ENV for t in toks):
+        return SIGNING_REASON, []
     for sub, args, d, configs in invocations:
         if unsigns_by_config(configs) \
-                or (sub in COMMIT_WRITERS and "--no-gpg-sign" in commit_flags(args)) \
+                or (sub in COMMIT_WRITERS and any(is_no_gpg_sign(f) for f in commit_flags(args))) \
                 or (sub == "config" and unsigns_by_git_config(args)):
             return SIGNING_REASON, []
         if sub == "commit":
@@ -361,8 +374,11 @@ def main():
     except ValueError:
         # Unbalanced quotes: cannot tokenize, so match the long flags literally
         # rather than letting a malformed command through.
-        for flag in ("--no-verify", "--no-gpg-sign") + tuple(FORCE_LONG):
-            if flag in cmd:
+        # `--no-g` covers every accepted prefix of `--no-gpg-sign`.
+        needles = {"--no-verify": "--no-verify", "--no-g": "--no-gpg-sign"}
+        needles.update({f: f for f in FORCE_LONG})
+        for needle, flag in needles.items():
+            if needle in cmd:
                 deny(f"`{flag}` is not allowed, and this command could not be "
                      "parsed safely. Rewrite it without the flag.")
         sys.exit(0)
@@ -456,6 +472,20 @@ def selftest():
 
     # an unsigned commit forced past commit.gpgsign
     assert v("git commit --no-gpg-sign -m x") is not None
+    assert v("git commit --no-gpg -m x") is not None        # git accepts a long-option prefix
+    assert v("git commit --no-gpg-si -m x") is not None
+    assert v("git commit --no-gp -m x") is not None
+    assert v("git commit --no-g -m x") is not None
+    assert v("git commit --no- -m x") is None               # ambiguous prefix, git rejects it
+    assert v("git commit --no-gpg-signx -m x") is None      # not a prefix
+    # a commit under a swapped-out config file loses the user's commit.gpgsign
+    assert v("GIT_CONFIG_GLOBAL=/dev/null git commit -m x") is not None
+    assert v("GIT_CONFIG_SYSTEM=/dev/null git rebase main") is not None
+    assert v("XDG_CONFIG_HOME=/tmp/x git commit -m x") is not None
+    assert v("HOME=/tmp git commit -m x") is not None
+    assert v("env HOME=/tmp git -C /p commit -m x") is not None
+    assert v("HOME=/tmp git status") is None                # no commit written
+    assert v("GIT_CONFIG_GLOBAL=/dev/null git log") is None
     assert v("git -C /p commit -m x --no-gpg-sign") is not None
     assert v("git rebase --no-gpg-sign main") is not None
     assert v("git -c commit.gpgsign=false commit -m x") is not None

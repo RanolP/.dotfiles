@@ -47,6 +47,9 @@ CASES = [
     ("global flag with value", "nsc --region eu create", "ask"),
     ("global flag =value", "nsc --region=eu extend abc", "ask"),
     ("subshell", "(nsc create)", "ask"),
+    # a newline ends a command like `;`
+    ("after newline", "cd x\nnsc create", "ask"),
+    ("after a heredoc", "cat <<EOF > notes.md\nnsc create\nEOF\nnsc destroy abc", "ask"),
 
     # read-only queries and help pass
     ("list", "nsc list", "passthrough"),
@@ -64,6 +67,9 @@ CASES = [
     ("grep for it", "rg -n 'nsc create' docs", "passthrough"),
     ("quoted operator", "echo 'a && nsc create'", "passthrough"),
     ("unterminated quote", "nsc create 'unclosed", "passthrough"),
+    # a heredoc body is data, not commands
+    ("heredoc body", "cat <<EOF > notes.md\nthen run; nsc create to test\nEOF", "passthrough"),
+    ("quoted heredoc word", "cat <<\"EOF\"\nnsc run --image x\nEOF", "passthrough"),
     ("similar name", "nscx create", "passthrough"),
     ("empty", "", "passthrough"),
 ]

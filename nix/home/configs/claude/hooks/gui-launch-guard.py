@@ -9,7 +9,8 @@ mechanized here.
 
 Denied, with the launch handed back as a `! <command>` line for the user:
 - `open -a <App>`, `open -b <bundle-id>`, `open <path>.app`
-- executing `<path>.app/Contents/MacOS/<binary>` (unless `--headless`)
+- executing `<path>.app/Contents/MacOS/<binary>` bare or with flags only; a
+  positional, a `+action`, an info flag or `--headless` marks a CLI use and passes
 - `electron <path>` / `electron .`, also through `npx`, `bunx`, `pnpx`,
   `npm|pnpm|yarn exec`, `pnpm|yarn dlx`, `bun x`, and `pnpm|yarn electron`
 - `electron-forge start`
@@ -50,9 +51,54 @@ def is_env_assign(tok):
     return all(_is_name_char(c) for c in tok[:eq])
 
 
+HEREDOC_WORD_END = " \t\r\n;&|<>()"
+
+
+def read_heredoc_word(command, i):
+    """Read the delimiter after an unquoted `<<` starting at `i`. Returns
+    (next index, word, strip_tabs); `<<-` strips leading tabs from the body."""
+    n = len(command)
+    strip_tabs = i < n and command[i] == "-"
+    if strip_tabs:
+        i += 1
+    while i < n and command[i] in " \t":
+        i += 1
+    word = []
+    while i < n and command[i] not in HEREDOC_WORD_END:
+        c = command[i]
+        if c in ("'", '"'):
+            end = command.find(c, i + 1)
+            if end == -1:
+                return n, "", strip_tabs
+            word.append(command[i + 1:end])
+            i = end + 1
+        elif c == "\\" and i + 1 < n:
+            word.append(command[i + 1])
+            i += 2
+        else:
+            word.append(c)
+            i += 1
+    return i, "".join(word), strip_tabs
+
+
+def skip_heredoc_bodies(command, i, heredocs):
+    """Skip the body of each pending heredoc, starting at the line after the
+    one that opened them, through its delimiter line."""
+    n = len(command)
+    for word, strip_tabs in heredocs:
+        while i < n:
+            j = command.find("\n", i)
+            line = command[i:j if j != -1 else n]
+            i = j + 1 if j != -1 else n
+            if (line.lstrip("\t") if strip_tabs else line) == word:
+                break
+    return i
+
+
 def parse_segments(command):
     """Split a shell command into operator-separated segments of unquoted
-    tokens in one pass. `&& || ; & |` split only outside quotes. A segment
+    tokens in one pass. `&& || ; & |` and a newline split only outside
+    quotes, and a heredoc body is skipped. A segment
     with an unterminated quote is marked so the caller skips it."""
     segments = []
     tokens = []
@@ -74,9 +120,23 @@ def parse_segments(command):
         tokens = []
         seg_error = False
 
+    heredocs = []
     i, n = 0, len(command)
     while i < n:
         c = command[i]
+        if c == "\n":
+            # A newline ends a command like `;`, then any heredoc body follows
+            # as data, never as commands.
+            flush_segment()
+            i = skip_heredoc_bodies(command, i + 1, heredocs)
+            heredocs = []
+            continue
+        if command.startswith("<<", i) and not command.startswith("<<<", i):
+            flush_token()
+            i, word, strip_tabs = read_heredoc_word(command, i + 2)
+            if word:
+                heredocs.append((word, strip_tabs))
+            continue
         if c == "'":
             tok_started = True
             i += 1
@@ -112,7 +172,7 @@ def parse_segments(command):
                 tok.append(c)
                 i += 1
             continue
-        if c in " \t\n\r":
+        if c in " \t\r":
             flush_token()
             i += 1
             continue
@@ -235,6 +295,14 @@ def electron_launches(toks):
     return False
 
 
+def is_cli_use(arg):
+    """True for an argument that makes an app-bundle binary run as a CLI
+    (`Tailscale status`, `ghostty +show-config`, `Google Chrome --version`)
+    or headless, so no window opens."""
+    return (arg in ELECTRON_INFO_FLAGS or arg.startswith("--headless")
+            or arg.startswith("+") or not arg.startswith("-"))
+
+
 def launches_gui(toks):
     toks = strip_prefix(toks)
     if not toks:
@@ -242,7 +310,7 @@ def launches_gui(toks):
     if base(toks[0]) == "open":
         return open_launches_app(toks[1:])
     if ".app/Contents/MacOS/" in toks[0]:
-        return not any(a == "--headless" or a.startswith("--headless=") for a in toks[1:])
+        return not any(is_cli_use(a) for a in toks[1:])
     target = runner_target(toks)
     return electron_launches(target if target else toks)
 

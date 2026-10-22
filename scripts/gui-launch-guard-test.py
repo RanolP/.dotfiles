@@ -68,6 +68,10 @@ CASES = [
     ("env prefix", "ELECTRON_ENABLE_LOGGING=1 electron .", "deny"),
     ("env wrapper", "env DEBUG=1 open -a Foo", "deny"),
     ("subshell", "(cd app && electron .)", "deny"),
+    # a newline ends a command like `;`
+    ("after newline open", "cd app\nopen -a Foo", "deny"),
+    ("after newline electron", "cd app\nelectron .", "deny"),
+    ("after a heredoc", "cat <<EOF > notes.md\nopen -a X\nEOF\nopen -a MyApp", "deny"),
 
     # the screen rule's sanctioned background launch and other passes
     ("open -g", "open -g -a Foo", "passthrough"),
@@ -83,6 +87,17 @@ CASES = [
     ("open dir", "open .", "passthrough"),
     ("open -R reveal file", "open -R build/out.zip", "passthrough"),
     ("open --args .app value", "open report.html --args Foo.app", "passthrough"),
+    # an app-bundle binary used as a CLI opens no window
+    ("chrome --version", '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version',
+     "passthrough"),
+    ("tailscale status", "/Applications/Tailscale.app/Contents/MacOS/Tailscale status", "passthrough"),
+    ("ghostty +show-config", "/Applications/Ghostty.app/Contents/MacOS/ghostty +show-config",
+     "passthrough"),
+    ("tshark -v", "/Applications/Wireshark.app/Contents/MacOS/tshark -v", "passthrough"),
+    # a heredoc body is data, not commands
+    ("heredoc body", "cat <<EOF > notes.md\nbuild; open -a MyApp to test\nEOF", "passthrough"),
+    ("quoted heredoc word", "cat <<'EOF' > notes.md\nelectron .\nEOF\necho done", "passthrough"),
+    ("<<- heredoc", "cat <<-EOF\n\topen -a MyApp\n\tEOF", "passthrough"),
     ("headless chrome binary", '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" '
      '--headless=new --dump-dom https://example.com', "passthrough"),
     ("agent-browser", "agent-browser open http://localhost:3000", "passthrough"),

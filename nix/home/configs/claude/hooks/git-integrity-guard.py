@@ -72,16 +72,33 @@ SIGNING_REASON = (
     "the same commit then runs signed.")
 
 
+def is_env_assign(tok):
+    name, eq, _ = tok.partition("=")
+    return bool(eq) and name.replace("_", "a").isalnum() and name.isascii() \
+        and not name[0].isdigit()
+
+
 def git_invocations(toks, cwd):
-    """Yield (subcommand, args, dir, configs) for every `git <sub>` in the token
-    stream, where args runs to the next shell operator, dir folds in every `-C`,
-    and configs lists the `-c` / `--config-env` values given before <sub>.
+    """Yield (subcommand, args, dir, configs, prefix_env) for every `git <sub>`
+    in the token stream, where args runs to the next shell operator, dir folds
+    in every `-C`, configs lists the `-c` / `--config-env` values given before
+    <sub>, and prefix_env lists the `NAME=value` assignments directly in front
+    of this `git` (through an `env` wrapper).
     Leading global options are skipped so `git -C path push` reports `push`."""
     i, n = 0, len(toks)
     while i < n:
         if toks[i].rsplit("/", 1)[-1] == "git":
             d = cwd
             configs = []
+            prefix_env = []
+            p = i - 1
+            while p >= 0:
+                t = toks[p]
+                if is_env_assign(t):
+                    prefix_env.append(t)
+                elif t.rsplit("/", 1)[-1] != "env" and not (t.startswith("-") and t not in OPS):
+                    break
+                p -= 1
             j = i + 1
             while j < n:
                 t = toks[j]
@@ -104,7 +121,7 @@ def git_invocations(toks, cwd):
                 while k < n and toks[k] not in OPS:
                     args.append(toks[k])
                     k += 1
-                yield toks[j], args, d, configs
+                yield toks[j], args, d, configs, prefix_env
                 i = k
                 continue
         i += 1
@@ -315,11 +332,10 @@ def violation(toks, cwd=".", lookup=gh_open_prs, head=current_branch):
     invocations = list(git_invocations(toks, cwd))
     if invocations and unsigns_by_env(toks):
         return SIGNING_REASON, []
-    if any(sub in COMMIT_WRITERS for sub, _, _, _ in invocations) \
-            and any("=" in t and t.partition("=")[0] in CONFIG_REDIRECT_ENV for t in toks):
-        return SIGNING_REASON, []
-    for sub, args, d, configs in invocations:
+    for sub, args, d, configs, prefix_env in invocations:
         if unsigns_by_config(configs) \
+                or (sub in COMMIT_WRITERS and any(a.partition("=")[0] in CONFIG_REDIRECT_ENV
+                                                  for a in prefix_env)) \
                 or (sub in COMMIT_WRITERS and any(is_no_gpg_sign(f) for f in commit_flags(args))) \
                 or (sub == "config" and unsigns_by_git_config(args)):
             return SIGNING_REASON, []
@@ -486,6 +502,10 @@ def selftest():
     assert v("env HOME=/tmp git -C /p commit -m x") is not None
     assert v("HOME=/tmp git status") is None                # no commit written
     assert v("GIT_CONFIG_GLOBAL=/dev/null git log") is None
+    # an assignment that belongs to another command, or sits in a message
+    assert v("HOME=$(mktemp -d) ./scripts/x-test.sh && git commit -m x") is None
+    assert v('git commit -m "HOME=/x is now read"') is None
+    assert v("GIT_CONFIG_GLOBAL=/dev/null env -i git commit -m x") is not None
     assert v("git -C /p commit -m x --no-gpg-sign") is not None
     assert v("git rebase --no-gpg-sign main") is not None
     assert v("git -c commit.gpgsign=false commit -m x") is not None

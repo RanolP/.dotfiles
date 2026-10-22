@@ -153,6 +153,10 @@ def parse_segments(command):
             else:
                 i += 1
             continue
+        if c == "\\" and command.startswith("\n", i + 1):
+            # A line continuation joins the two lines and starts no token.
+            i += 2
+            continue
         if c == "\\":
             tok_started = True
             if i + 1 < n:

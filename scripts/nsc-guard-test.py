@@ -49,6 +49,7 @@ CASES = [
     ("subshell", "(nsc create)", "ask"),
     # a newline ends a command like `;`
     ("after newline", "cd x\nnsc create", "ask"),
+    ("line continuation", "nsc \\\ncreate", "ask"),
     ("after a heredoc", "cat <<EOF > notes.md\nnsc create\nEOF\nnsc destroy abc", "ask"),
 
     # read-only queries and help pass

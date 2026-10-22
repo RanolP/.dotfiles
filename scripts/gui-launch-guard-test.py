@@ -71,6 +71,7 @@ CASES = [
     # a newline ends a command like `;`
     ("after newline open", "cd app\nopen -a Foo", "deny"),
     ("after newline electron", "cd app\nelectron .", "deny"),
+    ("line continuation", "npx \\\nelectron .", "deny"),
     ("after a heredoc", "cat <<EOF > notes.md\nopen -a X\nEOF\nopen -a MyApp", "deny"),
 
     # the screen rule's sanctioned background launch and other passes

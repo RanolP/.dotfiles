@@ -16,7 +16,7 @@ import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens } f
 import type { Opts } from './fold-runtime'
 import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
+import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog, modDetectionHarness } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 
 const readStateFile = (files: Record<string, string>, path: string): Record<string, unknown> => {
@@ -28,13 +28,56 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
 
+// Regression caught: a session kept running the old store copy after a rebuild and its autocompact silently failed 40 times.
+test('a compaction under a mod whose installed path changed since load logs mod-stale once', async () => {
+  const seen = modDetectionHarness([
+    { exitCode: 0, stdout: '/nix/store/old-hm_clm\n', stderr: '' },
+    { exitCode: 0, stdout: '/nix/store/new-hm_clm\n', stderr: '' },
+    { exitCode: 0, stdout: '/nix/store/new-hm_clm\n', stderr: '' },
+  ], { HOME: '/home/t', CLAUDE_CODE_PLUGIN_DIRS: '/home/t/.claude/mods/clm' })
+  await seen.initialize()
+  await seen.compact()
+  await seen.compact()
+  await seen.settle()
+  expect(logEvents(seen).filter(row => row.event === 'mod-stale').map(({ event, loadedFrom, installedPath }) => ({ event, loadedFrom, installedPath }))).toEqual([
+    { event: 'mod-stale', loadedFrom: '/nix/store/old-hm_clm', installedPath: '/nix/store/new-hm_clm' },
+  ])
+  expect(seen.logs.filter(text => text.includes('stale clm'))).toHaveLength(1)
+})
+
+// Regression caught: CLAUDE_CONFIG_DIR pointed at .claude-personal while the runtime loaded clm from CLAUDE_CODE_PLUGIN_DIRS under ~/.claude.
+test('the installed mod lookup follows CLAUDE_CODE_PLUGIN_DIRS instead of CLAUDE_CONFIG_DIR', async () => {
+  const seen = modDetectionHarness([{ exitCode: 0, stdout: '/nix/store/old-hm_clm\n', stderr: '' }], {
+    HOME: '/home/t', CLAUDE_CONFIG_DIR: '/x/.claude-personal', CLAUDE_CODE_PLUGIN_DIRS: '~/.claude/mods/clm:/other',
+  })
+  await seen.initialize()
+  expect(seen.runs[0]).toEqual(['realpath', '/home/t/.claude/mods/clm'])
+})
+
+// Regression caught: a compaction-time realpath failure went unlogged, leaving stale-mod detection failures invisible.
+test('a compaction-time installed mod lookup failure leaves compaction fail-open and logs the reason', async () => {
+  const seen = modDetectionHarness([
+    { exitCode: 0, stdout: '/nix/store/old-hm_clm\n', stderr: '' },
+    { exitCode: 1, stdout: '', stderr: 'not found' },
+  ], {
+    HOME: '/home/t', CLAUDE_CODE_PLUGIN_DIRS: '/home/t/.claude/mods/clm',
+  })
+  await seen.initialize()
+  const result = await seen.compact()
+  await seen.settle()
+  expect(result).toEqual({ messages: [M('user', 'ENGINE SUMMARY')] })
+  expect(logEvents(seen).filter(row => row.event === 'mod-stale').map(row => row.reason)).toEqual([
+    expect.stringContaining('could not resolve'),
+  ])
+})
+
 // Regression caught: a plugin compaction with no clm plan handed the rows back unchanged, so the context never shrank, and dropped out of latency attribution.
 test('a plugin compaction with no clm plan returns the engine summary and logs its entry state and wait time', OPTS, async () => {
   const logged = Promise.withResolvers<void>()
   const events: { event: string; fields: Record<string, unknown> }[] = []
   let time = 100
   const io = {
-    sessionId: async () => 'compact-log-plugin', now: async () => time += 5,
+    loadedFrom: '/nix/store/current-hm_clm', sessionId: async () => 'compact-log-plugin', now: async () => time += 5,
     readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
     storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:s1',
     logEvent: async (event: string, fields: Record<string, unknown>) => { events.push({ event, fields }); logged.resolve() }, log: () => undefined,
@@ -43,7 +86,7 @@ test('a plugin compaction with no clm plan returns the engine summary and logs i
   const result = await handleSessionCompact(io, OPTS.options, ROWS, 'plugin', async () => summary)
   await logged.promise
   expect(result).toEqual(summary)
-  expect(events).toEqual([{ event: 'session-compact', fields: { trigger: 'plugin', state: 'none', outcome: 'plugin-handoff', waitMs: 5, totalMs: 10 } }])
+  expect(events).toEqual([{ event: 'session-compact', fields: { trigger: 'plugin', state: 'none', outcome: 'plugin-handoff', loadedFrom: '/nix/store/current-hm_clm', waitMs: 5, totalMs: 10 } }])
 })
 
 // Regression caught: a swap whose io read rejected threw out of session.compact, so the engine's compactor never ran and the context stayed full.

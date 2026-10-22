@@ -7,10 +7,11 @@ import { describeOp } from './evidence'
 
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
   | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost' | 'ledger-over-budget' | 'rewind'
-  | 'fold-job' | 'fold-persist-failed' | 'session-state-migration' | 'session-compact'
+  | 'fold-job' | 'fold-persist-failed' | 'session-state-migration' | 'session-compact' | 'mod-stale'
 export type LogFields = {
   tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; durationMs?: number; summaryMs?: number; reason?: string
   trigger?: string; state?: 'none' | 'idle' | 'summarizing' | 'ready' | 'swapping'; outcome?: string; waitMs?: number; totalMs?: number
+  loadedFrom?: string; installedPath?: string
 }
 
 type FsEntry = { name: string; kind: string; size: number; mtimeMs: number; isLink: boolean }

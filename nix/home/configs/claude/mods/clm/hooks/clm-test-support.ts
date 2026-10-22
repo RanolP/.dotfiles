@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, isHeld, register, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -75,6 +75,41 @@ export const metaIn = (seen: { store: Record<string, unknown> }): Meta => {
 }
 
 export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; storeKeysBlock?: () => Promise<void> }
+export function modDetectionHarness(realpaths: { exitCode: number; stdout: string; stderr: string }[], env: Record<string, string | undefined>) {
+  const hooks: Record<string, unknown> = {}
+  const capture: Parameters<typeof register>[0] = (event, matcherOrHook, hook) => { hooks[event] = hook ?? matcherOrHook }
+  register(capture, OPTS.options)
+  const files: Record<string, string> = {}
+  const logs: string[] = []
+  const runs: string[][] = []
+  const engine = {
+    env: { get: async (name: string) => env[name] },
+    process: { run: async (argv: string[]) => {
+      runs.push(argv)
+      const result = realpaths.shift()
+      return result ?? { exitCode: 0, stdout: `${argv[1]}\n`, stderr: '' }
+    } },
+    fs: {
+      exists: async (path: string) => path in files,
+      read: async (path: string) => files[path] ?? '',
+      write: async (path: string, text: string) => { files[path] = text },
+    },
+    ui: { log: (text: string) => { logs.push(text) } },
+    session: { id: async () => 's1' },
+  }
+  const create = hooks['engine.create']
+  const compact = hooks['session.compact']
+  if (typeof create !== 'function' || typeof compact !== 'function') throw new Error('mod detection hooks were not registered')
+  return {
+    files, logs, runs,
+    initialize: () => create(engine, {}, async () => engine),
+    compact: () => compact(engine, { trigger: 'manual' }, async () => ({ messages: [M('user', 'ENGINE SUMMARY')] })),
+    settle: async () => {
+      for (let i = 0; i < 50 && !files[LOG_FILE]?.includes('"event":"mod-stale"'); i++)
+        await new Promise(resolve => setTimeout(resolve, 1))
+    },
+  }
+}
 const readFixtureState = (files: Record<string, string>, path: string): Record<string, unknown> => {
   try {
     const value: unknown = JSON.parse(files[path] ?? '{}')
@@ -140,7 +175,7 @@ export function bottoms(on: any, s: State) {
   on('session.cwd', () => ({ value: '/work/repo' }))
   on('process.run', (_$: any, e: any) => {
     if (e.argv[0] === 'rm') for (const path of e.argv.slice(e.argv.indexOf('--') + 1)) delete seen.files[path]
-    return { value: { exitCode: 0, stdout: e.argv.includes('get-url') ? 'git@github.com:o/repo.git\n' : 'main\n', stderr: '' } }
+    return { value: { exitCode: 0, stdout: e.argv[0] === 'realpath' ? `${e.argv[1]}\n` : e.argv.includes('get-url') ? 'git@github.com:o/repo.git\n' : 'main\n', stderr: '' } }
   })
   on('ui.panes', () => ({ value: [] }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))

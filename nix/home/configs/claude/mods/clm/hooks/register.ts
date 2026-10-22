@@ -607,6 +607,36 @@ const logEvent = ($: StoreWriter, event: LogEvent, fields: LogFields) => writeLo
   write: (path, text) => $.fs.write(path, text),
 }, event, fields)
 
+async function logModLocationFailure($: EngineInterface, loadedFrom: string | undefined, error: unknown): Promise<void> {
+  const reason = `could not resolve installed clm path: ${String(error).slice(0, 500)}`
+  try { await logEvent($, 'mod-stale', { loadedFrom, reason }) }
+  catch { try { $.ui.log(`clm: ${reason}`, { to: 'debug' }) } catch { /* detection remains fail-open */ } }
+}
+
+async function resolveInstalledMod($: EngineInterface): Promise<string> {
+  const home = (await $.env.get('HOME')) ?? '.'
+  const pluginDirs = await $.env.get('CLAUDE_CODE_PLUGIN_DIRS')
+  const configured = pluginDirs?.split(':')
+    .map(path => path.startsWith('~/') ? `${home}/${path.slice(2)}` : path)
+    .find(path => /\/mods\/clm\/?$/.test(path))
+  const installedDir = (configured ?? `${home}/.claude/mods/clm`).replace(/\/$/, '')
+  const result = await $.process.run(['realpath', installedDir], { timeoutMs: 5000 })
+  if (result.exitCode !== 0 || !result.stdout.trim()) throw new Error(`realpath exited ${result.exitCode}: ${result.stderr}`)
+  return result.stdout.trim()
+}
+
+async function detectStaleMod($: EngineInterface, loadedFrom: string, installed: string, warnedSessions: Set<string>): Promise<void> {
+  if (installed === loadedFrom) return
+  const session = await sid($)
+  if (warnedSessions.has(session)) return
+  warnedSessions.add(session)
+  try { await logEvent($, 'mod-stale', { loadedFrom, installedPath: installed }) }
+  catch (error) { try { $.ui.log(`clm: stale mod event logging failed (${String(error).slice(0, 160)})`, { to: 'debug' }) } catch { /* detection remains fail-open */ } }
+  try {
+    $.ui.log(`clm: this session is running a stale clm copy and must be restarted (loaded ${loadedFrom}; installed ${installed})`)
+  } catch (error) { try { $.ui.log(`clm: stale mod warning failed (${String(error).slice(0, 160)})`, { to: 'debug' }) } catch { /* detection remains fail-open */ } }
+}
+
 const panelIo = ($: EngineInterface): PanelIo => ({
   captureOrigin: () => captureOrigin($),
   readAll: () => readAll($),
@@ -903,7 +933,8 @@ const rewindIo = ($: EngineInterface): RewindIo => ({
   log: text => $.ui.log(text, { to: 'debug' }),
 })
 
-const foldJobIo = ($: EngineInterface): FoldJobIo => ({
+const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
+  loadedFrom: loadedFromPath,
   sessionId: () => $.session.id(),
   sessionMessages: () => $.session.messages(),
   stableAttachments: headKept => stableAttachmentRows($, headKept),
@@ -996,9 +1027,13 @@ export const register: Register = (on, options) => {
   const forceCompacts = new Set<string>()
   const { problems } = readOpts(options as Record<string, unknown>)
   const userOptions = options as Record<string, unknown>
+  let loadedFromPath: string | undefined
+  const warnedStaleSessions = new Set<string>()
 
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
+    try { loadedFromPath ??= await resolveInstalledMod($) }
+    catch (error) { await logModLocationFailure($, loadedFromPath, error) }
     return {
       ...built,
       clm: {
@@ -1125,8 +1160,14 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return next(e)
     if (e.trigger === 'plugin' && forceCompacts.delete(transcriptKey(await sid($)))) return next(e)
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
+    if (loadedFromPath !== undefined) {
+      const loadedFrom = loadedFromPath
+      void resolveInstalledMod($)
+        .then(installedPath => detectStaleMod($, loadedFrom, installedPath, warnedStaleSessions))
+        .catch(error => logModLocationFailure($, loadedFrom, error))
+    }
     if (!Array.isArray(e.messages)) return next(e)
-    return compactFoldJob(foldJobIo($), await liveOpts($, userOptions), e.messages, e.trigger, () => next(e))
+    return compactFoldJob(foldJobIo($, loadedFromPath), await liveOpts($, userOptions), e.messages, e.trigger, () => next(e))
   })
 
   on('tool.call', async ($, e, next) => {

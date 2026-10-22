@@ -36,6 +36,7 @@ type QueueTurn = { number: number; start: number; rows: readonly SessionMessage[
 const TURN_CHANGE_SYSTEM = 'Summarize only concrete non-task context changes from the finished coding turn. Reply with <changes>, at most three short Korean lines, or <changes></changes> when nothing changed.'
 
 export type FoldJobIo = {
+  loadedFrom?: string
   sessionId(): Promise<string>
   sessionMessages(): Promise<SessionMessage[]>
   stableAttachments(headKept: boolean): Promise<{ rows: SessionMessage[]; headKept: boolean }>
@@ -100,7 +101,7 @@ const compactResult = async <T>(
     try { totalMs = Math.max(waitMs ?? 0, (await io.now()) - startedAt) }
     catch (err) { try { io.log(`clm: compaction timing failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* timing never blocks compaction */ } }
     try {
-      await io.logEvent('session-compact', { trigger, state, outcome, ...(waitMs === undefined ? {} : { waitMs }), ...(totalMs === undefined ? {} : { totalMs }) })
+      await io.logEvent('session-compact', { trigger, state, outcome, loadedFrom: io.loadedFrom, ...(waitMs === undefined ? {} : { waitMs }), ...(totalMs === undefined ? {} : { totalMs }) })
     } catch (err) { try { io.log(`clm: compaction event logging failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* logging never blocks compaction */ } }
   }
   void settled.then(log, log)

@@ -59,4 +59,4 @@ The 개요 of that same body compresses the whole chain into one line: `저장�
 
 ## What the size difference looks like
 
-The user once rewrote an agent's body by hand: about 2,900 bytes became about 400, the same scope in a seventh of the space. The before-and-after shape is in `docs/src/agent-incidents.md` under the 2026-09-22 entry.
+The user once rewrote an agent's body by hand: about 2,900 bytes became about 400, the same scope in a seventh of the space. The before-and-after shape is in `docs/src/agent-incidents.md` under the 2026-09-22 entry "the user rewrote an agent's PR body and cut it to a seventh".

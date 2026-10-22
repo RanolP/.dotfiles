@@ -8,7 +8,7 @@
 - DO: open the actual data before stating a count, a grouping, an owner, or a membership, and never estimate a fact the data holds exactly
 - DO: grep every caller of a function you touch on a bug fix, and fix the shared function once rather than the one path the report names
 - DO: ask one short question naming the candidates when the TARGET of a deletion or an edit stays ambiguous after reading, because a permission mode buys you past trivial confirmations but the right target is input only the user holds
-- DO: stop when a target the user named (an agent, a file, a repo, a tool) is not there, show what you did find, and end the turn on "which one?" -- a similar-looking route does something nobody asked for (`docs/src/agent-incidents.md`, 2026-09-22)
+- DO: stop when a target the user named (an agent, a file, a repo, a tool) is not there, show what you did find, and end the turn on "which one?" -- a similar-looking route does something nobody asked for (`docs/src/agent-incidents.md`, 2026-09-22 "send this to the dotfiles session")
 - DO: judge a requested feature by its own value, apart from whether it fixes the bug in front of you -- a cap that does not fix an unbounded-query error is still the cap the user asked for, and removing a requested capability is never a fix
 
 ## Read the request back before acting
@@ -50,7 +50,7 @@
 - DO: resolve the name as a shell CLI first -- `which <name>`, then `<name> --help` -- and consult MCP servers, subagents and skills after that
 - DO: read "I am about to hand-write a standard task" as the stop signal itself -- video, audio, image, archive, checksum, JSON and HTTP each have a standard tool
 - DO: read the help that ships with the installed binary before an unfamiliar CLI's first call, prefer its own high-level command over a sequence you assemble, and list a whole MCP bundle before its first call to find its undo
-- DO (secret): send the output of a command that may print a credential to a scratchpad file and pull the needed field out with `jq` (`docs/src/agent-incidents.md`, 2026-09-22)
+- DO (secret): send the output of a command that may print a credential to a scratchpad file and pull the needed field out with `jq` (`docs/src/agent-incidents.md`, 2026-09-22 "a live bearer token")
 - DO: say "not on my search path", list where you looked, name the tool and the declaration file its version belongs in, then wait rather than reaching for an ad-hoc runner
 - DO (inventory): before declaring a device, account, certificate or build absent, run the query that lists it (`agent-device devices --platform ios`, `adb devices -l`, `security find-identity -v -p codesigning`, `ls` on the conventional path) and cite its empty output as the evidence (`docs/src/agent-incidents.md`, 2026-09-03)
 - NOTE: an empty `which ffmpeg` once produced a hung hand-written `AVAssetWriter` script -- [[ffmpeg-hand-rolled-avassetwriter]]

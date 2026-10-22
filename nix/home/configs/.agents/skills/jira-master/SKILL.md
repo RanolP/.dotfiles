@@ -43,7 +43,7 @@ Stage every edit for one card, review the queue, then apply once.
 
 Two hops are normal: a Jira card in `To Do` usually cannot jump to `Dev Done`, so `move` goes through `In Progress`. A refused hop leaves the earlier hops applied, because Jira has no transaction over a status change.
 
-Run `flow` and read the chain before you run `move`. A status transition is visible to every watcher of the card, so get the user's word for the target status first.
+Run `flow` and read the chain before you run `move`. A status transition is visible to every watcher of the card, so run `move` only when the user has asked for that move and named the target status, even on a card you own; never offer a transition as your own next step.
 
 ## Images: reference, never upload
 

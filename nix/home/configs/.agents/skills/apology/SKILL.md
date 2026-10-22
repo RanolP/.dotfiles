@@ -140,7 +140,7 @@ Write the guard as **one file inside `~/.dotfiles` and the change to it**. Prior
 
 For case 2, draft the rule by the `rule-write` skill, which owns generalizing the incident into the class of situation it belongs to, the file choice, merge-vs-new-section, and the bullet form. Run its steps up to the authored text and stop there.
 
-Write the guard into the document and stop there. Leave `~/.dotfiles` untouched: the 시말서 proposes the change and the user decides. Ask in one line, "이 변경을 적용할까요", and wait for the answer.
+Write the guard into the document and stop there. Leave `~/.dotfiles` untouched: the 시말서 proposes the change, and the user applies it with a separate instruction when they want it, so the report carries no question about applying it.
 
 ## 7. Wrap-up
 
@@ -149,6 +149,6 @@ Show the user:
 - The file path (`~/.dotfiles/.apologies/...`)
 - One line naming the violated rule
 - One line of cause
-- One line of the proposed guard, plus the question of whether to apply it
+- One line of the proposed guard
 
 Do not paste the full text back into the terminal. The user can open the file.

@@ -252,6 +252,8 @@
 - DO: open every PR as a draft unless the user says otherwise, and get an explicit yes before creating a repo, a service, or any other external resource
 - DO (standing go): treat a granted permission as standing for its whole class until the user withdraws it, and stop re-asking inside that class
 - DO (bookkeeping): refresh the commit hashes, branch names and diff links in an already-published body once the work they name is rewritten
+- DO (user-only): leave marking a PR ready for review (`gh pr ready`) and every Jira status transition (`jira move`, a Jira MCP transition) to the user, even on a card you own; report PR and card state as facts and keep these moves off your own to-do list
+- DO (filtered delete): before running or handing over a delete that selects its targets by a filter (`docker volume rm $(docker volume ls -q --filter label=...)`), show what the same filter lists and put those names into the delete as literals; with no listing, hand over no delete -- a compose label once matched two fixed-name volumes the description never mentioned
 - DO (irreversible): treat a send as permanent when the bundle carries no update and no delete, and take its draft path instead -- [[slack-send-is-irreversible]]
 - EXCEPT: a checkpoint commit onto `claude/local-dev` is exempt, because that branch never leaves the machine
 

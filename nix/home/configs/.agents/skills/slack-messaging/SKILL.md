@@ -84,7 +84,8 @@ The recurring correction on this user's drafts is length and shape, not accuracy
 - **Weigh the blast radius before any write.** A send either delivers information or interrupts the team, and the second one is a cost the recipients pay. When it is closer to an interruption, say so and do not send.
 - **Do not reconfigure the Slack MCP.** Use it to read, to draft, and to send what was approved; leave its setup alone.
 - **Synthesize, then ask for verification.** When the answer lives across a Slack thread and a Jira card, combine them yourself and bring the finished result for the user to check, rather than asking them to supply the pieces.
-- **A Slack post never triggers a ticket transition on its own.** After posting, ask which cards to move instead of inferring them from the message.
+- **A Slack post never triggers a ticket transition.** Ticket transitions belong to the user; report card states as facts and leave the move to them.
+- **Write in the user's own voice.** Before drafting, search `from:<user id>` in the same channel and match it: casual register, one line plus bare links, no honorifics, no emoji, no diff counts, no explanatory paragraph. A review request is one line with `• 웹` / `• 앱` PR links beneath; a QA build notice is the version, the environment and the fixed cards, with no scope or request wording, posted as a reply in the existing notice thread.
 
 ## Scheduling
 

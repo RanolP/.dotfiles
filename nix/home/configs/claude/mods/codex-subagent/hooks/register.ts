@@ -26,6 +26,7 @@ export const TYPES = {
 } as const
 type TypeName = keyof typeof TYPES
 const PREFIX = 'codex-subagent:'
+const MODEL_AUTO_COMPACT_TOKEN_LIMIT = 150000
 
 // Claude-side tools codex has no equivalent of. Read/Edit/Write/Bash/Grep/Glob
 // stay codex's own (shell + apply_patch). Agent is left out: a codex agent
@@ -349,12 +350,14 @@ export function contentHash(text: string): string {
 
 // The bridge's source as this module sees it on disk. A bridge outlives a
 // module reload, so a bridge whose /health reports another fingerprint runs
-// code this module was not written against.
+// code this module was not written against. The fingerprint covers every file
+// the bridge loads at startup: codex-bridge.mjs and codex-config.mjs.
 export const bridgeSource = ($: EngineInterface) => `${$.plugin.root}/daemon/codex-bridge.mjs`
+export const bridgeConfigSource = ($: EngineInterface) => `${$.plugin.root}/daemon/codex-config.mjs`
 export const UNREAD_FINGERPRINT = 'unread'
 export async function bridgeFingerprint($: EngineInterface): Promise<string> {
   try {
-    return contentHash(await $.fs.read(bridgeSource($)))
+    return contentHash((await Promise.all([bridgeSource($), bridgeConfigSource($)].map(p => $.fs.read(p)))).join('\0'))
   } catch (err) {
     // An unreadable source must not keep the bridge from starting; it only skips the staleness check.
     $.ui.log(`[codex-subagent] cannot fingerprint ${bridgeSource($)}: ${String(err)}`, { to: 'debug' })
@@ -369,7 +372,7 @@ export async function bridgeFingerprint($: EngineInterface): Promise<string> {
 function startBridge($: EngineInterface, sock: string, onFail: (ready: Promise<void>) => void): Promise<void> {
   let stop: (() => void) | undefined
   async function* output() {
-    const bridge = await $.process.spawn({ argv: ['node', bridgeSource($), sock, await bridgeFingerprint($)] })
+    const bridge = await $.process.spawn({ argv: ['node', bridgeSource($), sock, await bridgeFingerprint($), String(MODEL_AUTO_COMPACT_TOKEN_LIMIT)] })
     stop = () => {
       try { (bridge as unknown as { kill?: (signal?: string) => void }).kill?.('SIGTERM') } catch (err) { $.ui.log(`[codex-bridge] failed to stop after startup failure: ${String(err)}`, { to: 'debug' }) }
     }
@@ -432,7 +435,7 @@ function ensureRegistered(st: ModState, $: EngineInterface): Promise<void> {
         name,
         description: `Runs the task on OpenAI ${t.model} at ${t.effort} effort in the ${t.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; ${t.blurb}). SendMessage continues the same codex thread.`,
         prompt: 'This agent is served by Codex; this prompt is never sent to a Claude model.',
-        model: t.model, // never called: every step of this agent is answered by codex
+        model: t.model, // turn steps go to codex; engine compaction also sees this id, intercepted below
       })
     }
   })().catch(err => {
@@ -475,6 +478,16 @@ export const register: Register = (on) => {
     if (e.agentId && text && agents.has(e.agentId)) inbox.set(e.agentId, [...(inbox.get(e.agentId) ?? []), text])
     return r
   })
+
+  on('session.compact', async ($, e, next) => {
+    const subagentType = await subagentTypeOf(st, $, agents, e.agentId)
+    if (!subagentType?.startsWith(PREFIX)) return next(e)
+    if (!Array.isArray(e.messages)) return { skip: 'codex agent compaction needs messages' }
+    const messages = e.messages
+    const lastAssistant = messages.findLastIndex(message => message.role === 'assistant')
+    return { messages: messages.slice(Math.max(0, lastAssistant)) }
+  })
+
   let sock = ''
   let bridgeReady: Promise<void> | undefined
   const dropFailedBridge = (failed: Promise<void>) => { if (bridgeReady === failed) bridgeReady = undefined }

@@ -160,6 +160,7 @@ path = [
     "nix/home/configs/claude/mods/codex-subagent/hooks/register.ts",
     "nix/home/configs/claude/mods/codex-subagent/hooks/codex-subagent.test.ts",
     "nix/home/configs/claude/mods/codex-subagent/daemon/codex-bridge.mjs",
+    "nix/home/configs/claude/mods/codex-subagent/daemon/codex-config.mjs",
     "nix/home/configs/claude/mods/time-budget/.claude-plugin/plugin.json",
     "nix/home/configs/claude/mods/time-budget/hooks/hooks.json",
     "nix/home/configs/claude/mods/time-budget/hooks/register.ts",

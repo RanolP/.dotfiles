@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
+import { codexConfig } from './codex-config.mjs'
 
 const textInput = text => [{ type: 'text', text, text_elements: [] }]
 const WORKSPACE_WRITE_PROFILE = 'codex-subagent-workspace-write'
@@ -198,18 +199,8 @@ try {
 // The user's model choice carries over; nothing else from ~/.codex/config.toml does.
 let userConfig = ''
 try { userConfig = fs.readFileSync(path.join(userCodexHome, 'config.toml'), 'utf8') } catch {}
-const topLevel = userConfig.split(/^\[/m)[0]
-const inherited = topLevel.split('\n').filter(l => /^\s*(model|model_reasoning_effort)\s*=/.test(l))
-const config = [
-  ...inherited,
-  'web_search = "disabled"',
-  '[tools]', 'web_search = false',
-  '[features]',
-  ...['apps', 'plugins', 'memories', 'hooks', 'multi_agent', 'multi_agent_v2', 'image_generation', 'browser_use',
-    'browser_use_external', 'computer_use', 'in_app_browser', 'tool_suggest', 'skill_search', 'goals', 'shell_snapshot',
-  ].map(f => `${f} = false`),
-  '',
-].join('\n')
+const modelAutoCompactTokenLimit = Number(process.argv[4])
+const config = codexConfig(userConfig, modelAutoCompactTokenLimit)
 const configPath = path.join(codexHome, 'config.toml')
 const configTemp = `${configPath}.${process.pid}.tmp`
 fs.writeFileSync(configTemp, config, { mode: 0o600 })

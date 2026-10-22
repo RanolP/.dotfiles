@@ -1,6 +1,7 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
-import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionMessage, TimerCall } from 'claude-code'
-import { bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
+import { bridgeFingerprint, bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import { codexConfig } from '../daemon/codex-config.mjs'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -104,15 +105,17 @@ test('a failed Codex recovery ends the turn and asks the coordinator to resend',
   expect(r.value.answer).toBe('[codex-subagent error] cannot reach the bridge to recover a-recover-throw: codex-subagent: $.http.fetch: bridge unavailable; send the message again')
 })
 
-// Regression: the main-session cwd overrides the first writable root named in the brief.
+// Regression caught: the main-session cwd overrides the first writable root named in the brief, or the bridge spawn omits codex's auto-compaction limit.
 test('a spawned codex agent is remembered by the bridge so a restart can recover it', async ($, on) => {
   const remembered: Record<string, unknown>[] = []
+  const spawnArgv: string[][] = []
   mock.env(on, { HOME: '/home/test' })
   on('session.id', async () => ({ value: 'test-session' }))
   on('ui.log', async () => ({ value: undefined }))
   on('process.run', async (_$, e) => ({ value: { exitCode: e.argv[0] === 'test' ? 0 : 128, stdout: '', stderr: '' } }))
   on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-6-luna' }))
-  on('process.spawn', async function* () {
+  on('process.spawn', async function* (_$, e) {
+    spawnArgv.push(e.argv)
     yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
     return { value: { code: 0, signal: null } }
   })
@@ -127,6 +130,53 @@ test('a spawned codex agent is remembered by the bridge so a restart can recover
 
   await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repoB, /other-worktree\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repoA' } satisfies AgentSpawnArgs)
   expect(remembered).toEqual([{ key: 'spawned-codex', type: 'luna', cwd: '/repoB', writableRoots: ['/repoB', '/other-worktree'] }])
+  // Regression caught: the hook stopped passing the auto-compaction limit to the bridge, so codex kept the engine's larger context window.
+  expect(spawnArgv[0]?.[4]).toBe('150000')
+})
+
+// Regression caught: Claude Code auto-compacts a codex worker by calling Anthropic
+// with the worker's OpenAI model id, killing the worker and its pending prompt.
+test("a codex agent's auto-compaction never reaches the Claude compactor and keeps the pending prompt", async ($, on) => {
+  let nextCalls = 0
+  mock.clock(on)
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
+  on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-5.6-sol' }))
+  on('agent.list', async () => ({ value: [{ id: 'claude-agent', type: 'general-purpose', status: 'running', description: '' }] }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async () => ({ value: { status: 200, ok: true, headers: {}, text: '{}' } }))
+  on('session.compact', async () => {
+    nextCalls++
+    return { messages: [row('user', 'CLAUDE COMPACTOR')] }
+  })
+
+  await $.agent.spawn({ prompt: 'writable: /repo\nImplement it', subagentType: 'codex-subagent:sol', cwd: '/repo' } satisfies AgentSpawnArgs)
+  const messages = [
+    row('user', 'initial request'),
+    row('assistant', 'first relayed answer'),
+    row('user', 'intermediate prompt'),
+    row('assistant', 'last relayed answer'),
+    row('user', 'pending SendMessage prompt'),
+  ]
+  const owned = await $.session.compact({ trigger: 'auto', agentId: 'spawned-codex', messages } satisfies SessionCompactInput)
+  if (!('messages' in owned)) throw new Error('codex compaction returned no messages')
+  expect(owned.messages.map(message => message.text)).toEqual(['last relayed answer', 'pending SendMessage prompt'])
+  expect(nextCalls).toBe(0)
+
+  const missing = await $.session.compact({ trigger: 'auto', agentId: 'spawned-codex' } satisfies SessionCompactInput)
+  if (!('skip' in missing)) throw new Error('codex compaction without messages did not skip')
+  expect(missing.skip).toBe('codex agent compaction needs messages')
+  expect(nextCalls).toBe(0)
+
+  const foreign = await $.session.compact({ trigger: 'auto', agentId: 'claude-agent', messages } satisfies SessionCompactInput) as SessionCompactResult
+  if (!('messages' in foreign)) throw new Error('Claude compaction returned no messages')
+  expect(foreign.messages.map(message => message.text)).toEqual(['CLAUDE COMPACTOR'])
+  expect(nextCalls).toBe(1)
 })
 
 // Regression: a Codex worker starts without a brief-declared writable directory and inherits the wrong session root.
@@ -990,4 +1040,22 @@ test('a reloaded module re-registers its agent types on the first hook without s
 
   expect(claude.steps).toBe(2)
   expect(registered).toEqual(Object.entries(TYPES).map(([name, t]) => ({ name, model: t.model })))
+})
+
+// Regression caught: the limit left the generated codex config's top level, so codex never compacted before Claude's unknown-model window.
+test('codex config carries the auto-compaction limit at top level', () => {
+  expect(codexConfig('model = "m"\n[tools]\nweb_search = true\n', 150000).split(/^\[/m)[0]).toMatch(/^model_auto_compact_token_limit = 150000$/m)
+})
+
+// Regression caught: an edit to daemon/codex-config.mjs alone left the fingerprint unchanged, so a running bridge kept its old generated codex config.
+test('bridge fingerprint changes when only codex-config.mjs changes', async () => {
+  let config = 'export const v = 1\n'
+  const fake = {
+    plugin: { root: '/plugin' },
+    ui: { log: () => {} },
+    fs: { read: async (p: string) => (p.endsWith('codex-config.mjs') ? config : 'bridge source\n') },
+  } as unknown as Parameters<typeof bridgeFingerprint>[0]
+  const before = await bridgeFingerprint(fake)
+  config = 'export const v = 2\n'
+  expect(await bridgeFingerprint(fake)).not.toBe(before)
 })

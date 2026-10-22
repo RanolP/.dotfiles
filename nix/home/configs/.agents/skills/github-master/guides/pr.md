@@ -41,7 +41,7 @@ Add a `리뷰 포인트:` sub-bullet only where you judge that without it a Haik
 
 **Plain and honest over defensive.** Say the limitation outright: "PR 전체는 완전한 코드, 개별 커밋은 Lint/Typecheck 실패 가능" — not a hedged clause about a transitional state.
 
-**Title**: one short line with the description merged in, not a bare ticket key. It names what the PR achieves -- `feat(vibe-infra): vibe-infra 프로젝트 IaC 관리 시작` -- and leaves the implementation pieces (IAM, secrets, imports) to the body.
+**Title**: one short line with the description merged in, not a bare ticket key. It names what the PR achieves -- `feat(billing): 결제 수단 변경 지원` -- and leaves the implementation pieces to the body.
 
 ## PR body — Korean, 개조식-first
 

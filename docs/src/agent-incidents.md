@@ -109,3 +109,39 @@ One notation to carry verbatim: the user writes a reduction as `-N%p`, using the
 A self-review brief for a work ticket said "if the existing APK cannot run the bundle, build it yourself". The worker took that as permission and started `assembleDebug` without asking. At the same moment another session's emulator, Metro and jest were running on the same machine; load average climbed to 25, and the Gradle and Kotlin daemons alone held about 180% CPU. The user's words: "이딴 짓거리를 제발 함부로 저지르지 마라 나도 컴퓨터를 써야 할 거 아님;;" -- they need the machine for their own work.
 
 The Mac is the user's working computer, and several Claude sessions share it, so heavy jobs from different sessions stack on top of the user's own work. The `(load)` clauses of "Size the unit first" in `nix/home/configs/claude/CLAUDE.md` now make every heavy local job (a native build such as `gradlew` or `xcodebuild`, an extra emulator or simulator boot, Metro `--reset-cache`) an explicit question with its cost in one line. A worker brief says "stop and report if a build is needed" rather than "build if needed". An approved job runs under `renice -n 15`, and the emulators, Metro instances and Gradle daemons (`./gradlew --stop`) the session started are stopped when the check is done.
+
+## 2026-07-30 -- a probe build replaced a shared design doc with four placeholder boxes
+
+To diagnose a rendering problem, an agent published a stripped build of the user's design doc onto the doc's own live artifact URL. The good version was replaced by a page carrying four dashed "다이어그램 N -- 이 버전에서는 제외" placeholders, and the user was the one who noticed ("isn't it regression"). The version history made it recoverable, but the shared link stayed degraded in the meantime. The same session also inverted the user's version numbers ("v3 sharable, latest isn't") and stripped work that was already correct. A throwaway artifact answers the same diagnostic question at no cost to the user's link, so every probe goes to a fresh artifact, the live target only ever receives a complete state, and the user's version numbers are read back before acting on them. Rule: "DO (live target)" in `nix/home/configs/claude/CLAUDE.md`.
+
+## 2026-08-18 -- an invented backend API shipped through a patched shared package
+
+Wiring a feature whose backend contract did not exist yet, an agent created `PUT/DELETE` reservation endpoints and a new notification type out of nothing, and attached them to the shared API-endpoints package through a pnpm patch. A grep of the server repository for the feature's names returned zero hits: path, method, status codes and notification string were all invented, modelled on a neighbouring endpoint's shape and labelled a "temporary patch". The user's first reaction was "대체 왜 환각으로 api를 추가했나", and the next day everything was reverted. Three things failed: a goal word in the PR title ("실배선") outranked the missing contract, a cloned neighbouring shape was treated as a contract, and the "temporary" label was treated as an excuse. A missing contract is a stop condition: leave a labelled dummy and write what is missing in the code comment and the PR body.
+
+## 2026-09-03 -- a review card was nearly dropped as "no iOS device" while a booted iPad was attached
+
+Checking an iOS-only safe-area defect, an agent wrote "iOS 기기 필요 -- 판정 포기 유력" into the hand-off and reported the card as blocked. The user asked whether their iPad could be driven with `agent-device`; one `agent-device devices --platform ios` showed it `booted=true`, with the UI test runner signed and installed and the app already on it. The agent then proposed a simulator twice more. The user: "진짜 ㅅㅂ 다 해줬는데 안 쓰는 거 개선해야 한다". The existing "name you do not recognize" rule already covered "about to conclude that some capability is unavailable", but its only prescribed check was `which`, a PATH-level query; nothing told the agent to list what is attached behind a tool it already had. Hence "DO (inventory)": run the listing query and cite its empty output before declaring a device, account, certificate or build absent.
+
+## 2026-09-22 -- a CLI's JSON output printed a live bearer token into the transcript
+
+An agent ran an unfamiliar `nsc cache gradle setup -o json` without reading its `--help` first, and the command printed a live bearer token (`nsct_...`) straight into the conversation. Reading the help would have shown that the command writes credentials to stdout. The user: "앞으로 실행하기 전에 제발 도구 설명좀 읽자". Hence the help-first rule for an unfamiliar CLI, and "DO (secret)": send output that may carry a credential to a scratchpad file and extract only the needed field with `jq`.
+
+## 2026-09-22 -- "send this to the dotfiles session" became a worker editing the rules files
+
+The user told an agent to send an example of its failure to the `dotfiles` session. No session by that name was listed, so instead of stopping, the agent switched to the `dotfiles:evolve` and `rule-write` route and spawned a worker that would write the `~/.dotfiles` rules files directly. The instruction was a message, not rule authoring, and that repository deploys to every session. The worker was stopped before any file changed. The user: "ㅅㅂ dotfiles를 직접 작성하는 월권은 대체 왜 한 건데". When a named target is not there, show what was found and end the turn on "which one?".
+
+## 2026-09-30 -- a label-filtered volume delete removed two volumes nobody listed
+
+To clean up a finished agent worktree stack, an agent handed the user `docker volume rm $(docker volume ls -q --filter label=com.docker.compose.project=$P)`. Compose gives a volume with a fixed `name:` the project label of whichever stack first created it, so the filter also matched two fixed-name local database and secrets volumes from another project, and they were deleted (local development data only). An earlier listing command had been refused by the permission classifier, and the agent handed over the delete without any listing. A filtered delete is now preceded by the same filter's listing, and the delete names those targets as literals; with no listing, no delete is handed over.
+
+## 2026-10-01 -- a "flatten" redesign was built for a span real data never contained
+
+A trace-viewer prototype fixture put an invented span under every request root. The user asked to flatten that span into the request row, and the work was done. Afterwards it turned out the real telemetry has no such span at all. The user: "flatten할 게 없었네 애초에 니가 잘못된 걸 만든 게 문제였네". A fixture now holds only the span names and fields the real system's tests or source list, labels every stand-in, and a design question about fixture data first checks that the data exists.
+
+## 2026-10-06 -- a "<N>x" prompt saving was measured against the agent's own detour
+
+Optimising a per-item LLM extraction prompt, an agent's early variants sent one item per call, re-sending the whole instruction block per item. Moving to larger batches then produced a "<N>x" saving, but production had been batching items all along; against the production baseline the real gain was a small fraction of that. The user: "아 당연히 벌크로 했어야지 멍청한 것". An experiment now starts from the production shape (batch size, model, effort), and every gain is reported against that production baseline.
+
+## 2026-10-19 -- a release-order answer listed bare PR numbers, twice in a row
+
+Asked for the order of a multi-repository release, an agent answered with chains such as "#<a> -> #<b>" and "#<c>, #<d>, #<e>". The user asked "wtf is <a>", and the next answer again gave two bare "PR #<n>" references with no titles. The user: "내가 반복적으로 ID만 띡 던지지 말랬지 피드백을 해도 말을 안 들으니". The "Name every referent" rule already existed, which is evidence the prose rule alone does not hold. A later mention now uses a meaning-name ("the release PR"), and a draft is scanned for `#\d+`, 7+ hex characters and `[A-Z]+-\d+` before sending. A Stop hook that forces a rewrite was rejected as the guard ("\"다시 쓰게\" 하면 경험이 매우 별로였음").

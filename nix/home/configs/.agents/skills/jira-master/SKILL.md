@@ -45,6 +45,10 @@ Two hops are normal: a Jira card in `To Do` usually cannot jump to `Dev Done`, s
 
 Run `flow` and read the chain before you run `move`. A status transition is visible to every watcher of the card, so run `move` only when the user has asked for that move and named the target status, even on a card you own; never offer a transition as your own next step.
 
+## Answering "which card?"
+
+Offer one Jira card per question, after `jira show -i KEY` confirmed its status, leaving out keys merely mentioned in a card body. When a branch or PR instruction carries a key other than the one you reported, ask in one line before running it.
+
 ## Images: reference, never upload
 
 There is no upload path. The Atlassian MCP surface has no attachment tool, and its access token answers HTTP 401 on `api.atlassian.com/ex/jira/<cloudId>/rest/api/3/*`, so no REST fallback exists either.

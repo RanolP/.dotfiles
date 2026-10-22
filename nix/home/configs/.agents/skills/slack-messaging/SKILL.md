@@ -85,7 +85,7 @@ The recurring correction on this user's drafts is length and shape, not accuracy
 - **Do not reconfigure the Slack MCP.** Use it to read, to draft, and to send what was approved; leave its setup alone.
 - **Synthesize, then ask for verification.** When the answer lives across a Slack thread and a Jira card, combine them yourself and bring the finished result for the user to check, rather than asking them to supply the pieces.
 - **A Slack post never triggers a ticket transition.** Ticket transitions belong to the user; report card states as facts and leave the move to them.
-- **Write in the user's own voice.** Before drafting, search `from:<user id>` in the same channel and match it: casual register, one line plus bare links, no honorifics, no emoji, no diff counts, no explanatory paragraph. A review request is one line with `• 웹` / `• 앱` PR links beneath; a QA build notice is the version, the environment and the fixed cards, with no scope or request wording, posted as a reply in the existing notice thread.
+- **Write in the user's own voice.** Before drafting, search `from:<user id>` in the same channel and match it: casual register, one line plus bare links, no honorifics, no emoji, no diff counts, no explanatory paragraph. Match the channel's existing format for review requests and build notices too, as that same `from:<user id>` search shows it.
 
 ## Scheduling
 

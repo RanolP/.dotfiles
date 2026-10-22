@@ -33,6 +33,14 @@ Work from these alone. Everything the commissioner must hear about how the page 
 4. Write the file to `path`, then check your own stylesheet for three layout defects before returning: a `display: grid|flex` rule on an element that holds running text (it splits bare text nodes into separate items, so a sentence lands one character per line in a narrow column -- hang a marker with `position: absolute` on `::before` instead), a `gap` on elements whose default margins are still live (gap adds to them, doubling every seam -- zero those margins in the same stylesheet), and Korean body text without `word-break: keep-all; overflow-wrap: break-word` (Hangul otherwise breaks mid-word). Draw every diagram as inline static SVG, never a mermaid block: a page holding any mermaid block cannot be shared publicly, because the content scan never dispatches for it and public serving is refused.
 5. On a follow-up message carrying cold-read findings, revise the same file: move each `move_to: "chat"` quote into `returned_to_chat` and delete it from the page, and rewrite each `move_to: "rewrite_as_subject_fact"` quote as a statement about the subject. Return the result shape again.
 
+## Bug report and proposed-design pages
+
+This section applies to a page that reports a bug or proposes a design change; the design-review gallery follows its own skill instead.
+
+- Lead with numbered, one-line reproduction conditions (R1, R2: screen, action, browser, trigger expression, measured symptom, devices checked), then numbered to-be items (T1, T2) tagged [확정] (settled), [필수] (required) or [결정 필요] (decision needed), the last with each candidate's numbers.
+- Draw each as-is and to-be screen as an SVG built from the source's style values (size, spacing, token colors, alignment), and leave background, fix history, diffs and capture sections out.
+- When a draft needs a capture for review, render it as local HTML showing current and proposed side by side, light theme forced and only the requested figure area kept, through a capture copy that injects `data-theme="light"` and hides the surrounding elements.
+
 ## Output
 
 Return exactly this JSON, with no prose around it:

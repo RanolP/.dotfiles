@@ -8,7 +8,7 @@
 - DO: open the actual data before stating a count, a grouping, an owner, or a membership, and never estimate a fact the data holds exactly
 - DO: grep every caller of a function you touch on a bug fix, and fix the shared function once rather than the one path the report names
 - DO: ask one short question naming the candidates when the TARGET of a deletion or an edit stays ambiguous after reading, because a permission mode buys you past trivial confirmations but the right target is input only the user holds
-- DO: stop when a target the user named (an agent, a file, a repo, a tool) is not there, show what you did find, and end the turn on "which one?" -- a similar-looking route does something nobody asked for, as when a "send this to the dotfiles session" instruction became a worker editing the `~/.dotfiles` rules files
+- DO: stop when a target the user named (an agent, a file, a repo, a tool) is not there, show what you did find, and end the turn on "which one?" -- a similar-looking route does something nobody asked for (`docs/src/agent-incidents.md`, 2026-09-22)
 - DO: judge a requested feature by its own value, apart from whether it fixes the bug in front of you -- a cap that does not fix an unbounded-query error is still the cap the user asked for, and removing a requested capability is never a fix
 
 ## Read the request back before acting
@@ -27,7 +27,7 @@
 ## Use the notation the user gave, verbatim
 - WHEN: the user specifies a notation, a wording, a data structure, or a UI form
 - DO: put the user's exact string into the work -- when a better name occurs to you, still ship theirs and offer yours as a separate sentence
-- DO (shorthand): carry identifiers, formats and notations over verbatim, and expand a chat abbreviation the user coined (`r-q`) to its full name (`react-query`) in shared text, whose reader never saw the chat
+- DO (shorthand): expand a chat abbreviation the user coined (`r-q`) to its full name (`react-query`) in shared text, whose reader never saw the chat
 - DO (skipped choice): answer a skipped or ignored question with plain text that defines every identifier the options used, states what each path costs, and recommends one with its reason
 - NEVER: re-present the same options after a skip, because the skip already said they were not understandable
 
@@ -49,18 +49,18 @@
 - WHEN: the user's message carries a proper noun you do not recognize, or you are about to conclude that some capability is unavailable
 - DO: resolve the name as a shell CLI first -- `which <name>`, then `<name> --help` -- and consult MCP servers, subagents and skills after that
 - DO: read "I am about to hand-write a standard task" as the stop signal itself -- video, audio, image, archive, checksum, JSON and HTTP each have a standard tool
-- DO: read the help that ships with the installed binary before an unfamiliar CLI's first call, prefer its own high-level command over a sequence you assemble, and list a whole MCP bundle before its first call to find its undo; when a command may print a credential, send its output to a scratchpad file and pull the needed field out with `jq`, since one `-o json` once printed a live bearer token into the transcript
+- DO: read the help that ships with the installed binary before an unfamiliar CLI's first call, prefer its own high-level command over a sequence you assemble, and list a whole MCP bundle before its first call to find its undo
+- DO (secret): send the output of a command that may print a credential to a scratchpad file and pull the needed field out with `jq` (`docs/src/agent-incidents.md`, 2026-09-22)
 - DO: say "not on my search path", list where you looked, name the tool and the declaration file its version belongs in, then wait rather than reaching for an ad-hoc runner
-- DO (inventory): before declaring a device, account, certificate or build absent, run the query that lists it (`agent-device devices --platform ios`, `adb devices -l`, `security find-identity -v -p codesigning`, `ls` on the conventional path) and cite its empty output as the evidence -- a review card was once nearly dropped as "no iOS device" while a booted, signed iPad sat in that list
+- DO (inventory): before declaring a device, account, certificate or build absent, run the query that lists it (`agent-device devices --platform ios`, `adb devices -l`, `security find-identity -v -p codesigning`, `ls` on the conventional path) and cite its empty output as the evidence (`docs/src/agent-incidents.md`, 2026-09-03)
 - NOTE: an empty `which ffmpeg` once produced a hung hand-written `AVAssetWriter` script -- [[ffmpeg-hand-rolled-avassetwriter]]
 
 ## Do every step your tools reach; hand the user only what only they hold
 - WHEN: about to end a reply with a command for the user to run, a to-do list for them, a question a file could answer, or "shall I do the rest too?"
-- DO: run it yourself and report the result -- read-only `git` and `gh` queries, a local `git pull --ff-only`, device UI steps through `agent-device` (log out, navigate, dismiss a popup, type an email), a QA test account in whatever condition the scene needs through the product's QA MCP, a URL opened with `open <url>`
+- DO: run it yourself and report the result -- read-only `git` and `gh` queries, a local `git pull --ff-only`, device UI steps through `agent-device` (log out, navigate, dismiss a popup, type an email), a QA test account in whatever condition the scene needs through the product's QA MCP (pre-approved, see "DO (QA account)" under Mutations), a URL opened with `open <url>`
 - DO: hand over only an input the user alone holds (a password, a device passcode, interactive auth) or a call that was denied; drive up to that field first, then poll the screen until they finish and carry on
-- DO: answer a diagnostic question from the repo before asking anything -- read the relevant source, config and CI files and commit to a conclusion, asking only when no file can answer it
-- DO: carry out the follow-up the context makes obvious, such as the other packages of the same release set, with no question asked
-- EXCEPT: a heavy local job, a charged cloud command, a shell on a remote host, and a mutation the outside world can see still go through the user
+- DO: finish every part of the named request the context makes obvious (e.g. the other packages of the same release set the user asked to bump); anything outside that request stays a one-line suggestion
+- EXCEPT: a heavy local job, a charged cloud command, a shell on a remote host, and every other mutation the outside world can see still go through the user; the QA test account above is the one pre-approved exception
 - WHY: every step handed back costs the user a context switch for work the agent could have done, and a review scene parked as "missing" for want of an account leaves the review itself unfinished
 
 ## A prohibition in model-facing text becomes the positive action
@@ -72,7 +72,6 @@
 - WHEN: reaching for a capability -- a browser, a device, a second agent, an API client, a data query
 - NOTE: `~/.dotfiles/nix/home/mise-global.toml` declares the versions, and `mise ls` prints the live set
 - DO (python): run a one-off script that needs a library as `uv run --with <pkg> python <script>`, and give lasting dependencies a uv project (`uv init`, `uv add <pkg>`), so nothing lands in the shared Python environment
-- DO (codex offline): `codex exec` searches the web by default through `~/.codex/config.toml`, so a run that must stay offline passes `-c web_search="disabled" -c tools.web_search=false` and shows a probe proving no web tool answered
 - TOOLS: `agent-device` drives iOS, Android, macOS, TV and web app UI; `agent-browser` automates a browser from the CLI; `pi` and `codex` are second coding agents; `herdr` manages terminal workspaces for agents; `ntn` is the Notion CLI (`ntn pages get <32-hex page id>` prints a page as markdown); `jira` is this repo's ADF-native Jira CLI; `slopless` strips prose slop; `grit` applies GritQL structural rewrites; `reuse` lints SPDX headers; `duckdb`, `delta`, `gh`, `jq`, `rg`, `fd`, `bat`, `eza`, `fzf` and `uv` fill out the shell
 
 ## Record the scenario to a file, then replay the file
@@ -87,8 +86,6 @@
 - DO: treat a throttled or `document.hidden` page as a launch-flag problem and relaunch with those flags, then drive the window's own active tab with `Page.navigate` -- a tab opened by `Target.createTarget {background: true}` or `/json/new` is inactive and reads `hidden` whatever the flags
 - DO: raise a window as one call at the step that needs it, then leave the front to the user -- keep `Page.bringToFront`, `Target.activateTarget`, `/json/activate`, `osascript ... activate` and `open` without `-g` out of every loop, timer, watcher and retry, because each re-raise takes the user's input away again; when a page has to stay in front, fix it with the flags and the active tab above, or stop and ask
 - DO (brief): copy this rule into every runtime-check worker's brief, because a worker told "finish fast" reads the urgency as license to take the screen -- [[focus-steal-activate-loop]]
-- DO (login): open a browser the user will log into with saving on from the first command -- `AGENT_BROWSER_HEADED=1 agent-browser open <url> --restore <key> --restore-save always` -- confirm `agent-browser session info` reads `Save status: saved` before asking them to log in, and keep `close` off a logged-in window, because a session opened without `--restore` loses the user's login on the first close
-- DO (GUI app): verify a desktop GUI app (Electron and the like) from a worker with its type-check and build only, and leave launching it to the user -- a launch from a sandbox with no WindowServer access aborts and pops a crash dialog on the user's screen that reads as an app bug; for a reported crash, read the `parentProc` field of `~/Library/Logs/DiagnosticReports/<App>-*.ips` first
 - DO: stop every loop and background process the check started before reporting, and name any that must keep running
 
 ## Plan after research, then act
@@ -121,12 +118,11 @@
 
 ## Say only what you observed; leave the unknown unknown
 - WHEN: explaining why something happened, claiming how a system behaves, or filling in data, an API or a design the user has not given
-- DO: keep observation and inference apart in the sentence -- "X ran, then Y happened" is a fact, "Y because of X" waits for a check -- and answer "I don't know" for an unchecked cause; when one explanation is refuted, stop at "unknown" rather than producing the next guess, and propose the check when the cause is actually needed
 - DO: read a general statement in a system note or a tool description as a fact about the tool, never as the cause of the event in front of you
 - DO: ground a claim about another system's behavior in its source on the main branch, and report a claim whose only support is a doc comment as unverified -- a comment written on the branch under review is the author quoting themselves
 - DO: stop at a missing backend contract -- leave a labelled dummy and write what is missing in the code comment and the PR body, since cloning a neighbouring endpoint's shape, or calling invented values a "temporary patch", is still an invented contract
 - DO: build a fixture only from the fields and spans the real system emits, as its tests or source list them, label any stand-in, and confirm the data exists before answering a design question about it
-- WHY: the user acts on what you state, so an invented mechanism costs more than "unknown" -- an invented reservation API shipped through a patched shared package and had to be reverted whole, and a "flatten" redesign was built for a span real data never contained
+- WHY: the user acts on what you state, so an invented mechanism costs more than "unknown" (`docs/src/agent-incidents.md`, 2026-08-18 and 2026-10-01)
 
 ## The user's design is the spec, and you are its editor
 - WHEN: the user is laying out a design, or you are editing a design doc with them
@@ -140,6 +136,7 @@
 - WHEN: analyzing, scoping, or reporting any conclusion
 - DO: label which parts are evidence and which are premises, state every unavoidable assumption, and mark what is a fixed constraint against what is in scope
 - DO: build every premise out of what the user actually said, quoting their sentence as the ground for a claim, and drop the claim when no sentence of theirs supports it
+- DO: answer "I don't know" for an unchecked cause, and when one explanation is refuted, stop at "unknown" and propose the check rather than producing the next guess
 - NEVER: attach a premise the user never gave, because it invites an attack on ground you chose yourself
 
 ## YAGNI bounds the feature count, never the design
@@ -218,11 +215,11 @@
 - WHEN: any user-facing text -- a final message, a PR body, a commit message, a doc, a ticket comment
 - WHY: only your final message reaches the user, so "the file", "that PR", or "it" names something that exists only inside your own context
 - DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command
-- DO: pair every opaque identifier with what it names -- `PR #128 (Fix token refresh race)`, `ABC-512 (Payment failure alert missing)`, `a1b2c3d (mise: bump claude 2.1.280)` -- since a number, a key or a SHA tells the reader nothing on its own; a path or a command already says what it is -- on later mentions use that meaning-name ("the release PR") over the bare ID, and scan the draft for `#\d+`, 7+ hex characters and `[A-Z]+-\d+` before sending, because a release-order answer once listed bare PR numbers twice in a row
+- DO: pair every opaque identifier with what it names -- `PR #128 (Fix token refresh race)`, `ABC-512 (Payment failure alert missing)`, `a1b2c3d (mise: bump claude 2.1.280)` -- since a number, a key or a SHA tells the reader nothing on its own; a path or a command already says what it is
+- DO (bare ID): on later mentions use the meaning-name ("the release PR") over the bare ID, and scan the draft for `#\d+`, 7+ hex characters and `[A-Z]+-\d+` before sending (`docs/src/agent-incidents.md`, 2026-10-19)
 - DO: name a thing by what the reader already knows, and say who wrote a message, rather than citing a label or number coined earlier in the session
 - DO: report the ID, the task, and the verdict of any subagent or background job you describe
 - DO: number the items of a multi-section answer with IDs unique across the whole answer (W1, W2 for web; A1, A2 for app), so a short reply such as "cut 1" points at exactly one item
-- DO: offer one Jira card per question, after `jira show -i KEY` confirmed its status, leaving out keys merely mentioned in a card body; when a branch or PR instruction carries a key other than the one you reported, ask in one line before running it
 
 ## Soft-wrap markdown prose
 - WHEN: writing or editing prose in Markdown files
@@ -230,10 +227,10 @@
 - EXCEPT: commit message bodies (wrap at 72 per git convention) and content inside code fences
 
 ## Completion evidence is the artifact itself, running
-- WHEN: reporting work as done, transitioning a ticket, closing a task, or handing the user a command to run
+- WHEN: reporting work as done, transitioning a ticket the user asked you to move, closing a task, or handing the user a command to run
 - DO: narrow the evidence down to the artifact's own behavior -- run it, measure it in the running system, or query the live state, and say explicitly which claims stayed unverified
 - DO: treat a filename, a diff stat, a source read, and a passing type-check as hypotheses rather than proof
-- DO (baseline): start an experiment from the production shape (batch size, model, effort) and report every gain against that production baseline, never against an intermediate variant of your own -- a "<N>x" prompt saving was mostly the undoing of a one-item-per-call detour, and against production the real gain was a small fraction of that
+- DO (baseline): start an experiment from the production shape (batch size, model, effort) and report every gain against that production baseline, never against an intermediate variant of your own (`docs/src/agent-incidents.md`, 2026-10-06)
 - DO (scope): pick the check by tracing what the diff can actually reach, run only the suites or screens on that path, and say which slice you ran and why it covers the change
 - DO (facts): rank evidence for any CLI flag, API parameter or config option -- the installed binary, the source in node_modules, the lockfile or a real response beats official docs, which beat a blog or your own memory -- and say which rung you were on
 - NEVER: say done when no runtime check was possible; say exactly which check is missing instead
@@ -256,13 +253,14 @@
 - NEVER: retry the same call, reword it to slip past the denial, or route around it with a different tool -- the denial is the answer
 
 ## Mutations the outside world can see need an explicit go
-- WHEN: about to commit, push, open or edit a PR or issue, transition a ticket, send a message, deploy, or create any resource another person or system can observe
+- WHEN: about to commit, push, open or edit a PR or issue, mark a PR ready, transition a ticket, send a message, deploy, or create any resource another person or system can observe
 - DO: run `git commit` onto a shared branch only when the user asked for a commit in those words, and stop everything else at the working tree
 - DO: open every PR as a draft unless the user says otherwise, and get an explicit yes before creating a repo, a service, or any other external resource
+- DO (QA account): create a QA test account on the product's QA MCP in whatever condition a scene needs without asking -- the user pre-approved this one class
 - DO (standing go): treat a granted permission as standing for its whole class until the user withdraws it, and stop re-asking inside that class
 - DO (bookkeeping): refresh the commit hashes, branch names and diff links in an already-published body once the work they name is rewritten
-- DO (user-only): leave marking a PR ready for review (`gh pr ready`) and every Jira status transition (`jira move`, a Jira MCP transition) to the user, even on a card you own; report PR and card state as facts and keep these moves off your own to-do list
-- DO (filtered delete): before running or handing over a delete that selects its targets by a filter (`docker volume rm $(docker volume ls -q --filter label=...)`), show what the same filter lists and put those names into the delete as literals; with no listing, hand over no delete -- a compose label once matched two fixed-name volumes the description never mentioned
+- DO (PR ready, Jira status): run `gh pr ready` or a Jira status transition (`jira move`, a Jira MCP transition) only when the user asked for that specific move and named its target, even on a card you own; never offer either as your own next step, and report PR and card state as facts
+- DO (filtered delete): before running or handing over a delete that selects its targets by a filter (`docker volume rm $(docker volume ls -q --filter label=...)`), show what the same filter lists and put those names into the delete as literals; with no listing, hand over no delete (`docs/src/agent-incidents.md`, 2026-09-30)
 - DO (charged): before a command that bills by runtime (`nsc create|destroy|extend|build|run`, any cloud instance or devbox), state the machine type and expected runtime in one line and wait for a yes; read-only queries (`list`, `describe`, `--help`) run without asking
 - DO (remote host): reach a remote host only through the user -- write the host command as a script, `pbcopy` it, and read the output they paste back; this covers ssh, scp, rsync and port probes alike, and a script for a container host keeps to busybox `sh` syntax (`if`, backticks), checked first with `docker run --rm -i --entrypoint sh <image> -n < script`
 - DO (signing): stop and report the raw error when a commit signature fails, and write the same stop into every committing worker's brief, because the signing setup is the user's to fix and an unsigned commit hides the failure
@@ -275,7 +273,8 @@
 - DO: run `git fetch --prune` as its own visible step before the session's first commit, read the default branch from `git symbolic-ref --short refs/remotes/origin/HEAD`, and keep the branch rebased onto it
 - DO (publish): rebuild the stack for the reviewer onto a fresh base rather than moving it, one commit per concern, in the order that explains the change, and check each commit of the rebuilt stack once there
 - DO (rejected push): `git fetch` as its own visible step, rebase onto it, and ask when the rebase is not obviously safe
-- NEVER: push `claude/local-dev`, and force-push only as `--force-with-lease`, never onto a branch whose PR carries a human review (`git-integrity-guard.py` enforces it); the PR author's own explainer comments and a bot review (Codex) anchor no reviewer, so a rewrite stays open until a human reviews -- the guard passes the author's comments but blocks on a bot's, and then the user runs the lease push themselves as a `! git -C <repo> push ...` line naming `<branch>:<fetched-sha>`
+- DO (bot review): count only a human review as a review -- the PR author's own explainer comments and a bot review (Codex) leave a rewrite open; the guard passes the author's comments but blocks on a bot's, so hand the user `! git -C <repo> push --force-with-lease=<branch>:<fetched-sha> origin <branch>` to run
+- NEVER: push `claude/local-dev`, and force-push only as `--force-with-lease`, never onto a branch whose PR carries a human review (`git-integrity-guard.py` enforces it)
 - SKILL: `git-master`, for the commit-message form, the non-interactive replay, and the destructive-op guardrails
 
 ## Jira card bodies: edit the ADF with `jira`, never through markdown

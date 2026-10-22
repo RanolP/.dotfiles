@@ -126,6 +126,11 @@ Each of these produced a wrong verdict once. Check the matching one before repor
 - **iOS runner signing and its env.** With no Apple ID account in Xcode, the default runner bundle ID fails with "No Accounts / No profiles"; start the daemon with `AGENT_DEVICE_IOS_TEAM_ID`, `AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID` and `AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID` set to your team's prefix and leave `AGENT_DEVICE_IOS_PROVISIONING_PROFILE` unset, since it fights automatic signing. These are read only at daemon start, so kill the daemon first.
 - **`record start` stuck after a runner restart.** It keeps failing with "not reached a confirmed terminal state" until `~/.agent-device/sessions/<session>/screen-recording.resource.json` is moved aside. A `press` during recording can restart the runner, so check this first when a recording fails.
 
+## A browser the user logs into, and a desktop app from a worker
+
+- **Keep the user's login.** Open a browser the user will log into with saving on from the first command -- `AGENT_BROWSER_HEADED=1 agent-browser open <url> --restore <key> --restore-save always` -- and confirm `agent-browser session info` reads `Save status: saved` before asking them to log in. Keep `close` off a logged-in window, because a session opened without `--restore` loses the user's login on the first close.
+- **Leave a desktop GUI app's launch to the user.** Verify an Electron or similar app from a worker with its type-check and build only. A launch from a sandbox with no WindowServer access aborts and pops a crash dialog on the user's screen that reads as an app bug; for a reported crash, read the `parentProc` field of `~/Library/Logs/DiagnosticReports/<App>-*.ips` first.
+
 ## Ordering facts
 
 `agent-device` runs stateful commands (`open`, `press`, `fill`, `type`, `scroll`, `back`, `alert`, `replay`, `batch`, `close`) serially within one session, so a batch is already the serialized form. Concurrency belongs to read-only commands, or to separate sessions and devices — `agent-browser --session <name>` and `agent-device --session <name>` isolate them.

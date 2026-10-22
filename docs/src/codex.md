@@ -18,6 +18,8 @@ OpenAI coding agent CLI, configured through Home Manager and mise.
 | startup update check | disabled |
 | default subagent | `gpt-6-luna`, xhigh reasoning |
 
+Because web search is live by default, a `codex exec` run that must stay offline passes `-c web_search="disabled" -c tools.web_search=false` and shows a probe proving no web tool answered. The `codex-subagent` mod already writes both settings into its worker config.
+
 The `agents` section caps depth at 2 and concurrent threads per session at 8. The TUI status line shows the current directory, Git branch, model reasoning, context use, and five-hour and weekly limits.
 
 ## Agents and Hooks

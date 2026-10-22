@@ -97,5 +97,6 @@ Compare that file list against `git diff --name-only origin/<default-branch>...H
 
 - `--draft` for work in progress.
 - Keep PRs small and single-purpose. A feature PR carries only that feature: a new test framework, build-config changes and edits to unrelated packages go to their own PR, so read `git diff --stat origin/<default>` and move every path outside the feature out. Shared modules stay read-only in a feature PR -- build the behavior inside the feature directory, and justify each file outside it first when auditing the diff.
+- Renaming a branch (`gh api -X POST repos/{owner}/{repo}/branches/{branch}/rename -f new_name=...`) retargets every PR that uses it as base, but permanently CLOSES the PR whose head it is: `gh pr reopen` fails because the old head ref is gone. Say before the rename that the head PR dies and its number changes, then recreate it as a draft with the old body (`gh pr view <old> --json body -q .body > file`, `gh pr create --draft --body-file file`) and update every Jira, Slack and doc link to the new number. Deleting and re-pushing the branch closes it the same way.
 - Self-review the diff before requesting review.
 - Ensure the branch is clean and rebased before opening (defer to `git-master`).

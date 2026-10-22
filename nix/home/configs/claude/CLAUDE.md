@@ -14,11 +14,11 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: estimate how long this unit holds the main thread, then commit to EXACTLY ONE -- (1) SUBAGENT, a background Agent worker while main keeps answering the user; (2) QUICK RETURN, inline because it is read-only and finishes within a couple of tool calls
 - DO: read the session's delegation policy, which the SessionStart `architect-rules.py` hook injects per model, as the answer to which strategy is the default
 - DO: carry the chosen strategy to the end, because starting inline and converting halfway spends the main thread twice
-- DO (clock): read the `Now ...; last turn took ...` line the prompt hook injects, and when the last turn ran long, cut this one to the shortest path that answers
+- DO (clock): read the `Now ...; last turn took ...` line the prompt hook injects, and when the last turn ran long, cut this one to the shortest path that answers; answer first with what is already known and deepen only when asked, and declare multi-step work's budget with `mcp__time-budget__estimate` so elapsed time stays visible
 - DO (load): before starting a heavy local job -- a native build (`gradlew`, `xcodebuild`), an extra emulator or simulator boot, Metro `--reset-cache`, a container run -- ask the user first, with its cost (time, CPU, what else is already running per `sysctl -n vm.loadavg` and `pgrep -fl 'Simulator|qemu|emulator|metro|docker|nix build'`) in one line, and reuse a running emulator or build over starting another; cheap work such as edits and reads stays parallel at any load
 - DO (load, worker brief): write "stop and report if a build is needed" into the brief, so the ask reaches the user instead of the worker deciding
 - DO (load, approved): `renice -n 15` what you launched, and stop every emulator, Metro and Gradle daemon (`./gradlew --stop`) you started once the check is done
-- WHY: this Mac is the user's working machine and other sessions run emulators and Metro on it too, so overlapping heavy jobs freeze the user's own work -- one unasked `assembleDebug` drove load average to 25 [[heavy-local-build-unasked]]
+- WHY: this Mac is the user's working machine and other sessions run emulators and Metro on it too, so overlapping heavy jobs freeze the user's own work -- one unasked `assembleDebug` drove load average to 25 (`docs/src/agent-incidents.md`, 2026-10-15)
 - EXCEPT: keep work inline when only the main thread can do it -- the judgement itself, or a diff whose duplication the worker cannot see because the context lives in this session
 
 ## Run a delegated unit as a self-contained brief
@@ -27,6 +27,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: act on the completion notification when the harness re-invokes you -- continue other ready work, or end the turn
 - DO (multi-step): state the whole step set in the reply before the first one starts, which clm records into the task list panel, then send everything with no unmet dependency out in ONE message
 - DO: keep destructive Bash in the foreground, where its output lands in context
+- DO (codex commit): give a codex worker the change up to staging and make the commit from main or by the user's `!` command, because the codex seatbelt sandbox blocks the keyboxd socket and every signed commit fails inside it
 - DO (typed result): when a worker's result feeds another agent, a routing decision or a synthesis pass, name its exact fields and types in the brief (or pass `schema:` to a Workflow agent) and require that shape with no prose wrapper, so main holds a small structured record rather than worker prose
 - DO (receipt): check the shape before using it, and on a mismatch `SendMessage` the same worker once to re-emit in shape, since its context is still intact and a resend costs less than a respawn
 

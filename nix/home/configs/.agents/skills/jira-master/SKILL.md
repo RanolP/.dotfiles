@@ -52,3 +52,4 @@ There is no upload path. The Atlassian MCP surface has no attachment tool, and i
 - `jira media ls -i KEY` prints the media ids already on the card. Reference one of those.
 - A `media` node with `type: "external"` plus a `url` stores verbatim.
 - When a genuinely new file is needed, ask the user to upload it through the Jira web UI, then reference the id `jira media ls` reports.
+- Reading an attachment has no path either: the `jira` CLI has no download command, and its token answers 403 on `attachment/content/<id>`. Judge from the card text first, ask the user one line about what only the image shows, and read the screenshot they paste into the chat -- a browser detour to the attachment URL is not a route.

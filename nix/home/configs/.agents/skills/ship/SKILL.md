@@ -20,7 +20,7 @@ NEVER: chain `git add` and `git commit` with `&&`, `;`, or a newline inside a si
 
 ## Checkpoint commits land on main as each unit lands
 
-In a repository whose rules forbid branches and work directly on `main` (this dotfiles repo is one), commit every unit onto local `main` as soon as it lands, with no permission asked and no tests or build run first. Run steps 1-4 of the sequence for it -- read, stage, check safety, commit -- and stop there: the push waits for an explicit ship or push request, and the tests and build run once at that push (step 5). Other sessions share this checkout, so work left uncommitted gets stashed under them and fixed a second time -- [[ship-checkpoint-commit-main]].
+In a repository whose rules forbid branches and work directly on `main` (this dotfiles repo is one), commit every unit onto local `main` as soon as it lands, with no permission asked and no tests or build run first. Run steps 1-4 of the sequence for it -- read, stage, check safety, commit -- and stop there: the push waits for an explicit ship or push request, and the tests and build run once at that push (step 5). Other sessions share this checkout, so work left uncommitted gets stashed under them and fixed a second time (incident: `docs/src/agent-incidents.md`, 2026-10-07).
 
 ## The sequence
 

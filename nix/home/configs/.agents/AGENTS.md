@@ -27,6 +27,7 @@
 ## Use the notation the user gave, verbatim
 - WHEN: the user specifies a notation, a wording, a data structure, or a UI form
 - DO: put the user's exact string into the work -- when a better name occurs to you, still ship theirs and offer yours as a separate sentence
+- DO (shorthand): carry identifiers, formats and notations over verbatim, and expand a chat abbreviation the user coined (`r-q`) to its full name (`react-query`) in shared text, whose reader never saw the chat
 - DO (skipped choice): answer a skipped or ignored question with plain text that defines every identifier the options used, states what each path costs, and recommends one with its reason
 - NEVER: re-present the same options after a skip, because the skip already said they were not understandable
 
@@ -48,8 +49,9 @@
 - WHEN: the user's message carries a proper noun you do not recognize, or you are about to conclude that some capability is unavailable
 - DO: resolve the name as a shell CLI first -- `which <name>`, then `<name> --help` -- and consult MCP servers, subagents and skills after that
 - DO: read "I am about to hand-write a standard task" as the stop signal itself -- video, audio, image, archive, checksum, JSON and HTTP each have a standard tool
-- DO: read the help that ships with the installed binary before an unfamiliar CLI's first call, prefer its own high-level command over a sequence you assemble, and list a whole MCP bundle before its first call to find its undo
+- DO: read the help that ships with the installed binary before an unfamiliar CLI's first call, prefer its own high-level command over a sequence you assemble, and list a whole MCP bundle before its first call to find its undo; when a command may print a credential, send its output to a scratchpad file and pull the needed field out with `jq`, since one `-o json` once printed a live bearer token into the transcript
 - DO: say "not on my search path", list where you looked, name the tool and the declaration file its version belongs in, then wait rather than reaching for an ad-hoc runner
+- DO (inventory): before declaring a device, account, certificate or build absent, run the query that lists it (`agent-device devices --platform ios`, `adb devices -l`, `security find-identity -v -p codesigning`, `ls` on the conventional path) and cite its empty output as the evidence -- a review card was once nearly dropped as "no iOS device" while a booted, signed iPad sat in that list
 - NOTE: an empty `which ffmpeg` once produced a hung hand-written `AVAssetWriter` script -- [[ffmpeg-hand-rolled-avassetwriter]]
 
 ## Do every step your tools reach; hand the user only what only they hold
@@ -58,7 +60,7 @@
 - DO: hand over only an input the user alone holds (a password, a device passcode, interactive auth) or a call that was denied; drive up to that field first, then poll the screen until they finish and carry on
 - DO: answer a diagnostic question from the repo before asking anything -- read the relevant source, config and CI files and commit to a conclusion, asking only when no file can answer it
 - DO: carry out the follow-up the context makes obvious, such as the other packages of the same release set, with no question asked
-- EXCEPT: a heavy local job and a mutation the outside world can see still wait for the user's go
+- EXCEPT: a heavy local job, a charged cloud command, a shell on a remote host, and a mutation the outside world can see still go through the user
 - WHY: every step handed back costs the user a context switch for work the agent could have done, and a review scene parked as "missing" for want of an account leaves the review itself unfinished
 
 ## A prohibition in model-facing text becomes the positive action
@@ -70,7 +72,8 @@
 - WHEN: reaching for a capability -- a browser, a device, a second agent, an API client, a data query
 - NOTE: `~/.dotfiles/nix/home/mise-global.toml` declares the versions, and `mise ls` prints the live set
 - DO (python): run a one-off script that needs a library as `uv run --with <pkg> python <script>`, and give lasting dependencies a uv project (`uv init`, `uv add <pkg>`), so nothing lands in the shared Python environment
-- TOOLS: `agent-device` drives iOS, Android, macOS, TV and web app UI; `agent-browser` automates a browser from the CLI; `pi` and `codex` are second coding agents; `herdr` manages terminal workspaces for agents; `ntn` is the Notion CLI; `jira` is this repo's ADF-native Jira CLI; `slopless` strips prose slop; `grit` applies GritQL structural rewrites; `reuse` lints SPDX headers; `duckdb`, `delta`, `gh`, `jq`, `rg`, `fd`, `bat`, `eza`, `fzf` and `uv` fill out the shell
+- DO (codex offline): `codex exec` searches the web by default through `~/.codex/config.toml`, so a run that must stay offline passes `-c web_search="disabled" -c tools.web_search=false` and shows a probe proving no web tool answered
+- TOOLS: `agent-device` drives iOS, Android, macOS, TV and web app UI; `agent-browser` automates a browser from the CLI; `pi` and `codex` are second coding agents; `herdr` manages terminal workspaces for agents; `ntn` is the Notion CLI (`ntn pages get <32-hex page id>` prints a page as markdown); `jira` is this repo's ADF-native Jira CLI; `slopless` strips prose slop; `grit` applies GritQL structural rewrites; `reuse` lints SPDX headers; `duckdb`, `delta`, `gh`, `jq`, `rg`, `fd`, `bat`, `eza`, `fzf` and `uv` fill out the shell
 
 ## Record the scenario to a file, then replay the file
 - WHEN: about to drive a UI, an app, an API, or any multi-step flow you expect to run more than once
@@ -97,6 +100,7 @@
 - WHEN: a tool call, a command, a build, or a test fails
 - DO: write down the HYPOTHESIS for what failed, then the CHECK that would distinguish it from the alternatives, and run that check -- in that order
 - DO: make the check cheaper than the thing that failed, use a distinct new hypothesis each attempt, and stop with a notification after 3 failures
+- DO (DNS): read `nodename nor servname` as possibly transient -- resolve the host with `python3 -c "import socket; print(socket.gethostbyname('<host>'))"` and retry the plain fetch once before calling the host blocked; a durably blocked host reads through `https://r.jina.ai/<full url>`
 - NEVER: re-issue a byte-identical command that already failed
 - WHY: blind retries burned 3,674 seconds in one measured week and produced nothing -- [[retry-without-hypothesis-cost]]
 
@@ -214,7 +218,7 @@
 - WHEN: any user-facing text -- a final message, a PR body, a commit message, a doc, a ticket comment
 - WHY: only your final message reaches the user, so "the file", "that PR", or "it" names something that exists only inside your own context
 - DO: write the exact identifier -- `path/to/file.py:42`, `PR #128`, the branch name, the commit SHA, the ticket key, the literal command
-- DO: pair every opaque identifier with what it names -- `PR #128 (Fix token refresh race)`, `ABC-512 (Payment failure alert missing)`, `a1b2c3d (mise: bump claude 2.1.280)` -- since a number, a key or a SHA tells the reader nothing on its own; a path or a command already says what it is
+- DO: pair every opaque identifier with what it names -- `PR #128 (Fix token refresh race)`, `ABC-512 (Payment failure alert missing)`, `a1b2c3d (mise: bump claude 2.1.280)` -- since a number, a key or a SHA tells the reader nothing on its own; a path or a command already says what it is -- on later mentions use that meaning-name ("the release PR") over the bare ID, and scan the draft for `#\d+`, 7+ hex characters and `[A-Z]+-\d+` before sending, because a release-order answer once listed bare PR numbers twice in a row
 - DO: name a thing by what the reader already knows, and say who wrote a message, rather than citing a label or number coined earlier in the session
 - DO: report the ID, the task, and the verdict of any subagent or background job you describe
 - DO: number the items of a multi-section answer with IDs unique across the whole answer (W1, W2 for web; A1, A2 for app), so a short reply such as "cut 1" points at exactly one item
@@ -259,6 +263,9 @@
 - DO (bookkeeping): refresh the commit hashes, branch names and diff links in an already-published body once the work they name is rewritten
 - DO (user-only): leave marking a PR ready for review (`gh pr ready`) and every Jira status transition (`jira move`, a Jira MCP transition) to the user, even on a card you own; report PR and card state as facts and keep these moves off your own to-do list
 - DO (filtered delete): before running or handing over a delete that selects its targets by a filter (`docker volume rm $(docker volume ls -q --filter label=...)`), show what the same filter lists and put those names into the delete as literals; with no listing, hand over no delete -- a compose label once matched two fixed-name volumes the description never mentioned
+- DO (charged): before a command that bills by runtime (`nsc create|destroy|extend|build|run`, any cloud instance or devbox), state the machine type and expected runtime in one line and wait for a yes; read-only queries (`list`, `describe`, `--help`) run without asking
+- DO (remote host): reach a remote host only through the user -- write the host command as a script, `pbcopy` it, and read the output they paste back; this covers ssh, scp, rsync and port probes alike, and a script for a container host keeps to busybox `sh` syntax (`if`, backticks), checked first with `docker run --rm -i --entrypoint sh <image> -n < script`
+- DO (signing): stop and report the raw error when a commit signature fails, and write the same stop into every committing worker's brief, because the signing setup is the user's to fix and an unsigned commit hides the failure
 - DO (irreversible): treat a send as permanent when the bundle carries no update and no delete, and take its draft path instead -- [[slack-send-is-irreversible]]
 - EXCEPT: a checkpoint commit onto `claude/local-dev` is exempt, because that branch never leaves the machine
 
@@ -268,7 +275,7 @@
 - DO: run `git fetch --prune` as its own visible step before the session's first commit, read the default branch from `git symbolic-ref --short refs/remotes/origin/HEAD`, and keep the branch rebased onto it
 - DO (publish): rebuild the stack for the reviewer onto a fresh base rather than moving it, one commit per concern, in the order that explains the change, and check each commit of the rebuilt stack once there
 - DO (rejected push): `git fetch` as its own visible step, rebase onto it, and ask when the rebase is not obviously safe
-- NEVER: push `claude/local-dev`, and force-push only as `--force-with-lease`, never onto a branch whose PR carries review comments (`git-integrity-guard.py` enforces it)
+- NEVER: push `claude/local-dev`, and force-push only as `--force-with-lease`, never onto a branch whose PR carries a human review (`git-integrity-guard.py` enforces it); the PR author's own explainer comments and a bot review (Codex) anchor no reviewer, so a rewrite stays open until a human reviews -- the guard passes the author's comments but blocks on a bot's, and then the user runs the lease push themselves as a `! git -C <repo> push ...` line naming `<branch>:<fetched-sha>`
 - SKILL: `git-master`, for the commit-message form, the non-interactive replay, and the destructive-op guardrails
 
 ## Jira card bodies: edit the ADF with `jira`, never through markdown

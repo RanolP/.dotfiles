@@ -47,6 +47,14 @@ Warming the bundle this way before the app connects also removes the first-launc
 
 Metro's file watcher rebuilds on its own. After an edit, re-request the bundle -- the same blocking call returns when the new build is ready, which is the reload gate.
 
+## Which Metro the emulator actually reached
+
+A React Native debug app inside the Android emulator defaults to `10.0.2.2:8081`, which the emulator's `netsimd` forwards straight to host port 8081, so `adb reverse` never applies to it. With two worktrees each running Metro, the emulator loads whichever one holds 8081 -- a review once recorded the unfixed bundle three times and reported the fix as a new bug.
+
+- Read the real connection: `lsof -nP -iTCP -sTCP:ESTABLISHED | awk '$1=="netsimd"'`; the host port that appears and disappears as the app starts and stops is the Metro in use.
+- Point the app at another port by writing `<string name="debug_http_host">10.0.2.2:<port></string>` into `shared_prefs/<package>_preferences.xml` through `run-as`, after backing the file up, and restore it once the review is done.
+- Confirm the bundle's origin with that `lsof` before judging any recording.
+
 ## What not to write
 
 `sleep 150`, `sleep 340`, or `until grep -q "bundle" metro.log; do sleep 5; done`. A fixed duration overshoots whenever the build finished early and forces a second call whenever it did not; a log grep matches on a substring whose wording belongs to Metro's console output rather than to its contract.

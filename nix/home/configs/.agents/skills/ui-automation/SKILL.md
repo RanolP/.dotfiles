@@ -114,6 +114,18 @@ Two or three batches for a long journey is the shape to aim for. A stable, known
 
 A batch is for the journey you are walking now. For one you will run again, record it to a file and replay that file -- the `record-replay` skill carries the arm-and-publish shape, the secret-safe `--record-as` fill, the `agent-browser` JSON scenario, and the divergence-resume loop.
 
+## Environment traps that read as product bugs
+
+Each of these produced a wrong verdict once. Check the matching one before reporting a defect.
+
+- **The browser is not the one you named.** `agent-browser -p <provider>` accepts only the providers its `--help` lists, and `safari` is not one; an unknown name silently launches headless Chrome. Read `navigator.userAgent` before any browser-specific verdict (`Version/<n> Safari/605.x` is Safari, `HeadlessChrome` is not). Desktop Safari is driven through `safaridriver --port <port>` or by the user; DRM playback is judged only in a real browser attached with `agent-browser connect <port>`.
+- **The display is asleep.** A sleeping display makes Chrome stop producing frames, so `screenshot`, `batch` and any `requestAnimationFrame` wait hang while `open` and a plain `eval` still answer, and `press Enter` on a `hidden` tab never reaches the page while `type` still fills the field. Check `system_profiler SPDisplaysDataType | grep Asleep` and `document.visibilityState`, wake it with `caffeinate -u -t 2`, and keep it awake through a long capture with `caffeinate -d -t <seconds>`.
+- **A Next.js dev server opened from a LAN host never hydrates.** `next dev` blocks `/_next/webpack-hmr` for any origin other than localhost, so a page opened as `https://<lan-host>:<port>` renders server HTML with no React attached. Add the host to `allowedDevOrigins` in `next.config.js` and restart before reviewing on a LAN device.
+- **The screenshot you read is scaled.** The Read tool shows a large screenshot downscaled, so a coordinate read off the displayed image must be multiplied by original width / displayed width before a tap (a 1080-wide Android capture displays at 923, factor 1.17). Read the original capture rather than a pre-shrunk copy, whose factor differs, and take the scale as the first hypothesis when a tap lands on nothing.
+- **`DEVICE_IN_USE` with no session.** When `agent-device open` reports the device in use but `agent-device session list` is empty everywhere and `~/.agent-device/device-claims/` holds no entry for it, a long-lived daemon is holding a stale claim in memory: `kill` the `pid` in `~/.agent-device/daemon.json`, and the next command starts a fresh daemon.
+- **iOS runner signing and its env.** With no Apple ID account in Xcode, the default runner bundle ID fails with "No Accounts / No profiles"; start the daemon with `AGENT_DEVICE_IOS_TEAM_ID`, `AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID` and `AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID` set to your team's prefix and leave `AGENT_DEVICE_IOS_PROVISIONING_PROFILE` unset, since it fights automatic signing. These are read only at daemon start, so kill the daemon first.
+- **`record start` stuck after a runner restart.** It keeps failing with "not reached a confirmed terminal state" until `~/.agent-device/sessions/<session>/screen-recording.resource.json` is moved aside. A `press` during recording can restart the runner, so check this first when a recording fails.
+
 ## Ordering facts
 
 `agent-device` runs stateful commands (`open`, `press`, `fill`, `type`, `scroll`, `back`, `alert`, `replay`, `batch`, `close`) serially within one session, so a batch is already the serialized form. Concurrency belongs to read-only commands, or to separate sessions and devices — `agent-browser --session <name>` and `agent-device --session <name>` isolate them.

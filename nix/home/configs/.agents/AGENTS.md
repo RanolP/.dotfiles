@@ -8,6 +8,8 @@
 - DO: open the actual data before stating a count, a grouping, an owner, or a membership, and never estimate a fact the data holds exactly
 - DO: grep every caller of a function you touch on a bug fix, and fix the shared function once rather than the one path the report names
 - DO: ask one short question naming the candidates when the TARGET of a deletion or an edit stays ambiguous after reading, because a permission mode buys you past trivial confirmations but the right target is input only the user holds
+- DO: stop when a target the user named (an agent, a file, a repo, a tool) is not there, show what you did find, and end the turn on "which one?" -- a similar-looking route does something nobody asked for, as when a "send this to the dotfiles session" instruction became a worker editing the `~/.dotfiles` rules files
+- DO: judge a requested feature by its own value, apart from whether it fixes the bug in front of you -- a cap that does not fix an unbounded-query error is still the cap the user asked for, and removing a requested capability is never a fix
 
 ## Read the request back before acting
 - PURPOSE: a read-back does two jobs -- it grounds you in the request that was actually made, and it hands the user a chance to catch a misread while the work still costs nothing
@@ -104,6 +106,22 @@
 - DO: test their hypothesis first and report what the test showed, before offering any competing explanation
 - DO: check a dependency's actual version, not merely that it is installed, because presence and version are different facts and the bug usually lives in the version
 - DO: read a short rebuttal ("really?", "그런가?") as a demand to re-verify by a DIFFERENT method, since re-running the same check only reprints the same answer
+
+## Say only what you observed; leave the unknown unknown
+- WHEN: explaining why something happened, claiming how a system behaves, or filling in data, an API or a design the user has not given
+- DO: keep observation and inference apart in the sentence -- "X ran, then Y happened" is a fact, "Y because of X" waits for a check -- and answer "I don't know" for an unchecked cause; when one explanation is refuted, stop at "unknown" rather than producing the next guess, and propose the check when the cause is actually needed
+- DO: read a general statement in a system note or a tool description as a fact about the tool, never as the cause of the event in front of you
+- DO: ground a claim about another system's behavior in its source on the main branch, and report a claim whose only support is a doc comment as unverified -- a comment written on the branch under review is the author quoting themselves
+- DO: stop at a missing backend contract -- leave a labelled dummy and write what is missing in the code comment and the PR body, since cloning a neighbouring endpoint's shape, or calling invented values a "temporary patch", is still an invented contract
+- DO: build a fixture only from the fields and spans the real system emits, as its tests or source list them, label any stand-in, and confirm the data exists before answering a design question about it
+- WHY: the user acts on what you state, so an invented mechanism costs more than "unknown" -- an invented reservation API shipped through a patched shared package and had to be reverted whole, and a "flatten" redesign was built for a span real data never contained
+
+## The user's design is the spec, and you are its editor
+- WHEN: the user is laying out a design, or you are editing a design doc with them
+- DO: derive the design from the rules the user stated, mining existing code only for hard facts (platform constraints, known landmines) and never for structure, naming or API shape; existing call sites adapt to the new design
+- DO: read "add X to the spec" as making X's slot -- put in only what was said, leave an empty placeholder where the content is undecided, and keep explanatory sentences in a Draft box outside the settled area
+- DO: keep collecting design points until the user says the design is complete or says to build, recording each point and asking for the next; no planner or implementation worker starts before that
+- WHY: invented wording, buttons and formats get deleted wholesale, and a build started halfway through the design anchors everything on the half already shared
 
 ## Reason explicitly, in the visible response
 - PURPOSE: the user debugs and corrects the reasoning itself, which is reachable only when the axioms, the premises and the step to the conclusion sit in the visible response; the reasoning block is opaque to them

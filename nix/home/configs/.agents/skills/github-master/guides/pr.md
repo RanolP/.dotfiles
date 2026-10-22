@@ -90,12 +90,12 @@ Compare that file list against `git diff --name-only origin/<default-branch>...H
 
 1. **A found PR covers this same task** → it owns the work. Name it to the user — number, title, head branch — and ask whether to continue it. Wait for the answer, then commit onto its head branch and push. Create nothing.
 2. **Work builds on an unmerged PR** → ask the user which base to use, and wait for the answer. Open a stacked PR only when the user asks for one.
-3. **Work needs more than one PR** → present the split and get approval before you write any of the code.
+3. **Work needs more than one PR** → present the split and get approval before you write any of the code. Split the code, not the save points: expand (add the new API beside the old, behavior unchanged), switch (move the call sites, the only behavior change), contract (delete the old code and any shim). Each PR stays near 300 lines with its tests, passes type-check on its own, and is safe to deploy alone; "the switch is atomic" is a reason to re-plan, never to keep one large PR. Base an independent PR on the default branch and a dependent one on the PR below it, merge the stack bottom-up, and confirm each base with `gh pr view <n> --json baseRefName`.
 4. **No overlap, single PR** → create it against the repo default branch.
 
 ## PR hygiene
 
 - `--draft` for work in progress.
-- Keep PRs small and single-purpose.
+- Keep PRs small and single-purpose. A feature PR carries only that feature: a new test framework, build-config changes and edits to unrelated packages go to their own PR, so read `git diff --stat origin/<default>` and move every path outside the feature out. Shared modules stay read-only in a feature PR -- build the behavior inside the feature directory, and justify each file outside it first when auditing the diff.
 - Self-review the diff before requesting review.
 - Ensure the branch is clean and rebased before opening (defer to `git-master`).

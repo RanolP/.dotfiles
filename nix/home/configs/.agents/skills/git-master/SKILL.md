@@ -87,6 +87,19 @@ git rebase --exec '<lint and typecheck>' origin/main   # once, at publish: every
 - The `git diff --exit-code` check is the whole-branch case. Publishing a subset instead? Diff against the tree that subset was meant to reach.
 - `--exec` checks out each commit in turn, so a commit that passes only once a later commit lands fails here. That is what the check is for.
 - Take the lint and typecheck commands from the repo -- `package.json` scripts, the `Makefile`, or the CI workflow.
+- Before review, fold every cleanup or refactor into the commit that introduced the code it touches, splitting a tail commit by file and hunk, and rewrite those commits' messages to match; a reviewer reads commit by commit, so a tail "fix 1, fix 2" commit makes them read code an earlier commit already throws away. One feature is one commit (renderer and wiring together).
+- Continue an epic on the branch that already carries it -- check `git worktree list` and `git branch --list 'claude/*'` first -- and leave the decision to split branches to the user.
+- A cleanup or diff-trim pass keeps the last verified commit's runtime behavior: name that baseline commit in the worker brief, have the worker return `behavior_vs_head` listing every runtime difference with the rule that requires it, and revert each difference no rule requires.
+
+## Rebasing a stack -- verify ancestry, not the worker's report
+
+- Before branch surgery, `git worktree list` for stale worktrees that hold the target branch, and remove the clean ones; a stale worktree once replayed a rebase twice and leaked four foreign commits into a PR.
+- Done means `git merge-base --is-ancestor <base> <head>` succeeds for each adjacent pair and `git diff <old tip> HEAD` is empty.
+- Report a stacked PR as merged only after `git merge-base --is-ancestor <sha> origin/main` succeeds, since a PR merged into its parent branch is not on main.
+
+## Worktrees live in the repo, never in the scratchpad
+
+Start every branch job in `git worktree add <repo>/.claude/worktrees/<name> -b claude/<name> origin/<default>`, install dependencies there, and put that path in the worker brief; the main checkout stays on its default branch, where the user's untracked files would otherwise fail the commit hooks. The session scratchpad is under `/private/tmp`, which macOS empties on reboot, taking an uncommitted worktree with it -- so checkpoint-commit a worker's tree changes as soon as they land.
 
 ## Destructive-op guardrails — fail closed: confirm + back up first
 

@@ -18,6 +18,10 @@
 - DO: put that line in the visible response whenever the request is ambiguous or its scope includes a mutation, so the user's correction arrives before the edit instead of after it
 - DO: keep the read-back inside your reasoning when the request is unambiguous and read-only, where the output style governs the visible text
 - DO: handle the one central thing the request is about first, before anything adjacent
+- DO (pronoun): resolve "it" in a directive ("make a draft PR on it") against the goal that opened the session, not the side question you appended last; a side cleanup stays a suggestion until the user names it
+- DO (state): read a new directive as a sign the world moved, so the first tool call of that turn reads the target's live state -- `gh pr view <n> --json isDraft,labels,mergeStateStatus` plus `gh pr checks <n>` for a PR -- before you act or hand anything over
+- DO (scope): change only the part an edit request names and keep the rest byte-identical; when several things could be meant, narrow by evidence (which commit actually has the large diff), and read "apply X" from another branch as porting the named behavior onto the current code, leaving that branch's redesign behind
+- DO (time): turn "today", "tomorrow" and "next week" into absolute dates anchored at when the user said them, including ones read back from a summary, check `TZ=Asia/Seoul date` before acting on anything scheduled, and give every time to the user in KST, converting a UTC `...Z` timestamp
 - WHY: what you write conditions everything you generate after it, so resolving the referents in the read-back forces the disambiguation to happen before the work; a fluent paraphrase that keeps the pronouns can be produced without reading anything, and it grounds nothing
 
 ## Use the notation the user gave, verbatim
@@ -208,6 +212,8 @@
 - DO: pair every opaque identifier with what it names -- `PR #128 (Fix token refresh race)`, `ABC-512 (Payment failure alert missing)`, `a1b2c3d (mise: bump claude 2.1.280)` -- since a number, a key or a SHA tells the reader nothing on its own; a path or a command already says what it is
 - DO: name a thing by what the reader already knows, and say who wrote a message, rather than citing a label or number coined earlier in the session
 - DO: report the ID, the task, and the verdict of any subagent or background job you describe
+- DO: number the items of a multi-section answer with IDs unique across the whole answer (W1, W2 for web; A1, A2 for app), so a short reply such as "cut 1" points at exactly one item
+- DO: offer one Jira card per question, after `jira show -i KEY` confirmed its status, leaving out keys merely mentioned in a card body; when a branch or PR instruction carries a key other than the one you reported, ask in one line before running it
 
 ## Soft-wrap markdown prose
 - WHEN: writing or editing prose in Markdown files

@@ -15,7 +15,10 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - DO: read the session's delegation policy, which the SessionStart `architect-rules.py` hook injects per model, as the answer to which strategy is the default
 - DO: carry the chosen strategy to the end, because starting inline and converting halfway spends the main thread twice
 - DO (clock): read the `Now ...; last turn took ...` line the prompt hook injects, and when the last turn ran long, cut this one to the shortest path that answers
-- DO (load): before starting a heavy job -- an emulator or simulator boot, a native build, a container run, a full test suite -- read the `Load:` line the prompt hook injects; at `high`, first query `memory_pressure -Q` and `pgrep -fl 'Simulator|qemu|emulator|docker|nix build'`, then run heavy jobs one at a time and reuse a running emulator or build rather than starting another, while cheap work such as edits and reads stays parallel at any load
+- DO (load): before starting a heavy local job -- a native build (`gradlew`, `xcodebuild`), an extra emulator or simulator boot, Metro `--reset-cache`, a container run -- ask the user first, with its cost (time, CPU, what else is already running per `sysctl -n vm.loadavg` and `pgrep -fl 'Simulator|qemu|emulator|metro|docker|nix build'`) in one line, and reuse a running emulator or build over starting another; cheap work such as edits and reads stays parallel at any load
+- DO (load, worker brief): write "stop and report if a build is needed" into the brief, so the ask reaches the user instead of the worker deciding
+- DO (load, approved): `renice -n 15` what you launched, and stop every emulator, Metro and Gradle daemon (`./gradlew --stop`) you started once the check is done
+- WHY: this Mac is the user's working machine and other sessions run emulators and Metro on it too, so overlapping heavy jobs freeze the user's own work -- one unasked `assembleDebug` drove load average to 25 [[heavy-local-build-unasked]]
 - EXCEPT: keep work inline when only the main thread can do it -- the judgement itself, or a diff whose duplication the worker cannot see because the context lives in this session
 
 ## Run a delegated unit as a self-contained brief

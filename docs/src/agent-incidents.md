@@ -101,3 +101,9 @@ Five rules come out of that edit.
 **Evidence is a `증거: <링크>` line, not commentary.** The agent spent three paragraphs attributing each number to a cause; the user replaced them with the two run links. Whatever the reviewer can confirm by opening the link does not get explained in the body.
 
 One notation to carry verbatim: the user writes a reduction as `-N%p`, using the percentage-point symbol for a ratio change. Write it their way.
+
+## 2026-10-15 -- an unasked native build froze the user's Mac (heavy-local-build-unasked)
+
+A self-review brief for a work ticket said "if the existing APK cannot run the bundle, build it yourself". The worker took that as permission and started `assembleDebug` without asking. At the same moment another session's emulator, Metro and jest were running on the same machine; load average climbed to 25, and the Gradle and Kotlin daemons alone held about 180% CPU. The user's words: "이딴 짓거리를 제발 함부로 저지르지 마라 나도 컴퓨터를 써야 할 거 아님;;" -- they need the machine for their own work.
+
+The Mac is the user's working computer, and several Claude sessions share it, so heavy jobs from different sessions stack on top of the user's own work. The `(load)` clauses of "Size the unit first" in `nix/home/configs/claude/CLAUDE.md` now make every heavy local job (a native build such as `gradlew` or `xcodebuild`, an extra emulator or simulator boot, Metro `--reset-cache`) an explicit question with its cost in one line. A worker brief says "stop and report if a build is needed" rather than "build if needed". An approved job runs under `renice -n 15`, and the emulators, Metro instances and Gradle daemons (`./gradlew --stop`) the session started are stopped when the check is done.

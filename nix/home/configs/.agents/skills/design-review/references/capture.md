@@ -102,7 +102,7 @@ agent-device devices --platform ios          # also --platform android
 agent-device boot --platform android --device "<name from devices>"
 ```
 
-`adb devices -l` lists connected Android hardware as well. `boot` takes the device through the selection flags. Which device to use (real or emulator, which model) comes from the repo docs or the user's memory. When the second platform still cannot be booted, record its platform entry as `missing` with the reason and the user action that would unblock it.
+`adb devices -l` lists connected Android hardware as well. `boot` takes the device through the selection flags, once the user has approved the boot. Which device to use (real or emulator, which model) comes from the repo docs or the user's memory. When the second platform still cannot be booted, record its platform entry as `missing` with the reason and the user action that would unblock it.
 
 ## Login on web
 

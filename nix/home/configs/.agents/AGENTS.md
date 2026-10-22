@@ -33,6 +33,7 @@
 ## Conventions and toolchain come from the repo, never from a default
 - WHEN: about to write a commit, a test, a config, or any file whose shape a project convention governs
 - DO (commit): run `git log --oneline -30` first and match the dominant subject format, prefix scheme, and language of that repo
+- DO (language): reply in the language the user writes in, and give a PR body, a doc or a ticket the language that repo's existing artifacts of the same kind use, checked per artifact
 - DO (toolchain): read the manifest, the lockfile, or the config once up front, rather than probing for a tool after the code already depends on it
 - DO (premise): drop a refactor whose payoff needs a tool the repo lacks, and propose either the behavior change alone or installing that tool
 

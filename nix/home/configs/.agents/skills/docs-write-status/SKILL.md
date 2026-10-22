@@ -22,7 +22,7 @@ Order sections the way the decision was thought through, not by reference conven
 
 - **A glossary is a footnote.** It goes at the bottom, unannounced — never open the document with a term table, never write "용어는 아래에 있다".
 - **Checkboxes for state.** Done work `- [x]`, remaining work `- [ ]` — the platform then shows progress in the issue list. Deferred plans also get `- [ ]` so they're trackable if revived.
-- **Diagrams render.** Mermaid (`flowchart LR`) over ASCII art; each option's diagram lives under that option's heading, not in a shared pile.
+- **Diagrams render.** A block-coding text tree for flow and an SVG for structure (see `docs-write`); each option's diagram lives under that option's heading, not in a shared pile.
 - **Decisions carry their rejection.** "안 할 것" states what was rejected in one line and points at 채택 근거 — never re-explains it.
 - For GitHub mechanics (templates, gh commands, comment conventions), see the `github-master` skill's `guides/issue.md` and `guides/pr.md`.
 

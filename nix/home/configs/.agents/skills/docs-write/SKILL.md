@@ -48,6 +48,7 @@ Write each sentence to be read once.
 - **Name the subject explicitly.** An ambiguous actor invites misreading.
 - **Keep 조사 (case particles) and 어미 (verb endings) uniform.** Never mix "~합니다" and "~한다" inside one document.
 - **Keep Roman script and code identifiers in their original form.** Write `useState`, never "유즈스테이트".
+- **Write what a developer would say aloud to a colleague.** Replace metaphor and personification (`~가 산다`, `~를 진다`, `자를 댄다`) with the actor plus what it does: "`<useXxxEntry>`가 연령제한 숨김 판정도 한다", not "숨김은 `<useXxxEntry>` 안에만 산다". Turn a sentence that circles through a negated subject into what must happen for what result: "데이터 자체를 없애야 슬롯이 사라진다", not "행은 노출 판정을 스스로 하지 않는다". A sentence first thought in English and then carried over reads as 번역체 even when every word is Korean, and the reviewer snags on the sentence before the content.
 
 ### 4. Labels, jargon, and compression
 
@@ -58,7 +59,11 @@ Each rule earned by a real review:
 - **Replace abstract role-words with concrete duties.** "controller가 신원 확인·권한 검사·감사를 맡는다", not "controller가 정책 평면을 맡는다".
 - **Telegraphic compression is not concision.** Em-dash/middot/arrow chains and "X = Y" noun fragments make the reader decompress. Write complete sentences; get brevity from structure: one topic per bullet line, elaboration one level down as a sub-list.
 - **Don't narrate the obvious.** No meta-sentences like "현재 상태는 `지금 구조` 절에 있다" — headings already say that.
-- **Use the platform's affordances.** On GitHub: task-list checkboxes (`- [x]` / `- [ ]`) for done/remaining work, Mermaid instead of ASCII diagrams.
+- **Use the platform's affordances.** On GitHub: task-list checkboxes (`- [x]` / `- [ ]`) for done/remaining work.
+- **Draw a flow as block coding, a structure as SVG.** A procedure or branch is a Scratch-style indented text tree -- `⚑ 사용자 입력이 들어오면`, then `┣━ 만약 〈조건〉이면` / `┃    ┗━ 동작`, one `→ 결과` line per branch value -- and it replaces both the flowchart and a table restating the same branches. A structure picture is an SVG drawn by hand from coordinates and rendered to PNG. Mermaid's auto-layout places nodes where the reader does not expect them, so the user reads a block-coding tree faster than the same flow as a chart.
+- **Show the direction of a design, not its code.** A design explanation or old-vs-new comparison gives each side as short 개조식 bullets plus a diagram of what moved where; code appears only when a signature is itself the idea, at 1-3 lines. The one exception is a summary section: one real old/new code pair per advantage, 4-10 lines a side (the matching `git diff -U1` hunk when it is one file), with only the point lines highlighted, because an abstract label such as "슬롯 둘 + seq" conveys nothing.
+- **A planning or handoff doc holds only what to do.** Next steps, eventual work, and failed approaches with the reason each failed. Current state goes stale on the next commit, git log already holds what was done, and the code is the source of truth for structure, so "Current State", "What Was Done" and "Key Files" sections are cut.
+- **Write user-facing copy from the reader's persona.** Onboarding pages, reports and any screen an end user reads start from who that reader is and what they want: what they can ask for, what happens on their side in plain words, and one easy next action. The system's own name, internal skill names and harness jargon come out. A non-engineer gets a sentence to paste back to Claude instead of a shell command, and every message is written for its own case rather than filled into a `"{X} 항목이 실패했어요"` template.
 
 ## Pre-publish checklist
 

@@ -5,6 +5,11 @@ Two rules were prose in AGENTS.md and got violated anyway -- force-push commands
 were once handed over for four branches that already matched origin. A prose
 NEVER aimed at a model is a request, not a guard, so both live here instead:
 
+- An unsigned commit forced past `commit.gpgsign` -> denied: `--no-gpg-sign` on
+  a commit-writing subcommand, `-c commit.gpgsign=<false>` or
+  `--config-env=commit.gpgsign=...`, `git config ... commit.gpgsign <false>` or
+  its unset, and the `GIT_CONFIG_KEY_<n>` / `GIT_CONFIG_PARAMETERS` env forms.
+  A signing failure is the user's setup to fix, and an unsigned commit hides it.
 - `git commit --no-verify` / `-n`  -> denied. The hooks ARE the enforcement the
   repo was given; skipping them discards it silently.
 - `git push --no-verify`          -> denied, same reason. (`git push -n` is
@@ -44,23 +49,48 @@ OPS = {"&&", "||", ";", "&", "|", "|&"}
 FORCE_LONG = {"--force", "--force-with-lease", "--force-if-includes"}
 GH_TIMEOUT_S = 10
 
+# Subcommands that write a commit and accept --no-gpg-sign.
+COMMIT_WRITERS = {"commit", "merge", "rebase", "cherry-pick", "revert", "am", "pull"}
+# git's boolean false spellings; an empty value is false too.
+FALSY = {"false", "0", "no", "off", ""}
+GPGSIGN = "commit.gpgsign"
+# Options of the commit writers whose value is the next token, so a message
+# that reads `--no-gpg-sign` is never taken for the flag.
+COMMIT_OPT_WITH_ARG = {"-m", "--message", "-F", "--file", "-C", "--reuse-message",
+                       "-c", "--reedit-message", "--author", "--date", "--fixup",
+                       "--squash", "--cleanup", "-t", "--template", "--trailer",
+                       "--pathspec-from-file", "-X", "--strategy-option", "-s",
+                       "--strategy", "--onto", "--exec", "-x"}
+SIGNING_REASON = (
+    "Commit signing is the user's setup, so a commit stays signed. When signing "
+    "fails, stop and report the raw gpg error to the user, then wait for them. "
+    "When the error says the key is locked, the user unlocks it by running "
+    "`! echo | gpg -s` in their prompt (the path gpg-commit-guard.py names), and "
+    "the same commit then runs signed.")
+
 
 def git_invocations(toks, cwd):
-    """Yield (subcommand, args, dir) for every `git <sub>` in the token stream,
-    where args runs to the next shell operator and dir folds in every `-C`.
+    """Yield (subcommand, args, dir, configs) for every `git <sub>` in the token
+    stream, where args runs to the next shell operator, dir folds in every `-C`,
+    and configs lists the `-c` / `--config-env` values given before <sub>.
     Leading global options are skipped so `git -C path push` reports `push`."""
     i, n = 0, len(toks)
     while i < n:
         if toks[i].rsplit("/", 1)[-1] == "git":
             d = cwd
+            configs = []
             j = i + 1
             while j < n:
                 t = toks[j]
                 if t in GIT_GLOBAL_OPT_WITH_ARG:
                     if t == "-C" and j + 1 < n:
                         d = os.path.join(d, toks[j + 1])
+                    if t in ("-c", "--config-env") and j + 1 < n:
+                        configs.append((t, toks[j + 1]))
                     j += 2
                     continue
+                if t.startswith("--config-env="):
+                    configs.append(("--config-env", t[len("--config-env="):]))
                 if t.startswith("-"):
                     j += 1
                     continue
@@ -71,10 +101,75 @@ def git_invocations(toks, cwd):
                 while k < n and toks[k] not in OPS:
                     args.append(toks[k])
                     k += 1
-                yield toks[j], args, d
+                yield toks[j], args, d, configs
                 i = k
                 continue
         i += 1
+
+
+def commit_flags(args):
+    """Option tokens of a commit-writing subcommand, with every option value
+    and everything after `--` dropped."""
+    out, skip = [], False
+    for a in args:
+        if skip:
+            skip = False
+        elif a == "--":
+            break
+        elif a in COMMIT_OPT_WITH_ARG:
+            skip = True
+        elif a.startswith("-"):
+            out.append(a)
+    return out
+
+
+def unsigns_by_config(configs):
+    """True when a `-c` / `--config-env` before the subcommand turns commit
+    signing off. `--config-env` reads its value from a variable this guard
+    cannot see, so naming commit.gpgsign there counts."""
+    for opt, val in configs:
+        key, eq, value = val.partition("=")
+        if key.strip().lower() != GPGSIGN:
+            continue
+        if opt == "--config-env":
+            return True
+        if eq and value.strip().lower() in FALSY:
+            return True
+    return False
+
+
+def unsigns_by_git_config(args):
+    """True for `git config [...] commit.gpgsign <false>` or an unset of it,
+    in both the classic and the `git config set|unset` forms."""
+    lowered = [a.lower() for a in args]
+    if GPGSIGN not in lowered:
+        return False
+    if any(a in ("--unset", "--unset-all", "unset") for a in lowered):
+        return True
+    after = lowered[lowered.index(GPGSIGN) + 1:]
+    value = next((a for a in after if not a.startswith("-")), None)
+    return value is not None and value.strip() in FALSY
+
+
+def unsigns_by_env(toks):
+    """True when GIT_CONFIG_KEY_<n>=commit.gpgsign pairs with a false
+    GIT_CONFIG_VALUE_<n>, or GIT_CONFIG_PARAMETERS sets it false."""
+    keys, values = {}, {}
+    for t in toks:
+        name, eq, value = t.partition("=")
+        if not eq:
+            continue
+        if name.startswith("GIT_CONFIG_KEY_"):
+            keys[name[len("GIT_CONFIG_KEY_"):]] = value.strip().lower()
+        elif name.startswith("GIT_CONFIG_VALUE_"):
+            values[name[len("GIT_CONFIG_VALUE_"):]] = value.strip().lower()
+        elif name == "GIT_CONFIG_PARAMETERS":
+            flat = value.replace("'", "").replace('"', "").lower()
+            for pair in flat.split():
+                k, _, v = pair.partition("=")
+                if k == GPGSIGN and v in FALSY:
+                    return True
+    return any(k == GPGSIGN and values.get(n, "true") in FALSY for n, k in keys.items())
 
 
 def has_short(args, letter):
@@ -207,7 +302,14 @@ def violation(toks, cwd=".", lookup=gh_open_prs, head=current_branch):
     """Return (deny reason for the first offending git invocation or None,
     notes for the model about pushes that are allowed but leave work behind)."""
     notes = []
-    for sub, args, d in git_invocations(toks, cwd):
+    invocations = list(git_invocations(toks, cwd))
+    if invocations and unsigns_by_env(toks):
+        return SIGNING_REASON, []
+    for sub, args, d, configs in invocations:
+        if unsigns_by_config(configs) \
+                or (sub in COMMIT_WRITERS and "--no-gpg-sign" in commit_flags(args)) \
+                or (sub == "config" and unsigns_by_git_config(args)):
+            return SIGNING_REASON, []
         if sub == "commit":
             if "--no-verify" in args or has_short(args, "n"):
                 return ("`git commit --no-verify` skips the repo's hooks, which are "
@@ -245,9 +347,13 @@ def deny(reason):
 
 
 def main():
-    data = json.load(sys.stdin)
-    cmd = data.get("tool_input", {}).get("command", "")
-    if "git" not in cmd:
+    try:
+        data = json.load(sys.stdin)
+    except ValueError:
+        sys.exit(0)
+    tool_input = data.get("tool_input") if isinstance(data, dict) else None
+    cmd = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(cmd, str) or "git" not in cmd:
         sys.exit(0)
 
     try:
@@ -255,7 +361,7 @@ def main():
     except ValueError:
         # Unbalanced quotes: cannot tokenize, so match the long flags literally
         # rather than letting a malformed command through.
-        for flag in ("--no-verify",) + tuple(FORCE_LONG):
+        for flag in ("--no-verify", "--no-gpg-sign") + tuple(FORCE_LONG):
             if flag in cmd:
                 deny(f"`{flag}` is not allowed, and this command could not be "
                      "parsed safely. Rewrite it without the flag.")
@@ -347,6 +453,45 @@ def selftest():
               lambda b, d: seen.append((b, d)) or ([], None), lambda d: d + ":cur")
     # -C dir ignored, or an option value (-o ci.skip) mistaken for a refspec
     assert seen == [("/r/sub:cur", "/r/sub")], seen
+
+    # an unsigned commit forced past commit.gpgsign
+    assert v("git commit --no-gpg-sign -m x") is not None
+    assert v("git -C /p commit -m x --no-gpg-sign") is not None
+    assert v("git rebase --no-gpg-sign main") is not None
+    assert v("git -c commit.gpgsign=false commit -m x") is not None
+    assert v("git -c Commit.GpgSign=OFF commit -m x") is not None   # key is case-insensitive
+    assert v("git -c commit.gpgsign=0 commit -m x") is not None
+    assert v("git -c commit.gpgsign=no rebase main") is not None
+    assert v("git --config-env=commit.gpgsign=NOSIGN commit -m x") is not None
+    assert v("git config commit.gpgsign false") is not None
+    assert v("git config --global commit.gpgsign false") is not None
+    assert v("git config --local commit.gpgSign off") is not None
+    assert v("git config set --global commit.gpgsign false") is not None
+    assert v("git config --unset commit.gpgsign") is not None
+    assert v("git config --global --unset-all commit.gpgsign") is not None
+    assert v("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign "
+             "GIT_CONFIG_VALUE_0=false git commit -m x") is not None
+    assert v("env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=COMMIT.GPGSIGN "
+             "GIT_CONFIG_VALUE_0=0 git commit -m x") is not None
+    assert v("GIT_CONFIG_PARAMETERS=\"'commit.gpgsign'='false'\" git commit -m x") is not None
+    assert v("git add a && git commit --no-gpg-sign -m x") is not None
+    # flag-looking text inside a message value read as the flag
+    assert v("git commit -m '--no-gpg-sign'") is None
+    assert v("git commit -m 'drop --no-gpg-sign from the script'") is None
+    assert v("git commit -F --no-gpg-sign") is None
+    assert v("git commit -m x -- --no-gpg-sign") is None
+    assert v("git log --show-signature") is None
+    assert v("git commit -S -m x") is None
+    assert v("git -c commit.gpgsign=true commit -m x") is None
+    assert v("git -c user.name=x commit -m x") is None
+    assert v("git config --global commit.gpgsign true") is None
+    assert v("git config --get commit.gpgsign") is None
+    assert v("git config commit.gpgsign") is None
+    assert v("git config user.signingkey ABC") is None
+    assert v("git log --no-gpg-sign") is None          # not a commit-writing subcommand
+    assert v("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign "
+             "GIT_CONFIG_VALUE_0=true git commit -m x") is None
+    assert v("echo 'git commit --no-gpg-sign'") is None
 
     assert v("ls && git push --force") is not None      # found after an operator
     assert v("git status && git commit -m x") is None

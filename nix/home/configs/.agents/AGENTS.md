@@ -263,7 +263,7 @@
 - DO (filtered delete): before running or handing over a delete that selects its targets by a filter (`docker volume rm $(docker volume ls -q --filter label=...)`), show what the same filter lists and put those names into the delete as literals; with no listing, hand over no delete (`docs/src/agent-incidents.md`, 2026-09-30)
 - DO (charged): before a command that bills by runtime (`nsc create|destroy|extend|build|run`, any cloud instance or devbox), state the machine type and expected runtime in one line and wait for a yes; read-only queries (`list`, `describe`, `--help`) run without asking
 - DO (remote host): reach a remote host only through the user -- write the host command as a script, `pbcopy` it, and read the output they paste back; this covers ssh, scp, rsync and port probes alike, and a script for a container host keeps to busybox `sh` syntax (`if`, backticks), checked first with `docker run --rm -i --entrypoint sh <image> -n < script`
-- DO (signing): stop and report the raw error when a commit signature fails, and write the same stop into every committing worker's brief, because the signing setup is the user's to fix and an unsigned commit hides the failure
+- DO (signing): stop and report the raw error when a commit signature fails -- `git-integrity-guard.py` denies every unsigned-commit override and names the unlock path
 - DO (irreversible): treat a send as permanent when the bundle carries no update and no delete, and take its draft path instead -- [[slack-send-is-irreversible]]
 - EXCEPT: a checkpoint commit onto `claude/local-dev` is exempt, because that branch never leaves the machine
 

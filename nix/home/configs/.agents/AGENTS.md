@@ -45,6 +45,15 @@
 - DO: say "not on my search path", list where you looked, name the tool and the declaration file its version belongs in, then wait rather than reaching for an ad-hoc runner
 - NOTE: an empty `which ffmpeg` once produced a hung hand-written `AVAssetWriter` script -- [[ffmpeg-hand-rolled-avassetwriter]]
 
+## Do every step your tools reach; hand the user only what only they hold
+- WHEN: about to end a reply with a command for the user to run, a to-do list for them, a question a file could answer, or "shall I do the rest too?"
+- DO: run it yourself and report the result -- read-only `git` and `gh` queries, a local `git pull --ff-only`, device UI steps through `agent-device` (log out, navigate, dismiss a popup, type an email), a QA test account in whatever condition the scene needs through the product's QA MCP, a URL opened with `open <url>`
+- DO: hand over only an input the user alone holds (a password, a device passcode, interactive auth) or a call that was denied; drive up to that field first, then poll the screen until they finish and carry on
+- DO: answer a diagnostic question from the repo before asking anything -- read the relevant source, config and CI files and commit to a conclusion, asking only when no file can answer it
+- DO: carry out the follow-up the context makes obvious, such as the other packages of the same release set, with no question asked
+- EXCEPT: a heavy local job and a mutation the outside world can see still wait for the user's go
+- WHY: every step handed back costs the user a context switch for work the agent could have done, and a review scene parked as "missing" for want of an account leaves the review itself unfinished
+
 ## A prohibition in model-facing text becomes the positive action
 - WHEN: authoring text a model reads as behavior -- a prompt, a skill, a subagent brief, a rules file -- or acting on an instruction that arrives as a prohibition ("don't X", "avoid X")
 - DO: write the positive action that makes X impossible and work from that restated form, keeping the prohibition only when it carries an incident, a measurement, or an enforcement mechanism that its DO line cannot

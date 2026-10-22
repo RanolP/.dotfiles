@@ -53,7 +53,7 @@ The phone has one screen, so the two sides are recorded **sequentially**: captur
 mise exec -- npx expo start --port 8083
 ```
 
-It fixes the serial, applies the local `build.gradle` patch if it is missing, builds and installs the debug APK, backs up the preferences, points the instance at its bundle source, opens the reverse tunnel and launches the app. `--restore` undoes all of it.
+It fixes the serial, applies the local `build.gradle` patch if it is missing, builds and installs the debug APK (a native build, so ask the user first with its cost in one line), backs up the preferences, points the instance at its bundle source, opens the reverse tunnel and launches the app. `--restore` undoes all of it.
 
 **Which bundle a run actually used is a fact to verify, never to assume.** The device reaches the QA Metro through `adb reverse tcp:8082 tcp:8083`, and the proof it worked is the Metro's own inspector list:
 

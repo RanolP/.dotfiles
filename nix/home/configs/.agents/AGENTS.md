@@ -224,6 +224,7 @@
 - WHEN: reporting work as done, transitioning a ticket, closing a task, or handing the user a command to run
 - DO: narrow the evidence down to the artifact's own behavior -- run it, measure it in the running system, or query the live state, and say explicitly which claims stayed unverified
 - DO: treat a filename, a diff stat, a source read, and a passing type-check as hypotheses rather than proof
+- DO (baseline): start an experiment from the production shape (batch size, model, effort) and report every gain against that production baseline, never against an intermediate variant of your own -- a "<N>x" prompt saving was mostly the undoing of a one-item-per-call detour, and against production the real gain was a small fraction of that
 - DO (scope): pick the check by tracing what the diff can actually reach, run only the suites or screens on that path, and say which slice you ran and why it covers the change
 - DO (facts): rank evidence for any CLI flag, API parameter or config option -- the installed binary, the source in node_modules, the lockfile or a real response beats official docs, which beat a blog or your own memory -- and say which rung you were on
 - NEVER: say done when no runtime check was possible; say exactly which check is missing instead

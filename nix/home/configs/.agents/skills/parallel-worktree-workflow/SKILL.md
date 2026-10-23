@@ -7,7 +7,7 @@ description: Run a multi-unit implementation as plan -> parallel workers in git 
 
 Main plans, spawns, relays and merges; workers build. The loop ends in a stack of small commits on `claude/local-dev`, each merged as it landed, with the gate run once on the merged result.
 
-It extends three standing rules rather than restating them: `AGENTS.md` "Parallel execution, synchronous thought" (grouping, condition waits, streaming), `AGENTS.md` "`claude/local-dev` is a stash that holds a stack" (where commits land, how the stack is published), and `CLAUDE.md` "Run a delegated unit as a self-contained brief" (background spawn, typed results, receipt check).
+It extends three standing rules rather than restating them: `AGENTS.md` "Parallel execution, synchronous thought" (grouping, condition waits, streaming), `AGENTS.md` "Mutations the outside world can see need an explicit go" (its `claude/local-dev` line: where commits land, how the stack is published), and `CLAUDE.md` "Delegation is pre-approved; size the unit, then commit to one strategy" (background spawn, typed results, receipt check).
 
 ## 1. Plan: cut units by domain, small
 

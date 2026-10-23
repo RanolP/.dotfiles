@@ -190,6 +190,14 @@
           },
           {
             "type": "command",
+            "command": "python3 ~/.claude/hooks/nsc-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/gui-launch-guard.py"
+          },
+          {
+            "type": "command",
             "command": "python3 ~/.claude/hooks/gh-guard.py"
           },
           {

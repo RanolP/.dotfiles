@@ -41,10 +41,9 @@ READ_ONLY = frozenset({
 })
 
 CONTEXT = (
-    "ask-mode-guard: this is an `ask:` turn -- answer with text only. "
-    "Read-only lookups (Read/Glob/Grep/WebFetch/WebSearch) are allowed so the "
-    "answer can cite evidence; every acting tool is blocked until the next "
-    "user prompt."
+    "`ask:` turn: answer in text only; read-only lookups (Read/Glob/Grep/"
+    "WebFetch/WebSearch) stay open for evidence, acting tools are blocked "
+    "until the next prompt."
 )
 
 DENY = (

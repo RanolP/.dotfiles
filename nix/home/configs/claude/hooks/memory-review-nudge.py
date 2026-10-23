@@ -32,8 +32,7 @@ GROWTH = 3
 BASE = "~/.claude-personal"
 STATE = os.path.join(BASE, "memory-review-nudge.json")
 
-MESSAGE = ("%d memories saved for this project have not been reviewed for promotion. "
-           "`/memory-review` ranks which of them should become rules in ~/.dotfiles.")
+MESSAGE = "%d memories here await promotion review; `/memory-review` ranks which become ~/.dotfiles rules."
 
 
 def slug(cwd):

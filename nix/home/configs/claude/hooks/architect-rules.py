@@ -35,22 +35,17 @@ TRANSCRIPT_TAIL = 262144
 ARCHITECT_MODELS = ("fable", "opus")
 
 RULES = """## Architect mode: the main thread talks, workers mutate
-- PURPOSE: keep the main thread free to talk with the user at every moment -- its context stays clear of read-before-write traces and no execution loop blocks it
-- WHEN: this session's main model is Fable or Opus (the statusline names it)
-- DO: keep the main thread on assessment -- read, diagnose, scope, plan, brief, decide -- and put every code mutation inside a background worker's turn, because each Edit or Write needs a Read of its file first and those reads fill main context
-- DO: spawn one worker per unit as the unit starts, and send every unit with no unmet dependency out in one message so the workers run in parallel
-- DO: spend workers on producing work, and adopt each worker's checked result for its unit as it lands, leaving the one review to the final gate below
-- DO (route): name the Claude tier by its label -- `haiku`, `sonnet`, `opus` -- which the harness resolves to that tier's current model; send research and lookups to them (`haiku` mechanical, `sonnet` well-scoped, `opus` deep), plus every edit that needs this session's Claude-side context, such as model-facing prompt text under the prompt-authoring guard; Fable is reachable only through the oracle agent
-- DO (codex): hand code implementation from a settled plan to `codex-subagent:sol` (gpt-5.6-sol, medium, workspace-write) by default, and to `codex-subagent:luna` (gpt-6-luna, xhigh) only for a task that may run slow but must run cheap, spawned in the background; codex sees none of this thread and writes only inside the roots its brief names, so the brief opens with a `Budget: <N> min` line followed by a `writable: /abs/path, /abs/path2` line whose first path is the worker's working directory and which lists every absolute directory the worker writes -- each repo or worktree it touches, checked against the plan's file list before spawning -- then carries goal, files, constraints, the plan's decisions, verification commands, and the exact return shape
-- DO (review): once every implementer unit has landed, at the final gate before the commit or push, spawn ONE `code-reviewer` on the combined diff whoever wrote it; SendMessage every finding scored 70 or above to the SAME implementer that owns those lines, whose thread still holds the code, then re-review only the changed lines until clean, at most 3 rounds, then report the findings still open to the user; when the user has said to push, the fixes go out once their type-check and lint pass, with no re-review round
-- EXCEPT: the plan file, memory/evidence files, and a short read-only inspection (a couple of tool calls) stay the main thread's own work
-- WHY: a review after every unit adds wall time to every hand-off, while one review of the combined diff catches the same defects plus the ones between units; the review judges the diff, so the author's model never decides whether it runs"""
+- Main thread assesses (read, diagnose, scope, plan, brief, decide); every code mutation runs in a background worker, keeping main context free of read-before-write traces.
+- Spawn one worker per unit as it starts; send every unit with no unmet dependency in one message so they run in parallel; adopt each checked result as it lands.
+- Route by tier label: `haiku` mechanical, `sonnet` well-scoped, `opus` deep -- for research, lookups, and edits needing this session's Claude-side context (model-facing prompt text); Fable only via `oracle`.
+- Code from a settled plan goes to `codex-subagent:sol`, or `codex-subagent:luna` when slow-but-cheap fits, in the background. Codex sees none of this thread: the brief opens with `Budget: <N> min`, then `writable: /abs/workdir, /abs/other` listing every directory it writes (checked against the plan's files), then goal, files, constraints, plan decisions, verification commands, exact return shape.
+- At the final gate (all units landed, before commit or push) spawn ONE `code-reviewer` on the combined diff; SendMessage each finding scored 70+ to the implementer owning those lines, re-review only changed lines, max 3 rounds, then report open findings to the user. When the user said push, fixes ship once type-check and lint pass, without re-review.
+- Main keeps the plan file, memory/evidence files, and short read-only inspection (a couple of tool calls)."""
 
 LAZY_RULES = """## Delegation threshold: work inline until the task outgrows the thread
-- WHEN: this session's main model is neither Fable nor Opus (the statusline names it)
-- DO: work inline while main context is small and one thread still holds the task -- a spawn re-sends the whole system prompt and eats its own trace, so a needless spawn costs MORE tokens than it saves
-- DO (spawn): delegate once the task is genuinely too heavy for one thread -- a large multi-file investigation, wide parallel steps, or token-heavy execution whose trace would bloat main context
-- EXCEPT: tiny one-liners, exploratory or uncertain scope, and active dialogue with the user stay inline"""
+- Work inline while one thread holds the task; a spawn re-sends the whole system prompt, so a needless one costs more tokens than it saves.
+- Delegate once the task is too heavy for one thread: a large multi-file investigation, wide parallel steps, or execution whose trace would bloat main context.
+- Tiny one-liners, uncertain scope, and active dialogue with the user stay inline."""
 
 
 def payload_model(data):

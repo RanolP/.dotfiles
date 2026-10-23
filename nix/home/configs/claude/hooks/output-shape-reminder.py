@@ -15,7 +15,7 @@ cost grows with the SQUARE of the turn count -- injecting the full spec would
 add hundreds of thousands of tokens to a marathon session. The full spec stays
 in AGENTS.md; this is the check, not a replacement.
 
-Two more lines give the model what it cannot see on its own: the wall clock
+One more line gives the model what it cannot see on its own: the wall clock
 with the previous turn's duration, so it notices a slow turn, and the machine's
 load, so it weighs it before a heavy job. Both are read fresh on every prompt
 because a figure read at session start is stale in minutes. Memory and running
@@ -29,9 +29,8 @@ import sys
 from datetime import datetime
 
 REMINDER = (
-    "Shape check: end with the outcome, cut closers. If the user must act, say "
-    "it and stop; if several paths are open, offer the choices; else state your "
-    "next step in one line and continue."
+    "Shape: end on the outcome, cut closers; user must act -> say it and stop; "
+    "paths open -> offer choices; else one-line next step, continue."
 )
 
 # Injection cost grows with turns^2, so a long reminder is a session-wide tax.
@@ -53,7 +52,7 @@ def load_line():
         return None
     cores = os.cpu_count() or 1
     level = "high" if one / cores >= HIGH_LOAD_PER_CORE else "normal"
-    return f"Load: {one:.1f} on {cores} cores ({level}); weigh it before emulators or native builds."
+    return f"load {one:.1f}/{cores} cores ({level})"
 
 
 def is_prompt(entry):
@@ -112,9 +111,9 @@ def clock_line(path):
     now = datetime.now().astimezone().strftime("%H:%M %Z")
     secs = last_turn_seconds(path)
     if secs is None or secs < 0:
-        return f"Now {now}."
+        return f"Now {now}"
     mins, rest = divmod(int(secs), 60)
-    return f"Now {now}; last turn took {mins}m{rest:02d}s."
+    return f"Now {now}; last turn took {mins}m{rest:02d}s"
 
 
 def main():
@@ -125,10 +124,8 @@ def main():
     if not isinstance(data, dict):
         data = {}
     print(REMINDER)
-    print(clock_line(data.get("transcript_path")))
-    line = load_line()
-    if line:
-        print(line)
+    parts = [clock_line(data.get("transcript_path")), load_line()]
+    print("; ".join(p for p in parts if p) + ".")
     sys.exit(0)
 
 
@@ -137,7 +134,7 @@ def selftest():
     for check in ("outcome", "closer", "stop", "choices", "next step"):
         assert check in REMINDER, f"reminder dropped the {check!r} check"
     line = load_line()
-    assert line is None or (line.startswith("Load: ") and len(line) <= 120), line
+    assert line is None or (line.startswith("load ") and len(line) <= 40), line
 
     import tempfile
 

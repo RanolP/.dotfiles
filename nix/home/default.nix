@@ -172,9 +172,20 @@ let
 
   sharedAgentRules = ./configs/.agents/AGENTS.md;
   claudeSpecificRules = ./configs/claude/CLAUDE.md;
-  claudeUserRules = pkgs.writeText "CLAUDE.md" (
-    (builtins.readFile sharedAgentRules) + "\n" + (builtins.readFile claudeSpecificRules)
-  );
+  # Claude Code warns once ~/.claude/CLAUDE.md passes 40.0k chars, and every
+  # byte here is paid on every prompt. stringLength counts bytes, which is >=
+  # chars, so the check errs on the safe side.
+  claudeUserRulesText =
+    (builtins.readFile sharedAgentRules) + "\n" + (builtins.readFile claudeSpecificRules);
+  claudeUserRulesLimit = 40000;
+  claudeUserRules =
+    let
+      size = builtins.stringLength claudeUserRulesText;
+    in
+    if size > claudeUserRulesLimit then
+      throw "~/.claude/CLAUDE.md would be ${toString size} bytes, over the ${toString claudeUserRulesLimit}-byte limit (Claude Code warns at 40.0k chars). Shrink nix/home/configs/.agents/AGENTS.md + nix/home/configs/claude/CLAUDE.md: move skill-scoped detail into its skill and incident narrative into docs/src/agent-incidents.md (see the repo AGENTS.md rule on the two always-loaded rules files)."
+    else
+      pkgs.writeText "CLAUDE.md" claudeUserRulesText;
 
   # Response-shape rules, held apart from the rules files because the two tools
   # consume them differently. Claude has an output style layer whose whole body

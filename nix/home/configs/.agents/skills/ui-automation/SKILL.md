@@ -126,6 +126,12 @@ Each of these produced a wrong verdict once. Check the matching one before repor
 - **iOS runner signing and its env.** With no Apple ID account in Xcode, the default runner bundle ID fails with "No Accounts / No profiles"; start the daemon with `AGENT_DEVICE_IOS_TEAM_ID`, `AGENT_DEVICE_IOS_RUNNER_APP_BUNDLE_ID` and `AGENT_DEVICE_IOS_RUNNER_TEST_BUNDLE_ID` set to your team's prefix and leave `AGENT_DEVICE_IOS_PROVISIONING_PROFILE` unset, since it fights automatic signing. These are read only at daemon start, so kill the daemon first.
 - **`record start` stuck after a runner restart.** It keeps failing with "not reached a confirmed terminal state" until `~/.agent-device/sessions/<session>/screen-recording.resource.json` is moved aside. A `press` during recording can restart the runner, so check this first when a recording fails.
 
+## Keep an automated Chrome behind the user's windows
+
+- **Launch it in the background.** When a check needs a real Chrome (DRM, a logged-in profile), start it with `open -gna "Google Chrome" --args --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling ...`, so it neither takes the foreground nor stalls while hidden.
+- **A throttled page is a launch-flag problem.** Treat a throttled or `document.hidden` page as missing flags: relaunch with them, then drive the window's own active tab with `Page.navigate`. A tab opened by `Target.createTarget {background: true}` or `/json/new` is inactive and reads `hidden` whatever the flags.
+- **Raise once, never in a loop.** `Page.bringToFront`, `Target.activateTarget`, `/json/activate`, `osascript ... activate` and `open` without `-g` each take the user's input away; call one at the single step that needs it, and keep all of them out of every loop, timer, watcher and retry.
+
 ## A browser the user logs into, and a desktop app from a worker
 
 - **Keep the user's login.** Open a browser the user will log into with saving on from the first command -- `AGENT_BROWSER_HEADED=1 agent-browser open <url> --restore <key> --restore-save always` -- and confirm `agent-browser session info` reads `Save status: saved` before asking them to log in. Keep `close` off a logged-in window, because a session opened without `--restore` loses the user's login on the first close.

@@ -88,6 +88,8 @@ git rebase --exec '<lint and typecheck>' origin/main   # once, at publish: every
 - `--exec` checks out each commit in turn, so a commit that passes only once a later commit lands fails here. That is what the check is for.
 - Take the lint and typecheck commands from the repo -- `package.json` scripts, the `Makefile`, or the CI workflow.
 - Before review, fold every cleanup or refactor into the commit that introduced the code it touches, splitting a tail commit by file and hunk, and rewrite those commits' messages to match; a reviewer reads commit by commit, so a tail "fix 1, fix 2" commit makes them read code an earlier commit already throws away. One feature is one commit (renderer and wiring together).
+- Rejected push: `git fetch` as its own visible step, rebase onto it, and ask the user when the rebase is not obviously safe.
+- Count only a human review as a review. The PR author's own explainer comments and a bot review (Codex) leave a rewrite open, but `git-integrity-guard.py` passes the author's comments and blocks on a bot's -- so for a bot-reviewed PR, hand the user `! git -C <repo> push --force-with-lease=<branch>:<fetched-sha> origin <branch>` to run. A branch whose PR carries a human review gets fixup commits on top, never a force-push.
 - Continue an epic on the branch that already carries it -- check `git worktree list` and `git branch --list 'claude/*'` first -- and leave the decision to split branches to the user.
 - A cleanup or diff-trim pass keeps the last verified commit's runtime behavior: name that baseline commit in the worker brief, have the worker return `behavior_vs_head` listing every runtime difference with the rule that requires it, and revert each difference no rule requires.
 

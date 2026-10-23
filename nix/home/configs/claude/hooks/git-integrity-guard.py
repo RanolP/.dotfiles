@@ -78,6 +78,44 @@ def is_env_assign(tok):
         and not name[0].isdigit()
 
 
+def command_prefix_env(toks, i):
+    """The `NAME=value` assignments in front of toks[i] within its command,
+    through an `env` wrapper. An `env` option that clears the environment
+    (`-i`, `--ignore-environment`, `-`) or unsets a CONFIG_REDIRECT_ENV name
+    (`-u NAME`, `--unset[=]NAME`, `-uNAME`) shows up as a `NAME=` marker, since
+    either one drops the config file that holds commit.gpgsign. Anything else
+    in front of toks[i] means it is not a plain env-prefixed git call, and the
+    assignments seen so far are dropped."""
+    s = i
+    while s > 0 and toks[s - 1] not in OPS:
+        s -= 1
+    out, in_env, k = [], False, s
+    while k < i:
+        t = toks[k]
+        if is_env_assign(t):
+            out.append(t)
+        elif t.rsplit("/", 1)[-1] == "env":
+            in_env = True
+        elif in_env and t in ("-i", "--ignore-environment", "-"):
+            out.append("HOME=")
+        elif in_env and t in ("-u", "--unset"):
+            if k + 1 < i and toks[k + 1] in CONFIG_REDIRECT_ENV:
+                out.append(toks[k + 1] + "=")
+            k += 1
+        elif in_env and (t.startswith("--unset=") or (t.startswith("-u") and len(t) > 2)):
+            name = t[len("--unset="):] if t.startswith("--") else t[2:]
+            if name in CONFIG_REDIRECT_ENV:
+                out.append(name + "=")
+        elif in_env and t in ("-C", "--chdir", "-S", "--split-string"):
+            k += 1
+        elif in_env and t.startswith("-") and not t.startswith("--") and "i" in t[1:]:
+            out.append("HOME=")
+        elif not (in_env and t.startswith("-")):
+            out, in_env = [], False
+        k += 1
+    return out
+
+
 def git_invocations(toks, cwd):
     """Yield (subcommand, args, dir, configs, prefix_env) for every `git <sub>`
     in the token stream, where args runs to the next shell operator, dir folds
@@ -90,15 +128,7 @@ def git_invocations(toks, cwd):
         if toks[i].rsplit("/", 1)[-1] == "git":
             d = cwd
             configs = []
-            prefix_env = []
-            p = i - 1
-            while p >= 0:
-                t = toks[p]
-                if is_env_assign(t):
-                    prefix_env.append(t)
-                elif t.rsplit("/", 1)[-1] != "env" and not (t.startswith("-") and t not in OPS):
-                    break
-                p -= 1
+            prefix_env = command_prefix_env(toks, i)
             j = i + 1
             while j < n:
                 t = toks[j]
@@ -506,6 +536,19 @@ def selftest():
     assert v("HOME=$(mktemp -d) ./scripts/x-test.sh && git commit -m x") is None
     assert v('git commit -m "HOME=/x is now read"') is None
     assert v("GIT_CONFIG_GLOBAL=/dev/null env -i git commit -m x") is not None
+    # env clearing or unsetting the variables that locate the user's git config
+    assert v("env -i git commit -m x") is not None
+    assert v("env -i PATH=/usr/bin:/bin git commit -m x") is not None
+    assert v("env - git commit -m x") is not None
+    assert v("env --ignore-environment git commit -m x") is not None
+    assert v("env -u HOME git commit -m x") is not None
+    assert v("env -u HOME -u XDG_CONFIG_HOME git commit -m x") is not None
+    assert v("env --unset=XDG_CONFIG_HOME git commit -m x") is not None
+    assert v("env -uHOME git commit -m x") is not None
+    assert v("GIT_CONFIG_GLOBAL=/x env -u FOO git commit -m x") is not None
+    assert v("env -u FOO git commit -m x") is None
+    assert v("env -i git status") is None
+    assert v("HOME=/tmp echo hi && git commit -m x") is None   # assignment for another command
     assert v("git -C /p commit -m x --no-gpg-sign") is not None
     assert v("git rebase --no-gpg-sign main") is not None
     assert v("git -c commit.gpgsign=false commit -m x") is not None

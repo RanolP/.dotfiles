@@ -18,7 +18,7 @@ let state = try { open --raw $target | from json } catch {|e|
 
 echo $"     (ansi blue)Merge(ansi reset) mcpServers \(($declared | columns | str join ', ')\) into ~/.claude.json"
 if not ($backup | path exists) { cp $target $backup }
-let current = ($state | get --optional mcpServers | default {})
+let current = ($state | get --ignore-errors mcpServers | default {})
 let merged = ($state | upsert mcpServers ($current | merge $declared))
 $merged | to json --indent 2 | save -f $tmp
 mv --force $tmp $target

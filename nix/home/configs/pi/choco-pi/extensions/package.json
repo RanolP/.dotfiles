@@ -1,0 +1,22 @@
+{
+  "name": "choco-pi-extensions",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "grok-mermaid": "0.2.2"
+  },
+  "packageManager": "pnpm@11.11.0",
+  "pi": {
+    "extensions": [
+      "./file-checkpoints.ts",
+      "./review/index.ts",
+      "./cache-retention.ts",
+      "./session-aliases.ts",
+      "./anthropic-error-tool-results.ts",
+      "./multiplexer-images.ts",
+      "./autocomplete-anywhere.ts",
+      "./mermaid-fallback.ts"
+    ]
+  }
+}

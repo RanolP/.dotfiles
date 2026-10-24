@@ -337,3 +337,20 @@ path = ["nix/home/configs/pi/choco-pi/packages/choco-pi-web-search/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 choco-pi contributors"
 SPDX-License-Identifier = "LicenseRef-choco-pi-author-grant"
+
+# Vendored byte-identical from github.com/Nebu1eto/choco-pi @ 82ae11191f9ab45a4b4189cdf879a33cb76aa930, .pi/extensions
+# Upstream carries no license for them; see LICENSES/LicenseRef-choco-pi-author-grant.txt.
+[[annotations]]
+path = ["nix/home/configs/pi/choco-pi/extensions/**/*.ts"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 choco-pi contributors"
+SPDX-License-Identifier = "LicenseRef-choco-pi-author-grant"
+
+[[annotations]]
+path = [
+    "nix/home/configs/pi/choco-pi/extensions/package.json",
+    "nix/home/configs/pi/choco-pi/extensions/pnpm-lock.yaml",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"

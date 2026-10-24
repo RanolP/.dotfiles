@@ -301,7 +301,7 @@ SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["xpkg/configs/render.nu", "xpkg/configs/pi/install.nu", "xpkg/configs/opencode/install.nu"]
+path = ["xpkg/configs/render.nu", "xpkg/configs/pi/install.nu", "xpkg/configs/opencode/install.nu", "xpkg/configs/claude/mcp.nu"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"

@@ -71,6 +71,8 @@ for m in $mods {
     cp --recursive $'($nix)/claude/mods/($m)' $dest
 }
 
+nu $'($local)/mcp.nu'
+
 echo $"     (ansi blue)Copy(ansi reset) hooks"
 for hook in (ls ($'($nix)/claude/hooks/*.py' | into glob)) {
     let name = ($hook.name | path basename)

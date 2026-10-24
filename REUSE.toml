@@ -294,7 +294,7 @@ SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["xpkg/configs/render.nu", "xpkg/configs/pi/install.nu"]
+path = ["xpkg/configs/render.nu", "xpkg/configs/pi/install.nu", "xpkg/configs/opencode/install.nu"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
@@ -351,6 +351,7 @@ path = [
     "nix/home/configs/pi/choco-pi/extensions/package.json",
     "nix/home/configs/pi/choco-pi/extensions/pnpm-lock.yaml",
     "nix/home/configs/pi/settings.json",
+    "nix/home/configs/opencode/opencode.jsonc",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

@@ -39,6 +39,11 @@ if not (which pi | is-empty) {
     nu $'($configs)/pi/install.nu'
 }
 
+if not (which opencode | is-empty) {
+    echo $"(ansi purple)>>(ansi reset) Installing opencode configs"
+    nu $'($configs)/opencode/install.nu'
+}
+
 if ($nu.os-info.kernel_version | str contains 'WSL2') {
     echo $"(ansi purple)>>(ansi reset) Integrating Windows fonts for WSL2"
     do -i { sudo mkdir /etc/fonts/ }

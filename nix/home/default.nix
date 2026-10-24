@@ -601,6 +601,10 @@ in
     skillFiles
   ];
 
+  # opencode's shared config; its rea MCP server resolves `rea` from the mise
+  # shims on PATH.
+  xdg.configFile."opencode/opencode.jsonc".source = ./configs/opencode/opencode.jsonc;
+
   # Herdr (terminal workspace manager, installed via mise) spawns new panes with
   # $SHELL, which is zsh. Point it at nushell instead -- absolute path because
   # herdr execs the binary directly, and nu is not on the PATH of the process

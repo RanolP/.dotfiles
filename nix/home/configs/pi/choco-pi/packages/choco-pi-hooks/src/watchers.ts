@@ -1,0 +1,155 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { rethrowUnlessStaleContext } from "./lifecycle.ts";
+import type { HookSource } from "./types.ts";
+import type { HookDispatch } from "./supplemental-events.ts";
+
+interface HookWatchers {
+  replaceSources(sources: HookSource[]): void;
+  replaceDynamicPaths(paths: string[]): void;
+  dispose(): void;
+}
+
+interface HookWatcherOptions {
+  cwd: string;
+  ctx: ExtensionContext;
+  sources: HookSource[];
+  dispatch: HookDispatch;
+  onAllowedConfigChange(): void;
+}
+
+function watchedNames(sources: HookSource[]): Set<string> {
+  const names = new Set<string>();
+  for (const source of sources)
+    for (const group of source.hooks.FileChanged ?? [])
+      for (const name of group.matcher?.split("|") ?? []) if (name) names.add(name);
+  return names;
+}
+
+function configSource(cwd: string, file: string): string | undefined {
+  const normalized = path.resolve(file);
+  const home = os.homedir();
+  const piAgentDir = process.env.PI_CODING_AGENT_DIR ?? path.join(home, ".pi", "agent");
+  if (
+    [
+      path.join(home, ".claude", "settings.json"),
+      path.join(home, ".agents", "settings.json"),
+      path.join(piAgentDir, "settings.json"),
+    ].includes(normalized)
+  )
+    return "user_settings";
+  if (
+    [".claude", ".agents", ".pi"].some(
+      (directory) => normalized === path.join(cwd, directory, "settings.json"),
+    )
+  )
+    return "project_settings";
+  if (
+    [".claude", ".agents", ".pi"].some(
+      (directory) => normalized === path.join(cwd, directory, "settings.local.json"),
+    )
+  )
+    return "local_settings";
+  if (
+    normalized.includes(`${path.sep}.claude${path.sep}skills${path.sep}`) ||
+    normalized.includes(`${path.sep}.agents${path.sep}skills${path.sep}`) ||
+    normalized.includes(`${path.sep}.pi${path.sep}skills${path.sep}`)
+  )
+    return "skills";
+  return undefined;
+}
+
+export function createHookWatchers(options: HookWatcherOptions): HookWatchers {
+  const { cwd, ctx, sources, dispatch, onAllowedConfigChange } = options;
+  let disposed = false;
+  let names = watchedNames(sources);
+  let dynamicPaths = new Set<string>();
+  const dynamicWatchers = new Map<string, fs.FSWatcher>();
+  const onChange = (base: string, eventType: string, relativeName: string | Buffer | null) => {
+    if (disposed || !relativeName) return;
+    const absolute = path.resolve(base, String(relativeName));
+    const source = configSource(cwd, absolute);
+    if (source) {
+      void dispatch("ConfigChange", ctx, { source, file_path: absolute }).then((result) => {
+        if (disposed) return;
+        if (!result.blocked) onAllowedConfigChange();
+      }, rethrowUnlessStaleContext);
+    }
+    if (!names.has(path.basename(absolute)) && !dynamicPaths.has(absolute)) return;
+    let event = "change";
+    if (eventType === "rename") event = fs.existsSync(absolute) ? "add" : "unlink";
+    void dispatch("FileChanged", ctx, { file_path: absolute, event }).then((result) => {
+      if (disposed) return;
+      if (ctx.hasUI) for (const message of result.systemMessages) ctx.ui.notify(message, "warning");
+      if (result.watchPaths)
+        dynamicPaths = new Set(result.watchPaths.map((file) => path.resolve(file)));
+    }, rethrowUnlessStaleContext);
+  };
+  const watchers = [
+    fs.watch(cwd, { recursive: true }, (event, file) => onChange(cwd, event, file)),
+  ];
+  const userRoots = [
+    path.join(os.homedir(), ".claude"),
+    path.join(os.homedir(), ".agents"),
+    process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"),
+  ];
+  for (const root of userRoots)
+    if (fs.existsSync(root))
+      watchers.push(
+        fs.watch(root, { recursive: true }, (event, file) => onChange(root, event, file)),
+      );
+  const watchedRoots = new Set([path.resolve(cwd), ...userRoots.map((root) => path.resolve(root))]);
+  for (const source of sources) {
+    if (source.kind !== "managed") continue;
+    const directory = path.dirname(source.id);
+    if (watchedRoots.has(directory) || !fs.existsSync(directory)) continue;
+    watchedRoots.add(directory);
+    watchers.push(
+      fs.watch(directory, (event, file) => {
+        if (file) onChange(directory, event, file);
+      }),
+    );
+  }
+  const replaceDynamicPaths = (paths: string[]): void => {
+    if (disposed) return;
+    const next = new Set(paths.map((file) => path.resolve(file)));
+    for (const [file, watcher] of dynamicWatchers) {
+      if (next.has(file)) continue;
+      watcher.close();
+      dynamicWatchers.delete(file);
+    }
+    for (const file of next) {
+      if (dynamicWatchers.has(file) || file.startsWith(`${cwd}${path.sep}`)) continue;
+      const directory = path.dirname(file);
+      if (!fs.existsSync(directory)) continue;
+      dynamicWatchers.set(
+        file,
+        fs.watch(directory, (event, changed) => {
+          if (changed && path.resolve(directory, String(changed)) === file)
+            onChange(directory, event, changed);
+        }),
+      );
+    }
+    dynamicPaths = next;
+  };
+  return {
+    replaceSources(nextSources) {
+      if (disposed) return;
+      names = watchedNames(nextSources);
+    },
+    replaceDynamicPaths(paths) {
+      replaceDynamicPaths(paths);
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const watcher of watchers) watcher.close();
+      for (const watcher of dynamicWatchers.values()) watcher.close();
+      dynamicWatchers.clear();
+    },
+  };
+}
+
+export type { HookWatchers };

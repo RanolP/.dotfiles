@@ -298,3 +298,26 @@ path = ["xpkg/configs/render.nu"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
+
+# Vendored from github.com/Nebu1eto/choco-pi @ 82ae11191f9ab45a4b4189cdf879a33cb76aa930, .pi/packages/choco-pi-agents-md
+[[annotations]]
+path = ["nix/home/configs/pi/choco-pi/packages/choco-pi-agents-md/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 choco-pi contributors"
+SPDX-License-Identifier = "MIT"
+
+# Vendored from github.com/Nebu1eto/choco-pi @ 82ae11191f9ab45a4b4189cdf879a33cb76aa930, .pi/packages/choco-pi-goal
+# (itself a fork of fitchmultz/pi-codex-goal@0.2.0)
+[[annotations]]
+path = ["nix/home/configs/pi/choco-pi/packages/choco-pi-goal/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 Mitch Fultz", "2026 choco-pi contributors"]
+SPDX-License-Identifier = "MIT"
+
+# Vendored from github.com/Nebu1eto/choco-pi @ 82ae11191f9ab45a4b4189cdf879a33cb76aa930, .pi/packages/choco-pi-hooks
+# (MIT per its package.json; upstream ships no LICENSE file for it)
+[[annotations]]
+path = ["nix/home/configs/pi/choco-pi/packages/choco-pi-hooks/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 choco-pi contributors"
+SPDX-License-Identifier = "MIT"

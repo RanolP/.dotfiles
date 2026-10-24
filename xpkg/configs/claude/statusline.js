@@ -14,7 +14,6 @@ const { execFileSync } = require("child_process");
 
 const G = "\x1b[32m";
 const Y = "\x1b[33m";
-const O = "\x1b[38;5;208m";
 const R = "\x1b[31m";
 const C = "\x1b[36m";
 const W = "\x1b[97m";
@@ -23,7 +22,6 @@ const RS = "\x1b[0m";
 
 const FOLDER_ICON = Buffer.from([0xef, 0x81, 0xbb]).toString("utf8"); // nf-fa-folder
 const BRANCH_ICON = Buffer.from([0xee, 0x82, 0xa0]).toString("utf8"); // nf-pl-branch
-const RL_ICON = Buffer.from([0xf3, 0xb0, 0x91, 0x90]).toString("utf8");
 
 function readStdin() {
   try {
@@ -105,15 +103,6 @@ function main() {
   const THINKING = get(input, "thinking.enabled", false);
   const DIR = get(input, "workspace.current_dir", ".");
   const SESSION_ID = get(input, "session_id", "unknown");
-  const PCT = Math.trunc(Number(get(input, "context_window.used_percentage", 0)) || 0);
-  const COST = Number(get(input, "cost.total_cost_usd", 0)) || 0;
-  const DURATION_MS = Number(get(input, "cost.total_duration_ms", 0)) || 0;
-  const LINES_ADDED = Number(get(input, "cost.total_lines_added", 0)) || 0;
-  const LINES_REMOVED = Number(get(input, "cost.total_lines_removed", 0)) || 0;
-  const FIVE_H = get(input, "rate_limits.five_hour.used_percentage", "");
-  const FIVE_H_RESET = get(input, "rate_limits.five_hour.resets_at", "");
-  const WEEK = get(input, "rate_limits.seven_day.used_percentage", "");
-  const WEEK_RESET = get(input, "rate_limits.seven_day.resets_at", "");
   const PR_NUM = get(input, "pr.number", "");
   const PR_STATE = get(input, "pr.review_state", "");
 
@@ -189,71 +178,8 @@ function main() {
 
   const GAP1 = Math.max(1, COLS - L1L_W - L1R_W);
   console.log(`${L1L}${" ".repeat(GAP1)}${L1R}`);
-
-  // ── LINE 2 ─────────────────────────────────────────────────────────────
-  let BAR_C;
-  if (PCT >= 80) BAR_C = R;
-  else if (PCT >= 60) BAR_C = O;
-  else if (PCT >= 40) BAR_C = Y;
-  else BAR_C = G;
-
-  const COST_FMT = `$${COST.toFixed(2)}`;
-
-  const L2L = `${GR}used ${RS}${Y}${COST_FMT}${RS}${GR} with ${RS}${BAR_C}${PCT}%${RS}${GR} contexts${RS}`;
-  const L2L_W = 5 + COST_FMT.length + 6 + String(PCT).length + 10;
-
-  const DUR_SEC = Math.trunc(DURATION_MS / 1000);
-  const MINS = Math.trunc(DUR_SEC / 60);
-  const SECS = DUR_SEC % 60;
-  const DUR = `${MINS}m ${SECS}s`;
-  const ADDED_STR = `+${LINES_ADDED}`;
-  const REMOVED_STR = `-${LINES_REMOVED}`;
-  const L2R = `${G}${ADDED_STR}${RS} ${R}${REMOVED_STR}${RS} ${GR}${DUR}${RS}`;
-  const L2R_W = ADDED_STR.length + 1 + REMOVED_STR.length + 1 + DUR.length;
-
-  const GAP2 = Math.max(1, COLS - L2L_W - L2R_W);
-  console.log(`${L2L}${" ".repeat(GAP2)}${L2R}`);
-
-  // ── LINE 3 ─────────────────────────────────────────────────────────────
-  let FH_STR;
-  if (FIVE_H !== "" && FIVE_H !== null && FIVE_H !== undefined) {
-    const FH = Math.round(Number(FIVE_H));
-    let TIME_UNTIL = "";
-    if (FIVE_H_RESET) {
-      const DIFF_SEC = Number(FIVE_H_RESET) - Math.floor(Date.now() / 1000);
-      if (DIFF_SEC <= 0) {
-        TIME_UNTIL = "now";
-      } else if (DIFF_SEC < 3600) {
-        TIME_UNTIL = `${Math.trunc(DIFF_SEC / 60)}m`;
-      } else {
-        const DIFF_H = Math.trunc(DIFF_SEC / 3600);
-        const DIFF_M = Math.trunc((DIFF_SEC % 3600) / 60);
-        TIME_UNTIL = DIFF_M > 0 ? `${DIFF_H}h${DIFF_M}m` : `${DIFF_H}h`;
-      }
-    }
-    FH_STR = `${GR}5h ${RS}${W}${FH}%${RS}${GR} ${RL_ICON}${RS}`;
-    if (TIME_UNTIL) FH_STR += `${GR} in ${RS}${W}${TIME_UNTIL}${RS}`;
-  } else {
-    FH_STR = `${GR}5h ${RS}${W}unknown${RS}`;
-  }
-
-  let WK_STR;
-  if (WEEK !== "" && WEEK !== null && WEEK !== undefined) {
-    const WK = Math.round(Number(WEEK));
-    let WEEK_RESET_FMT = "";
-    if (WEEK_RESET) {
-      const d = new Date(Number(WEEK_RESET) * 1000);
-      const dow = d.toLocaleDateString("en-US", { weekday: "short" });
-      const mm = String(d.getMinutes()).padStart(2, "0");
-      WEEK_RESET_FMT = `${dow} ${d.getHours()}:${mm}`;
-    }
-    WK_STR = `${GR}weekly ${RS}${W}${WK}%${RS}${GR} ${RL_ICON}${RS}`;
-    if (WEEK_RESET_FMT) WK_STR += `${GR} at ${RS}${W}${WEEK_RESET_FMT}${RS}`;
-  } else {
-    WK_STR = `${GR}weekly ${RS}${W}unknown${RS}`;
-  }
-
-  console.log(`${FH_STR}${GR}  ${RS}${WK_STR}`);
+  // Cost, context, duration, lines and the 5h/weekly limits moved to the dash
+  // mod's pane, as in nix/home/configs/claude/statusline.sh.
 }
 
 main();

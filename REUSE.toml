@@ -350,6 +350,7 @@ SPDX-License-Identifier = "LicenseRef-choco-pi-author-grant"
 path = [
     "nix/home/configs/pi/choco-pi/extensions/package.json",
     "nix/home/configs/pi/choco-pi/extensions/pnpm-lock.yaml",
+    "nix/home/configs/pi/settings.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

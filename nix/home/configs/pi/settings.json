@@ -1,0 +1,10 @@
+{
+  "packages": [
+    "./vendor/choco-pi/packages/choco-pi-agents-md",
+    "./vendor/choco-pi/packages/choco-pi-goal",
+    "./vendor/choco-pi/packages/choco-pi-hooks",
+    "./vendor/choco-pi/packages/choco-pi-web-search",
+    "./vendor/choco-pi/packages/choco-pi-web-access",
+    "./vendor/choco-pi/extensions"
+  ]
+}

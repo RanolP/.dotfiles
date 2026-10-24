@@ -760,8 +760,6 @@ in
     out="$piDir/settings.json"
     repo=${./configs/pi/settings.json}
     run mkdir -p "$piDir"
-    # Drop any leftover read-only symlink from previous management.
-    [ -L "$out" ] && run rm -f "$out"
     live="$out"
     [ -f "$live" ] || live=${pkgs.writeText "pi-settings-empty.json" "{}"}
     if ! run sh -c '${pkgs.jq}/bin/jq -s ".[0] + .[1]" "$1" "$2" > "$0.merged" && chmod 0644 "$0.merged" && mv "$0.merged" "$0"' "$out" "$live" "$repo"; then

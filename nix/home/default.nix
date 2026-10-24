@@ -112,6 +112,64 @@ let
       true
     '';
 
+  # The vendored choco-pi tree, deployed to ~/.pi/agent/vendor/choco-pi where
+  # configs/pi/settings.json points its relative `packages` entries (the review
+  # extension writes its data under ~/.pi/agent/choco-pi, so the tree stays out
+  # of that path). Pi never npm-installs a local package, so the two dirs with
+  # third-party dependencies get node_modules from their committed pnpm
+  # lockfiles -- the macOS twin of xpkg/configs/pi/install.nu. fetchPnpmDeps
+  # only downloads registry tarballs and the install runs offline with
+  # --ignore-scripts, so nothing compiles. Each lockfile has its own
+  # fixed-output hash: after a lockfile change, set it to lib.fakeHash, build,
+  # and copy the `got: sha256-...` value back.
+  piVendor =
+    let
+      src = ./configs/pi/choco-pi;
+      pnpm = pkgs.pnpm_11;
+      nodeModules =
+        name: dir: hash:
+        pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
+          pname = "choco-pi-${name}-node-modules";
+          version = "0";
+          src = dir;
+          pnpmDeps = pkgs.fetchPnpmDeps {
+            inherit (finalAttrs) pname version src;
+            inherit pnpm hash;
+            fetcherVersion = 4;
+          };
+          nativeBuildInputs = [
+            pnpm
+            pkgs.pnpmConfigHook
+          ];
+          dontBuild = true;
+          installPhase = ''
+            runHook preInstall
+            if [ ! -d node_modules ]; then
+              echo "piVendor: pnpm install in ${name} left no node_modules" >&2
+              exit 1
+            fi
+            cp -R node_modules $out
+            runHook postInstall
+          '';
+        });
+      webAccessModules =
+        nodeModules "web-access" ./configs/pi/choco-pi/packages/choco-pi-web-access
+          lib.fakeHash;
+      extensionsModules = nodeModules "extensions" ./configs/pi/choco-pi/extensions lib.fakeHash;
+    in
+    pkgs.runCommand "choco-pi-vendor" { } ''
+      cp -R ${src} $out
+      chmod -R u+w $out
+      cp -R ${webAccessModules} $out/packages/choco-pi-web-access/node_modules
+      cp -R ${extensionsModules} $out/extensions/node_modules
+      for dir in packages/choco-pi-web-access extensions; do
+        if [ ! -d "$out/$dir/node_modules" ]; then
+          echo "piVendor: $out/$dir/node_modules is missing after the copy" >&2
+          exit 1
+        fi
+      done
+    '';
+
   sharedAgentRules = ./configs/.agents/AGENTS.md;
   claudeSpecificRules = ./configs/claude/CLAUDE.md;
   claudeUserRules = pkgs.writeText "CLAUDE.md" (
@@ -537,6 +595,7 @@ in
       # holds a bare path in herdr's own mutable state, which nix can't see.
       ".local/share/herdr-plugins/herdr-browser".source = herdrBrowser;
       ".local/share/herdr-plugins/herdr-handsfree".source = herdrHandsfree;
+      ".pi/agent/vendor/choco-pi".source = piVendor;
       ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
     }
     skillFiles
@@ -688,6 +747,27 @@ in
         echo ""
         ${pkgs.gawk}/bin/awk '/^\[/ { keep = ($0 ~ /^\[projects\./ || $0 ~ /^\[mcp_servers\./) } keep' "$localTrust"
       } >> "$out"
+    fi
+  '';
+
+  # Pi rewrites ~/.pi/agent/settings.json in place at runtime, so it is neither
+  # a read-only link nor a full overwrite: keep every key Pi wrote and put the
+  # repo keys on top (shallow merge, repo wins), the same as install.nu does on
+  # Windows. The merged file is written beside the live one and moved over it,
+  # so a failed merge leaves the live file untouched.
+  home.activation.piSettings = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    piDir="$HOME/.pi/agent"
+    out="$piDir/settings.json"
+    repo=${./configs/pi/settings.json}
+    run mkdir -p "$piDir"
+    # Drop any leftover read-only symlink from previous management.
+    [ -L "$out" ] && run rm -f "$out"
+    live="$out"
+    [ -f "$live" ] || live=${pkgs.writeText "pi-settings-empty.json" "{}"}
+    if ! run sh -c '${pkgs.jq}/bin/jq -s ".[0] + .[1]" "$1" "$2" > "$0.merged" && chmod 0644 "$0.merged" && mv "$0.merged" "$0"' "$out" "$live" "$repo"; then
+      echo "piSettings: jq merge of $live (live) with $repo (repo) into $out failed; see the jq error above. $out is unchanged." >&2
+      rm -f "$out.merged"
+      exit 1
     fi
   '';
 

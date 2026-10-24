@@ -292,3 +292,9 @@ path = ["docs/proposals/260821-named-resource-purpose.md"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["xpkg/configs/render.nu"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 RanolP"
+SPDX-License-Identifier = "MIT"

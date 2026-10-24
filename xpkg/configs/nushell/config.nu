@@ -1,6 +1,11 @@
-# Nushell Config File
+# Windows nushell config overlay -- xpkg/configs/install.nu writes
+# $nu.config-path as this file, then the shared nix source
+# (nix/home/configs/nushell/config.nu, minus its nix-only `source` line), then
+# the shared aliases (nix/home/programs/aliases.nix). Keys here add the
+# Windows-only parts (theme, keybindings, mise activation, `rebuild`); shared
+# settings belong in the nix sources so every host matches.
 #
-# version = "0.87.1"
+# Based on the Nushell 0.87.1 default config file.
 
 # For more information on defining custom themes, see
 # https://www.nushell.sh/book/coloring_and_theming.html

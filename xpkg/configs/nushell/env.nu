@@ -1,6 +1,9 @@
-# Nushell Environment Config File
+# Windows nushell env overlay -- xpkg/configs/install.nu writes $nu.env-path as
+# this file followed by the shared nix source (nix/home/configs/nushell/
+# env.common.nu). This part runs first, so PATH and HOME are set up for the
+# shared env. Shared env vars belong in env.common.nu, not here.
 #
-# version = "0.87.1"
+# Based on the Nushell 0.87.1 default env file.
 
 def create_left_prompt [] {
     let home =  $nu.home-path
@@ -100,3 +103,6 @@ $env.NU_PLUGIN_DIRS = [
 # To add entries to PATH (on Windows you might use Path), you can use the following pattern:
 # $env.PATH = ($env.PATH | split row (char esep) | prepend '/some/path')
 $env.PATH = ($env.PATH | append '~/.opencode/bin')
+
+# The shared env below reads $env.HOME, which Windows does not set.
+$env.HOME = ($env.HOME? | default $nu.home-path)

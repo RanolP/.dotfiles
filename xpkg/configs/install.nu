@@ -1,5 +1,6 @@
 #!/usr/bin/env nu
 source ~/.dotfiles/xpkg/utils/normalize.nu
+use ~/.dotfiles/xpkg/configs/render.nu [nushell-config mise-config]
 
 if ($nu.os-info.name == windows) and (not (is-admin)) {
     echo $"(ansi yellow)!!(ansi reset) Relaunch ~/.dotfiles/xpkg/configs/install.nu with admin privileges"
@@ -9,21 +10,11 @@ if ($nu.os-info.name == windows) and (not (is-admin)) {
 
 let configs = $env.FILE_PWD
 
-echo $"(ansi purple)>>(ansi reset) Hardlinking nushell configs"
-do -i { ln -P -f $'($configs)/nushell/config.nu' $nu.config-path }
-do -i { ln -P -f $'($configs)/nushell/env.nu' $nu.env-path }
+echo $"(ansi purple)>>(ansi reset) Generating nushell configs \(Windows overlay + shared nix\)"
+nushell-config $nu.env-path $nu.config-path
 
-# mise: merge the shared nix source (single source of truth for tool versions)
-# with the Windows overlay, then write ~/.config/mise/config.toml. Overlay keys
-# win, so it adds Windows-only tools and swaps in the Windows `claude` binary.
 echo $"(ansi purple)>>(ansi reset) Merging mise config \(shared nix + Windows overlay\)"
-let mise_shared = (open ($nu.home-path | path join '.dotfiles' 'nix' 'home' 'mise-global.toml'))
-let mise_overlay = (open $'($configs)/mise/config.toml')
-do -i { mkdir ($nu.home-path | path join '.config' 'mise') }
-{
-    tools: ($mise_shared.tools? | default {} | merge ($mise_overlay.tools? | default {}))
-    settings: ($mise_shared.settings? | default {} | merge ($mise_overlay.settings? | default {}))
-} | save -f ($nu.home-path | path join '.config' 'mise' 'config.toml')
+mise-config ($nu.home-path | path join '.config' 'mise' 'config.toml')
 
 echo $"(ansi purple)>>(ansi reset) Updating .gitconfig"
 nu $'($configs)/gitconfig.nu'

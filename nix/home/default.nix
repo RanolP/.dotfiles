@@ -233,6 +233,7 @@ let
     component-pixel-review = localSkill "component-pixel-review";
     design-review = localSkill "design-review";
     artificier-comparison = localSkill "artificier-comparison";
+    reverse-engineer-anything = localSkill "reverse-engineer-anything";
     slack-messaging = localSkill "slack-messaging";
     worktree-cleanup = localSkill "worktree-cleanup";
     want-exit = localSkill "want-exit";

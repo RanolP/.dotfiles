@@ -5,9 +5,9 @@ github.com/Nebu1eto/choco-pi at commit
 82ae11191f9ab45a4b4189cdf879a33cb76aa930 that carry no license in the
 upstream repository.
 
-The choco-pi author (GitHub user Nebu1eto) personally told the owner of
-this repository (RanolP), via a Discord announcement, that the code may
-be freely taken and used.
+The choco-pi author (GitHub user Nebu1eto), an acquaintance of the owner
+of this repository (RanolP), announced on Discord that the code may be
+freely taken and used.
 
 The upstream repository carries no license for these files. A request
 for the upstream author to add an MIT LICENSE is pending.

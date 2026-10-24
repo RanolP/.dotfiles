@@ -10,10 +10,10 @@ let nix = $'($home)/.dotfiles/nix/home/configs'
 let agent = $'($home)/.pi/agent'
 let vendor = $'($agent)/vendor/choco-pi'
 
-do -i { mkdir $'($agent)/vendor' }
+mkdir $'($agent)/vendor'
 
 print $"     (ansi blue)Copy(ansi reset) vendor/choco-pi"
-do -i { rm -rf $vendor }
+rm -rf $vendor
 cp --recursive $'($nix)/pi/choco-pi' $vendor
 
 for dir in [packages/choco-pi-web-access extensions] {

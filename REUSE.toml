@@ -355,10 +355,3 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
-
-# Derived from npm @ravshansbox/pi-opencode-zen@0.4.3 (index.ts), trimmed to one static free model.
-[[annotations]]
-path = ["nix/home/configs/pi/extensions/opencode-zen-free.ts"]
-precedence = "aggregate"
-SPDX-FileCopyrightText = ["2026 RanolP", "2026 Ravshan"]
-SPDX-License-Identifier = "MIT"

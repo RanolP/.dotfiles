@@ -596,7 +596,6 @@ in
       ".local/share/herdr-plugins/herdr-browser".source = herdrBrowser;
       ".local/share/herdr-plugins/herdr-handsfree".source = herdrHandsfree;
       ".pi/agent/vendor/choco-pi".source = piVendor;
-      ".pi/agent/extensions/opencode-zen-free.ts".source = ./configs/pi/extensions/opencode-zen-free.ts;
       ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
     }
     skillFiles

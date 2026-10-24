@@ -16,6 +16,11 @@ print $"     (ansi blue)Copy(ansi reset) vendor/choco-pi"
 rm -rf $vendor
 cp --recursive $'($nix)/pi/choco-pi' $vendor
 
+# Pi auto-discovers every file in ~/.pi/agent/extensions.
+print $"     (ansi blue)Copy(ansi reset) extensions/opencode-zen-free.ts"
+mkdir $'($agent)/extensions'
+cp $'($nix)/pi/extensions/opencode-zen-free.ts' $'($agent)/extensions/opencode-zen-free.ts'
+
 for dir in [packages/choco-pi-web-access extensions] {
     print $"     (ansi blue)Install(ansi reset) vendor/choco-pi/($dir) dependencies"
     let result = (do { cd $'($vendor)/($dir)'; ^pnpm install --frozen-lockfile --ignore-scripts } | complete)

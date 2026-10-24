@@ -34,6 +34,11 @@ if not (which codex | is-empty) {
     nu $'($configs)/codex/install.nu'
 }
 
+if not (which pi | is-empty) {
+    echo $"(ansi purple)>>(ansi reset) Installing Pi configs"
+    nu $'($configs)/pi/install.nu'
+}
+
 if ($nu.os-info.kernel_version | str contains 'WSL2') {
     echo $"(ansi purple)>>(ansi reset) Integrating Windows fonts for WSL2"
     do -i { sudo mkdir /etc/fonts/ }

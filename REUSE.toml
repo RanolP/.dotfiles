@@ -321,3 +321,19 @@ path = ["nix/home/configs/pi/choco-pi/packages/choco-pi-hooks/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 choco-pi contributors"
 SPDX-License-Identifier = "MIT"
+
+# Vendored from github.com/Nebu1eto/choco-pi @ 82ae11191f9ab45a4b4189cdf879a33cb76aa930, .pi/packages/choco-pi-web-access
+# (itself a fork of nicobailon/pi-web-access@8a1748f106acb20626ace32806fc726bb0858859)
+[[annotations]]
+path = ["nix/home/configs/pi/choco-pi/packages/choco-pi-web-access/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2025 Nico Bailon", "2026 choco-pi contributors"]
+SPDX-License-Identifier = "MIT"
+
+# Vendored from github.com/Nebu1eto/choco-pi @ 82ae11191f9ab45a4b4189cdf879a33cb76aa930, .pi/packages/choco-pi-web-search
+# Upstream carries no license for it; see LICENSES/LicenseRef-choco-pi-author-grant.txt.
+[[annotations]]
+path = ["nix/home/configs/pi/choco-pi/packages/choco-pi-web-search/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 choco-pi contributors"
+SPDX-License-Identifier = "LicenseRef-choco-pi-author-grant"

@@ -154,8 +154,10 @@ let
         });
       webAccessModules =
         nodeModules "web-access" ./configs/pi/choco-pi/packages/choco-pi-web-access
-          lib.fakeHash;
-      extensionsModules = nodeModules "extensions" ./configs/pi/choco-pi/extensions lib.fakeHash;
+          "sha256-Mc/ZxWUKA5MljxxzoPEZfty7JgyMEJB4wYNgzcWW6ew=";
+      extensionsModules =
+        nodeModules "extensions" ./configs/pi/choco-pi/extensions
+          "sha256-z2Uea2EpZNimbzxVhEmQUeYo/3eYaTrN/6rLCzLI9XI=";
     in
     pkgs.runCommand "choco-pi-vendor" { } ''
       cp -R ${src} $out

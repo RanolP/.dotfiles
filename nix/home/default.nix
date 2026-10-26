@@ -280,6 +280,7 @@ let
     record-replay = localSkill "record-replay";
     metro-wait = localSkill "metro-wait";
     evidence-store = localSkill "evidence-store";
+    teardown = localSkill "teardown";
     apology = localSkill "apology";
     # Same skill under the name the user actually types. Slash-command
     # resolution uses the linked directory name, so the alias is a second link

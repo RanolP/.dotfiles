@@ -276,6 +276,13 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "Atlassian Pty Ltd"
 SPDX-License-Identifier = "Apache-2.0"
 
+# Vendored verbatim from https://github.com/jakubkrehel/skills (skills/teardown) at commit 592aedc (v1.17.0).
+[[annotations]]
+path = ["nix/home/configs/.agents/skills/teardown/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jakub Krehel"
+SPDX-License-Identifier = "MIT"
+
 [[annotations]]
 path = [
     "scripts/verify-claude-hook.sh",

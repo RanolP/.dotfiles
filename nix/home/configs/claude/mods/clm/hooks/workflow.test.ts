@@ -47,6 +47,64 @@ test('the later queue survives a turn end unsubmitted', OPTS, async ($, on) => {
   expect(JSON.stringify(await band.drawn())).toContain('1. Run the focused verification')
 })
 
+const seedWorkflow = (on: On, seed: ClmWorkflow) => {
+  const isWorkflow = (e: { plugin: string; key: string }) => e.plugin === 'clm' && e.key === 'workflow'
+  let written: ClmWorkflow = seed
+  on('state.get', async (_$: unknown, e: any, next: (e: any) => Promise<any>) => {
+    const read = await next(e)
+    return isWorkflow(e) && read.value.value === undefined ? { value: { ...read.value, value: seed } } : read
+  })
+  on('state.set', async (_$: unknown, e: any, next: (e: any) => Promise<any>) => {
+    if (isWorkflow(e)) written = e.value
+    return next(e)
+  })
+  return () => written
+}
+const pendingResume = () => workflow({ resumeRequest: { text: 'continue the audit' }, activeTurnId: 't1' })
+
+// Regression caught: an aborted main turn still submitted the queued resume.
+test('an aborted main turn leaves a queued resume unsubmitted', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  seedWorkflow(on, pendingResume())
+  await $.turn.complete(turnInput('t1', { isAborted: true }))
+  expect(seen.submissions).toEqual([])
+})
+
+// Regression caught: a subagent's turn end submitted the main session's queued resume.
+test('a subagent turn end leaves a queued resume unsubmitted', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  seedWorkflow(on, pendingResume())
+  await $.turn.complete(turnInput('t-agent', { agentId: 'agent-1' }))
+  expect(seen.submissions).toEqual([])
+})
+
+// Regression caught: a duplicate completion event for one turn submitted the queued resume twice.
+test('a duplicate completion of one turn submits a queued resume once', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  seedWorkflow(on, pendingResume())
+  await $.turn.complete(turnInput('t1'))
+  await $.turn.complete(turnInput('t1'))
+  expect(seen.submissions).toEqual([{ text: 'continue the audit' }])
+})
+
+// Regression caught: a refused pop lost its later item or moved it
+test('a refused /clm pop puts the item back in place and clears its replay', OPTS, async ($, on) => {
+  on('prompt.submit', { text: 'second' }, () => ({ drop: 'refused' }))
+  const seen = bottoms(on, { rows: [], replies: [] })
+  const later = [{ text: 'first' }, { text: 'second', issue: 's1-9' }, { text: 'third' }]
+  const stored = seedWorkflow(on, workflow({ later }))
+  await runClm($, 'pop 2')
+  await seen.clock.advance(1)
+  const drawn = JSON.stringify(await (await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })).drawn())
+  expect(drawn).toContain('1. first')
+  expect(drawn).toContain('2. second')
+  expect(drawn).toContain('3. third')
+  expect(stored().later).toEqual(later)
+  expect(stored().replayed).toBeNull()
+  expect(seen.logs).toContain('clm: continuation submit failed (Error: refused)')
+  expect(seen.submissions).toEqual([])
+})
+
 // Regression caught: /clm pop n submitted or removed a different item than the one the human named.
 test('/clm pop 2 submits item 2 as the user and removes only it', OPTS, async ($, on) => {
   const seen = bottoms(on, {

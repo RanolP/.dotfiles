@@ -42,6 +42,7 @@ packages = [
   "PrismLauncher.PrismLauncher",
   "ShareX.ShareX",
   "Smilegate.Stove",
+  "Tailscale.Tailscale",
   "Telegram.TelegramDesktop",
   "uutils.coreutils",
   "Valve.Steam",

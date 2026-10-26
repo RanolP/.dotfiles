@@ -78,6 +78,18 @@ The recurring correction on this user's drafts is length and shape, not accuracy
 - Cut every sentence that repeats a fact another line already carries.
 - Keep prose only for a single argument a list would break.
 
+## The user's voice
+
+Derived on 2026-10-26 from about 300 of the user's own Slack messages (2026-07-27..10-26) and 3,940 Claude Code messages. Before drafting, still search `from:<user id>` in the target channel and match that channel's format, including its format for review requests and build notices.
+
+- **Register:** casual 반말 by default, leaning suggestive or permissive rather than commanding ("s3 콘솔 가서 업로드해", "이거 <a teammate>이나 다른 프론트 팀원에게 요청해도 돼"). Use 합니다체 only for fixed-format reports ("퇴근합니다.", "빌드 나왔습니다 <build>", "<build>에 들어간 카드 전체입니다 (<previous build> 대비)"), and 해요체 in company-wide notice channels ("넵 필요에 따라선 연차나 반차를 써서 갈 수도 있어요").
+- **Endings:** opinions end tentatively with `~듯`, `~거 같음`, `~수도 있고`, `어때?` ("별도 카드로 분리하는 것도 검토해봐야 할듯"). Requests and decisions end short with `해줘`, `~하자`, `ㄱㄱ`.
+- **Length:** about 25 characters per message is the user's median. One thought per line; a long explanation goes as a code block or a link, not a paragraph.
+- **Terms:** English technical terms stay untranslated inside Korean sentences ("hono는 fastapi같은거", "go server보다 이점이 매우 큰지는 모르겠어").
+- **Humor:** light self-deprecating humor in plain sentences is in voice ("센트리가 나를 싫어해").
+- **Plain text only:** write the sentence without onomatopoeia, laughter or crying syllables (흑흑, 크아악, ㅋㅋㅋ, ㅠ), trailing ellipses ("...."), or profanity. The user said: "의성어 말줄임표는 굳이 재현하지 말고". Profanity appears only in their messages to Claude after agent mistakes, never in their Slack sample.
+- **Constraints:** no honorifics toward teammates in casual channels, no emoji unless the channel's own format uses them (e.g. `:ios:`/`:android:` build lines), no diff counts, no explanatory paragraph. Links follow the "[label](url)" rule of the "A bare URL swallows the line after it" section.
+
 ## Boundaries this user has set
 
 - **The designer is off limits.** "디자이너와 소통은 니가 슬랙 맨날 사고 치니까 절대 안맡김" -- do not draft or send anything to the designer; hand that conversation back to the user.
@@ -85,7 +97,7 @@ The recurring correction on this user's drafts is length and shape, not accuracy
 - **Do not reconfigure the Slack MCP.** Use it to read, to draft, and to send what was approved; leave its setup alone.
 - **Synthesize, then ask for verification.** When the answer lives across a Slack thread and a Jira card, combine them yourself and bring the finished result for the user to check, rather than asking them to supply the pieces.
 - **A Slack post never triggers a ticket transition.** Ticket transitions belong to the user; report card states as facts and leave the move to them.
-- **Write in the user's own voice.** Before drafting, search `from:<user id>` in the same channel and match it: casual register, one line plus bare links, no honorifics, no emoji, no diff counts, no explanatory paragraph. Match the channel's existing format for review requests and build notices too, as that same `from:<user id>` search shows it.
+- **Write in the user's own voice** -- see the section below.
 
 ## Scheduling
 

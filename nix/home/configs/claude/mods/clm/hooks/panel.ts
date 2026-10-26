@@ -7,6 +7,7 @@ import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, shownNote, 
 import type { FocusState } from './tracker'
 import { debateRubric, outermostSteppedRootOf, rubricText, type ModelIo } from './stepped'
 import { WorktreeError, startWorktree, type Worktree } from './worktree'
+import type { LaterPop } from './workflow'
 
 export const TASK_TOOL = 'mcp__clm__clm_task'
 
@@ -615,6 +616,7 @@ export type PanelCommandIo = {
   append(payloads: readonly Payload[]): Promise<TrackerEvent[]>
   issues(): Promise<Issue[]>
   openBoard(): Promise<void>
+  popLater(number: number): Promise<LaterPop>
   log(text: string): void
 }
 
@@ -645,8 +647,19 @@ export async function runPanelCommand(io: PanelCommandIo, rawArgs: string | unde
     if (args.length && !named.length && !unknown.length) io.log('clm: no open issue to drop')
     return 'handled'
   }
+  if (sub === 'pop') {
+    const number = arg === undefined ? 1 : /^[1-9]\d*$/.test(arg) ? Number(arg) : undefined
+    if (number === undefined || args.length > 1) {
+      io.log('clm: usage /clm pop [n], where n is a later queue number')
+      return 'handled'
+    }
+    const outcome = await io.popLater(number)
+    if ('missing' in outcome) io.log(outcome.missing === 'empty' ? 'clm: the later queue is empty' : `clm: no later item ${number}; the queue has ${outcome.size}`)
+    else io.log(`clm: popped later item ${number}: ${outcome.popped.text}`)
+    return 'handled'
+  }
   if (sub) {
-    io.log('clm: usage /clm, /clm board, /clm link <issue id>, /clm drop <issue id…|all>')
+    io.log('clm: usage /clm, /clm board, /clm link <issue id>, /clm drop <issue id…|all>, /clm pop [n]')
     return 'handled'
   }
   return 'report'

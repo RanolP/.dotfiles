@@ -57,37 +57,46 @@ export function resetUserWorkflow(current: ClmWorkflow, origin: PromptOrigin): C
   return { ...current, resumeRequest: null, lastSubmittedTurn: null }
 }
 
-export type Continuation = { text: string; issue?: string; asUser?: true; source: 'later' | 'resume' }
+export type Continuation = { text: string }
 export function chooseContinuation(current: ClmWorkflow, turnId: string): { workflow: ClmWorkflow; continuation?: Continuation } {
-  if (current.lastSubmittedTurn === turnId) return { workflow: current }
-  const [laterHead, ...laterRest] = current.later
-  if (laterHead !== undefined) {
-    return {
-      workflow: {
-        ...current, later: laterRest, lastSubmittedTurn: turnId,
-        replayed: laterHead.issue ? { issue: laterHead.issue } : current.replayed,
-      },
-      continuation: { text: laterHead.text, ...(laterHead.issue ? { issue: laterHead.issue } : {}), asUser: true, source: 'later' },
-    }
+  if (current.lastSubmittedTurn === turnId || !current.resumeRequest) return { workflow: current }
+  return {
+    workflow: { ...current, resumeRequest: null, lastSubmittedTurn: turnId },
+    continuation: { text: current.resumeRequest.text },
   }
-  if (current.resumeRequest) {
-    return {
-      workflow: { ...current, resumeRequest: null, lastSubmittedTurn: turnId },
-      continuation: { text: current.resumeRequest.text, source: 'resume' },
-    }
-  }
-  return { workflow: current }
 }
 
 export function restoreFailedContinuation(current: ClmWorkflow, turnId: string, continuation: Continuation): ClmWorkflow {
   if (current.lastSubmittedTurn !== turnId) return current
-  if (continuation.source === 'later')
-    return {
-      ...current, later: [{ text: continuation.text, ...(continuation.issue ? { issue: continuation.issue } : {}) }, ...current.later],
-      replayed: continuation.issue && current.replayed?.issue === continuation.issue ? null : current.replayed,
-      lastSubmittedTurn: null,
-    }
   return { ...current, resumeRequest: current.resumeRequest ?? { text: continuation.text }, lastSubmittedTurn: null }
+}
+
+export type LaterPop = { popped: ClmWorkflow['later'][number] } | { missing: 'empty' | number; size: number }
+export async function popLater(io: WorkflowIo, number: number, defer: (run: () => Promise<void>) => void): Promise<LaterPop> {
+  const taken = await io.change((current): { next: ClmWorkflow; result: LaterPop } => {
+    const item = current.later[number - 1]
+    if (!item) return { next: current, result: { missing: current.later.length ? number : 'empty', size: current.later.length } }
+    return {
+      next: { ...current, later: current.later.filter((_, i) => i !== number - 1), replayed: item.issue ? { issue: item.issue } : current.replayed },
+      result: { popped: item },
+    }
+  })
+  if (!('popped' in taken)) return taken
+  const item = taken.popped
+  const restore = () => io.change(current => ({
+    next: {
+      ...current, later: [...current.later.slice(0, number - 1), item, ...current.later.slice(number - 1)],
+      replayed: item.issue && current.replayed?.issue === item.issue ? null : current.replayed,
+    },
+    result: undefined,
+  }))
+  defer(async () => {
+    await submitWithRecovery(async () => {
+      const result = await io.submit({ text: item.text, asUser: true })
+      if (result.drop !== undefined) throw new Error(result.drop)
+    }, restore, message => io.log(message))
+  })
+  return taken
 }
 
 export function removeQueueSnapshotTargets(
@@ -226,7 +235,7 @@ export async function submitWithRecovery(
 async function submitContinuation(io: WorkflowIo, turnId: string, continuation: Continuation): Promise<boolean> {
   return submitWithRecovery(
     async () => {
-      const submitted = await io.submit({ text: continuation.text, ...(continuation.asUser ? { asUser: true } : {}) })
+      const submitted = await io.submit({ text: continuation.text })
       if (submitted.drop !== undefined) throw new Error(submitted.drop)
     },
     () => restoreContinuation(io, turnId, continuation),
@@ -241,6 +250,5 @@ export async function arbitrateContinuation(io: WorkflowIo, turnId: string): Pro
     void submitContinuation(io, turnId, continuation)
     return 'queued'
   }
-  const submitted = await submitContinuation(io, turnId, continuation)
-  return submitted && continuation.source === 'resume' ? 'submitted' : 'queued'
+  return await submitContinuation(io, turnId, continuation) ? 'submitted' : 'queued'
 }

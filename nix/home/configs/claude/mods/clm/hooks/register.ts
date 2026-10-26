@@ -23,7 +23,7 @@ import {
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
 import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
-import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
+import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, popLater, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
@@ -1092,7 +1092,7 @@ export const register: Register = (on, options) => {
     }
     await $.command.register({
       name: 'clm',
-      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session (shown to you only).',
+      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session, `pop [n]` sends later queue item n (default 1) as your next prompt (shown to you only).',
       immediate: true,
     })
     await $.command.register({ name: 'force-compact', description: 'Compact once with Claude Code\'s own summarizer instead of the clm fold; text after it becomes the summary instructions.', immediate: true })
@@ -1124,6 +1124,8 @@ export const register: Register = (on, options) => {
       append: payloads => append($, payloads),
       issues: () => sessionIssues($),
       openBoard: () => openPanelBoard(panelIo($)),
+      // The host refuses a prompt submit from inside command.run, so the popped item is submitted once the command has returned.
+      popLater: number => popLater(workflowIo($), number, run => { $.clock.after(0, run) }),
       log: text => $.ui.log(text),
     }, e.args)
     if (outcome === 'handled') return {}
@@ -1254,7 +1256,7 @@ export const register: Register = (on, options) => {
         throw new Error('no implementation for ui.render')
       }
       const { Box, Text } = $.ui.resolve(e)
-      const queue = Text({ dimColor: true, children: `Later queue:\n${later.map((item, i) => `${i + 1}. ${item.text}`).join('\n')}` })
+      const queue = Text({ dimColor: true, children: `Later queue (/clm pop [n]):\n${later.map((item, i) => `${i + 1}. ${item.text}`).join('\n')}` })
       return Box({ gap: 1, children: base === null ? [queue] : [base, queue] })
     } catch (err) {
       if (String(err).includes('no implementation for ui.render')) throw err

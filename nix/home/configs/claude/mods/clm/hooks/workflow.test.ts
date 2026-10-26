@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
@@ -32,24 +32,41 @@ test('chat deferrals stay in session state and the band numbers them', OPTS, asy
   expect(drawn.indexOf('Check the release notes')).toBeLessThan(drawn.indexOf('Verify the changelog'))
 })
 
-// Regression caught: queue continuations lost asUser or repeated after duplicate completion events.
-test('the continuation arbiter submits the later queue once per turn', OPTS, async ($, on) => {
+// Regression caught: a turn end submitted a deferred later item as the next prompt before the human popped it.
+test('the later queue survives a turn end unsubmitted', OPTS, async ($, on) => {
   const seen = bottoms(on, {
     rows: [], replies: [], intentReplies: [intentReply({ later: ['Run the focused verification'] })],
   })
   await $.prompt.submit(promptInput('Run the focused verification later'))
   await waitForLog(seen, 'clm: queued later item 1')
   seen.submissions.length = 0
-  const end = (turnId: string, extra: Partial<TurnCompleteInput> = {}) => $.turn.complete(turnInput(turnId, extra))
-  await end('t1', { isAborted: true })
-  await end('t-agent', { agentId: 'agent-1' })
+  await $.turn.complete(turnInput('t1'))
+  await $.turn.complete(turnInput('t2'))
   expect(seen.submissions).toEqual([])
-  await end('t1')
-  await end('t1')
-  expect(seen.submissions).toEqual([{ text: 'Run the focused verification', asUser: true }])
-  await end('t2')
-  await end('t2')
-  expect(seen.submissions).toEqual([{ text: 'Run the focused verification', asUser: true }])
+  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
+  expect(JSON.stringify(await band.drawn())).toContain('1. Run the focused verification')
+})
+
+// Regression caught: /clm pop n submitted or removed a different item than the one the human named.
+test('/clm pop 2 submits item 2 as the user and removes only it', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], intentReplies: [intentReply({ later: ['first request', 'second request', 'third request'] })],
+  })
+  await $.prompt.submit(promptInput('Do these later: first request, second request, third request'))
+  await waitForLog(seen, 'clm: queued later item 3')
+  seen.submissions.length = 0
+  await runClm($, 'pop 2')
+  await seen.clock.advance(1)
+  expect(seen.submissions).toEqual([{ text: 'second request', asUser: true }])
+  expect(seen.logs).toContain('clm: popped later item 2: second request')
+  const drawn = JSON.stringify(await (await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })).drawn())
+  expect(drawn).toContain('1. first request')
+  expect(drawn).toContain('2. third request')
+  expect(drawn).not.toContain('second request')
+  await runClm($, 'pop 5')
+  await seen.clock.advance(1)
+  expect(seen.logs).toContain('clm: no later item 5; the queue has 2')
+  expect(seen.submissions).toHaveLength(1)
 })
 
 // Regression caught: a hand-back fabricated a handoff in the main session.
@@ -247,7 +264,8 @@ test('a replayed later continuation is not classified', OPTS, async ($, on) => {
   })
   await $.prompt.submit(promptInput('Run the focused verification later'))
   await waitForLog(seen, 'clm: queued later item 1')
-  await $.turn.complete({ ...TURN, turnId: 'later-replay-turn' })
+  await runClm($, 'pop')
+  await seen.clock.advance(1)
   expect(seen.submissions).toContainEqual({ text: 'Run the focused verification', asUser: true })
   expect(seen.intentPrompts).toHaveLength(1)
 })
@@ -259,7 +277,8 @@ test('a linked later replay reconciles once to its issue and then stays unchange
   })
   await $.prompt.submit(promptInput('Do deferred task later'))
   await waitForLog(seen, 'clm: queued later item 1')
-  await $.turn.complete(turnInput('defer-turn'))
+  await runClm($, 'pop')
+  await seen.clock.advance(1)
   expect(seen.submissions).toContainEqual({ text: 'Do deferred task', asUser: true })
   await $.turn.complete(turnInput('replay-finished'))
   const path = '/home/t/.claude-work/tracker/events/s1.jsonl'
@@ -315,29 +334,28 @@ test('a chat drop removes exactly the named item and keeps the rest in order', O
   expect(seen.logs).toContain('clm: dropped later item 2: second request')
 })
 
-// Regression caught: a failed continuation submission consumed the queue head and blocked retrying the same turn.
-test('a rejected continuation submission restores its queue head and clears its turn claim', async () => {
+// Regression caught: a failed continuation submission consumed the resume request and blocked retrying the same turn.
+test('a rejected continuation submission restores its resume request and clears its turn claim', async () => {
   let currentWorkflow: ClmWorkflow = workflow({ lastSubmittedTurn: 'retry-turn' })
   const logs: string[] = []
   const submitted = await submitWithRecovery(
     async () => { throw new Error('settings hook refused prompt') },
-    async () => { currentWorkflow = restoreFailedContinuation(currentWorkflow, 'retry-turn', { text: 'next item', asUser: true, source: 'later' }) },
+    async () => { currentWorkflow = restoreFailedContinuation(currentWorkflow, 'retry-turn', { text: 'next item' }) },
     message => logs.push(message),
   )
   expect(submitted).toBe(false)
-  expect(currentWorkflow.later).toEqual([{ text: 'next item' }])
+  expect(currentWorkflow.resumeRequest).toEqual({ text: 'next item' })
   expect(currentWorkflow.lastSubmittedTurn).toBeNull()
   expect(logs).toContain('clm: continuation submit failed (Error: settings hook refused prompt)')
 })
 
-// Regression caught: clm skipped a queued resume after consuming the higher-priority later queue.
-test('the continuation selector consumes a resume request after the later queue', async () => {
+// Regression caught: the turn-end selector consumed the later queue, or skipped a queued resume while later items waited.
+test('the continuation selector consumes a resume request and leaves the later queue', async () => {
   const start = workflow({ later: [{ text: 'verify the release' }], resumeRequest: { text: 'time-budget resume' } })
-  const queue = chooseContinuation(start, 't1')
-  expect(queue.continuation).toEqual({ text: 'verify the release', asUser: true, source: 'later' })
-  const resumed = chooseContinuation(queue.workflow, 't2')
-  expect(resumed.continuation?.text).toBe('time-budget resume')
-  expect(chooseContinuation(resumed.workflow, 't3').continuation).toBeUndefined()
+  const resumed = chooseContinuation(start, 't1')
+  expect(resumed.continuation).toEqual({ text: 'time-budget resume' })
+  expect(resumed.workflow.later).toEqual([{ text: 'verify the release' }])
+  expect(chooseContinuation(resumed.workflow, 't2').continuation).toBeUndefined()
 })
 
 // Regression caught: task notifications cleared queued away-resume requests, or a human return left one stale.

@@ -458,6 +458,28 @@ async function subagentTypeOf(st: ModState, $: EngineInterface, agents: Readonly
   return st.subagentTypes.get(agentId)
 }
 
+const writableFix = 'add a line `writable: /abs/repo, /abs/other-worktree` to the brief naming every directory the worker must write'
+async function writableRootsFromPrompt($: EngineInterface, prompt: string, cwd: string, required: boolean): Promise<{ writableRoots?: string[]; error?: string }> {
+  const writableLine = /^writable:[ \t]*(.+)$/m.exec(prompt)?.[1]
+  if (writableLine === undefined)
+    return required ? { error: `Codex subagent spawn denied: prompt is missing the required writable: line; ${writableFix}.` } : {}
+  const writableRoots = writableLine.split(',').map(root => root.trim())
+  const nonAbsolute = writableRoots.filter(root => !root.startsWith('/'))
+  if (nonAbsolute.length)
+    return { error: `Codex subagent spawn denied: writable paths must be absolute; offending path(s): ${nonAbsolute.map(root => `\`${root || '<empty>'}\``).join(', ')}; ${writableFix}.` }
+  const nonDirectories = (await Promise.all(writableRoots.map(async root => {
+    try {
+      const result = await $.process.run(['test', '-d', root], { cwd })
+      return result.exitCode === 0 ? undefined : root
+    } catch {
+      return root
+    }
+  }))).filter((root): root is string => root !== undefined)
+  if (nonDirectories.length)
+    return { error: `Codex subagent spawn denied: writable path(s) must be existing directories; offending path(s): ${nonDirectories.map(root => `\`${root}\``).join(', ')}; ${writableFix}.` }
+  return { writableRoots }
+}
+
 export const register: Register = (on) => {
   const st: ModState = { logChain: Promise.resolve(), registrationLogged: false, subagentTypes: new Map() }
   const agents = new Map<string, Agent>()
@@ -517,25 +539,10 @@ export const register: Register = (on) => {
     let cwd: string
     let writableRoots: string[] = []
     try {
-      const writableLine = /^writable:[ \t]*(.+)$/m.exec(e.prompt)?.[1]
-      const fix = 'add a line `writable: /abs/repo, /abs/other-worktree` to the brief naming every directory the worker must write'
-      if (writableLine === undefined)
-        return { deny: `Codex subagent spawn denied: prompt is missing the required writable: line; ${fix}.` }
-      writableRoots = writableLine.split(',').map(root => root.trim())
-      const nonAbsolute = writableRoots.filter(root => !root.startsWith('/'))
-      if (nonAbsolute.length)
-        return { deny: `Codex subagent spawn denied: writable paths must be absolute; offending path(s): ${nonAbsolute.map(root => `\`${root || '<empty>'}\``).join(', ')}; ${fix}.` }
       const spawnCwd = e.cwd ?? await $.session.cwd()
-      const nonDirectories = (await Promise.all(writableRoots.map(async root => {
-        try {
-          const result = await $.process.run(['test', '-d', root], { cwd: spawnCwd })
-          return result.exitCode === 0 ? undefined : root
-        } catch {
-          return root
-        }
-      }))).filter((root): root is string => root !== undefined)
-      if (nonDirectories.length)
-        return { deny: `Codex subagent spawn denied: writable path(s) must be existing directories; offending path(s): ${nonDirectories.map(root => `\`${root}\``).join(', ')}; ${fix}.` }
+      const parsed = await writableRootsFromPrompt($, e.prompt, spawnCwd, true)
+      if (parsed.error) return { deny: parsed.error }
+      writableRoots = parsed.writableRoots!
       cwd = writableRoots[0]
       r = await next(e)
       if (r.agentId) { agents.set(r.agentId, { type, cwd, writableRoots }); st.subagentTypes.set(r.agentId, e.subagentType) }
@@ -776,6 +783,11 @@ export const register: Register = (on) => {
           body.developerInstructions = `${PREAMBLE}\n\n${inheritedContext(api)}`
         }
         body.prompt = prompt
+      }
+      if (typeof body.prompt === 'string') {
+        const parsed = await writableRootsFromPrompt($, body.prompt, agent.cwd, false)
+        if (parsed.error) throw new Error(parsed.error)
+        if (parsed.writableRoots) { agent.writableRoots = parsed.writableRoots; body.writableRoots = parsed.writableRoots }
       }
       agent.waiting = undefined
       sock ||= await socketPath($)

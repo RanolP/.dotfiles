@@ -623,6 +623,66 @@ test('a resumed worker receives a long multi-line message and runs a new turn in
   expect(String((resumed.toolUses[0]?.input as { message?: unknown }).message)).toStartWith('review applied')
 })
 
+// Regression: a SendMessage assigns a worker a new worktree, but the next
+// bridge step keeps the writable roots from the original brief.
+test('a SendMessage carrying a new writable: line updates the roots sent to the bridge', async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-new-roots'
+  let api: ApiMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'ctx' }, { type: 'text', text: 'implement it' }] }]
+  let rows: SessionMessage[] = [row('user', 'implement it')]
+  const steps: Record<string, unknown>[] = []
+
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const body = JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>
+    const json = (value: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(value) } })
+    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo', writableRoots: ['/repo'], threadId: 'thread-1' })
+    if (route === '/step') { steps.push(body); return json({ pending: true }) }
+    if (route === '/wait') return json({ threadId: 'thread-1', resumed: true, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  const runStep = async (turnId: string) => {
+    const stream = $.turn.step({ turnId, index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId })
+    let result = await stream.next()
+    while (!result.done) result = await stream.next()
+    return result.value
+  }
+
+  const first = await runStep('turn-roots-1')
+  const handbackId = `toolu_codex_handback_thread-1_turn-roots-1_0`
+  api = [
+    ...api,
+    { role: 'assistant', content: [{ type: 'tool_use', id: handbackId, name: 'SubagentHandback', input: { message: 'done' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: handbackId, content: '{"success":true}' }, { type: 'text', text: 'writable: /repo-next, /scratch\nContinue there' }] },
+  ]
+  rows = [...rows, row('assistant', '', { toolUses: first.toolUses }), row('user', 'writable: /repo-next, /scratch\nContinue there')]
+
+  const second = await runStep('turn-roots-2')
+  expect(steps[1]).toMatchObject({ cwd: '/repo', writableRoots: ['/repo-next', '/scratch'] })
+
+  const secondHandbackId = `toolu_codex_handback_thread-1_turn-roots-2_0`
+  api = [
+    ...api,
+    { role: 'assistant', content: [{ type: 'tool_use', id: secondHandbackId, name: 'SubagentHandback', input: { message: 'done' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: secondHandbackId, content: '{"success":true}' }, { type: 'text', text: 'writable: relative/repo\nContinue there' }] },
+  ]
+  rows = [...rows, row('assistant', '', { toolUses: second.toolUses }), row('user', 'writable: relative/repo\nContinue there')]
+  const invalid = await runStep('turn-roots-3')
+  expect(invalid.answer).toContain('writable paths must be absolute; offending path(s): `relative/repo`')
+  expect(steps).toHaveLength(2)
+})
+
 // Incident class: a SendMessage that reached a worker while one of its relayed
 // tools ran rides in the same user message as that tool's result; the step
 // handed codex the text as part of the tool output, never as the coordinator's.

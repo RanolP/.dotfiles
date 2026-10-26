@@ -64,6 +64,12 @@ export function turnStartParams(s, prompt) {
   }
 }
 
+function updateWritableRoots(s, b) {
+  if (!b.writableRoots?.length) return false
+  s.writableRoots = [...b.writableRoots]
+  return true
+}
+
 if (process.argv[2] === '--selftest') {
   const writableRoots = ['/repo', '/worktree']
   assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: 'medium', sandbox: 'workspace-write', writableRoots }, 'work'), {
@@ -74,6 +80,11 @@ if (process.argv[2] === '--selftest') {
   })
   assert.deepEqual(turnStartParams({ threadId: 'thread-1', effort: null, sandbox: 'read-only', writableRoots }, 'work'), {
     threadId: 'thread-1', effort: null, input: textInput('work'),
+  })
+  const openSession = { threadId: 'thread-1', effort: 'medium', sandbox: 'workspace-write', writableRoots }
+  updateWritableRoots(openSession, { writableRoots: ['/next-repo', '/next-worktree'] })
+  assert.deepEqual(turnStartParams(openSession, 'second step'), {
+    threadId: 'thread-1', effort: 'medium', input: textInput('second step'), runtimeWorkspaceRoots: ['/next-repo', '/next-worktree'],
   })
   const usageSession = { usage: null }
   const firstLast = { inputTokens: 100, cachedInputTokens: 20, cacheWriteInputTokens: 0, outputTokens: 10, reasoningOutputTokens: 4, totalTokens: 110 }
@@ -616,7 +627,14 @@ async function withSchemas(b) {
 
 async function open(b) {
   let s = sessions.get(b.key)
-  if (s) return s
+  if (s) {
+    if (updateWritableRoots(s, b)) {
+      // The thread's git-metadata config is fixed at thread/start; only runtime workspace roots can change between turns.
+      persisted.agents[b.key] = { type: s.agentType, cwd: s.cwd, writableRoots: s.writableRoots, threadId: s.threadId }
+      saveState()
+    }
+    return s
+  }
   const writableRoots = b.writableRoots?.length ? b.writableRoots : [b.cwd]
   const workspaceWrite = b.sandbox === 'workspace-write'
   const common = { model: b.model ?? null, cwd: b.cwd ?? null, approvalPolicy: 'never', ...(workspaceWrite ? { permissions: WORKSPACE_WRITE_PROFILE, runtimeWorkspaceRoots: writableRoots, config: workspaceWriteConfig(writableRoots) } : { sandbox: b.sandbox ?? 'read-only' }), developerInstructions: b.developerInstructions ?? null }

@@ -48,7 +48,7 @@
 
 ## Scope and shape of code
 - After tracing the real flow, stop at the first rung that holds: skip it; reuse a codebase helper; stdlib; native platform; installed dependency; one line; only then the minimum that works. Add no unrequested feature, abstraction, dependency or boilerplate, and leave adjacent code alone rather than refactoring or rewriting whole files on the way past.
-- Keep correctness unbounded on any task: validation at trust boundaries, error handling against data loss, security, accessibility; equal cost resolves to the sturdier approach. Change only the lines that fix it, preferring deletion and boring code.
+- Keep correctness unbounded on any task: validation at trust boundaries, error handling against data loss, security, accessibility; equal cost resolves to the sturdier approach. A race or security case with no concrete trigger is scope, not correctness: state its failure mode, likelihood and the complexity it adds, and build it only on the user's yes. Change only the lines that fix it, preferring deletion and boring code.
 - Before preserving, guarding or deferring anything, price its reach as a binary (merged or not, public or internal, published or draft, committed or in a transaction): restructure freely below it, pay for compatibility above it, and state the reach as one fact rather than picking the side that cannot be blamed.
 - Split files, directories, docs and boards by domain, never by layer (redux, components, atoms) -- skill `modularize-by-domain`.
 - Make failures self-diagnosing: a shell step prints status and response body (a `curl` inside `$()` swallows it), CI logs the values a failure hinges on, app code logs enough context per error site to diagnose without a debugger.

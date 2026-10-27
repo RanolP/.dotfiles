@@ -10,28 +10,97 @@ export type Term = { atom: string } | { num: number } | { var: string } | { str:
   | { list: Term[] } | { fn: string; args: Term[] }
 export type Goal = { neg: boolean; name: string; args: Term[] }
 export type ClauseSource = { address: string; promptSeq: number; quote: string }
+export type ClauseOrigin = 'user' | 'fold' | 'legacy'
+export type ClauseKind = 'instruction' | 'fact' | 'goal'
+export type ClauseEvidence = { ref: string; quote: string; tool?: string }
 export type Clause = {
   id: string; head: { name: string; args: Term[] }; neg: boolean; body: Goal[]
   // `text` is a one-sentence Korean rendering for display; conflicts are decided on the parsed head alone.
   source: string; text: string; quote: string; address: string; promptSeq: number; sources: ClauseSource[]
   issue: string | null; at: string; status: 'live' | 'retracted'
+  origin: ClauseOrigin; kind: ClauseKind; evidence?: ClauseEvidence
   retraction?: { at: string; by: string; bySource: string; reason: 'conflict' | 'explicit' | 'rewind' }
 }
 export type ClauseStore = {
   version: 1; nextId: number
-  predicates: Record<string, { key: number; example: string }>
-  clauses: Clause[]; migratedLegacy?: boolean
+  predicates: Record<string, { key: number; example: string; kind: ClauseKind }>
+  clauses: Clause[]; migratedLegacy?: boolean; migratedLedger?: boolean; legacy?: string[]
 }
 export type ParsedClause = Pick<Clause, 'head' | 'neg' | 'body'>
 /** One clause to apply: parsed, its quote already checked against the prompt it came from. */
-export type IncomingClause = ParsedClause & { text: string; quote: string; address: string; issue: string | null; key?: number }
+export type IncomingClause = ParsedClause & {
+  text: string; quote: string; address: string; issue: string | null; key?: number
+  origin?: ClauseOrigin; kind?: ClauseKind; evidence?: ClauseEvidence
+}
 export type BacklogEntry = { address: string; promptSeq: number; text: string; attempts?: number }
 
 export const clauseStoreKey = (key: string) => `clauses:${key}`
 export const clauseBacklogKey = (key: string) => `clause-backlog:${key}`
-export const emptyClauseStore = (): ClauseStore => ({ version: 1, nextId: 1, predicates: {}, clauses: [] })
+export const emptyClauseStore = (): ClauseStore => ({ version: 1, nextId: 1, predicates: { ...SEED_PREDICATES }, clauses: [] })
 
 const MAX_RETRACTED = 500
+export const SEED_PREDICATES: ClauseStore['predicates'] = {
+  'goal/2': { key: 1, example: 'goal(issue, slug).', kind: 'goal' },
+  'decided/2': { key: 1, example: 'decided(topic, choice).', kind: 'fact' },
+  'measured/3': { key: 2, example: 'measured(subject, metric, value).', kind: 'fact' },
+  'found/3': { key: 2, example: 'found(subject, attr, value).', kind: 'fact' },
+  'cause/2': { key: 1, example: 'cause(symptom, cause).', kind: 'fact' },
+  'failed/2': { key: 1, example: 'failed(approach, reason).', kind: 'fact' },
+}
+
+export type FoldClause = {
+  clause: string; text: string; kind: 'fact' | 'goal'; promptSeq: number; address: string; issue?: string | null; key?: number
+  evidence?: ClauseEvidence
+}
+export type FoldClauseOp = FoldClause | { retract: string }
+
+const isEvidence = (value: unknown): value is ClauseEvidence => isRecord(value)
+  && typeof value.ref === 'string' && typeof value.quote === 'string'
+  && (value.tool === undefined || typeof value.tool === 'string')
+const isFoldClause = (value: unknown): value is FoldClause => isRecord(value)
+  && typeof value.clause === 'string' && typeof value.text === 'string'
+  && (value.kind === 'fact' || value.kind === 'goal')
+  && Number.isInteger(value.promptSeq) && Number(value.promptSeq) >= 0
+  && typeof value.address === 'string'
+  && (value.issue === undefined || value.issue === null || typeof value.issue === 'string')
+  && (value.key === undefined || Number.isInteger(value.key))
+  && (value.kind === 'goal' || isEvidence(value.evidence))
+const isFoldRetract = (value: unknown): value is { retract: string } => isRecord(value)
+  && Object.keys(value).length === 1 && typeof value.retract === 'string'
+
+/** Strictly reads a fold reply; callers apply no partial result when this returns a reason. */
+export function parseFoldClauseOps(raw: string): FoldClauseOp[] | string {
+  let value: unknown
+  try { value = JSON.parse(raw.trim().replace(/^```(?:json)?\n([\s\S]*?)\n```$/i, '$1')) } catch (err) { return `fold reply is not JSON (${String(err).slice(0, 80)})` }
+  if (!isRecord(value) || !Array.isArray(value.ops)) return 'fold reply needs an ops array'
+  if (!value.ops.every(item => isFoldClause(item) || isFoldRetract(item))) return 'fold reply contains an invalid clause op'
+  return value.ops
+}
+
+/** Applies one already-validated fold batch atomically to a copy of the store. */
+export function applyFoldClauseOps(store: ClauseStore, ops: readonly FoldClauseOp[], now: string): ClauseStore {
+  let next = store
+  for (const op of ops) {
+    if ('retract' in op) {
+      next = applyRetract(next, [{ id: op.retract, quote: op.retract }], () => true, '@fold', now, 'fold').next
+      continue
+    }
+    if (op.kind === 'fact' && !op.evidence) continue
+    let parsed: ParsedClause
+    try { parsed = parseClause(op.clause) } catch { continue }
+    next = applyClauses(next, [{
+      ...parsed, text: op.text, quote: op.evidence?.quote ?? op.text, address: op.address,
+      issue: op.issue ?? null, key: op.key, origin: 'fold', kind: op.kind, evidence: op.evidence,
+    }], op.promptSeq, now).next
+  }
+  return next
+}
+
+/** A malformed reply preserves object identity so landing cannot write a partial store. */
+export function applyFoldClauseReply(store: ClauseStore, raw: string, now: string): ClauseStore {
+  const ops = parseFoldClauseOps(raw)
+  return typeof ops === 'string' ? store : applyFoldClauseOps(store, ops, now)
+}
 
 // --- parse and print ---------------------------------------------------------
 
@@ -224,17 +293,21 @@ export function applyClauses(
     const name = predicateOf(parsed)
     const arity = parsed.head.args.length
     const registered = predicates[name]
+    const origin = item.origin ?? 'user'
+    const kind = item.kind ?? 'instruction'
+    if ((kind === 'instruction' && origin !== 'user') || (registered && registered.kind !== kind)) continue
     const key = registered?.key ?? (item.key !== undefined && Number.isInteger(item.key) && item.key >= 0 && item.key <= arity ? item.key : defaultKey(arity))
-    if (!registered) predicates[name] = { key, example: source }
+    if (!registered) predicates[name] = { key, example: source, kind }
     const same = clauses.find(clause => clause.status === 'live' && clause.source === source)
     if (same) {
       same.sources.push({ address: item.address, promptSeq, quote: item.quote })
-      if (promptSeq >= same.promptSeq) Object.assign(same, { text: item.text, quote: item.quote, address: item.address, promptSeq, issue: item.issue, at: now })
+      if (promptSeq >= same.promptSeq) Object.assign(same, { text: normalizeText(item.text), quote: item.quote, address: item.address, promptSeq, issue: item.issue, at: now, origin, kind, ...(item.evidence ? { evidence: item.evidence } : {}) })
       continue
     }
     const clause: Clause = {
-      id: `C${nextId++}`, ...parsed, source, text: item.text, quote: item.quote, address: item.address, promptSeq,
+      id: `C${nextId++}`, ...parsed, source, quote: item.quote, address: item.address, promptSeq,
       sources: [{ address: item.address, promptSeq, quote: item.quote }], issue: item.issue, at: now, status: 'live',
+      text: normalizeText(item.text), origin, kind, ...(item.evidence ? { evidence: item.evidence } : {}),
     }
     const rivals = clauses.filter(other => other.status === 'live' && conflicts(clause, other, key))
     const newer = rivals.filter(other => other.promptSeq > promptSeq).sort((a, b) => b.promptSeq - a.promptSeq)[0]
@@ -259,11 +332,12 @@ export function applyClauses(
 /** Retracts live clauses the user withdrew by name; each request needs a quote `supported` by the prompt. */
 export function applyRetract(
   store: ClauseStore, requests: readonly { id: string; quote: string }[], supported: (quote: string) => boolean, address: string, now: string,
+  origin: ClauseOrigin = 'user',
 ): { next: ClauseStore; retracted: Clause[] } {
   const retracted: Clause[] = []
   const clauses = store.clauses.map(clause => {
     const request = requests.find(item => item.id === clause.id)
-    if (!request || clause.status !== 'live' || !supported(request.quote)) return clause
+    if (!request || clause.status !== 'live' || !supported(request.quote) || (origin === 'fold' && clause.kind === 'instruction')) return clause
     const next: Clause = { ...clause, status: 'retracted', retraction: { at: now, by: address, bySource: request.quote, reason: 'explicit' } }
     retracted.push(next)
     return next
@@ -319,6 +393,10 @@ function isClause(value: unknown): value is Clause {
     && typeof value.at === 'string' && (value.status === 'live' || value.status === 'retracted')
 }
 
+const isOrigin = (value: unknown): value is ClauseOrigin => value === 'user' || value === 'fold' || value === 'legacy'
+const isKind = (value: unknown): value is ClauseKind => value === 'instruction' || value === 'fact' || value === 'goal'
+const normalizeText = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 200)
+
 const isClauseSource = (value: unknown): value is ClauseSource => isRecord(value)
   && typeof value.address === 'string' && typeof value.promptSeq === 'number' && typeof value.quote === 'string'
 
@@ -327,16 +405,23 @@ export function readClauseStore(value: unknown): ClauseStore | undefined {
   if (!isRecord(value) || value.version !== 1) return undefined
   const clauses = Array.isArray(value.clauses) ? value.clauses.filter(isClause).map(clause => ({
     ...clause,
+    origin: isOrigin(clause.origin) ? clause.origin : 'user',
+    kind: isKind(clause.kind) ? clause.kind : 'instruction',
     sources: Array.isArray(clause.sources) && clause.sources.every(isClauseSource)
       ? clause.sources
       : [{ address: clause.address, promptSeq: clause.promptSeq, quote: clause.quote }],
   })) : []
   const predicates = isRecord(value.predicates)
-    ? Object.fromEntries(Object.entries(value.predicates).filter(([, p]) => isRecord(p) && typeof p.key === 'number' && typeof p.example === 'string')) as ClauseStore['predicates']
+    ? Object.fromEntries(Object.entries(value.predicates).filter(([, p]) => isRecord(p) && typeof p.key === 'number' && typeof p.example === 'string').map(([name, p]) => [name, { ...p, kind: isKind(p.kind) ? p.kind : 'instruction' }])) as ClauseStore['predicates']
     : {}
   const highest = clauses.reduce((max, clause) => Math.max(max, Number(/^C(\d+)$/.exec(clause.id)?.[1] ?? 0)), 0)
   const nextId = typeof value.nextId === 'number' && value.nextId > highest ? value.nextId : highest + 1
-  return { version: 1, nextId, predicates, clauses, ...(value.migratedLegacy === true ? { migratedLegacy: true } : {}) }
+  return {
+    version: 1, nextId, predicates: { ...SEED_PREDICATES, ...predicates }, clauses,
+    ...(value.migratedLegacy === true ? { migratedLegacy: true } : {}),
+    ...(value.migratedLedger === true ? { migratedLedger: true } : {}),
+    ...(Array.isArray(value.legacy) ? { legacy: value.legacy.filter(item => typeof item === 'string') } : {}),
+  }
 }
 
 export const isBacklogEntry = (value: unknown): value is BacklogEntry => isRecord(value)
@@ -352,9 +437,9 @@ export function livePredicates(store: ClauseStore, cap = 40): string[] {
 }
 
 /** Live clauses in scope as `- text (Cn @addr)`, capped with a pointer to clm_recall. */
-export function renderClauses(store: ClauseStore, inScope: (issue: string | null) => boolean, cap = 40): string[] {
-  const live = store.clauses.filter(clause => clause.status === 'live' && inScope(clause.issue))
-  const lines = live.slice(-cap).map(clause => `- ${clause.text.replace(/\s+/g, ' ').trim()} (${clause.id} ${clause.address})`)
+export function renderClauses(store: ClauseStore, inScope: (issue: string | null) => boolean, cap = 40, kinds?: readonly ClauseKind[]): string[] {
+  const live = store.clauses.filter(clause => clause.status === 'live' && inScope(clause.issue) && (!kinds || kinds.includes(clause.kind)))
+  const lines = live.slice(-cap).reverse().map(clause => `- ${clause.text.replace(/\s+/g, ' ').trim()} (${clause.id} ${clause.address})`)
   if (live.length > cap) lines.push(`- ${live.length - cap} more: clm_recall clauses`)
   return lines
 }
@@ -385,6 +470,7 @@ export function clauseQuoteOverlaps(left: string, right: string): boolean {
 
 export function describeClause(clause: Clause): string {
   const lines = [`${clause.id} ${clause.status} ${clause.source}  % ${clause.address} ${clause.at}`, `  text: ${clause.text}`, `  quote: ${clause.quote}`]
+  if (clause.evidence) lines.push(`  evidence: ${clause.evidence.ref}${clause.evidence.tool ? ` (${clause.evidence.tool})` : ''}: ${clause.evidence.quote}`)
   const r = clause.retraction
   if (r) lines.push(`  retracted ${r.at} (${r.reason}) by ${r.by}: ${r.bySource}`)
   return lines.join('\n')

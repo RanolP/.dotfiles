@@ -1,5 +1,5 @@
 {
   "fixture": "release",
   "model": "haiku",
-  "reply": "{\"split\":5,\"notes\":\"## 목표\\n- release audit: Use UTC timestamps for the release report.\",\"ops\":[{\"op\":\"withdraw\",\"instruction\":\"Use local timestamps for the release report.\"}],\"topics\":[{\"topic\":\"release audit\",\"summary\":\"Use UTC timestamps for the release report. Interleave SYNTH-52 above SYNTH-417 and keep the release audit open under it. Receipt SYNTH-417 remains the lookup address for the detailed artifact.\",\"support\":[\"tool-release-scan\"]}]}"
+  "reply": "{\"split\":5,\"notes\":\"## 목표\\n- release audit: Use UTC timestamps for the release report.\",\"ops\":[],\"topics\":[{\"topic\":\"release audit\",\"summary\":\"Use UTC timestamps for the release report. Interleave SYNTH-52 above SYNTH-417 and keep the release audit open under it. Receipt SYNTH-417 remains the lookup address for the detailed artifact.\",\"support\":[\"tool-release-scan\"]}]}"
 }

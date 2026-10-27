@@ -7,23 +7,21 @@ import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSn
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
-import { residentLedger } from './resident'
+import { migrateLegacyLedger, residentLedger } from './resident'
+import { emptyClauseStore } from './clauses'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, issueList, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, issueList, MERGE_SYSTEM, parseMerge, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
 import { askedItems, CONFIRM_ITEMS, CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import { describe, focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { estTokens, fingerprint, ledgerRowText, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
-// Regression caught: a merge withdrawing an instruction the user never gave was counted as valid, or a reply without 사용자 지시 was refused.
-test('a withdraw naming no current instruction is rejected and a reply without instructions is accepted', async () => {
-  const ok = parseMerge(NOTE_REPLY + '<ops>[]</ops>', new Set(), 1000, ['old'])
-  expect(typeof ok === 'string' ? ok : ok.withdrawn).toEqual([])
-  const r = parseMerge(NOTE_REPLY + '<ops>[{"op":"withdraw","instruction":"never said"},{"op":"withdraw","instruction":"old"}]</ops>', new Set(), 1000, ['old'])
-  if (typeof r === 'string') throw new Error(r)
-  expect(r.withdrawn).toEqual(['old'])
-  expect(r.rejected).toBe(1)
+// Regression caught: the clause-only merge contract accidentally required a prose instruction section.
+test('a clause merge reply needs no prose instruction section', async () => {
+  const ok = parseMerge(NOTE_REPLY + '<ops>[]</ops>', new Set(), 1000)
+  expect(typeof ok).not.toBe('string')
+  if (typeof ok !== 'string') expect(ok.clauseOps).toEqual([])
 })
 
 
@@ -33,11 +31,11 @@ test('a long instruction remains whole behind its transcript address', async () 
   const prompt = 'line one\n' + 'x'.repeat(2100)
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
   const dropped = [M('user', prompt)]
-  const first = preserveInstructions(fallbackLedger(prev, dropped), [], dropped, '/ledger.md')
+  const first = carryLegacyInstructions(fallbackLedger(prev, dropped), [], dropped, '/ledger.md')
   expect(first.notes).toContain(JSON.stringify(prompt))
   expect(first.fullNotes.split(JSON.stringify(prompt)).length).toBe(2)
   // The next fold reads the file's values back as prior; the same prompt dropped again stays one line.
-  const again = preserveInstructions(first.fullNotes, [prompt], dropped, '/ledger.md')
+  const again = carryLegacyInstructions(first.fullNotes, [prompt], dropped, '/ledger.md')
   expect(again.fullNotes.split(JSON.stringify(prompt)).length).toBe(2)
   expect(again.notes.split(JSON.stringify(prompt)).length).toBe(2)
 })
@@ -46,7 +44,7 @@ test('a long instruction remains whole behind its transcript address', async () 
 test('instruction preservation has no character cap', async () => {
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
   const old = Array.from({ length: 12 }, (_, i) => `old instruction ${i} ${'x'.repeat(24)}`)
-  const out = preserveInstructions(prev, old, [M('user', 'newest correction')], '/ledger.md')
+  const out = carryLegacyInstructions(prev, old, [M('user', 'newest correction')], '/ledger.md')
   expect(out.notes).toContain('- "newest correction"')
   expect(out.notes).toContain(JSON.stringify(old[0]))
   expect(out.notes).toContain(JSON.stringify(old[11]))
@@ -57,7 +55,7 @@ test('a dropped built-in compact summary is not preserved as a user instruction'
   const notes = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
   const summary = M('user', 'This session is being continued from a previous conversation…') as SessionMessage & { isCompactSummary: boolean }
   summary.isCompactSummary = true
-  const out = preserveInstructions(notes, [], [summary], '/ledger.md')
+  const out = carryLegacyInstructions(notes, [], [summary], '/ledger.md')
   expect(instructionValues(out.notes)).toEqual([])
 })
 
@@ -78,7 +76,7 @@ test('the eight-section ledger keeps actions under the focused task and resource
     uncertain: [uncertain], learned: ['- the build tool failed once — quote: "exit code 1"'], resources: ['- metro :8081', '- mutex ipad held'],
   })
   expect([...row.matchAll(/^## (.+)$/gm)].map(match => match[1])).toEqual([
-    'where we are', 'what to do', 'what to request', 'user instructions', 'constraints & preferences', 'uncertain', 'learned', 'owned resources',
+    'where we are', 'what to do', 'what to request', 'user instructions', 'facts', 'uncertain', 'owned resources',
   ])
   expect(row).toContain('focused build — last build note @e330c1ab')
   expect(row).toContain('Build verification: tests are next.')
@@ -90,6 +88,15 @@ test('the eight-section ledger keeps actions under the focused task and resource
   expect(row).toContain('## owned resources\n\n- metro :8081\n- mutex ipad held')
   expect(row).toContain('the build tool failed once')
   expect(row).toContain('- stack 2 · pending 1')
+})
+
+test('a legacy prose ledger migrates without losing a line', () => {
+  const notes = '## 목표\n- old work\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- [constraint] keep generated files\n- lint failed before the fix'
+  const store = migrateLegacyLedger(emptyClauseStore(), notes, [{ topic: 'old work', summary: 'tests remain', seq: 1, focusIssue: 's1-1' }], 3, '2026-10-27T00:00:00Z')
+  expect(store.clauses.filter(clause => clause.status === 'live').map(clause => clause.text).sort()).toEqual([
+    'keep generated files', 'lint failed before the fix', 'old work: tests remain',
+  ])
+  expect(store.legacy ?? []).toEqual([])
 })
 
 // Regression caught: the merge model received B and moved it into the summary even though the swap keeps B verbatim.
@@ -117,12 +124,11 @@ test('a quoted tool constraint survives two folds without entering topic decay',
   const s: State = { rows: ROWS, replies: [first, second] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  expect(section(seen.results[0].messages[1].text, 'constraints & preferences')).toContain('generated artifacts to stay checked in')
+  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('generated artifacts to stay checked in')
   const firstMessages = seen.results[0].messages
   s.rows = [...ROWS, ...firstMessages, ...ROWS.slice(4)]
   await turnEnds($, s, seen)
-  expect(section(seen.results[1].messages[1].text, 'constraints & preferences')).toContain('generated artifacts to stay checked in')
-  expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('[constraint] The build tool requires generated artifacts to stay checked in.')
+  expect(section(seen.results[1].messages[1].text, 'facts')).toContain('generated artifacts to stay checked in')
 })
 
 const confirmIssue = (id: string, title: string, status: Issue['status']): Issue =>
@@ -163,8 +169,7 @@ test('the resident ledger renders compact metadata, marked clipping, bullets and
   expect(section(row, 'where we are')).toContain('- stack 2 · pending 1')
   expect(row).not.toContain('Stack size')
   expect(section(row, 'user instructions')).toContain(`- ${long} (C1 @abcd1234)`)
-  expect(section(row, 'constraints & preferences').trim()).toBe('- keep it')
-  expect(section(row, 'learned').trim()).toBe('- (none yet)')
+  expect(section(row, 'facts').trim()).toBe('- keep it')
   expect(section(row, 'owned resources').trim()).toBe('- port 8080')
 })
 
@@ -180,7 +185,7 @@ test('the resident ledger shows the live clause text and hides the retracted one
   }
   const row = await residentLedger({
     get: async key => store[key],
-    readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), storedTopics: async () => [],
+    readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
     readRequests: async () => [
       { id: 'R1', text: 'Run the cache-only benchmark.', quote: '캐시만 패치해서 벤치마크 해봐', status: 'open' },
       { id: 'R2', text: 'Publish the report.', quote: '리포트를 올려줘', status: 'open' },
@@ -334,7 +339,7 @@ test('age decay leaves a floor-sized old topic untouched on the next merge', asy
 // Regression caught: a withdrawn instruction disappeared from the full ledger file along with the visible notes.
 test('a withdrawn instruction stays in fullNotes as withdrawn but leaves visible notes', async () => {
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
-  const out = preserveInstructions(prev, ['keep this', 'take this back'], [], '/ledger.md', ['take this back'])
+  const out = carryLegacyInstructions(prev, ['keep this', 'take this back'], [], '/ledger.md', ['take this back'])
   expect(out.notes).toContain('- "keep this"')
   expect(out.notes).not.toContain('take this back')
   expect(out.fullNotes).toContain('- (withdrawn) "take this back"')
@@ -343,7 +348,7 @@ test('a withdrawn instruction stays in fullNotes as withdrawn but leaves visible
 // Regression caught: re-issuing a previously withdrawn instruction stayed hidden because withdrawal state was sticky.
 test('a re-issued withdrawn instruction becomes visible in its newest slot', async () => {
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- (withdrawn) "use tabs"\n\n## 핵심 사실·경로\n- f'
-  const out = preserveInstructions(prev, instructionValues(prev), [M('user', 'use tabs')], '/ledger.md')
+  const out = carryLegacyInstructions(prev, instructionValues(prev), [M('user', 'use tabs')], '/ledger.md')
   expect(out.notes).toContain('- "use tabs"')
 })
 
@@ -381,10 +386,10 @@ test('two concurrent model TaskCreate calls keep both issues with distinct ids',
 })
 
 // Regression caught: instruction lines from a ledger written before JSON-quoted instructions failed to parse and were deleted for good on the first fold after the upgrade.
-test('legacy free-form instruction lines survive preserveInstructions verbatim', async () => {
+test('legacy free-form instruction lines survive clause migration verbatim', async () => {
   const legacy = ['"headless only, no visible windows, no input events" (UI 검증)', 'PR 병합에 대해: "ㅇ 일단 다 머지하고 생각해보자"']
   const notes = `## 목표\n- g\n\n## 사용자 지시\n${legacy.map(l => `- ${l}`).join('\n')}\n- "quoted one"\n- [additional user instructions in /ledger.md]\n\n## 핵심 사실·경로\n- f`
-  const out = preserveInstructions(notes, instructionValues(notes), [], '/ledger.md')
+  const out = carryLegacyInstructions(notes, instructionValues(notes), [], '/ledger.md')
   expect(instructionValues(out.fullNotes)).toEqual([...legacy, 'quoted one'])
 })
 
@@ -522,7 +527,7 @@ test('fold row renders /clear or ledger text instead of the compacted line', OPT
   expect(out[0].text).toBe('please investigate the build')
   const row = out.find((m: any) => m.text.startsWith('[clm ledger'))
   expect(row.text).not.toContain('## 핵심 사실·경로')
-  expect(storedLedger(seen)).toContain('## 핵심 사실·경로\n- fact')
+  expect(section(row.text, 'facts')).toContain('fact')
   const drawn = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'UserMessage', props: { text: row.text, origin: { kind: 'composer' }, isExpanded: false } })
   expect((await drawn.drawn()).children[0]).toMatch(/^\* clm compacted/)
 })

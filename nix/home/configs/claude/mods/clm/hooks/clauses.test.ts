@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { applyClauses, applyRetract, clauseStoreKey, dropClauses, emptyClauseStore, parseClause, printClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
+import { applyClauses, applyFoldClauseReply, applyRetract, clauseStoreKey, dropClauses, emptyClauseStore, parseClause, printClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
 import { recallAddress } from './address'
 import { supportedRequestQuote } from './intent'
 
@@ -39,6 +39,41 @@ test('the f757aaf2 benchmark correction retracts the upgrade benchmark', () => {
   expect(live(next)).toEqual(['benchmark(stylelint, cache_patch_only).'])
   expect(retracted.map(item => item.id)).toEqual(['C1'])
   expect(next.clauses[0]?.retraction).toEqual({ at: LATER, by: 'C2', bySource: 'benchmark(stylelint, cache_patch_only).', reason: 'conflict' })
+})
+
+test('a corrected measurement retracts the stale value', () => {
+  const first = applyClauses(emptyClauseStore(), [{ ...parseClause('measured(lint_css_ci, seconds, 48).'), text: 'lint_css_ci는 48초다.', quote: '48 seconds', address: '@00000001', issue: null, kind: 'fact', origin: 'fold', key: 2 }], 1, '2026-10-27T00:00:00Z').next
+  const result = applyClauses(first, [{ ...parseClause('measured(lint_css_ci, seconds, 6).'), text: 'lint_css_ci는 6초다.', quote: '6 seconds', address: '@00000002', issue: null, kind: 'fact', origin: 'fold', key: 2 }], 2, '2026-10-27T00:00:01Z')
+  expect(result.next.clauses.find(clause => clause.source.includes('48'))?.status).toBe('retracted')
+  expect(result.next.clauses.find(clause => clause.source.includes('6'))?.status).toBe('live')
+})
+
+test('one goal per issue replaces the accreted topics', () => {
+  const first = applyClauses(emptyClauseStore(), [{ ...parseClause("goal('CLM-1', old_topic)."), text: 'old goal', quote: 'old', address: '@00000001', issue: 'CLM-1', kind: 'goal', origin: 'fold', key: 1 }], 1, '2026-10-27T00:00:00Z').next
+  const result = applyClauses(first, [{ ...parseClause("goal('CLM-1', current_topic)."), text: 'current goal', quote: 'current', address: '@00000002', issue: 'CLM-1', kind: 'goal', origin: 'fold', key: 1 }], 2, '2026-10-27T00:00:01Z')
+  expect(result.next.clauses.filter(clause => clause.kind === 'goal' && clause.status === 'live').map(clause => clause.text)).toEqual(['current goal'])
+})
+
+test('a fold op can never retract a user instruction clause', () => {
+  const first = applyClauses(emptyClauseStore(), [{ ...parseClause('forbid(push).'), text: 'push하지 않는다.', quote: 'never push', address: '@00000001', issue: null }], 1, '2026-10-27T00:00:00Z').next
+  const result = applyRetract(first, [{ id: 'C1', quote: 'fold says retract' }], () => true, '@00000002', '2026-10-27T00:00:01Z', 'fold')
+  expect(result.next.clauses[0]?.status).toBe('live')
+})
+
+test('a malformed fold reply leaves the store unchanged', () => {
+  const store = applyClauses(emptyClauseStore(), [clause('forbid(push).')], 1, NOW).next
+  expect(applyFoldClauseReply(store, '{"ops":[{"clause":', NOW)).toBe(store)
+})
+
+test('the rendered ledger hides evidence quotes and Prolog source', () => {
+  const store = applyFoldClauseReply(emptyClauseStore(), JSON.stringify({ ops: [{
+    clause: 'measured(lint_css_ci, seconds, 6).', text: 'lint_css_ci는 6초다.', kind: 'fact',
+    promptSeq: 2, address: '@00000002', evidence: { ref: 'toolu_1', quote: 'secret exact evidence' },
+  }] }), NOW)
+  const rendered = renderClauses(store, () => true, 15, ['fact']).join('\n')
+  expect(rendered).toContain('lint_css_ci는 6초다. (C1 @00000002)')
+  expect(rendered).not.toContain('secret exact evidence')
+  expect(rendered).not.toContain('measured(')
 })
 
 test('a rule head adding to a set does not retract its existing facts', () => {
@@ -92,7 +127,7 @@ test('a negated head conflicts with its positive fact', () => {
 
 test('a reused head keeps the predicate\'s registered key', () => {
   const first = applyClauses(emptyClauseStore(), [clause('prefer(search, rg).')], 1, NOW).next
-  expect(first.predicates['prefer/2']).toEqual({ key: 1, example: 'prefer(search, rg).' })
+  expect(first.predicates['prefer/2']).toEqual({ key: 1, example: 'prefer(search, rg).', kind: 'instruction' })
   // Key 2 would let both coexist; the registered key 1 makes the newer value win.
   const { next } = applyClauses(first, [clause('prefer(search, fd).', 'fd', '@00000002', { key: 2 })], 2, NOW)
   expect(live(next)).toEqual(['prefer(search, fd).'])

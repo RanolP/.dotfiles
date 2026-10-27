@@ -8,11 +8,11 @@ import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { buildCleared, estTokens, fingerprint, foldedRows, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
-import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens, storedTopics } from './fold-runtime'
+import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens, readLegacyTopics } from './fold-runtime'
 import type { Opts } from './fold-runtime'
 import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
@@ -156,7 +156,7 @@ test('a ready plan whose stable rows grow total context leaves the ledger, its s
 
 test('multiline goals survive topic restoration through the end of the 목표 section', async () => {
   const notes = '## 목표\n- first line\n- second line\n\n## 사용자 지시\n- keep this'
-  const topics = await storedTopics({ topics: async () => undefined }, notes, 2, 's1:main')
+  const topics = await readLegacyTopics({ topics: async () => undefined }, notes, 2, 's1:main')
   expect(topics).toEqual([{ topic: '기존 세션 주제', summary: '- first line\n- second line', seq: 2 }])
 })
 
@@ -431,8 +431,7 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   const out = seen.results[0].messages
   expect(out[0].text).toBe('please investigate the build')
   expect(out[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(section(out[1].text, 'learned')).toContain('a.ts:12 is the bad import')
-  expect(storedLedger(seen)).toContain('a.ts:12 is the bad import')
+  expect(section(out[1].text, 'facts')).toContain('a.ts:12 is the bad import')
   expect(shape(out.slice(2))).toEqual(['run tests', 'tu_c', 'tu_c', 'tests pass', 'commit it', 'done'])
   expect(out[0].handle).toBe('h0')
   expect(out.slice(1).some((m: any) => m.handle !== undefined)).toBe(false)
@@ -734,8 +733,7 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
   const out = seen.results[1].messages
   expect(out.filter((m: any) => m.text.startsWith('[clm ledger')).length).toBe(1)
   expect(out[1].text).toMatch(/^\[clm ledger #2 · /)
-  expect(section(out[1].text, 'learned')).toContain('SECOND-FACT')
-  expect(storedLedger(seen)).toContain('SECOND-FACT')
+  expect(section(out[1].text, 'facts')).toContain('SECOND-FACT')
   expect(out.map((m: any) => m.text).filter(Boolean)).toEqual(['please investigate the build', out[1].text, 'push', 'pushed'])
 })
 
@@ -1010,20 +1008,21 @@ test('a real rewind restores the prior folded ledger without another summary cal
   await $.turn.complete(TURN)
   await waitForPending(seen)
   const first = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
-  expect(storedLedger(seen)).toContain('A outcome')
+  expect(section(first[1]?.text ?? '', 'where we are')).toContain('A outcome')
   s.rows = [...first, M('user', 'continue with C'), M('assistant', 'C'.repeat(11_000))]
   await $.turn.complete(turnInput('second-fold'))
   await waitForPending(seen)
   const second = compactedMessages(await $.session.compact(compactInput('auto', handled(s.rows))))
-  expect(storedLedger(seen)).toContain('B outcome')
+  expect(section(second[1]?.text ?? '', 'where we are')).toContain('B outcome')
   expect(seen.store['ledger-snapshots:s1:main']).toHaveLength(2)
 
   s.rows = [...first]
   const calls = seen.splitPrompts.length + seen.prompts.length + seen.compressionPrompts.length
   const restored = compactedMessages(await $.session.compact(compactInput('plugin', handled(s.rows))))
   expect(restored.some(row => row.text.startsWith('[clm ledger #'))).toBe(true)
-  expect(storedLedger(seen)).toContain('A outcome')
-  expect(storedLedger(seen)).not.toContain('B outcome')
+  const restoredWhere = section(restored[1]?.text ?? '', 'where we are')
+  expect(restoredWhere).toContain('A outcome')
+  expect(restoredWhere).not.toContain('B outcome')
   expect(seen.splitPrompts.length + seen.prompts.length + seen.compressionPrompts.length).toBe(calls)
 })
 
@@ -1044,8 +1043,8 @@ test('a duplicated short prompt rewind leaves the ledger intact', { options: { b
   expect(seen.logs.some(line => line.includes('restored ledger snapshot'))).toBe(false)
 })
 
-// Regression caught: re-folding kept T1 at its old size or discarded an exact user instruction.
-test('ledger recompression shrinks the old topic and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 250, reserve: 100 } }, async ($, on) => {
+// Regression caught: replacing topic recompression with goal clauses discarded an exact user instruction.
+test('goal migration retires topic recompression and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 250, reserve: 100 } }, async ($, on) => {
   const instruction = 'Keep the public API stable while changing the parser.'
   const oldSummary = 'T1 '.repeat(160)
   const oldLedger = `[clm ledger #1 · 2026-10-14 09:00 KST] Earlier turns of this session were folded into these notes by a Haiku summary (file: ${LEDGER_FILE}).\n\n## 목표\n- T1: ${oldSummary}\n\n## 사용자 지시\n- (none yet)\n\n## 한 일\n- (none yet)\n\n## 할 일\n- (none yet)\n\n## 미결 질문\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
@@ -1058,18 +1057,24 @@ test('ledger recompression shrinks the old topic and preserves each user instruc
   seen.files[LEDGER_FILE] = oldLedger
   seen.store['ledger:s1'] = { seq: 1, fails: 0 }
   seen.store['topics:s1'] = [{ topic: 'T1', summary: oldSummary, seq: 1 }]
+  seen.store['clauses:s1:main'] = {
+    version: 1, nextId: 2, predicates: { preserve: { key: 0, example: 'preserve(public_api).' } }, clauses: [
+      { id: 'C1', head: { name: 'preserve', args: [{ atom: 'public_api' }] }, neg: false, body: [], source: 'preserve(public_api).', text: instruction, quote: instruction, address: '@00000001', promptSeq: 1, sources: [], issue: null, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'user', kind: 'instruction' },
+    ],
+  }
   await $.turn.complete(TURN)
   await waitForPending(seen)
   const result = compactedMessages(await $.session.compact(compactInput('plugin', handled(rows))))
   const ledgerRow = result[1]?.text ?? ''
-  expect(seen.compressionPrompts).toHaveLength(1)
-  expect(storedLedger(seen)).toContain('T1:')
-  expect(ledgerRow).toContain('T1: T1 closed outcome')
+  expect(seen.compressionPrompts).toHaveLength(0)
+  expect(section(ledgerRow, 'where we are')).not.toContain('T1:')
+  expect(section(ledgerRow, 'where we are')).toContain('T2: new topic summary')
+  expect(ledgerRow).not.toContain('T1: T1 closed outcome')
   expect(ledgerRow).not.toContain(oldSummary)
   const ledgerMessage = result[1]
   if (!ledgerMessage) throw new Error('fold omitted the ledger message')
   expect(est(ledgerMessage)).toBeLessThanOrEqual(250)
-  expect(instructionValues(storedLedger(seen))).toContain(instruction)
+  expect(section(ledgerRow, 'user instructions')).toContain(instruction)
 })
 
 // Regression caught (guards 2 and 6): a fold cut the tool result of the newest turn while that command was still in progress.
@@ -1230,12 +1235,12 @@ test('auto compaction with no pending plan produces a clm ledger instead of an e
   const seen = bottoms(on, s)
   const auto = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
   expect(auto[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(section(auto[1].text, 'learned')).toContain('INLINE-FACT')
-  expect(storedLedger(seen)).toContain('INLINE-FACT')
+  expect(section(auto[1].text, 'facts')).toContain('INLINE-FACT')
   expect(seen.engineCompactions).toBe(0)
   // Nothing is left for clm to fold here, so the engine summary is the only way the context still shrinks.
   const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
-  expect(manual.map(m => m.text)).toEqual(ENGINE_SUMMARY_TEXTS)
+  expect(manual[0]?.text).toBe('ENGINE SUMMARY')
+  expect(manual[1]?.text).toContain('INLINE-FACT')
   expect(seen.engineCompactions).toBe(1)
 })
 
@@ -1318,10 +1323,11 @@ test('a handoff after a clm fold keeps the ledger', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('INLINE-FACT'), 'not a ledger'] }
   const seen = bottoms(on, s)
   const auto = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
-  expect(storedLedger(seen)).toContain('INLINE-FACT')
+  expect(section(auto[1].text, 'facts')).toContain('INLINE-FACT')
   const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
-  expect(manual.map(m => m.text)).toEqual(ENGINE_SUMMARY_TEXTS)
+  expect(manual[0]?.text).toBe('ENGINE SUMMARY')
+  expect(manual[1]?.text).toContain('INLINE-FACT')
   s.rows = [...manual, M('user', 'next'), M('assistant', 'done')]
   await $.session.compact(compactInput('plugin', handled(s.rows)))
-  expect(storedLedger(seen)).toContain('INLINE-FACT')
+  expect(manual.some(row => row.text.includes('INLINE-FACT'))).toBe(true)
 })

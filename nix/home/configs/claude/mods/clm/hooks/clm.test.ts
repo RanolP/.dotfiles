@@ -9,7 +9,7 @@ import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
@@ -296,7 +296,7 @@ test('a merge reply carrying a changes block folds without announcing it', OPTS,
   const s: State = { rows: ROWS, replies: [`<changes>핵심 사실: 순서가 바뀐 응답</changes>\n\n${ledger('fact')}`] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  expect(storedLedger(seen)).toContain('fact')
+  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('fact')
   expect(seen.results[0].messages[1].text).not.toContain('<changes>')
   expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
 })
@@ -318,6 +318,6 @@ test('a merge without non-task changes still applies the fold', OPTS, async ($, 
   const s: State = { rows: ROWS, replies: [ledger('fact')] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  expect(storedLedger(seen)).toContain('fact')
+  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('fact')
   expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
 })

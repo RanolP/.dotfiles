@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionMessage } from 'claude-code'
-import { createHarness, formatReport, type Fixture, type Probe } from './run'
+import { createHarness, formatReport, residentTokenEstimate, type Fixture, type Probe } from './run'
 import { fixtures as fixtureData, probes as probeData, replies as replyData } from './data'
 
 const OPTIONS = { budget: 10_000, tailTarget: 1_800, queueTarget: 8_000, ledgerTarget: 900, reserve: 1_000, model: 'haiku', reviewModel: 'haiku' }
@@ -23,6 +23,11 @@ test('the folded ledger retains or can resolve every declared fact', { options: 
     const compacted = await $.session.compact({ trigger: 'plugin', messages })
     if (!compacted || !Array.isArray(compacted.messages)) throw new Error(`${fixture.id} compaction returned no messages`)
     if (harness.splitCalls() - callsBefore !== 1) throw new Error(`${fixture.id} crossed queueTarget with ${harness.splitCalls() - callsBefore} split-summary calls`)
+    if (fixture.id === 'f757aaf2') {
+      const residentTokens = residentTokenEstimate(compacted.messages)
+      console.log(`CLM_EVAL_SIZE f757aaf2 ${residentTokens}`)
+      expect(residentTokens).toBeLessThanOrEqual(1_500)
+    }
     results.push(...harness.score(fixture, probeData as unknown as Probe[], compacted.messages))
   }
   console.log(formatReport(results))

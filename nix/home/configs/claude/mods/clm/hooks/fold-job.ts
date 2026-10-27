@@ -6,7 +6,7 @@ import {
 import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import {
   composeLedger, EMPTY_LEDGER, factLines, instructionValues, mergeableNotes, notesOf, parseChanges, parseMerge,
-  fallbackLedger, oversizeLines, preserveInstructions, preservedLines, rememberOversize, rememberPreserved, renderTurns,
+  fallbackLedger, oversizeLines, carryLegacyInstructions, preservedLines, rememberOversize, rememberPreserved, renderTurns,
   LESSON_SYSTEM, SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
 } from './ledger'
 import { focusOf, injected, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
@@ -17,11 +17,12 @@ import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type Rewind
 import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
 import type { SentAt } from './address'
-import { clauseStoreKey, emptyClauseStore, readClauseStore, renderClauses } from './clauses'
+import { clauseStoreKey, emptyClauseStore, readClauseStore, renderClauses, type ClauseStore } from './clauses'
 
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; asks?: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: TopicState[]
+  clauses?: ClauseStore
   rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]; coveredRows?: string[]
 }
 type PendingJob =
@@ -62,6 +63,7 @@ export type FoldJobIo = {
   storeGet(key: string): Promise<unknown>
   storeSet(key: string, value: unknown): Promise<void>
   storeDelete(key: string): Promise<void>
+  serialize<T>(session: string, run: () => Promise<T>): Promise<T>
   pendingKey(key: string): Promise<string>
   topicsKey(key: string): Promise<string>
   captureOrigin(): Promise<Origin>
@@ -254,7 +256,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       if (attempt === 1) io.log(`clm: split summary rejected (${retryRule}); the next turn end may retry`, { to: 'debug' })
       continue
     }
-    const merge = parseMerge(answer.mergeReply, known, Math.max(500, Math.floor(opts.budget / 4)), instructionValues(notesOf(previous)), factLines(notesOf(previous)))
+    const merge = parseMerge(answer.mergeReply, known, Math.max(500, Math.floor(opts.budget / 4)), factLines(notesOf(previous)))
     if (typeof merge === 'string') {
       retryRule = `The previous summary failed validation: ${merge}. Return valid note sections and ops in the required JSON object.`
       if (attempt === 1) io.log(`clm: split summary rejected (${merge}); the next turn end may retry`, { to: 'debug' })
@@ -285,7 +287,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       ...(folded.plan.tail[0] ? { keepFp: fingerprint(folded.plan.tail[0]) } : {}),
       keepFrom: rows.length - folded.plan.tail.length,
       dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
-      cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics,
+      cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauses: folded.clauses,
       promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
     }
   }
@@ -301,7 +303,7 @@ function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryM
     notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, asks: folded.asks, seq: folded.seq,
     ...(keptRow ? { keepFp: fingerprint(keptRow) } : {}), keepFrom,
     dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
-    cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics,
+    cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauses: folded.clauses,
     promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
   }
 }
@@ -351,7 +353,7 @@ async function prepareMechanicalFold(io: FoldJobIo, opts: Opts, rows: readonly S
   const plan = planClear(rows, Math.max(0, opts.tailTarget / (meta.ratio ?? 1)), estTokens({ role: 'user', text: notes, toolUses: [] }) + 60)
   if (!plan) return undefined
   const kept = [...preservedLines(notes), ...withheldLines(plan.dropped)]
-  const preserved = preserveInstructions(fallbackLedger(notes, plan.dropped), instructionValues(notes), plan.dropped, await io.ledgerPath())
+  const preserved = carryLegacyInstructions(fallbackLedger(notes, plan.dropped), instructionValues(notes), plan.dropped, await io.ledgerPath())
   const notesAfterFold = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
   const fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
   const keepFrom = rows.length - plan.tail.length
@@ -479,7 +481,7 @@ async function applyFoldPlan(
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
   const liveFocus = focusOf(stateEvents, here.session)
   const fileLedger = composeLedger(use.fullNotes, currentView.issues)
-  const ledger = await persistStep(io, fileLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus }))
+  const ledger = await persistStep(io, fileLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus, clauses: use.clauses }))
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
   const headGroup = keepsHeadGroup(workingRows, first)
@@ -493,6 +495,7 @@ async function applyFoldPlan(
   const result = { messages, tokensBefore, tokensAfter }
   return persistCompactResult(io, result, async () => {
     await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
+    if (use.clauses) await io.serialize(here.session, () => io.storeSet(clauseStoreKey(key), use.clauses))
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     else await io.storeDelete(topicKey)
@@ -527,7 +530,7 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
   const liveFocus = focusOf(stateEvents, here.session)
   const fullLedger = composeLedger(use.fullNotes, view.issues)
-  const ledger = await persistStep(io, fullLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus }))
+  const ledger = await persistStep(io, fullLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus, clauses: use.clauses }))
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const row: SessionMessage = { role: 'user', text, toolUses: [] }
   const plan: ClearPlan = {
@@ -543,6 +546,7 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
   const offset = messages.findIndex(message => message.text === text)
   return persistCompactResult(io, result, async () => {
     await io.writeFile(await io.ledgerPath(), fullLedger + '\n')
+    if (use.clauses) await io.serialize(here.session, () => io.storeSet(clauseStoreKey(key), use.clauses))
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(row), fullLedger, use.topics, use.coveredRows ?? [])
@@ -601,7 +605,7 @@ export async function handOff(io: FoldJobIo, key: string, handoff: () => Promise
   await persistStep<void>(io, undefined, () => io.backfillClauses(key))
   const result = await handoff()
   const store = readClauseStore(await persistStep(io, undefined, () => io.storeGet(clauseStoreKey(key)))) ?? emptyClauseStore()
-  const clauses = renderClauses(store, () => true)
+  const clauses = renderClauses(store, () => true, 40)
   const messages = result.messages?.length
     ? [result.messages[0]!, { role: 'user' as const, text: `[clm clauses]\n${clauses.join('\n') || '- (none)'}`, toolUses: [] }, ...result.messages.slice(1).filter(row => !row.text.startsWith('[clm clauses]'))]
     : result.messages
@@ -700,7 +704,7 @@ async function keepEscapedInstructions(io: FoldJobIo, rows: readonly SessionMess
   try {
     const path = await io.ledgerPath()
     const notes = notesOf((await io.readFile(path)) ?? EMPTY_LEDGER)
-    const preserved = preserveInstructions(notes, instructionValues(notes), rows.slice(protectedIndex(rows)), path)
+    const preserved = carryLegacyInstructions(notes, instructionValues(notes), rows.slice(protectedIndex(rows)), path)
     const view = await io.trackerView(await io.captureOrigin())
     await io.writeFile(path, composeLedger(preserved.fullNotes, view.issues) + '\n')
   } catch (err) {

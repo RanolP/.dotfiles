@@ -8,7 +8,7 @@ import type { Held, Meta } from './register'
 import { CLAUSE_BACKFILL_SYSTEM, INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, LESSON_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, fallbackLedger, instructionValues, LESSON_SYSTEM, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { estTokens, fingerprint } from './fold'
 
@@ -30,13 +30,16 @@ export const ROWS = [
   M('user', 'run tests'), use('tu_c', 'Bash'), res('tu_c', 'pass: all 12 tests passed ' + BIG), M('assistant', 'tests pass'),
   M('user', 'commit it'), M('assistant', 'done'),
 ]
-// The merge model writes 목표 and an <ops> array; facts arrive as fact ops,
+// The merge model writes 목표 and an <ops> array; facts arrive as clause ops,
 // clm keeps 사용자 지시 itself and the tracker renders the other three. Every
 // fact and done claim here cites the first tool result of ROWS ("log: ..."),
 // which tests not about evidence rely on to pass the mechanical check.
 export const CITE = [{ ref: 'tu_a', quote: 'log: make fails at' }]
-export const ledger = (fact: string, ops = '[]', cite = CITE) =>
-  `## 목표\n- -\n\n<ops>${JSON.stringify([{ op: 'fact', text: fact, evidence: cite }, ...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))])}</ops>`
+export const ledger = (fact: string, ops = '[]', cite = CITE) => {
+  let hash = 2166136261
+  for (const char of fact) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+  return `## 목표\n- -\n\n<ops>${JSON.stringify([{ clause: `legacy_fact('F${(hash >>> 0).toString(16)}').`, kind: 'fact', text: fact, evidence: cite }, ...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))])}</ops>`
+}
 export const splitAnswer = (split = 2, topic = 'build', summary = 'build summary', note = 'build summary') => JSON.stringify({
   split, notes: `## 목표\n- ${note}`, ops: [], topics: [{ topic, summary }],
 })
@@ -208,12 +211,6 @@ export function bottoms(on: any, s: State) {
       if (s.splitBlock) await s.splitBlock()
       if (s.splitDelay) await clock.sleep(s.splitDelay)
       const text = s.splitReplies?.shift() ?? splitAnswer()
-      if (text instanceof Error) throw text
-      return { value: { isAnswered: true, text, usage: {} } }
-    }
-    if (e.system === LEDGER_COMPACT_SYSTEM) {
-      seen.compressionPrompts.push(e.prompt)
-      const text = s.compressionReplies?.shift() ?? compressedTopics([{ topic: 'build', summary: 'build summary', seq: 1 }])
       if (text instanceof Error) throw text
       return { value: { isAnswered: true, text, usage: {} } }
     }

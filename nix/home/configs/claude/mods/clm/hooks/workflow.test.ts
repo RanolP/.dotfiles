@@ -10,7 +10,7 @@ import { applyClauses, emptyClauseStore, parseClause, readClauseStore, renderCla
 import { observeTranscript, transcriptRowsKey, type RewindIo } from './rewind'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { CONFIRM_ITEMS, CONFIRM_PREFIX } from './evidence'
 import { focusOf, parseLog, parseOps, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
@@ -447,7 +447,7 @@ test('/clm drop drops one named issue, then every open issue of the session', OP
 test('wrapper rows and short acknowledgements stay out of 사용자 지시', async () => {
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- "ㄱ"\n\n## 핵심 사실·경로\n- f'
   const dropped = ['<bash-input>adb uninstall com.x</bash-input>', '<bash-stdout>Success</bash-stdout>', '<local-command-stdout>ok</local-command-stdout>', 'ㄱㄱ', '지금?', '빨리 하쇼', 'OK', 'keep the API stable'].map(t => M('user', t))
-  const out = preserveInstructions(prev, instructionValues(prev), dropped, '/ledger.md')
+  const out = carryLegacyInstructions(prev, instructionValues(prev), dropped, '/ledger.md')
   expect(section(out.fullNotes, '사용자 지시')).toBe('- "keep the API stable"')
 })
 
@@ -474,7 +474,7 @@ test('a quote of short pieces scattered across a row is refused, a long piece en
   const s: State = { rows, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  const facts = section(storedLedger(seen), '핵심 사실·경로')
+  const facts = section(seen.results[0].messages[1].text, 'facts')
   expect(facts).not.toContain('FACT-SCATTERED')
   expect(facts).toContain('FACT-ONE-PIECE')
 })
@@ -484,9 +484,9 @@ test('short directives stay in 사용자 지시 and survive the next fold readin
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- "ㄱ"\n\n## 핵심 사실·경로\n- f'
   const rows = ['하지마', 'push', '멈춰', 'ㅇㅋ', '넵', 'y'].map(t => M('user', t))
   const want = '- "하지마"\n- "push"\n- "멈춰"'
-  const first = preserveInstructions(prev, instructionValues(prev), rows, '/ledger.md')
+  const first = carryLegacyInstructions(prev, instructionValues(prev), rows, '/ledger.md')
   expect(section(first.fullNotes, '사용자 지시')).toBe(want)
-  const again = preserveInstructions(first.fullNotes, instructionValues(first.fullNotes), [], '/ledger.md')
+  const again = carryLegacyInstructions(first.fullNotes, instructionValues(first.fullNotes), [], '/ledger.md')
   expect(section(again.fullNotes, '사용자 지시')).toBe(want)
 })
 

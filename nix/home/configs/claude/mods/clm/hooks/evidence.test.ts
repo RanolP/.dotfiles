@@ -8,7 +8,7 @@ import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
 import { checkEvidence } from './evidence'
@@ -70,8 +70,7 @@ test('a fabricated quote is rejected for a fact', OPTS, async ($, on) => {
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
-  expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('the build log is long')
-  expect(row).toContain('the build log is long — quote:')
+  expect(section(row, 'facts')).toContain('the build log is long')
   expect(row).not.toContain('the build passes')
   expect(logEvents(seen).find(e => e.event === 'evidence-rejected')?.reason).toContain('"the build passed cleanly" is not in tu_a')
 })
@@ -119,8 +118,8 @@ test('a reviewer failure records no done, holds the facts out of the ledger, and
   s.replies.push(ledger('third', '[]', [{ ref: 'tu_e', quote: 'w ' + 'x'.repeat(40) }]))
   await turnEnds($, s, seen)
   const third = seen.results[2].messages[1].text
-  expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('HELD-FACT-ONE')
-  expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('HELD-FACT-TWO')
+  expect(section(third, 'facts')).toContain('HELD-FACT-ONE')
+  expect(section(third, 'facts')).toContain('HELD-FACT-TWO')
   expect(seen.store['held:s1']).toBeUndefined()
 })
 
@@ -150,14 +149,14 @@ test('a failed review drops the merge\'s retracts and note ops instead of applyi
   await turnEnds($, s, seen)
   const tracker = () => snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
   const issue = tracker().find(i => i.title === 'PR 정리')!
-  expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('ACCEPTED-FACT')
+  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('ACCEPTED-FACT')
   s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
-  const factLine = section(storedLedger(seen), '핵심 사실·경로').split('\n').find(l => l.includes('ACCEPTED-FACT'))!.replace(/^- /, '')
+  const factLine = section(seen.results[0].messages[1].text, 'facts').split('\n').find(l => l.includes('ACCEPTED-FACT'))!.replace(/^- /, '')
   const ops = [{ op: 'retract', fact: factLine }, { op: 'note', issue: issue.id, text: 'PR #<pr> closed' }, { op: 'retitle', issue: issue.id, title: 'PR #<pr> 닫힘' }]
   s.replies.push(`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`)
   s.reviewReplies = [new Error('review down')]
   await turnEnds($, s, seen)
-  expect(section(storedLedger(seen), '핵심 사실·경로')).toContain('ACCEPTED-FACT')
+  expect(section(seen.results[1].messages[1].text, 'facts')).toContain('ACCEPTED-FACT')
   const after = tracker().find(i => i.id === issue.id)!
   expect(after.title).toBe('PR 정리')
   expect(after.notes).not.toContain('PR #<pr> closed')
@@ -300,7 +299,7 @@ test('a quote ending in the clip ellipsis or taken from past the clip still hold
   const s: State = { rows, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  const facts = section(storedLedger(seen), '핵심 사실·경로')
+  const facts = section(seen.results[0].messages[1].text, 'facts')
   expect(facts).toContain('FACT-PAST-CLIP')
   expect(facts).toContain('FACT-ELLIPSIS')
 })

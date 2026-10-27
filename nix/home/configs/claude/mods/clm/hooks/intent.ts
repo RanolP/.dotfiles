@@ -87,6 +87,7 @@ Set laterDrop to "all" when the user asks to remove every queued later item, or 
 Track direct work requests independently from focus and later items. Add each new request to raised, including requests phrased as statements without a question mark. Write each request as a standalone instruction in the user's language and quote an exact substring from user_prompt. Resolve an open request only when the last assistant reply or user_prompt provides evidence that it was answered, declined, or skipped. Use the request's exact id and one of answered, declined, skipped; include quote copied exactly from that evidence when available. A skipped request is closed.
 Set stepped to true when the message asks for a big piece of work that needs a plan before the first edit: several ordered phases, changes across several files or components, or a feature built end to end. Set it to false for a single fix, a question, an approval, a correction, or a follow-up inside a task already under way.
 Set clauses to the standing instructions the message gives: how the agent must work, what to use, target or avoid, from now on or for the current task. Write each as one clause in restricted Prolog: a fact such as "forbid(push).", a negated fact such as "\\+ forbid(push).", or a rule whose head variables each appear in a positive body goal such as "upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint']).". Use lowercase atoms, quote an atom that holds a hyphen or a capital, and end with a period. Give each clause text, one plain Korean sentence saying what it asks, and quote, an exact substring of user_prompt that states it.
+Set kind to instruction for those standing instructions. A factual correction may use kind fact only by reusing a predicate head listed in <live_facts>; this replaces the stale value with the corrected value. Emit no goal clauses.
 Reuse a head from <predicates> whenever it means the same thing, keeping its argument order: a clause with the same leading key arguments replaces the old one, which is how a correction lands. The key of a new predicate is every argument but the last; set key to another count only when more arguments identify the value. Set scope to "session" when the instruction holds beyond the current task, otherwise "task".
 Extend a set with a new fact; replace a set with an explicit retract, so for example add "forbid(force_push)." beside "forbid(push)." and retract the old members before narrowing the set with a rule.
 For example, with "benchmark/2 key=1 e.g. benchmark(stylelint, upgrade)." in <predicates>, the message "oh fuck. 캐시만 패치해서 벤치마크 해봐." gives clauses [{"clause": "benchmark(stylelint, cache_patch_only).", "text": "stylelint 벤치마크는 캐시만 패치한 상태로 잰다.", "quote": "캐시만 패치해서 벤치마크 해봐", "scope": "task"}].
@@ -123,6 +124,7 @@ export function intentPrompt({ state, issues, lastAssistantReply, userPrompt, la
     tag('open_issues', list(otherOpen)),
     tag('predicates', list(livePredicates(clauses))),
     tag('live_clauses', list(clauses.clauses.filter(clause => clause.status === 'live').slice(-40).map(clause => `${clause.id} | ${clause.source}`))),
+    tag('live_facts', list(clauses.clauses.filter(clause => clause.status === 'live' && clause.kind === 'fact').slice(-20).map(clause => `${clause.id} | ${clause.source}`))),
     tag('last_assistant_reply', lastAssistantReply.slice(-1500)),
     tag('user_prompt', userPrompt.slice(0, 4000)),
   ].join('\n\n')
@@ -187,11 +189,12 @@ export function parseFocus(raw: string, knownIds: ReadonlySet<string>): FocusCla
   return { intent: value.intent, target, title, rule }
 }
 
-export type ProposedClause = { clause: string; text: string; quote: string; key?: number; scope?: 'session' | 'task' }
+export type ProposedClause = { clause: string; text: string; quote: string; key?: number; scope?: 'session' | 'task'; kind?: 'instruction' | 'fact' }
 export type ClauseClassification = { clauses: ProposedClause[]; retract: { id: string; quote: string }[] }
 const isProposedClause = (value: unknown): value is ProposedClause => isRecord(value)
   && typeof value.clause === 'string' && typeof value.text === 'string' && value.text.trim().length > 0 && typeof value.quote === 'string' && value.quote.trim().length > 0
   && (value.key === undefined || typeof value.key === 'number') && (value.scope === undefined || value.scope === 'session' || value.scope === 'task')
+  && (value.kind === undefined || value.kind === 'instruction' || value.kind === 'fact')
 const isRetractRequest = (value: unknown): value is { id: string; quote: string } => isRecord(value) && typeof value.id === 'string' && typeof value.quote === 'string'
 
 /** A reply without clauses or retract reads as empty, so an older-shaped reply lands nothing. */
@@ -471,14 +474,21 @@ const supportedClauseQuote = (quote: string, prompt: string) => {
 }
 
 /** Proposed clauses whose quote the prompt holds and that parse; the rest are dropped with a debug line. */
-function incomingClauses(io: PromptIntentIo, proposed: readonly ProposedClause[], text: string, address: string, issue: string | null): IncomingClause[] {
+function incomingClauses(io: PromptIntentIo, proposed: readonly ProposedClause[], text: string, address: string, issue: string | null, store = emptyClauseStore()): IncomingClause[] {
+  const liveFacts = new Set(store.clauses.filter(clause => clause.status === 'live' && clause.kind === 'fact').map(clause => `${clause.head.name}/${clause.head.args.length}`))
   return proposed.flatMap(item => {
     if (!supportedClauseQuote(item.quote, text)) {
       io.log(`clm clause: dropped ${item.clause} (quote not in ${address})`, { to: 'debug' })
       return []
     }
     try {
-      return [{ ...parseClause(item.clause), text: squash(item.text).slice(0, 200), quote: item.quote, address, issue: item.scope === 'session' ? null : issue, ...(item.key === undefined ? {} : { key: item.key }) }]
+      const parsed = parseClause(item.clause)
+      const kind = item.kind ?? 'instruction'
+      if (kind === 'fact' && !liveFacts.has(`${parsed.head.name}/${parsed.head.args.length}`)) {
+        io.log(`clm clause: dropped ${item.clause} (fact head is not live)`, { to: 'debug' })
+        return []
+      }
+      return [{ ...parsed, text: squash(item.text).slice(0, 200), quote: item.quote, address, issue: item.scope === 'session' ? null : issue, kind, origin: 'user', ...(item.key === undefined ? {} : { key: item.key }) }]
     } catch (err) {
       io.log(`clm clause: dropped ${item.clause} (${String(err).slice(0, 120)})`, { to: 'debug' })
       return []
@@ -578,7 +588,7 @@ export async function backfillClauses(io: PromptIntentIo, session: string, key: 
   }
   const entries = backlog.map((entry, index) => ({
     entry,
-    clauses: incomingClauses(io, proposed.filter((item): item is ProposedClause & { prompt: number } => isProposedClause(item) && isRecord(item) && item.prompt === index + 1), entry.text, entry.address, null),
+    clauses: incomingClauses(io, proposed.filter((item): item is ProposedClause & { prompt: number } => isProposedClause(item) && isRecord(item) && item.prompt === index + 1), entry.text, entry.address, null, store),
   }))
   await io.serialize(session, () => landClauses(io, key, entries))
 }
@@ -652,7 +662,7 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
         if (entry && clauseClassification) {
           try {
             const issue = focusOf(await io.readAll(), origin.session).stack.at(-1) ?? null
-            await landClauses(io, key, [{ entry, clauses: incomingClauses(io, clauseClassification.clauses, userPrompt, entry.address, issue), retract: clauseClassification.retract }])
+            await landClauses(io, key, [{ entry, clauses: incomingClauses(io, clauseClassification.clauses, userPrompt, entry.address, issue, clauses), retract: clauseClassification.retract }])
           } catch (err) { io.log(`clm clause: store update failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
         }
         io.log(`clm intent: dropped older focus result ${promptSeq} (applied ${workflowAtApply.focusAppliedSeq})`, { to: 'debug' })
@@ -677,7 +687,7 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
       if (entry && clauseClassification) {
         try {
           const issue = classification.target ?? createdId ?? next.stack.at(-1) ?? null
-          await landClauses(io, key, [{ entry, clauses: incomingClauses(io, clauseClassification.clauses, userPrompt, entry.address, issue), retract: clauseClassification.retract }])
+          await landClauses(io, key, [{ entry, clauses: incomingClauses(io, clauseClassification.clauses, userPrompt, entry.address, issue, clauses), retract: clauseClassification.retract }])
         } catch (err) { io.log(`clm clause: store update failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
       }
       const steppedRoot = classification.intent === 'question' || !parseStepped(response.text) ? undefined

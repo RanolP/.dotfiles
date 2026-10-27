@@ -12,8 +12,8 @@ import {
   type Evidence, type Source,
 } from './evidence'
 import {
-  composeLedger, EMPTY_LEDGER, factLine, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, withdrawnInstructionKeys, issueList, legacyItems, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
-  parseChanges, parseMerge, parseReview, preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
+  composeLedger, EMPTY_LEDGER, factLine, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, withdrawnInstructionKeys, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
+  parseChanges, parseMerge, parseReview, preservedLines, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
   withNotes, WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective, type Fact,
 } from './ledger'
 import {
@@ -28,9 +28,10 @@ import type { ClmStableAttachmentSession as StableAttachmentSession, ClmStableAt
 import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
-import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
+import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
 import { registerResources } from './resources'
+import { clauseStoreKey, emptyClauseStore, readClauseStore } from './clauses'
 
 export { recallRows } from './address'
 export { residentLedgerText } from './resident'
@@ -841,7 +842,10 @@ const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
   gateMerge: (ops, evidence, facts, sources, ratio, dropped) => gateMerge($, ops, evidence, facts, sources, ratio, dropped),
   reviewFold: (opts, input) => reviewFold($, opts, input),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
-  storedTopics: (notes, seq, key) => storedTopics($, notes, seq, key),
+  clauseStore: async key => readClauseStore(await sessionStoreGet($, clauseStoreKey(key))) ?? emptyClauseStore(),
+  addressRows: key => addressRows(addressIo($), key),
+  nowIso: () => nowIso($),
+  readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
   ledgerPath: () => ledgerPath($),
   topics: async key => sessionStoreGet($, await topicsKey($, key)),
   usageReading: () => usageReading($),
@@ -864,19 +868,21 @@ async function readRequests($: EngineInterface, key: string): Promise<RequestRec
   return Array.isArray(value) ? value.filter(isRequestRecord) : []
 }
 
-async function storedTopics($: EngineInterface, notes: string, seq: number, key?: string): Promise<Topic[]> {
+async function readLegacyTopics($: EngineInterface, notes: string, seq: number, key?: string): Promise<Topic[]> {
   const resolvedKey = key ?? transcriptKey(await sid($))
-  return storedTopicsDomain({ topics: async target => sessionStoreGet($, await topicsKey($, target)) }, notes, seq, resolvedKey)
+  return readLegacyTopicsDomain({ topics: async target => sessionStoreGet($, await topicsKey($, target)) }, notes, seq, resolvedKey)
 }
 
 const residentIo = ($: EngineInterface): ResidentIo => ({
   get: key => sessionStoreGet($, key),
+  set: (key, value) => sessionStoreSet($, key, value),
+  log: (text, options) => $.ui.log(text, options),
   readLedger: async () => readText($, await ledgerPath($)),
   readMeta: () => readMeta($),
-  storedTopics: (notes, seq, key) => storedTopics($, notes, seq, key),
+  readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
   readRequests: key => readRequests($, key),
 })
-const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } } = {}) =>
+const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] }; clauses?: import('./clauses').ClauseStore } = {}) =>
   renderResidentLedger(residentIo($), key, issues, state, events, preview)
 
 const intentIo = ($: EngineInterface): PromptIntentIo => ({
@@ -915,6 +921,7 @@ const rewindIo = ($: EngineInterface): RewindIo => ({
   storeGet: key => sessionStoreGet($, key),
   storeSet: (key, value) => sessionStoreSet($, key, value),
   storeDelete: key => sessionStoreDelete($, key),
+  serialize: (session, run) => serialized(session, run),
   writeFile: (path, text) => $.fs.write(path, text),
   ledgerPath: () => ledgerPath($),
   topicsKey: key => topicsKey($, key),
@@ -960,6 +967,7 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   storeGet: key => sessionStoreGet($, key),
   storeSet: (key, value) => sessionStoreSet($, key, value),
   storeDelete: key => sessionStoreDelete($, key),
+  serialize: (session, run) => serialized(session, run),
   pendingKey: key => pendingKey($, key),
   topicsKey: key => topicsKey($, key),
   captureOrigin: () => captureOrigin($),
@@ -1131,7 +1139,7 @@ export const register: Register = (on, options) => {
     const meta = await readMeta($)
     const rows = liveRows(await $.session.messages(), meta.boundary)
     const log = ((await readText($, await logPath($))) ?? '').split('\n').filter(Boolean).slice(-5)
-    $.ui.log(foldJobReport(await readText($, await ledgerPath($)), rows, await liveOpts($, userOptions), meta, log))
+    $.ui.log(foldJobReport(rows.findLast(isLedgerRow)?.text ?? await readText($, await ledgerPath($)), rows, await liveOpts($, userOptions), meta, log))
     return {}
   })
 
@@ -1288,10 +1296,10 @@ export const register: Register = (on, options) => {
     if (isHumanOrigin(e.origin)) {
       try {
         const key = transcriptKey(await sid($))
-        address = await recordPrompt(addressIo($), key, e.text, await nowIso($))
         await observeTranscript(rewindIo($), key, await $.session.messages())
         await changeWorkflow($, current => ({ next: resetUserWorkflow(current, e.origin), result: undefined }))
         promptSeq = await stampHumanPrompt($)
+        address = await recordPrompt(addressIo($), key, e.text, await nowIso($), promptSeq)
         await reconcileReplay($)
       } catch (err) {
         $.ui.log(`clm: prompt state update failed (${String(err).slice(0, 160)})`)

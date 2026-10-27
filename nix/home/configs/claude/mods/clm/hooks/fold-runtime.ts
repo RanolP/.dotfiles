@@ -4,9 +4,9 @@ import {
 } from './fold'
 import { confirmQuestion, renderRange, type Evidence, type Source } from './evidence'
 import {
-  EMPTY_LEDGER, ageDecayPlan, fallbackLedger, factLines, instructionKey, instructionValues, issueList,
-  LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, legacyItems, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseMerge,
-  preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved,
+  EMPTY_LEDGER, fallbackLedger, factLines, instructionKey, instructionValues, issueList,
+  MERGE_SYSTEM, legacyItems, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseMerge,
+  preservedLines, carryLegacyInstructions, rememberFacts, rememberOversize, rememberPreserved,
   sectionBody, withheldLines, WITHDRAWN_PREFIX, withNotes, type Fact,
 } from './ledger'
 import { archivedDone, injected, isRecord, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
@@ -15,6 +15,9 @@ import type { RewindTopic } from './rewind'
 import type { SentAt } from './address'
 import type { LogEvent } from './events'
 import { xmlText } from './intent'
+import { applyFoldClauseOps, livePredicates, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
+import type { AddressRow } from './address'
+import { migrateLegacyLedger } from './resident'
 
 export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
 export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; firstObserved?: number; estimatorVersion?: number }
@@ -23,8 +26,8 @@ export type TopicDraft = { topic: string; summary: string }
 export type SplitAnswer = { split: number; mergeReply: string; topics: TopicDraft[] }
 export type PreparedFold = { plan: ClearPlan; mergeReply: string; topics: TopicDraft[] }
 export type TrackerView = { issues: Issue[]; dropped: Issue[]; finished: Issue[]; doneTitles: Set<string> }
-export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; asks: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; tailTokens: number }
-export type FoldPreview = { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: FocusState }
+export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; asks: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; clauses?: ClauseStore; tailTokens: number }
+export type FoldPreview = { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: FocusState; clauses?: ClauseStore }
 
 export type FoldRuntimeIo = {
   readLedger: () => Promise<string | undefined>
@@ -36,7 +39,10 @@ export type FoldRuntimeIo = {
   gateMerge: (ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>) => Promise<{ ops: Payload[]; evidence: Evidence[][]; facts: Fact[] }>
   reviewFold: (opts: Opts, input: ReviewInput) => Promise<Reviewed>
   residentLedger: (key: string, issues: readonly Issue[], state: FocusState, events: readonly TrackerEvent[], preview?: FoldPreview) => Promise<string>
-  storedTopics: (notes: string, seq: number, key: string) => Promise<TopicState[]>
+  clauseStore: (key: string) => Promise<ClauseStore>
+  addressRows: (key: string) => Promise<AddressRow[]>
+  nowIso: () => Promise<string>
+  readLegacyTopics: (notes: string, seq: number, key: string) => Promise<TopicState[]>
   ledgerPath: () => Promise<string>
   topics: (key: string) => Promise<unknown>
   usageReading: () => Promise<number | undefined>
@@ -52,8 +58,6 @@ export const isTopic = (value: unknown): value is TopicState => isRecord(value) 
   && (value.focusIssue === undefined || value.focusIssue === null || typeof value.focusIssue === 'string')
 const isTopicDraft = (value: unknown): value is TopicDraft => isRecord(value) && typeof value.topic === 'string' && value.topic.trim() !== '' && typeof value.summary === 'string' && value.summary.trim() !== ''
 const topicKey = (topic: Pick<TopicState, 'topic' | 'focusIssue'>) => `${instructionKey(topic.topic)}\0${topic.focusIssue ?? ''}`
-const topicTokens = (topic: Pick<TopicState, 'topic' | 'summary'>) => Math.ceil((topic.topic.length + topic.summary.length) / 4)
-const topicFloorTokens = (topic: Pick<TopicState, 'topic'>) => Math.ceil((topic.topic.length + 10) / 4)
 const ratioMin = 1, ratioMax = 4
 const clampRatio = (value: number) => Math.round(Math.min(ratioMax, Math.max(ratioMin, value)) * 1000) / 1000
 const freshReal = (reading: number | undefined, meta: Meta) => (reading !== meta.foldTokens ? reading : undefined)
@@ -62,120 +66,24 @@ export function parseSplitAnswer(raw: string): SplitAnswer | string {
   let value: unknown
   try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `split reply is not JSON (${String(err).slice(0, 80)})` }
   if (!isRecord(value) || typeof value.split !== 'number' || !Number.isInteger(value.split)) return `split must be an integer turn number (received ${JSON.stringify(isRecord(value) ? value.split : undefined)})`
-  if (typeof value.notes !== 'string' || !Array.isArray(value.ops)) return 'split reply needs notes and ops'
-  const drafts = value.topics
-  if (!Array.isArray(drafts) || !drafts.every(isTopicDraft)) return 'split reply needs topic summaries'
-  return { split: value.split, mergeReply: `${normalizeLedger(value.notes)}\n<ops>${JSON.stringify(value.ops)}</ops>`, topics: drafts.map(topic => ({ topic: topic.topic.trim(), summary: topic.summary.trim() })) }
+  if (!Array.isArray(value.ops)) return 'split reply needs ops'
+  const drafts = Array.isArray(value.topics) && value.topics.every(isTopicDraft) ? value.topics : []
+  const mergeReply = typeof value.notes === 'string'
+    ? `${normalizeLedger(value.notes)}\n<ops>${JSON.stringify(value.ops)}</ops>`
+    : JSON.stringify({ ops: value.ops })
+  return { split: value.split, mergeReply, topics: drafts.map(topic => ({ topic: topic.topic.trim(), summary: topic.summary.trim() })) }
 }
 
 function isTopicList(value: unknown): value is TopicState[] {
   return Array.isArray(value) && value.every(isTopic) && new Set(value.map(topic => topicKey(topic))).size === value.length
 }
 
-export function notesWithTopics(notes: string, topics: readonly TopicState[]): string {
-  const goal = topics.length ? topics.map(topic => `- ${topic.topic}: ${topic.summary}`).join('\n') : '- (none yet)'
-  return withNotes(notes, `## 목표\n${goal}`)
-}
-
-function parseTopics(raw: string): TopicState[] | string {
-  let value: unknown
-  try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `topic merge is not JSON (${String(err).slice(0, 80)})` }
-  if (!isRecord(value) || !isTopicList(value.topics)) return 'topic merge needs distinct {topic, summary, seq} records'
-  return value.topics
-}
-
-export async function storedTopics(io: Pick<FoldRuntimeIo, 'topics'>, notes: string, seq: number, key: string): Promise<TopicState[]> {
+export async function readLegacyTopics(io: Pick<FoldRuntimeIo, 'topics'>, notes: string, seq: number, key: string): Promise<TopicState[]> {
   const stored = await io.topics(key)
   if (isTopicList(stored)) return stored
   const goal = sectionBody(notes, '목표')
   if (!goal || goal === '- (none yet)') return []
   return [{ topic: '기존 세션 주제', summary: goal, seq: Math.max(1, seq) }]
-}
-
-export async function compressTopics(
-  io: FoldRuntimeIo, opts: Opts, input: readonly TopicState[], seq: number, notes: string, issues: readonly Issue[], key: string,
-): Promise<{ topics: TopicState[]; ledgerTokens: number }> {
-  const normalized: (TopicState & { sourceTokens: number })[] = input.map(topic => ({ ...topic, sourceTokens: topic.sourceTokens ?? topicTokens(topic) }))
-  const old = new Map(normalized.map(topic => [topicKey(topic), topic]))
-  const fixedNotes = withNotes(notes, '## 목표\n')
-  const origin = await io.captureOrigin()
-  const events = await io.readAll()
-  const state = focusOf(events, origin.session)
-  const pointer = await io.ledgerPath()
-  const renderRow = async (topicList: readonly TopicState[], ledgerNotes: string): Promise<SessionMessage> => {
-    const text = await io.residentLedger(key, issues, state, events, { notes: ledgerNotes, topics: [...topicList], issues, state })
-    return { role: 'user', text: ledgerRowText(seq, kst(), pointer, text, opts.ledgerTarget), toolUses: [] }
-  }
-  const fixedRow = await renderRow([], fixedNotes)
-  const fixedTokens = sum([fixedRow])
-  const topicBudget = Math.max(0, opts.ledgerTarget - fixedTokens)
-  const allocation = ageDecayPlan(normalized.map(topic => ({ sourceTokens: topic.sourceTokens, currentTokens: topicTokens(topic), floorTokens: topicFloorTokens(topic), seq: topic.seq })), topicBudget)
-  const targets = allocation.targets
-  const rewrite: typeof normalized = []
-  for (const index of allocation.rewrite) {
-    const topic = normalized[index]
-    if (topic) rewrite.push(topic)
-  }
-  let retryReason = ''
-  let latest = [...normalized]
-  let latestTokens = 0
-  if (!rewrite.length) {
-    const row = await renderRow(latest, notesWithTopics(notes, latest))
-    latestTokens = sum([row])
-    if (latestTokens > opts.ledgerTarget) {
-      const over = latestTokens - opts.ledgerTarget
-      io.log(`clm: ledger over budget by ${over}`, { to: 'debug' })
-      await io.logEvent('ledger-over-budget', { reason: `ledger over budget by ${over}` })
-    }
-    return { topics: latest, ledgerTokens: latestTokens }
-  }
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const response = await io.complete({
-        model: opts.model,
-        system: LEDGER_COMPACT_SYSTEM,
-        prompt: [
-          `<budget>\n${opts.ledgerTarget} tokens for the complete ledger; fixed sections use about ${fixedTokens} tokens and topic summaries have ${topicBudget} tokens.</budget>`,
-          `<fixed_sections>\n${xmlText(fixedRow.text)}\n</fixed_sections>`,
-          `<topic_entries>\n${rewrite.map(topic => JSON.stringify({ ...topic, tokens: topicTokens(topic), targetTokens: targets[normalized.indexOf(topic)] })).join('\n') || '(none)'}\n</topic_entries>`,
-          `<new_summary>\n${rewrite.filter(topic => topic.seq === seq).map(topic => JSON.stringify({ ...topic, tokens: topicTokens(topic), targetTokens: targets[normalized.indexOf(topic)] })).join('\n') || '(none)'}\n</new_summary>`,
-          retryReason ? `<retry_rule>\n${retryReason}\n</retry_rule>` : '',
-        ].filter(Boolean).join('\n\n'),
-        maxTokens: Math.max(1024, Math.min(8192, opts.ledgerTarget * 2)), timeoutMs: 60_000,
-      })
-      const parsed = response.isAnswered ? parseTopics(response.text) : `topic merge gave no text (${response.reason})`
-      if (typeof parsed === 'string') {
-        retryReason = `The previous reply failed: ${parsed}. Return the required JSON object with a topics array.`
-        if (attempt === 1) io.log(`clm: topic merge failed (${parsed}); keeping the summaries as written`, { to: 'debug' })
-        continue
-      }
-      const byName = new Map(parsed.map(topic => [topicKey(topic), topic]))
-      latest = normalized.map(topic => {
-        const response = rewrite.some(candidate => topicKey(candidate) === topicKey(topic))
-          ? byName.get(topicKey(topic)) ?? (parsed.filter(candidate => instructionKey(candidate.topic) === instructionKey(topic.topic)).length === 1
-            ? parsed.find(candidate => instructionKey(candidate.topic) === instructionKey(topic.topic)) : undefined)
-          : undefined
-        const previous = old.get(topicKey(topic))
-        if (!response) return topic
-        return { ...topic, summary: response.summary, seq: previous?.summary === response.summary ? previous.seq : seq }
-      })
-      const row = await renderRow(latest, notesWithTopics(notes, latest))
-      latestTokens = sum([row])
-      if (latestTokens <= opts.ledgerTarget) return { topics: latest, ledgerTokens: latestTokens }
-      retryReason = `The previous ledger used ${latestTokens} tokens, exceeding ${opts.ledgerTarget} by ${latestTokens - opts.ledgerTarget}. Re-summarize older topics more tightly and return the full topics array.`
-    } catch (err) {
-      retryReason = `The previous topic merge failed: ${String(err).slice(0, 120)}. Return the required JSON object.`
-      if (attempt === 1) io.log(`clm: topic merge failed (${String(err).slice(0, 120)}); keeping the summaries as written`, { to: 'debug' })
-    }
-  }
-  const fallbackRow = await renderRow(latest, notesWithTopics(notes, latest))
-  latestTokens = sum([fallbackRow])
-  if (latestTokens > opts.ledgerTarget) {
-    const over = latestTokens - opts.ledgerTarget
-    io.log(`clm: ledger over budget by ${over}`, { to: 'debug' })
-    await io.logEvent('ledger-over-budget', { reason: `ledger over budget by ${over}` })
-  }
-  return { topics: latest, ledgerTokens: latestTokens }
 }
 
 const usableOverhead = (reading: number, rows: readonly SessionMessage[], meta: Pick<Meta, 'estimatorVersion' | 'overhead'>) => {
@@ -256,6 +164,9 @@ export async function fold(
   const plan = prepared?.plan ?? planClear(rows, Math.max(0, opts.tailTarget / ratio), estTokens({ role: 'user', text: previous, toolUses: [] }) + 60)
   if (!plan) return 'nothing left to fold'
   const here = await io.captureOrigin()
+  const clauseKey = transcript ?? `${here.session}:main`
+  const legacyTopics = await io.readLegacyTopics(notesOf(previous), meta.seq, clauseKey)
+  const baseClauses = migrateLegacyLedger(await io.clauseStore(clauseKey), notesOf(previous), legacyTopics, meta.seq, await io.nowIso())
   const view = await io.trackerView(here)
   let notes = notesOf(previous)
   const kept = [...preservedLines(notes), ...withheldLines(plan.dropped)]
@@ -263,7 +174,8 @@ export async function fold(
   const instructions = storedInstructions.filter(item => !item.startsWith(WITHDRAWN_PREFIX))
   const priorFacts = factLines(notes)
   const range = renderRange(plan.dropped, undefined, undefined, await io.sentAt())
-  let ops: Payload[] = [], evidence: Evidence[][] = [], facts: Fact[] = [], retracted: string[] = [], withdrawn: string[] = []
+  let ops: Payload[] = [], evidence: Evidence[][] = [], facts: Fact[] = [], retracted: string[] = []
+  let clauseOps: (import('./ledger').FoldClauseDraft | { retract: string })[] = []
   let fallback = false
   let promoted: Payload[] = [], hold: Held[] = [], claimed: Payload[] = []
   const held = io.heldClaims(await io.readHeld(), view.issues, here.session)
@@ -279,18 +191,19 @@ export async function fold(
           `<notes>\n${mergeableNotes(notes)}\n</notes>`,
           `<instructions>\n${instructions.map(item => JSON.stringify(item)).join('\n') || '(none)'}\n</instructions>`,
           `<facts>\n${priorFacts.join('\n') || '(none)'}\n</facts>`,
+          `<predicates>\n${livePredicates(baseClauses, 40).map(xmlText).join('\n') || '(none)'}\n</predicates>`,
+          `<live_clauses>\n${renderClauses(baseClauses, () => true, 60).map(xmlText).join('\n') || '(none)'}\n</live_clauses>`,
           `<issues>\n${issueList(modelIssues(view))}\n</issues>`,
           ...(view.finished.length ? [`<finished_earlier>\n${view.finished.map(issue => `- ${issue.title}`).join('\n')}\n</finished_earlier>`] : []),
           ...(legacy.length ? [`<legacy>\n${legacy.join('\n')}\n</legacy>`] : []),
           `<removed_turns>\n${range.text}\n</removed_turns>`,
         ].join('\n\n'), maxTokens: 4096, timeoutMs: 120_000,
       })
-    const withdrawable = [...instructions, ...plan.dropped.filter(isUserTyped).map(message => stripReminders(message.text))]
-    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id)), Math.max(500, Math.floor(opts.budget / 4)), withdrawable, priorFacts) : `merge model gave no text (${response.reason})`
+    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id)), Math.max(500, Math.floor(opts.budget / 4)), priorFacts) : `merge model gave no text (${response.reason})`
     const bad = typeof merged === 'string' ? merged : undefined
     if (typeof merged !== 'string') {
-      notes = withNotes(notes, merged.notes)
-      ;({ ops, evidence, facts, retracted, withdrawn } = merged)
+      if (merged.notes !== undefined) notes = withNotes(notes, merged.notes)
+      ;({ ops, evidence, facts, retracted, clauseOps } = merged)
       claimed = ops
       meta.fails = 0
       if (merged.rejected) await io.logEvent('ops-rejected', { ratio, reason: `${merged.rejected} op(s) failed validation; ${ops.length} kept` })
@@ -313,8 +226,20 @@ export async function fold(
       issues: modelIssues(view), claims: held.claims, heldFacts: held.facts, range, ratio,
     })
     if (!fallback) ops = reviewed.ops
-    if (reviewed.failed) retracted = []
+    if (reviewed.failed) { retracted = []; clauseOps = [] }
     facts = reviewed.facts
+    const acceptedFacts = new Set(facts.map(fact => fact.text))
+    clauseOps = clauseOps.filter(op => 'retract' in op || op.kind === 'goal' || acceptedFacts.has(op.text))
+    const draftedFacts = new Set(clauseOps.flatMap(op => 'retract' in op || op.kind !== 'fact' ? [] : [op.text]))
+    for (const fact of facts) if (!draftedFacts.has(fact.text)) {
+      let hash = 2166136261
+      for (const char of fact.text) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+      clauseOps.push({ clause: `legacy_fact('F${(hash >>> 0).toString(16)}').`, kind: 'fact', text: fact.text, evidence: fact.evidence })
+    }
+    for (const topic of prepared?.topics ?? []) {
+      const slug = topic.topic.replaceAll('\\', '\\\\').replaceAll("'", "\\'")
+      clauseOps.push({ clause: `goal(session, '${slug}').`, kind: 'goal', text: `${topic.topic}: ${topic.summary}`.replace(/\s+/g, ' ').slice(0, 200), evidence: [] })
+    }
     promoted = reviewed.promoted
     hold = reviewed.hold
     settled = [...settled, ...reviewed.settled]
@@ -324,34 +249,34 @@ export async function fold(
   // The confirm ops are recomputed when the fold lands (fold-job), since the user may answer the question while this fold runs.
   const asks = fallback ? [] : claimed.filter(op => !finishedEarlier(op))
   const asking = confirmQuestion(asks, ops, view.issues, view.doneTitles)
-  notes = rememberFacts(notes, facts, retracted)
-  const preserved = preserveInstructions(notes, storedInstructions, plan.dropped, await io.ledgerPath(), withdrawn)
+  const preserved = carryLegacyInstructions(notes, storedInstructions, plan.dropped, await io.ledgerPath())
   notes = rememberPreserved(rememberOversize(preserved.notes, oversizeLines(plan.tail, plan.cuts)), kept)
   let fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
   const seq = meta.seq + 1
+  const addressIndex = await io.addressRows(clauseKey)
+  const sourceRow = (ref: string): SessionMessage | undefined => {
+    const user = /^m(\d+)$/.exec(ref)
+    if (user) return plan.dropped[Number(user[1]) - 1]
+    const index = rows.findIndex(row => row.toolResults?.some(result => result.tool_use_id === ref))
+    for (let i = index; i >= 0; i--) if (isUserTyped(rows[i]!)) return rows[i]
+  }
+  const resolvedOps: FoldClauseOp[] = clauseOps.flatMap(op => {
+    if ('retract' in op) return [op]
+    const proof = op.evidence[0]
+    const row = (proof ? sourceRow(proof.ref) : undefined) ?? [...rows].reverse().find(isUserTyped)
+    if (!row) return []
+    const address = [...addressIndex].reverse().find(item => stripReminders(item.text) === stripReminders(row.text))
+    const source = proof ? range.sources.get(proof.ref) : undefined
+    return [{ clause: op.clause, kind: op.kind, text: op.text, issue: op.issue, key: op.key,
+      promptSeq: address?.promptSeq ?? seq, address: address?.address ?? '@unknown',
+      ...(proof ? { evidence: { ref: proof.ref, quote: proof.quote, ...(source?.tool ? { tool: source.tool } : {}) } } : {}),
+    }]
+  })
+  const clauses = resolvedOps.length ? applyFoldClauseOps(baseClauses, resolvedOps, await io.nowIso()) : baseClauses
   const currentView = await io.trackerView(here, [...ops, ...asking, ...promoted])
   const currentEvents = await io.readAll()
   const focusState = focusOf(currentEvents, here.session)
-  const focusIssue = focusState.stack.at(-1) ?? null
-  const previousTopics = (await io.storedTopics(notesOf(previous), meta.seq, transcript ?? `${here.session}:main`))
-    .map(topic => topic.focusIssue === undefined ? { ...topic, focusIssue } : topic)
-  if (prepared) {
-    const freshTopics = prepared.topics.map(topic => ({ ...topic, sourceTokens: topicTokens(topic), seq, focusIssue }))
-    const compressed = await compressTopics(io, opts, [...previousTopics, ...freshTopics], seq, notes, currentView.issues, transcript ?? `${here.session}:main`)
-    notes = notesWithTopics(notes, compressed.topics)
-    fullNotes = notesWithTopics(fullNotes, compressed.topics)
-    topics = compressed.topics
-  } else {
-    const goal = sectionBody(notes, '목표')
-    if (goal && goal !== '- (none yet)') {
-      const focus = currentView.issues.find(issue => issue.id === focusIssue)
-      const latest: TopicState = { topic: focus?.title ?? '현재 작업', summary: goal, seq, sourceTokens: estTokens({ role: 'user', text: goal, toolUses: [] }), focusIssue }
-      topics = [...previousTopics.filter(topic => topic.focusIssue !== focusIssue), latest]
-      notes = notesWithTopics(notes, topics)
-      fullNotes = notesWithTopics(fullNotes, topics)
-    } else topics = previousTopics
-  }
-  const preview = await io.residentLedger(transcript ?? `${here.session}:main`, currentView.issues, focusState, currentEvents, { notes: fullNotes, topics, issues: currentView.issues, state: focusState })
+  const preview = await io.residentLedger(clauseKey, currentView.issues, focusState, currentEvents, { notes: fullNotes, topics, issues: currentView.issues, state: focusState, clauses })
   const text = ledgerRowText(seq, kst(), await io.ledgerPath(), preview, opts.ledgerTarget)
   const tokensBefore = messageTokens(rows, observed, meta)
   const tokensAfter = sum(buildCleared(plan, { role: 'user', text, toolUses: [] }))
@@ -364,5 +289,5 @@ export async function fold(
   }
   if (Object.keys(plan.cuts).length) await io.logEvent('truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
   if (calib !== undefined) meta.overhead = boundedOverhead(calib - estimated, meta)
-  return { plan, notes, fullNotes, ops, asks, seq, fallback, promoted, hold, settled, topics, tailTokens }
+  return { plan, notes, fullNotes, ops, asks, seq, fallback, promoted, hold, settled, topics, clauses, tailTokens }
 }

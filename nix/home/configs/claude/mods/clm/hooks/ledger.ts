@@ -57,7 +57,7 @@ export const oversizeLines = (tail: readonly SessionMessage[], cuts: Record<stri
     .map(u => `- ${OVERSIZE_MARK} ${clip(oneLine(`${u.tool} ${JSON.stringify(u.input ?? {})}`), 70)}`)
 
 // The merged half of the ledger: the sections the merge model rewrites, 목표
-// alone. 사용자 지시 is owned by preserveInstructions and 핵심 사실·경로 by
+// alone. Legacy 사용자 지시 are carried only until clause migration; 핵심 사실·경로 by
 // rememberFacts, so each of their lines traces to a quote; the other three
 // sections come from the tracker.
 const INSTRUCTIONS = '사용자 지시'
@@ -171,7 +171,7 @@ export type PreservedInstructions = { notes: string; fullNotes: string }
  * plus every prompt in `dropped`, each once by instructionKey. Visible notes
  * omit `withdrawn` instructions; `fullNotes` keeps them marked for the ledger file.
  */
-export function preserveInstructions(
+export function carryLegacyInstructions(
   notes: string, prior: readonly string[], dropped: readonly SessionMessage[], _pointer: string,
   withdrawn: readonly string[] = [],
 ): PreservedInstructions {
@@ -247,7 +247,7 @@ export function ageDecayPlan(topics: readonly AgeDecayTopic[], budget: number): 
 }
 
 // Deterministic stand-in when the merge model keeps failing: the notes stay as
-// they were (preserveInstructions adds the dropped prompts) plus one marked line
+// they were (carryLegacyInstructions adds the dropped prompts) plus one marked line
 // saying turns were folded unsummarized. No reviewer saw those turns, so they
 // add no tracker item: an open item would read as work still pending.
 export function fallbackLedger(prevNotes: string, dropped: readonly SessionMessage[]): string {
@@ -259,66 +259,44 @@ export function fallbackLedger(prevNotes: string, dropped: readonly SessionMessa
 const EVIDENCE_FIELD = '"evidence":[{"ref":"<ref>","quote":"<text copied exactly from that row>"}]'
 // clm-prompt
 export const MERGE_SYSTEM = [
-  'You keep the working ledger of a coding session whose oldest turns are about to be deleted.',
-  'You receive the goal notes, the user\'s standing instructions, the recorded key facts, the open issues of this session\'s tracker, and the turns being removed.',
+  'You convert the oldest turns of a coding session into tracker changes and typed clauses before those turns are deleted.',
+  'You receive registered predicates, live clauses, open tracker issues and the turns being removed.',
   'In <removed_turns> a user message is headed `[user mN]` and a tool result `<- [id]`; mN and id are refs you cite. Write a ref as that bare key and nothing else: `m4` for the row headed `[user m4 2026-10-15 14:03 KST]`, `toolu_01AbC` for the row headed `<- [toolu_01AbC]`. Assistant rows carry no ref: they show what the assistant said or proposed, and the tool results and the user\'s words show what actually happened.',
   'A row whose send time is known carries it in its header after the role and ref, as `YYYY-MM-DD HH:MM KST`.',
   'When a message you cite or summarize uses a relative time expression (내일, 어제 밤, 2시간 뒤), write the absolute KST date right after the original words as `<original>(=YYYY-MM-DD)`, computed from that message\'s own header time; for a sub-day expression write `<original>(=YYYY-MM-DD HH:MM)`. Keep the expression as written when its message carries no time.',
-  `Reply with the updated notes and then \`<ops>\`, starting directly with the heading ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')} and writing the notes as plain markdown.`,
-  '- 목표: what the session is trying to achieve, updated if the turns changed it.',
-  'Then `<ops>` holding a JSON array of changes the removed turns show, and `</ops>`. Each op is one of:',
+  'Return one JSON object with an ops array. Each op is one of:',
   `  {"op":"create","title":"<one line>","status":"todo|doing|done|question","note":"<one line>",${EVIDENCE_FIELD}}`,
   `  {"op":"status","issue":"<id from the issues>","status":"todo|doing|done|question|dropped",${EVIDENCE_FIELD}}`,
   '  {"op":"retitle","issue":"<id from the issues>","title":"<new one line title>"}',
   '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
   '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
-  `  {"op":"fact","kind":"constraint|learned","text":"<a fact with a quote for a later step>",${EVIDENCE_FIELD}}`,
-  '  {"op":"retract","fact":"<one line of <facts>, copied exactly>"} when the removed turns show that fact no longer holds.',
-  '  {"op":"withdraw","instruction":"<one line of <instructions>, copied exactly>"} when the removed turns show the user taking that instruction back.',
+  `  {"clause":"<restricted Prolog>","kind":"fact","text":"<one Korean sentence>",${EVIDENCE_FIELD}}`,
+  '  {"clause":"goal(\'issue-id\', slug).","kind":"goal","text":"<one Korean sentence>","issue":"<issue id>"}',
+  '  {"retract":"<C-id from live_clauses>"} when a newer fact or goal makes it stale.',
   'Every done (a create with status done, or a status op to done) and every fact carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
   'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
   'A fact stands when the cited row states it. Mark a stable constraint or preference discovered in tool output as kind constraint; mark a lesson from a failure or user correction as kind learned.',
   'A constraint carries a quote from a tool result. A learned item carries the failed result or the user correction verbatim as its quote.',
   'Every id, number and date in one claim comes from the same row and names the same object as that row; a `(=...)` date beside a relative expression comes from that row\'s header time plus the expression.',
-  'The harness keeps the user\'s instructions itself; the prompts in the removed turns are added to them for you.',
+  'A clause with kind instruction is outside your authority. Use only fact and goal.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'For each existing issue changed by the turns, write an update using its existing id so its history stays attached. Omit an op for each unchanged issue. Items listed under <legacy> have no issue yet: create one for each that still holds.',
   'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
   'When the user resumes a dropped direction, move that dropped issue back to todo or doing by its id; it keeps its id and history that way.',
   'Keep the recorded state of each step listed under <finished_earlier>.',
-  'Write `<ops>[]</ops>` when nothing changed.',
-  'Keep session-relevant goals, decisions, facts and work, using the latest state when later turns supersede earlier details. Keep the notes under 300 words.',
-  'Write the 목표 notes, every title, note and fact text in Korean, keeping code identifiers, paths and commands verbatim.',
+  'An open option becomes a tracker create op with status question, not a fact.',
+  'Write {"ops":[]} when nothing changed. Write titles, notes and clause text in Korean, keeping code identifiers, paths and commands verbatim.',
+  'Reply with the JSON object and nothing else.',
 ].join('\n')
 
 // clm-prompt
 export const SPLIT_MERGE_SYSTEM = [
-  MERGE_SYSTEM.split('\n').filter(line =>
-    !line.startsWith('Reply with the updated notes')
-    && !line.startsWith('Then `<ops>`')
-    && !line.startsWith('Write `<ops>[]'),
-  ).join('\n'),
-  'You also receive numbered complete turns with estimated token counts. Return one JSON object with split, notes, ops and topics fields.',
+  MERGE_SYSTEM,
+  'You also receive numbered complete turns with estimated token counts. Return one JSON object with split and ops fields.',
   'Inside <queue_turns>, cite a user row by its bare mN key (`m4`) and a tool result by its bare id (`toolu_01AbC`) in the ops evidence, the same ref format as in <removed_turns>.',
   'Set split to the 1-based first turn of B. Turns before split form A, and A contains at least one whole turn about a finished topic. Choose a boundary where the turns from split onward form the topic still in progress.',
-  'Summarize only A into notes, ops and topic summaries. The caller keeps B from its numbered turn boundary verbatim.',
-  `Set notes to the required plain-markdown note sections headed ${NOTE_SECTIONS.map(s => `"## ${s}"`).join(', ')}; set ops to the JSON array of changes supported by A.`,
-  'Set topics to an array of {topic, summary} records for A, preserving distinct topics as separate entries and using concise summaries.',
-  'Summarize only the focus topic that remains active after A in the 목표 notes; keep each closed topic in its own concise topic record.',
-  'Reply with only JSON: {"split":2,"notes":"## 목표\\n...","ops":[],"topics":[{"topic":"...","summary":"..."}]}.',
-].join('\n')
-
-// clm-prompt
-export const LEDGER_COMPACT_SYSTEM = [
-  'You compact the topic summaries that make up a coding session ledger.',
-  'Each topic record gives its topic, summary, last-written fold sequence, and estimated token count. New summaries also include their token counts.',
-  'Each topic has a focusIssue field naming the tracker issue whose focus it describes, or null for work with no focused issue. Keep every summary scoped to that focusIssue.',
-  'Return one JSON object with a topics array of {topic, summary, seq, focusIssue} records.',
-  'Fit the complete ledger within the supplied token budget. Give recent topics more room and re-summarize older topics more tightly.',
-  'Merge recurring topics into one entry only when their focusIssue matches. Keep a closed topic as its outcome and key facts.',
-  'Keep distinct topics distinct and preserve their supported facts and outcomes.',
-  'Use the supplied fold sequence for each topic whose summary you rewrite; retain an earlier sequence for a topic whose summary stays unchanged.',
-  'Reply with only JSON: {"topics":[{"topic":"...","summary":"...","seq":1,"focusIssue":null}]}.',
+  'Summarize only A into ops. The caller keeps B from its numbered turn boundary verbatim.',
+  'Reply with only JSON: {"split":2,"ops":[]}.',
 ].join('\n')
 
 // clm-prompt
@@ -352,45 +330,60 @@ export function parseChanges(reply: string): string[] {
   const body = /<changes>([\s\S]*?)(?:<\/changes>|$)/.exec(reply)?.[1] ?? ''
   return body.split('\n').map(line => line.trim()).filter(line => line && !/[<>]/.test(line)).slice(0, 3).map(line => clip(line, 80))
 }
-type Withdraw = { op: 'withdraw'; instruction: string }
-const isWithdraw = (o: unknown): o is Withdraw =>
-  typeof o === 'object' && o !== null && 'op' in o && o.op === 'withdraw' && 'instruction' in o && typeof o.instruction === 'string'
 const isOp = (o: unknown, op: string): o is Record<string, unknown> => typeof o === 'object' && o !== null && 'op' in o && o.op === op
-export type Merge = { notes: string; ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; retracted: string[]; withdrawn: string[]; rejected: number }
+export type FoldClauseDraft = { clause: string; kind: 'fact' | 'goal'; text: string; evidence: Evidence[]; issue?: string; key?: number }
+const isFoldClauseDraft = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+  && 'clause' in value && typeof value.clause === 'string' && 'text' in value && typeof value.text === 'string'
+  && 'kind' in value && (value.kind === 'fact' || value.kind === 'goal')
+export type Merge = { notes?: string; ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; clauseOps: (FoldClauseDraft | { retract: string })[]; retracted: string[]; rejected: number }
 /**
  * Splits a merge reply into notes, validated tracker ops (with the evidence
- * each cited), proposed facts, retracted facts and withdrawn instructions, or
- * says why it is unusable. A withdraw naming no line of `instructions`, a
- * retract naming no line of `facts`, and a fact with no text are dropped and
+ * each cited), proposed facts and retracted facts, or says why it is unusable.
+ * A retract naming no line of `facts` and a fact with no text are dropped and
  * counted as rejected. Evidence is only read here; the caller checks it.
  */
-export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number, instructions: readonly string[] = [], facts: readonly string[] = []): Merge | string {
+export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number, facts: readonly string[] = []): Merge | string {
   const m = /<ops>([\s\S]*?)<\/ops>/.exec(reply)
-  if (!m) return 'reply has no <ops>…</ops> block'
-  const notes = normalizeLedger(reply.slice(0, m.index))
-  const heads = [...notes.matchAll(/^##\s+(.+?)\s*$/gm)].map(h => h[1])
-  if (heads.join('|') !== NOTE_SECTIONS.join('|')) return `headers were [${heads.join(', ')}], expected the ${NOTE_SECTIONS.length} note sections in order`
-  const notesTokens = estTokens({ role: 'user', text: notes, toolUses: [] })
-  if (notesTokens > maxTokens) return `notes are ~${notesTokens}t, over the ${maxTokens}t cap`
+  let notes: string | undefined
   let rawOps: unknown
-  try { rawOps = JSON.parse(normalizeLedger(m[1] ?? '')) } catch (err) { return 'ops are not JSON (' + String(err).slice(0, 80) + ')' }
+  if (m) {
+    notes = normalizeLedger(reply.slice(0, m.index))
+    const heads = [...notes.matchAll(/^##\s+(.+?)\s*$/gm)].map(h => h[1])
+    if (heads.join('|') !== NOTE_SECTIONS.join('|')) return `headers were [${heads.join(', ')}], expected the ${NOTE_SECTIONS.length} note sections in order`
+    const notesTokens = estTokens({ role: 'user', text: notes, toolUses: [] })
+    if (notesTokens > maxTokens) return `notes are ~${notesTokens}t, over the ${maxTokens}t cap`
+    try { rawOps = JSON.parse(normalizeLedger(m[1] ?? '')) } catch (err) { return 'ops are not JSON (' + String(err).slice(0, 80) + ')' }
+  } else {
+    try {
+      const value: unknown = JSON.parse(normalizeLedger(reply))
+      rawOps = typeof value === 'object' && value !== null && 'ops' in value ? value.ops : undefined
+    } catch (err) { return 'reply is not JSON (' + String(err).slice(0, 80) + ')' }
+  }
   if (!Array.isArray(rawOps)) return 'ops are not a JSON array'
-  const current = new Set(instructions.map(instructionKey))
-  const withdraws = rawOps.filter(isWithdraw)
-  const withdrawn = withdraws.map(o => o.instruction).filter(t => current.has(instructionKey(t)))
+  const clauseDrafts: FoldClauseDraft[] = rawOps.filter(isFoldClauseDraft).map(o => ({
+    clause: String(o.clause), kind: o.kind as 'fact' | 'goal', text: oneLine(String(o.text)).slice(0, 200), evidence: readEvidence(o.evidence),
+    ...(typeof o.issue === 'string' ? { issue: o.issue } : {}), ...(typeof o.key === 'number' ? { key: o.key } : {}),
+  }))
+  const clauseRetracts = rawOps.flatMap(o => typeof o === 'object' && o !== null && 'retract' in o && typeof o.retract === 'string' ? [{ retract: o.retract }] : [])
   const factOps = rawOps.filter(o => isOp(o, 'fact'))
   const proposed = factOps.flatMap(o => (typeof o.text === 'string' && o.text.trim() ? [{
     text: oneLine(o.text.trim()).slice(0, 300), evidence: readEvidence(o.evidence),
     kind: o.kind === 'constraint' ? 'constraint' as const : 'learned' as const,
   }] : []))
+  const legacyClauseFacts: FoldClauseDraft[] = proposed.map(fact => {
+    let hash = 2166136261
+    for (const char of fact.text) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
+    return { clause: `legacy_fact('F${(hash >>> 0).toString(16)}').`, kind: 'fact', text: fact.text, evidence: fact.evidence }
+  })
   const knownFacts = new Set(facts.map(instructionKey))
   const retractOps = rawOps.filter(o => isOp(o, 'retract'))
   const retracted = retractOps.flatMap(o => (typeof o.fact === 'string' && knownFacts.has(instructionKey(o.fact.replace(/^\s*-\s*/, ''))) ? [o.fact] : []))
-  const tracker = rawOps.filter(o => !isWithdraw(o) && !isOp(o, 'fact') && !isOp(o, 'retract'))
+  const tracker = rawOps.filter(o => !isFoldClauseDraft(o) && !(typeof o === 'object' && o !== null && 'retract' in o) && !isOp(o, 'fact') && !isOp(o, 'retract'))
   const ops = parseOps(JSON.stringify(tracker), known)
   if (typeof ops === 'string') return ops
-  const rejected = ops.rejected + withdraws.length - withdrawn.length + factOps.length - proposed.length + retractOps.length - retracted.length
-  return { notes, ops: ops.ops, evidence: ops.evidence, facts: proposed, retracted, withdrawn, rejected }
+  const clauseFacts = clauseDrafts.filter(item => item.kind === 'fact').map(item => ({ text: item.text, evidence: item.evidence }))
+  const rejected = ops.rejected + factOps.length - proposed.length + retractOps.length - retracted.length
+  return { ...(notes === undefined ? {} : { notes }), ops: ops.ops, evidence: ops.evidence, facts: [...proposed, ...clauseFacts], clauseOps: [...clauseDrafts, ...legacyClauseFacts, ...clauseRetracts], retracted, rejected }
 }
 
 // --- review -------------------------------------------------------------------

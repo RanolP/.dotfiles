@@ -1,6 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 import { isLedgerRow, isSystemRow, isUserTyped, protectedIndex, sum } from '../hooks/fold'
-import { LEDGER_COMPACT_SYSTEM, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from '../hooks/ledger'
+import { REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from '../hooks/ledger'
 import { isRecord } from '../hooks/tracker'
 
 type Kind = 'instruction' | 'decision' | 'focus' | 'fact' | 'stack'
@@ -15,12 +15,6 @@ export const QUEUE_TARGET = 8_000
 const OPTIONS = { budget: 32_000, tailTarget: 1_800, queueTarget: QUEUE_TARGET, ledgerTarget: 900, reserve: 1_000, model: 'haiku', reviewModel: 'haiku' }
 const normalize = (text: string) => text.replace(/\s+/g, ' ').trim().toLocaleLowerCase()
 const rowText = (row: SessionMessage) => [row.text, ...row.toolUses.map(use => `${use.tool} ${JSON.stringify(use.input ?? {})}`), ...(row.toolResults ?? []).map(result => result.text)].join('\n')
-
-function compressTopicEntries(prompt: string): string {
-  const body = /<topic_entries>\s*([\s\S]*?)\s*<\/topic_entries>/.exec(prompt)?.[1]?.trim() ?? ''
-  const topics = body && body !== '(none)' ? body.split('\n').map(line => JSON.parse(line)) : []
-  return JSON.stringify({ topics })
-}
 
 function installHarness(
   on: On, current: () => Fixture, files: Record<string, string>, store: Record<string, unknown>, logs: string[],
@@ -78,7 +72,6 @@ function installHarness(
       if (!reply || reply.fixture !== current().id || typeof reply.reply !== 'string') throw new Error(`missing recorded reply for ${current().id}`)
       return { value: { isAnswered: true, text: reply.reply, usage: {} } }
     }
-    if (event.system === LEDGER_COMPACT_SYSTEM) return { value: { isAnswered: true, text: compressTopicEntries(event.prompt), usage: {} } }
     if (event.system === REVIEW_SYSTEM) return { value: { isAnswered: true, text: '{"verdicts":[]}', usage: {} } }
     logs.push(`unmocked model.complete: ${event.system.slice(0, 100)}`)
     return next(event)
@@ -169,6 +162,9 @@ function residentText(messages: readonly SessionMessage[]): string {
   if (ledgerIndex < 0) throw new Error('fold result has no ledger row')
   return [messages[ledgerIndex]!.text, ...messages.slice(ledgerIndex + 1).map(rowText)].join('\n')
 }
+
+export const residentTokenEstimate = (messages: readonly SessionMessage[]): number =>
+  sum([{ role: 'user', text: residentText(messages), toolUses: [] }])
 
 function recalledText(address: string, fixture: Fixture): string[] {
   const rowRef = /^m(\d+)$/i.exec(address)

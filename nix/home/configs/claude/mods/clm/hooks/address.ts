@@ -10,7 +10,7 @@ import { clauseStoreKey, readClauseStore, recallClauses } from './clauses'
 // from some point on resolves older rows to @unknown.
 
 /** A human prompt as clm saw it at prompt.submit, with the address clm coined for it. */
-type AddressRow = { address: string; text: string; at: string }
+export type AddressRow = { address: string; text: string; at: string; promptSeq?: number }
 /** First-seen time of a message fingerprint; `at` is null once two sends share it. */
 type Stamp = { at: string | null; n: number }
 type AddressIndex = { rows: AddressRow[]; stamps: Record<string, Stamp> }
@@ -49,12 +49,12 @@ export async function addressRows(io: AddressIo, key: string): Promise<AddressRo
 }
 
 /** Records a human prompt and returns the address coined for it. */
-export async function recordPrompt(io: AddressIo, key: string, text: string, at: string): Promise<string> {
+export async function recordPrompt(io: AddressIo, key: string, text: string, at: string, promptSeq?: number): Promise<string> {
   const index = await readIndex(io, key)
   const taken = new Set(index.rows.map(row => row.address))
   let address = coin(`${key}\0${index.rows.length}\0${at}\0${text}`)
   for (let salt = 1; taken.has(address); salt++) address = coin(`${key}\0${index.rows.length}\0${at}\0${text}\0${salt}`)
-  await io.set(addressIndexKey(key), { ...index, rows: [...index.rows, { address, text, at }].slice(-MAX_ROWS) })
+  await io.set(addressIndexKey(key), { ...index, rows: [...index.rows, { address, text, at, ...(promptSeq === undefined ? {} : { promptSeq }) }].slice(-MAX_ROWS) })
   return address
 }
 

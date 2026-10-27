@@ -22,14 +22,14 @@ import {
 } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
-import { compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
+import { backfillClauses as backfillClauseStore, compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, popLater, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
-import { ensureInstructionIndex as ensureResidentInstructionIndex, residentLedger as renderResidentLedger, type ResidentIo } from './resident'
+import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, storedTopics as storedTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
-import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
+import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
 import { registerResources } from './resources'
 
 export { recallRows } from './address'
@@ -154,7 +154,7 @@ const topicsKey = async ($: EngineInterface, key?: string) => {
 const requestsKey = (key: string) => `requests:${key}`
 
 const SESSION_STORE_PREFIXES = new Set([
-  'address-index', 'agent-task-roots', 'agent-task-step-claims', 'headAttachments', 'held', 'instruction-index', 'issue-addresses',
+  'address-index', 'agent-task-roots', 'agent-task-step-claims', 'clause-backlog', 'clauses', 'headAttachments', 'held', 'instruction-index', 'issue-addresses',
   'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows',
 ])
 const SESSION_STATE_MAX_CHARS = 4_194_304
@@ -871,14 +871,11 @@ async function storedTopics($: EngineInterface, notes: string, seq: number, key?
 
 const residentIo = ($: EngineInterface): ResidentIo => ({
   get: key => sessionStoreGet($, key),
-  set: (key, value) => sessionStoreSet($, key, value),
-  addressRows: key => addressRows(addressIo($), key),
   readLedger: async () => readText($, await ledgerPath($)),
   readMeta: () => readMeta($),
   storedTopics: (notes, seq, key) => storedTopics($, notes, seq, key),
   readRequests: key => readRequests($, key),
 })
-const ensureInstructionIndex = ($: EngineInterface, key: string, notes: string) => ensureResidentInstructionIndex(residentIo($), key, notes)
 const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } } = {}) =>
   renderResidentLedger(residentIo($), key, issues, state, events, preview)
 
@@ -895,6 +892,7 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   serialize: (session, run) => serialized(session, run),
   syncPanel: (origin, events) => syncPanelSafely($, origin, events),
   log: (text, options) => $.ui.log(text, options),
+  logEvent: (event, fields) => logEvent($, event, fields),
 })
 const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number, address?: string) => classifyPrompt(intentIo($), text, promptSeq, address)
 
@@ -959,6 +957,7 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   fileExists: path => $.fs.exists(path),
   fileList: path => $.fs.list(path),
   run: (args, options) => $.process.run(args, options),
+  storeGet: key => sessionStoreGet($, key),
   storeSet: (key, value) => sessionStoreSet($, key, value),
   storeDelete: key => sessionStoreDelete($, key),
   pendingKey: key => pendingKey($, key),
@@ -967,7 +966,7 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   readAll: () => readAll($),
   trackerView: (origin, ops) => trackerView($, origin, ops),
   updateHeld: (settled, hold) => updateHeld($, settled, hold),
-  ensureInstructionIndex: (key, notes) => ensureInstructionIndex($, key, notes),
+  backfillClauses: key => backfillClauseStore(intentIo($), key.split(':', 1)[0] ?? key, key),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
   append: (payloads, origin, project, knownTitles) => append($, payloads, origin, project, knownTitles),
   projectPanel: (origin, events) => projectPanel($, origin, events),
@@ -1018,7 +1017,7 @@ const mainTurnCompletionIo = ($: EngineInterface, opts: Opts): MainTurnCompletio
 // clm-prompt
 const GUIDE = [
   'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
-  'That row is a Haiku summary: the goal, the user\'s instructions verbatim, what was done, what is left, open questions and key facts, each completed task and key fact citing a quote from the user or a tool result. The turns it replaced are gone.',
+  'That row carries the goal, live user instructions as plaintext clauses with C-ids, what was done, what is left, open questions and key facts. An engine summary is followed by a "[clm clauses]" row with the same live instructions. The turns they replaced are gone.',
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
 ].join('\n')
@@ -1067,7 +1066,7 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_recall',
-        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last. Includes rows folded from the live context and rows on rewound branches.',
+        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last; read one stored instruction with #C12 or all stored instructions with clauses. Includes folded and rewound history.',
         inputSchema: { type: 'object', properties: { address: { type: 'string' } }, required: ['address'], additionalProperties: false },
       })
     } catch (err) {
@@ -1160,7 +1159,10 @@ export const register: Register = (on, options) => {
   // The engine and the turn-end check share one per-transcript job.
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
-    if (e.trigger === 'plugin' && forceCompacts.delete(transcriptKey(await sid($)))) return next(e)
+    if (e.trigger === 'plugin' && forceCompacts.delete(transcriptKey(await sid($)))) {
+      const key = transcriptKey(await sid($))
+      return handOffFoldJob(foldJobIo($, loadedFromPath), key, () => next(e), 'force-compact requested')
+    }
     if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
     if (loadedFromPath !== undefined) {
       const loadedFrom = loadedFromPath

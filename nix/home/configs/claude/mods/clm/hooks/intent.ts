@@ -8,7 +8,7 @@ import { instructionKey, normalizeLedger, WITHDRAWN_PREFIX } from './ledger'
 import { instructionIndexKey, issueAddressKey, isInstructionIndex } from './resident'
 import type { LogEvent, LogFields } from './events'
 import {
-  applyClauses, applyRetract, clauseBacklogKey, clauseStoreKey, emptyClauseStore, isBacklogEntry, livePredicates, parseClause, readClauseStore,
+  applyClauses, applyRetract, clauseBacklogKey, clauseQuoteOverlaps, clauseStoreKey, emptyClauseStore, isBacklogEntry, livePredicates, parseClause, readClauseStore,
   type BacklogEntry, type Clause, type ClauseStore, type IncomingClause,
 } from './clauses'
 
@@ -53,26 +53,7 @@ export function supportedRequestQuote(quote: string, sourceText: string, kind: S
 }
 
 export function laterSupported(item: string, prompt: string): boolean {
-  const grams = (text: string) => {
-    const chars = [...text.replace(/\s/gu, '').toLocaleLowerCase()]
-    const counts = new Map<string, number>()
-    for (let i = 0; i + 1 < chars.length; i++) {
-      const first = chars[i], second = chars[i + 1]
-      if (first === undefined || second === undefined) continue
-      const gram = first + second
-      counts.set(gram, (counts.get(gram) ?? 0) + 1)
-    }
-    return counts
-  }
-  const itemGrams = grams(item), promptGrams = grams(prompt)
-  if (!itemGrams.size) return prompt.replace(/\s/gu, '').toLocaleLowerCase().includes(item.replace(/\s/gu, '').toLocaleLowerCase())
-  let matched = 0
-  let total = 0
-  for (const [gram, count] of itemGrams) {
-    total += count
-    matched += Math.min(count, promptGrams.get(gram) ?? 0)
-  }
-  return matched / total >= 0.5
+  return clauseQuoteOverlaps(item, prompt)
 }
 
 export function supportedLaterDrop(drop: number[] | 'all', prompt: string): number[] | 'all' {
@@ -545,7 +526,7 @@ async function landClauses(
  * instruction index enqueues it once, then prompts an earlier classifier
  * never answered are backfilled so this one sees their heads.
  */
-async function backfillClauses(io: PromptIntentIo, session: string, key: string): Promise<void> {
+export async function backfillClauses(io: PromptIntentIo, session: string, key: string): Promise<void> {
   if (await io.get(clauseStoreKey(key)) === undefined) {
     const raw = await io.get(instructionIndexKey(key))
     const legacy = (Array.isArray(raw) ? raw.filter(isInstructionIndex) : []).filter(item => !item.text.startsWith(WITHDRAWN_PREFIX))

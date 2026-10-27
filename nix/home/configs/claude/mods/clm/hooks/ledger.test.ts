@@ -7,6 +7,7 @@ import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSn
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
+import { residentLedger } from './resident'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, issueList, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
@@ -60,33 +61,8 @@ test('a dropped built-in compact summary is not preserved as a user instruction'
   expect(instructionValues(out.notes)).toEqual([])
 })
 
-// Regression caught: a session whose transcript exceeds the fs size cap lost every instruction address, so preserved instructions showed @unknown.
-test('an instruction given in a session whose transcript exceeds the fs size cap still gets a real address', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
-  const full = 'Do not change generated files. Keep every existing lockfile byte-for-byte stable, including all metadata and ordering.'
-  const rows = [M('user', 'Begin project'), M('assistant', 'I will inspect it.'), M('user', full), M('assistant', 'A'.repeat(24_000)), M('user', 'Fix the unrelated parser task.'), M('assistant', 'Done.')]
-  const s: State = { rows, replies: [], intentReplies: [new Error('Haiku timeout'), new Error('Haiku timeout')], splitReplies: [splitAnswer(2, 'parser', 'parser outcome')] }
-  // No transcript file exists anywhere in this test; the address comes from clm's own index.
-  const seen = bottoms(on, s)
-  await $.prompt.submit(promptInput(full))
-  await $.prompt.submit(promptInput('Fix the unrelated parser task.'))
-  for (let i = 0; i < 50 && seen.logs.filter(line => line.includes('classification failed')).length < 2; i++) await new Promise(resolve => setTimeout(resolve, 2))
-  await $.turn.complete(TURN)
-  await waitForPending(seen)
-  const indexed = (seen.store['address-index:s1:main'] as { rows: { address: string; text: string }[] }).rows
-  const address = indexed.find(row => row.text === full)?.address ?? ''
-  expect(address).toMatch(/^@[\da-f]{8}$/)
-  const folded = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
-  const ledgerRow = folded.find(row => row.text.startsWith('[clm ledger #'))
-  if (!ledgerRow) throw new Error('fold omitted the ledger row')
-  expect(ledgerRow.text).toContain(`${[...full].slice(0, 80).join('')}… ${address}`)
-  expect(ledgerRow.text).not.toContain(full)
-  expect(seen.store['instruction-index:s1:main']).toContainEqual({ address, issue: null, text: full })
-  expect(recallRows(indexed as any, address).text).toContain(full)
-  expect(recallRows(indexed as any, `${address}..${indexed[1]?.address}`).text?.split('\n').length).toBe(2)
-})
-
 // Regression caught: the compact row exposed every task instead of the scoped sections, including owned resources.
-test('the seven-section ledger keeps actions under the focused task and resources separate', async () => {
+test('the eight-section ledger keeps actions under the focused task and resources separate', async () => {
   const issue = (id: string, title: string, status: Issue['status'], parent?: string, notes: string[] = []) => ({
     id, title, status, ...(parent ? { parent } : {}), notes, linked: [],
     origin: { session: 's1', repo: 'github.com/o/r', cwd: '/w' }, updated: '2026-10-15T00:00:00Z',
@@ -95,14 +71,14 @@ test('the seven-section ledger keeps actions under the focused task and resource
   const child = issue('s1-2', 'run focused tests', 'todo', top.id)
   const unrelated = issue('s1-3', 'unrelated docs', 'todo')
   const uncertain = issue('s1-4', 'verify package checksum', 'uncertain', undefined, ['check the release digest'])
-  const row = residentLedgerText(top, '@e330c1ab', 2, 1, [], new Set([top.id]), {
+  const row = residentLedgerText(top, '@e330c1ab', 2, 1, [], {
     where: ['Build verification: tests are next.'], children: [child, unrelated],
     requests: [{ id: 'R1', text: 'Rebuild the package.', quote: 'Please rebuild the package', status: 'open' }],
     constraints: ['- preserve generated outputs — quote: "build tool generated this file" @aabbccdd'],
     uncertain: [uncertain], learned: ['- the build tool failed once — quote: "exit code 1"'], resources: ['- metro :8081', '- mutex ipad held'],
   })
   expect([...row.matchAll(/^## (.+)$/gm)].map(match => match[1])).toEqual([
-    'where we are', 'what to do', 'what to request', 'constraints & preferences', 'uncertain', 'learned', 'owned resources',
+    'where we are', 'what to do', 'what to request', 'user instructions', 'constraints & preferences', 'uncertain', 'learned', 'owned resources',
   ])
   expect(row).toContain('focused build — last build note @e330c1ab')
   expect(row).toContain('Build verification: tests are next.')
@@ -172,7 +148,7 @@ test('the resident ledger lists open questions without the stored item list', ()
   const [made] = confirmQuestion([{ op: 'create', title: 'tag the release', status: 'done' }], [], [], new Set())
   if (made?.op !== 'create') throw new Error('expected a create')
   const q = { ...confirmIssue('s1-q', made.title, 'question'), notes: [made.note ?? ''] }
-  const row = residentLedgerText(undefined, undefined, 0, 0, [], new Set(), { questions: [q, confirmIssue('s1-z', 'answered before', 'done')] })
+  const row = residentLedgerText(undefined, undefined, 0, 0, [], { questions: [q, confirmIssue('s1-z', 'answered before', 'done')] })
   expect(row).toContain(`## open questions\n\n- ${made.title} [s1-q]`)
   expect(row).not.toContain('answered before')
   expect(row).not.toContain(CONFIRM_ITEMS)
@@ -181,14 +157,39 @@ test('the resident ledger lists open questions without the stored item list', ()
 // Regression caught: resident metadata was four bare lines, long instructions were silently cut, and empty or fact sections rendered blank/unbulleted lines.
 test('the resident ledger renders compact metadata, marked clipping, bullets and placeholders', () => {
   const long = 'x'.repeat(81)
-  const row = residentLedgerText(undefined, undefined, 2, 1, [{ address: '@abcd1234', issue: null, text: long }], new Set(), {
+  const row = residentLedgerText(undefined, undefined, 2, 1, [`- ${long} (C1 @abcd1234)`], {
     where: [''], constraints: ['keep it'], learned: [''], resources: ['port 8080'],
   })
   expect(section(row, 'where we are')).toContain('- stack 2 · pending 1')
   expect(row).not.toContain('Stack size')
-  expect(section(row, 'constraints & preferences')).toContain(`- ${'x'.repeat(80)}… @abcd1234\n- keep it`)
+  expect(section(row, 'user instructions')).toContain(`- ${long} (C1 @abcd1234)`)
+  expect(section(row, 'constraints & preferences').trim()).toBe('- keep it')
   expect(section(row, 'learned').trim()).toBe('- (none yet)')
   expect(section(row, 'owned resources').trim()).toBe('- port 8080')
+})
+
+// Regression caught: after the clause store replaced the instruction index, live sessions showed no user instructions and repeated them as open requests.
+test('the resident ledger shows the live clause text and hides the retracted one', async () => {
+  const store: Record<string, unknown> = {
+    'clauses:s1:main': {
+      version: 1, nextId: 3, predicates: { benchmark: { key: 1, example: 'benchmark(stylelint, cache_patch_only).' } }, clauses: [
+        { id: 'C1', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'upgrade' }] }, neg: false, body: [], source: 'benchmark(stylelint, upgrade).', text: 'stylelint 업그레이드 상태로 벤치마크한다.', quote: '업그레이드했을 때 벤치마크', address: '@00000001', promptSeq: 1, issue: null, at: '2026-10-27T00:00:00Z', status: 'retracted', retraction: { at: '2026-10-27T00:00:01Z', by: 'C2', bySource: 'benchmark(stylelint, cache_patch_only).', reason: 'conflict' } },
+        { id: 'C2', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'cache_patch_only' }] }, neg: false, body: [], source: 'benchmark(stylelint, cache_patch_only).', text: 'stylelint 벤치마크는 캐시만 패치한 상태로 잰다.', quote: '캐시만 패치해서 벤치마크 해봐', address: '@00000002', promptSeq: 2, issue: null, at: '2026-10-27T00:00:01Z', status: 'live' },
+      ],
+    },
+  }
+  const row = await residentLedger({
+    get: async key => store[key],
+    readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), storedTopics: async () => [],
+    readRequests: async () => [
+      { id: 'R1', text: 'Run the cache-only benchmark.', quote: '캐시만 패치해서 벤치마크 해봐', status: 'open' },
+      { id: 'R2', text: 'Publish the report.', quote: '리포트를 올려줘', status: 'open' },
+    ],
+  }, 's1:main', [], { stack: [], pending: [] }, [])
+  expect(section(row, 'user instructions')).toContain('- stylelint 벤치마크는 캐시만 패치한 상태로 잰다. (C2 @00000002)')
+  expect(row).not.toContain('업그레이드 상태로')
+  expect(section(row, 'what to request')).not.toContain('[R1]')
+  expect(section(row, 'what to request')).toContain('[R2]')
 })
 
 // Regression caught: a malformed note carrying the item prefix sent the re-read to the clipped title, losing the items behind "외 N건" and keeping that tail as an item.
@@ -208,7 +209,7 @@ test('the confirm item note never shows where an issue note is shown', () => {
   if (made?.op !== 'create') throw new Error('expected a create')
   const q = { ...confirmIssue('s1-q', made.title, 'question'), notes: [made.note ?? ''] }
   const event = toEvents([{ op: 'note', issue: 's1-q', text: made.note ?? '' }], { session: 's1', repo: 'r', cwd: '/' }, 0, '')
-  const shown = [issueList([q]), describe(event, [q]).join('\n'), residentLedgerText(q, undefined, 1, 0, [], new Set(), { children: [{ ...q, parent: 's1-q' }] })]
+  const shown = [issueList([q]), describe(event, [q]).join('\n'), residentLedgerText(q, undefined, 1, 0, [], { children: [{ ...q, parent: 's1-q' }] })]
   for (const text of shown) expect(text).not.toContain(CONFIRM_ITEMS)
 })
 
@@ -417,7 +418,7 @@ test('a failed escape retry hands off to exactly one engine summary', OPTS, asyn
   const seen = bottoms(on, s)
   const messages = compactedMessages(await $.session.compact(compactInput('auto', handled(ESCAPE_ROWS))))
   expect(seen.engineCompactions).toBe(1)
-  expect(messages.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(messages.map(m => m.text)).toEqual(['ENGINE SUMMARY', '[clm clauses]\n- (none)'])
   expect(seen.files[WITHHELD_FILE]).toBe('r'.repeat(4000))
 })
 

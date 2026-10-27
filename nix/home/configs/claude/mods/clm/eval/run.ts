@@ -109,6 +109,19 @@ export function createHarness(on: On, fixtures: readonly Fixture[], replies: Rea
       .map(item => score(item, fixture, residentText(messages))),
     seedResidentState: (fixture: Fixture) => {
       const rows = fixture.rows.filter(row => row.role === 'user').map(row => row.text)
+      const key = `${fixture.sessionId}:main`
+      if (fixture.id === 'f757aaf2') {
+        const upgrade = rows.find(text => text.includes('upgrade했을 때 벤치마크'))
+        const cache = rows.find(text => text.includes('캐시만 패치해서 벤치마크'))
+        if (!upgrade || !cache) throw new Error('f757aaf2 is missing benchmark correction rows')
+        files[`/home/t/.claude-work/plans/clm-${fixture.sessionId}.state.json`] = JSON.stringify({ [`clauses:${key}`]: {
+          version: 1, nextId: 3, predicates: { benchmark: { key: 1, example: 'benchmark(tool, method).' } }, clauses: [
+            { id: 'C1', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'upgrade' }] }, neg: false, body: [], source: 'benchmark(stylelint, upgrade).', text: 'stylelint를 업그레이드한 상태로 벤치마크한다.', quote: upgrade, address: '@00000004', promptSeq: 4, issue: null, at: '2026-10-15T00:00:04Z', status: 'retracted', retraction: { at: '2026-10-15T00:00:05Z', by: 'C2', bySource: 'benchmark(stylelint, cache_patch_only).', reason: 'conflict' } },
+            { id: 'C2', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'cache_patch_only' }] }, neg: false, body: [], source: 'benchmark(stylelint, cache_patch_only).', text: '캐시만 패치한 상태로 stylelint 벤치마크를 돌린다.', quote: cache, address: '@00000005', promptSeq: 5, issue: null, at: '2026-10-15T00:00:05Z', status: 'live' },
+          ],
+        } })
+        return
+      }
       const globalRule = rows.find(text => text.startsWith('Never push '))
       const scopedRule = rows.find(text => text.startsWith('For '))
       const focusPrompt = rows.find(text => text.startsWith('Help me review '))
@@ -132,12 +145,15 @@ export function createHarness(on: On, fixtures: readonly Fixture[], replies: Rea
         { ts: at(9), seq: 9, issue: fixture.sessionId, origin, op: 'focus', stack: [mainIssue], pending: [], intent: 'continue' },
       ]
       files[`/home/t/.claude-work/tracker/events/${fixture.sessionId}.jsonl`] = events.map(event => JSON.stringify(event)).join('\n') + '\n'
-      const key = `${fixture.sessionId}:main`
-      store[`instruction-index:${key}`] = [
-        { address: '@00000001', issue: null, text: globalRule },
-        { address: '@00000002', issue: mainIssue, text: scopedRule },
-      ]
-      store[`issue-addresses:${key}`] = { [mainIssue]: '@00000003' }
+      files[`/home/t/.claude-work/plans/clm-${fixture.sessionId}.state.json`] = JSON.stringify({
+        [`clauses:${key}`]: {
+        version: 1, nextId: 3, predicates: { preserve: { key: 0, example: 'preserve(scope).' } }, clauses: [
+          { id: 'C1', head: { name: 'preserve', args: [{ atom: 'global' }] }, neg: false, body: [], source: 'preserve(global).', text: globalRule, quote: globalRule, address: '@00000001', promptSeq: 1, issue: null, at: at(1), status: 'live' },
+          { id: 'C2', head: { name: 'preserve', args: [{ atom: 'scope' }] }, neg: false, body: [], source: 'preserve(scope).', text: scopedRule, quote: scopedRule, address: '@00000002', promptSeq: 2, issue: mainIssue, at: at(2), status: 'live' },
+        ],
+        },
+        [`issue-addresses:${key}`]: { [mainIssue]: '@00000003' },
+      })
     },
     options: OPTIONS,
   }

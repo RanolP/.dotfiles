@@ -120,7 +120,7 @@ export function bottoms(on: any, s: State) {
   const clock = mock.clock(on, { now: Date.parse('2026-10-06T00:00:00Z') })
   const engineStore: Record<string, unknown> = {}
   const files: Record<string, string> = {}
-  const sessionStorePrefixes = new Set(['address-index', 'agent-task-roots', 'agent-task-step-claims', 'headAttachments', 'held', 'instruction-index', 'issue-addresses', 'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows'])
+  const sessionStorePrefixes = new Set(['address-index', 'agent-task-roots', 'agent-task-step-claims', 'clause-backlog', 'clauses', 'headAttachments', 'held', 'instruction-index', 'issue-addresses', 'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows'])
   const sessionStorePath = (key: string) => {
     const separator = key.indexOf(':')
     if (separator < 0 || !sessionStorePrefixes.has(key.slice(0, separator))) return undefined

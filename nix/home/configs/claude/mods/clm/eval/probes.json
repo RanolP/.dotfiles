@@ -132,8 +132,8 @@
     "id": "f757aaf2-benchmark",
     "fixture": "f757aaf2",
     "kind": "instruction",
-    "expect": "benchmark(stylelint, cache_patch_only).",
+    "expect": "캐시만 패치한 상태로 stylelint 벤치마크를 돌린다.",
     "mustBe": "resident",
-    "forbid": "benchmark(stylelint, upgrade)."
+    "forbid": "stylelint를 업그레이드한 상태로 벤치마크한다."
   }
 ]

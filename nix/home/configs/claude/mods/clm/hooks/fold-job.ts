@@ -17,6 +17,7 @@ import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type Rewind
 import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
 import type { SentAt } from './address'
+import { clauseStoreKey, emptyClauseStore, readClauseStore, renderClauses } from './clauses'
 
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; asks?: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
@@ -58,6 +59,7 @@ export type FoldJobIo = {
   fileExists(path: string): Promise<boolean>
   fileList(path: string): Promise<{ name: string; kind: string }[]>
   run(args: string[], options: { timeoutMs: number }): Promise<{ exitCode: number; stderr: string }>
+  storeGet(key: string): Promise<unknown>
   storeSet(key: string, value: unknown): Promise<void>
   storeDelete(key: string): Promise<void>
   pendingKey(key: string): Promise<string>
@@ -66,7 +68,7 @@ export type FoldJobIo = {
   readAll(): Promise<TrackerEvent[]>
   trackerView(origin: Origin, ops?: readonly Payload[]): Promise<TrackerView>
   updateHeld(settled: readonly string[], hold: readonly Held[]): Promise<void>
-  ensureInstructionIndex(key: string, notes: string): Promise<void>
+  backfillClauses(key: string): Promise<void>
   residentLedger(key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview?: FoldPreview): Promise<string>
   append(payloads: Payloads, origin: Origin, project: boolean, knownTitles: boolean): Promise<TrackerEvent[]>
   projectPanel(origin: Origin, events: readonly TrackerEvent[]): Promise<void>
@@ -472,7 +474,6 @@ async function applyFoldPlan(
   const landing = [...use.ops, ...(use.promoted ?? [])]
   const appended = await persistStep<TrackerEvent[]>(io, [], () => io.append(use.asks ? before => [...landing, ...landedAsks(use.asks ?? [], landing, before, here)] : landing, here, false, true))
   await persistStep<void>(io, undefined, () => io.updateHeld(use.settled ?? [], use.hold ?? []))
-  await persistStep<void>(io, undefined, () => io.ensureInstructionIndex(key, use.fullNotes))
   const stateEvents = await io.readAll()
   const currentView = await io.trackerView(here)
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
@@ -595,11 +596,18 @@ async function awaitOrFallback(
 // The engine records any returned list as a finished compaction, so a decline
 // that handed the rows back unchanged left autocompact firing on every turn
 // until it reported thrashing. Every decline goes to the engine summarizer.
-async function handOff(io: FoldJobIo, key: string, handoff: () => Promise<SessionCompactResult>, why: string): Promise<SessionCompactResult> {
+export async function handOff(io: FoldJobIo, key: string, handoff: () => Promise<SessionCompactResult>, why: string): Promise<SessionCompactResult> {
   try { io.log(`clm: ${why}; the engine summarizer compacts instead`, { to: 'debug' }) } catch { /* logging never blocks compaction */ }
+  await persistStep<void>(io, undefined, () => io.backfillClauses(key))
   const result = await handoff()
-  await adoptEngineSummary(io, key, result.messages)
-  return result
+  const store = readClauseStore(await persistStep(io, undefined, () => io.storeGet(clauseStoreKey(key)))) ?? emptyClauseStore()
+  const clauses = renderClauses(store, () => true)
+  const messages = result.messages?.length
+    ? [result.messages[0]!, { role: 'user' as const, text: `[clm clauses]\n${clauses.join('\n') || '- (none)'}`, toolUses: [] }, ...result.messages.slice(1).filter(row => !row.text.startsWith('[clm clauses]'))]
+    : result.messages
+  const kept = messages ? { ...result, messages } : result
+  await adoptEngineSummary(io, key, messages)
+  return kept
 }
 
 export async function handleSessionCompact(

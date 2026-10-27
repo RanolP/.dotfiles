@@ -18,7 +18,7 @@ sync_bundle() {
   python3 - "$eval_dir" <<'PY'
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
-ids = ['release', 'auth', 'migration']
+ids = ['f757aaf2', 'release', 'auth', 'migration']
 fixtures = {name: json.loads((root / 'fixtures' / f'{name}.json').read_text()) for name in ids}
 replies = {name: json.loads((root / 'recorded' / f'{name}.json').read_text()) for name in ids}
 probes = json.loads((root / 'probes.json').read_text())
@@ -47,7 +47,7 @@ for line in lines:
         visible.append(line)
         continue
     record = json.loads(line[len(prefix):])
-    if record.get('fixture') not in {'release', 'auth', 'migration'} or not isinstance(record.get('reply'), str):
+    if record.get('fixture') not in {'f757aaf2', 'release', 'auth', 'migration'} or not isinstance(record.get('reply'), str):
         raise SystemExit('invalid CLM_EVAL_RECORD output')
     (root / 'recorded' / f"{record['fixture']}.json").write_text(json.dumps(record, indent=2, ensure_ascii=False) + '\n')
 output.write_text('\n'.join(visible) + '\n')

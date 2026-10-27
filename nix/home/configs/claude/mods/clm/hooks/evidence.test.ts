@@ -253,7 +253,7 @@ test('a small transcript with no fold plan hands off to the engine summary', OPT
   const seen = bottoms(on, s)
   const result = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
   expect(seen.engineCompactions).toBe(1)
-  expect(result.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(result.map(m => m.text)).toEqual(['ENGINE SUMMARY', '[clm clauses]\n- (none)'])
 })
 
 // Regression caught (round 3, finding 1): a hand-back excluded from turn boundaries left a coordinator session (one typed prompt, then hand-backs) with a single turn, so it never folded and always escaped to the engine summarizer.

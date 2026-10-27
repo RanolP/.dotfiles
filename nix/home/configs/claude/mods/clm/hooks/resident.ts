@@ -1,10 +1,9 @@
 import { isOpen, isRecord, shownNote, type Issue, type TrackerEvent } from './tracker'
 import {
-  EMPTY_LEDGER, constraintFactLines, instructionKey, instructionValues, learnedFactLines, notesOf, sectionBody, withdrawnInstructionKeys,
-  WITHDRAWN_PREFIX, type Topic,
+  EMPTY_LEDGER, constraintFactLines, learnedFactLines, notesOf, sectionBody, type Topic,
 } from './ledger'
-import { stripReminders } from './fold'
 import { resourceLedgerForSession } from './resources'
+import { clauseQuoteOverlaps, clauseStoreKey, emptyClauseStore, readClauseStore, renderClauses } from './clauses'
 
 export type InstructionIndex = { address: string; issue: string | null; text: string }
 export type ResidentLedgerRequest = {
@@ -26,8 +25,6 @@ export type ResidentLedgerSections = {
 
 export type ResidentIo = {
   get: (key: string) => Promise<unknown>
-  set: (key: string, value: unknown) => Promise<void>
-  addressRows: (key: string) => Promise<{ address: string; text: string }[]>
   readLedger: () => Promise<string | undefined>
   readMeta: () => Promise<{ seq: number }>
   storedTopics: (notes: string, seq: number, key: string) => Promise<Topic[]>
@@ -42,39 +39,9 @@ export function isInstructionIndex(value: unknown): value is InstructionIndex {
     && (typeof value.issue === 'string' || value.issue === null) && typeof value.text === 'string'
 }
 
-export async function ensureInstructionIndex(io: ResidentIo, key: string, notes: string): Promise<void> {
-  const raw = await io.get(instructionIndexKey(key))
-  const index = Array.isArray(raw) ? raw.filter(isInstructionIndex) : []
-  const indexed = new Set(index.map(item => instructionKey(item.text)))
-  const rows = await io.addressRows(key)
-  let changed = false
-  for (const text of instructionValues(notes)) {
-    if (text.startsWith(WITHDRAWN_PREFIX)) continue
-    const normalized = instructionKey(text)
-    if (!normalized || indexed.has(normalized)) continue
-    const source = [...rows].reverse().find(row => instructionKey(stripReminders(row.text)) === normalized)
-    index.push({ address: source?.address ?? '@unknown', issue: null, text })
-    indexed.add(normalized)
-    changed = true
-  }
-  if (changed) await io.set(instructionIndexKey(key), index)
-}
-
 export async function residentLedger(
-  io: ResidentIo, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: LedgerPreview = {},
+  io: ResidentIo, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, _events: readonly TrackerEvent[], preview: LedgerPreview = {},
 ): Promise<string> {
-  const rawIndex = await io.get(instructionIndexKey(key))
-  const index = Array.isArray(rawIndex) ? rawIndex.filter(isInstructionIndex) : []
-  const rows = await io.addressRows(key)
-  const seen = new Set(index.map(item => `${item.address}\0${item.issue}`))
-  for (const event of events) {
-    const rule = event.op === 'focus' ? event.rule?.trim() : undefined
-    if (event.op !== 'focus' || event.issue !== event.origin.session || !rule) continue
-    const source = [...rows].reverse().find(row => instructionKey(row.text).includes(instructionKey(rule)))
-    if (!source) continue
-    const { address } = source
-    if (!seen.has(`${address}\0null`)) index.push({ address, issue: null, text: source.text })
-  }
   const shownIssues = preview.issues ?? [...issues]
   const shownState = preview.state ?? state
   const addressesRaw = await io.get(issueAddressKey(key))
@@ -88,7 +55,10 @@ export async function residentLedger(
     ancestors.add(current.id)
     current = current.parent ? byId.get(current.parent) : undefined
   }
-  if (index.length !== (Array.isArray(rawIndex) ? rawIndex.length : 0)) await io.set(instructionIndexKey(key), index)
+  const clauseStore = readClauseStore(await io.get(clauseStoreKey(key))) ?? emptyClauseStore()
+  const inScope = (issue: string | null) => issue === null || ancestors.has(issue)
+  const instructions = renderClauses(clauseStore, inScope)
+  const liveQuotes = clauseStore.clauses.filter(clause => clause.status === 'live').map(clause => clause.quote)
   const rawNotes = preview.notes ?? notesOf((await io.readLedger()) ?? EMPTY_LEDGER)
   const meta = await io.readMeta()
   const topics = preview.topics ?? await io.storedTopics(rawNotes, meta.seq, key)
@@ -99,7 +69,7 @@ export async function residentLedger(
   const where = topics.length
     ? scopedTopics.map(topic => `${topic.topic}: ${topic.summary}`)
     : fallbackGoal && fallbackGoal !== '- (none yet)' ? [fallbackGoal] : []
-  const requests = (await io.readRequests(key)).filter(request => request.status === 'open')
+  const requests = (await io.readRequests(key)).filter(request => request.status === 'open' && !liveQuotes.some(quote => clauseQuoteOverlaps(request.quote, quote)))
   const constraints = constraintFactLines(rawNotes).map(line => line.replace(/^\[constraint\]\s*/, ''))
   const learned = learnedFactLines(rawNotes)
   const resources = await resourceLedgerForSession(key.split(':')[0] ?? '')
@@ -113,14 +83,12 @@ export async function residentLedger(
     learned,
     resources,
   }
-  const withdrawn = withdrawnInstructionKeys(rawNotes)
-  const visibleIndex = index.filter(item => !withdrawn.has(instructionKey(item.text)))
-  return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, shownState.stack.length, shownState.pending.length, visibleIndex, ancestors, sections)
+  return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, shownState.stack.length, shownState.pending.length, instructions, sections)
 }
 
 export function residentLedgerText(
   top: Issue | undefined, topAddress: string | undefined, stackSize: number, pendingCount: number,
-  instructions: readonly InstructionIndex[], ancestorIds: ReadonlySet<string>, sections: ResidentLedgerSections = {},
+  instructions: readonly string[], sections: ResidentLedgerSections = {},
 ): string {
   const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim()
   const bullet = (value: string) => `- ${oneLine(value).replace(/^-\s*/, '')}`
@@ -128,11 +96,6 @@ export function residentLedgerText(
   const focus = top
     ? `- ${oneLine(top.title)}${lastNote ? ` — ${oneLine(lastNote)}` : ''} ${topAddress ?? '@unknown'}`
     : '- (none)'
-  const index = instructions.filter(item => item.issue === null || (item.issue !== null && ancestorIds.has(item.issue)))
-    .map(item => {
-      const chars = [...item.text]
-      return `- ${chars.slice(0, 80).join('')}${chars.length > 80 ? '…' : ''} ${item.address}`
-    })
   const where = [focus, ...(sections.where ?? []).map(line => oneLine(line)).filter(Boolean).map(line => `- ${line}`), `- stack ${stackSize} · pending ${pendingCount}`]
   const tasks = (sections.children ?? []).filter(issue => issue.parent === top?.id && isOpen(issue))
     .map(issue => {
@@ -141,7 +104,7 @@ export function residentLedgerText(
     })
   const requests = (sections.requests ?? []).filter(request => request.status === 'open')
     .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
-  const constraints = [...index, ...(sections.constraints ?? []).map(oneLine).filter(Boolean).map(bullet)]
+  const constraints = (sections.constraints ?? []).map(oneLine).filter(Boolean).map(bullet)
   const questions = (sections.questions ?? []).filter(issue => issue.status === 'question')
     .map(issue => {
       const note = shownNote(issue)
@@ -158,6 +121,7 @@ export function residentLedgerText(
     '## what to request', body(requests),
     // Shown only while a question waits, so the common case pays nothing for it.
     ...(questions.length ? ['## open questions', questions.join('\n')] : []),
+    '## user instructions', body(instructions),
     '## constraints & preferences', body(constraints),
     '## uncertain', body(uncertain),
     '## learned', body(learned),

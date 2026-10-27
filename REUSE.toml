@@ -158,6 +158,7 @@ path = [
     "nix/home/configs/claude/mods/clm/eval/recorded/auth.json",
     "nix/home/configs/claude/mods/clm/eval/recorded/migration.json",
     "nix/home/configs/claude/mods/clm/eval/recorded/release.json",
+    "nix/home/configs/claude/mods/clm/eval/recorded/f757aaf2.json",
     "nix/home/configs/claude/mods/clm/eval/run.test.ts",
     "nix/home/configs/claude/mods/clm/eval/run.ts",
     "nix/home/configs/claude/mods/codex-subagent/.claude-plugin/plugin.json",

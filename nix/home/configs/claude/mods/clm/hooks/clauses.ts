@@ -336,6 +336,30 @@ export function renderClauses(store: ClauseStore, inScope: (issue: string | null
   return lines
 }
 
+/** Whether two instruction quotes substantially describe the same request. */
+export function clauseQuoteOverlaps(left: string, right: string): boolean {
+  const grams = (text: string) => {
+    const chars = [...text.replace(/\s/gu, '').toLocaleLowerCase()]
+    const counts = new Map<string, number>()
+    for (let i = 0; i + 1 < chars.length; i++) {
+      const first = chars[i], second = chars[i + 1]
+      if (first === undefined || second === undefined) continue
+      const gram = first + second
+      counts.set(gram, (counts.get(gram) ?? 0) + 1)
+    }
+    return counts
+  }
+  const leftGrams = grams(left), rightGrams = grams(right)
+  if (!leftGrams.size) return right.replace(/\s/gu, '').toLocaleLowerCase().includes(left.replace(/\s/gu, '').toLocaleLowerCase())
+  let matched = 0
+  let total = 0
+  for (const [gram, count] of leftGrams) {
+    total += count
+    matched += Math.min(count, rightGrams.get(gram) ?? 0)
+  }
+  return matched / total >= 0.5
+}
+
 export function describeClause(clause: Clause): string {
   const lines = [`${clause.id} ${clause.status} ${clause.source}  % ${clause.address} ${clause.at}`, `  text: ${clause.text}`, `  quote: ${clause.quote}`]
   const r = clause.retraction

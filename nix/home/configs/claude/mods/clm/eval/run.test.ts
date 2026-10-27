@@ -6,7 +6,7 @@ import { fixtures as fixtureData, probes as probeData, replies as replyData } fr
 const OPTIONS = { budget: 10_000, tailTarget: 1_800, queueTarget: 8_000, ledgerTarget: 900, reserve: 1_000, model: 'haiku', reviewModel: 'haiku' }
 
 test('the folded ledger retains or can resolve every declared fact', { options: OPTIONS }, async ($, on) => {
-  const fixtures = [fixtureData.release, fixtureData.auth, fixtureData.migration] as unknown as Fixture[]
+  const fixtures = [fixtureData.f757aaf2, fixtureData.release, fixtureData.auth, fixtureData.migration] as unknown as Fixture[]
   const harness = createHarness(on, fixtures, replyData)
   const results: { id: string; kind: Probe['kind']; pass: boolean }[] = []
   for (const fixture of fixtures) {

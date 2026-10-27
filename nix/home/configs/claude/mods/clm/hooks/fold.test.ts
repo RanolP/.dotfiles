@@ -27,6 +27,7 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
+const ENGINE_SUMMARY_TEXTS = ['ENGINE SUMMARY', '[clm clauses]\n- (none)']
 
 // Regression caught: a session kept running the old store copy after a rebuild and its autocompact silently failed 40 times.
 test('a compaction under a mod whose installed path changed since load logs mod-stale once', async () => {
@@ -65,7 +66,7 @@ test('a compaction-time installed mod lookup failure leaves compaction fail-open
   await seen.initialize()
   const result = await seen.compact()
   await seen.settle()
-  expect(result).toEqual({ messages: [M('user', 'ENGINE SUMMARY')] })
+  expect(result.messages?.map(message => message.text)).toEqual(['ENGINE SUMMARY'])
   expect(logEvents(seen).filter(row => row.event === 'mod-stale').map(row => row.reason)).toEqual([
     expect.stringContaining('could not resolve'),
   ])
@@ -79,13 +80,14 @@ test('a plugin compaction with no clm plan returns the engine summary and logs i
   const io = {
     loadedFrom: '/nix/store/current-hm_clm', sessionId: async () => 'compact-log-plugin', now: async () => time += 5,
     readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
-    storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:s1',
+    storeGet: async () => undefined, storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:s1',
+    backfillClauses: async () => undefined,
     logEvent: async (event: string, fields: Record<string, unknown>) => { events.push({ event, fields }); logged.resolve() }, log: () => undefined,
   } as unknown as FoldJobIo
   const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
   const result = await handleSessionCompact(io, OPTS.options, ROWS, 'plugin', async () => summary)
   await logged.promise
-  expect(result).toEqual(summary)
+  expect(result.messages?.map(message => message.text)).toEqual(ENGINE_SUMMARY_TEXTS)
   expect(events).toEqual([{ event: 'session-compact', fields: { trigger: 'plugin', state: 'none', outcome: 'plugin-handoff', loadedFrom: '/nix/store/current-hm_clm', waitMs: 5, totalMs: 10 } }])
 })
 
@@ -108,7 +110,7 @@ test('a swap whose io read rejects hands off to the engine summary exactly once'
   const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
   try {
     const result = await handleSessionCompact(io, OPTS.options, rows, 'auto', async () => { handoffs++; return summary })
-    expect(result).toEqual(summary)
+    expect(result.messages?.map(message => message.text)).toEqual(ENGINE_SUMMARY_TEXTS)
     expect(handoffs).toBe(1)
   } finally { clearFoldJob(key) }
 })
@@ -128,7 +130,7 @@ test('a ready plan whose stable rows grow total context leaves the ledger, its s
     writeFile: async (path: string, text: string) => { files[path] = text },
     readRewindIo: () => ({ storeGet: async (key: string) => stored[key], storeSet: async (key: string, value: unknown) => { stored[key] = value } }),
     captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
-    append: async () => [], updateHeld: async () => undefined, ensureInstructionIndex: async () => undefined, readAll: async () => [],
+    append: async () => [], updateHeld: async () => undefined, backfillClauses: async () => undefined, readAll: async () => [],
     trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
     residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
     stableAttachments: async (headKept: boolean) => ({ rows: [stableAttachmentRow('output_style_instructions', 's'.repeat(20_000))], headKept }),
@@ -144,7 +146,7 @@ test('a ready plan whose stable rows grow total context leaves the ledger, its s
   }, rows.map(fingerprint))
   const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
   try {
-    expect(await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => summary)).toEqual(summary)
+    expect((await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => summary)).messages?.map(message => message.text)).toEqual(ENGINE_SUMMARY_TEXTS)
   } finally { clearFoldJob(key) }
   expect(logs.some(text => text.includes('did not shrink'))).toBe(true)
   expect(stored[`ledger-snapshots:${key}`]).toBeUndefined()
@@ -202,7 +204,7 @@ test('an auto compaction joining a plugin rewind swap whose rows grew hands off 
     const auto = handleSessionCompact(io, OPTS.options, rows, 'auto', async () => { autoHandoffs++; return summary })
     gate.resolve()
     expect((await plugin).messages?.some(message => message.text.includes('clm ledger #1'))).toBe(true)
-    expect(await auto).toEqual(summary)
+    expect((await auto).messages?.map(message => message.text)).toEqual(ENGINE_SUMMARY_TEXTS)
     expect(pluginHandoffs).toBe(0)
     expect(autoHandoffs).toBe(1)
   } finally { clearFoldJob(key) }
@@ -306,11 +308,11 @@ test('a compact returns folded messages when store persistence exceeds its limit
     readFile: async () => undefined, writeFile: async (path, text) => { files[path] = text }, appendFile: async () => undefined,
     lessonsPath: async () => '', fileExists: async () => false, fileList: async () => [],
     run: async () => ({ exitCode: 0, stderr: '' }),
-    storeSet: async () => { throw new Error('HooksError: $.store.set: the store would be 4194305 characters, over the 4194304 limit') },
+    storeGet: async () => undefined, storeSet: async () => { throw new Error('HooksError: $.store.set: the store would be 4194305 characters, over the 4194304 limit') },
     storeDelete: async () => undefined, pendingKey: async () => 'pending:s1', topicsKey: async () => 'topics:s1:main',
     captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
     readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
-    updateHeld: async () => { throw new Error('held store full') }, ensureInstructionIndex: async () => { throw new Error('instruction index write failed') },
+    updateHeld: async () => { throw new Error('held store full') }, backfillClauses: async () => undefined,
     residentLedger: async () => { throw new Error('resident index write failed') },
     append: async () => { throw new Error('tracker write failed') }, projectPanel: async () => undefined, readRewindIo: () => rewind,
     observeTranscript: async () => { throw new Error('transcript write failed') }, fold: async () => { throw new Error('ready plan should bypass fold summary') },
@@ -338,7 +340,7 @@ test('a compact returns folded messages when store persistence exceeds its limit
   clearFoldJob('s1:main')
   expect(compactedMessages(result).some(message => message.text.includes('clm ledger #1'))).toBe(true)
   const failures = logEvents({ files }).filter(event => event.event === 'fold-persist-failed').map(event => String(event.reason))
-  for (const reason of ['malformed session state', 'transcript write failed', 'tracker write failed', 'held store full', 'instruction index write failed', 'resident index write failed', 'attachment read failed', 'over the 4194304 limit']) {
+  for (const reason of ['malformed session state', 'transcript write failed', 'tracker write failed', 'held store full', 'resident index write failed', 'attachment read failed', 'over the 4194304 limit']) {
     expect(failures.some(failure => failure.includes(reason))).toBe(true)
   }
 })
@@ -438,6 +440,14 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   expect(seen.prompts[0]).not.toContain('tests pass')
   expect(seen.files[LEDGER_FILE]).toContain('## 핵심 사실·경로')
   expect(seen.engineCompactions).toBe(0)
+})
+
+// Regression caught: every fold rewrote the retired instruction index after clauses became authoritative.
+test('a fold leaves the retired instruction index absent', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [ledger('fold without a legacy index')] }
+  const seen = bottoms(on, s)
+  await turnEnds($, s, seen)
+  expect(seen.store['instruction-index:s1:main']).toBeUndefined()
 })
 
 // Regression caught: the harness moved stable attachments behind the ledger after compact, invalidating the cached prompt prefix.
@@ -821,6 +831,11 @@ test('a compact whose background summary never finishes folds mechanically at th
   let summaryStarted = false
   const s: State = { rows, replies: [], splitBlock: () => { summaryStarted = true; return new Promise<void>(() => {}) } }
   const seen = bottoms(on, s)
+  seen.store['clauses:s1:main'] = {
+    version: 1, nextId: 2, predicates: { preserve: { key: 0, example: 'preserve(instruction).' } }, clauses: [
+      { id: 'C1', head: { name: 'preserve', args: [{ atom: 'instruction' }] }, neg: false, body: [], source: 'preserve(instruction).', text: instruction, quote: instruction, address: '@00000001', promptSeq: 1, issue: null, at: '2026-10-27T00:00:00Z', status: 'live' },
+    ],
+  }
   seen.files[LEDGER_FILE] = `## 목표\n- keep goal\n\n## 사용자 지시\n- ${JSON.stringify(instruction)}\n\n## 한 일\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
   await $.turn.complete(TURN)
   for (let i = 0; i < 50 && !summaryStarted; i++) await new Promise(resolve => setTimeout(resolve, 2))
@@ -920,7 +935,7 @@ test('a background plan whose A rows changed is discarded and the engine summary
   s.rows[1] = M('user', 'A changed after summary')
   const unchanged = handled(s.rows)
   const result = compactedMessages(await $.session.compact(compactInput('plugin', unchanged)))
-  expect(result.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(result.map(m => m.text)).toEqual(ENGINE_SUMMARY_TEXTS)
   expect(seen.store['pending:s1']).toBeUndefined()
   expect(seen.engineCompactions).toBe(1)
 })
@@ -1220,7 +1235,7 @@ test('auto compaction with no pending plan produces a clm ledger instead of an e
   expect(seen.engineCompactions).toBe(0)
   // Nothing is left for clm to fold here, so the engine summary is the only way the context still shrinks.
   const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
-  expect(manual.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(manual.map(m => m.text)).toEqual(ENGINE_SUMMARY_TEXTS)
   expect(seen.engineCompactions).toBe(1)
 })
 
@@ -1231,9 +1246,22 @@ test('a non-shrinking auto job hands off to the engine summary after its escape 
   const seen = bottoms(on, s)
   const r = await $.session.compact({ trigger: 'auto', messages: handled(rows) })
   if (!('messages' in r)) throw new Error('compaction returned no messages')
-  expect(r.messages?.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(r.messages?.map(m => m.text)).toEqual(ENGINE_SUMMARY_TEXTS)
   expect(seen.engineCompactions).toBe(1)
   expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
+})
+
+// Regression caught: engine handoff discarded the clause store from the live context, so the next turn had no user instructions.
+test('an engine handoff keeps the user clauses as a [clm clauses] row', OPTS, async ($, on) => {
+  const rows = [M('user', 'start')]
+  const seen = bottoms(on, { rows, replies: [] })
+  seen.store['clauses:s1:main'] = {
+    version: 1, nextId: 2, predicates: { forbid: { key: 0, example: 'forbid(push).' } }, clauses: [
+      { id: 'C1', head: { name: 'forbid', args: [{ atom: 'push' }] }, neg: false, body: [], source: 'forbid(push).', text: 'origin에 push하지 않는다.', quote: 'Never push to origin.', address: '@00000001', promptSeq: 1, issue: null, at: '2026-10-27T00:00:00Z', status: 'live' },
+    ],
+  }
+  const out = compactedMessages(await $.session.compact(compactInput('manual', handled(rows))))
+  expect(out.map(row => row.text)).toEqual(['ENGINE SUMMARY', '[clm clauses]\n- origin에 push하지 않는다. (C1 @00000001)'])
 })
 
 const FOLD_ROWS = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
@@ -1292,7 +1320,7 @@ test('a handoff after a clm fold keeps the ledger', OPTS, async ($, on) => {
   const auto = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
   expect(storedLedger(seen)).toContain('INLINE-FACT')
   const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
-  expect(manual.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
+  expect(manual.map(m => m.text)).toEqual(ENGINE_SUMMARY_TEXTS)
   s.rows = [...manual, M('user', 'next'), M('assistant', 'done')]
   await $.session.compact(compactInput('plugin', handled(s.rows)))
   expect(storedLedger(seen)).toContain('INLINE-FACT')

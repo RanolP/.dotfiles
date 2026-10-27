@@ -1,0 +1,5 @@
+{
+  "fixture": "f757aaf2",
+  "model": "haiku",
+  "reply": "{\"split\":7,\"notes\":\"## 목표\\n- stylelint CI 병목을 벤치마크한다.\",\"ops\":[],\"topics\":[{\"topic\":\"stylelint benchmark\",\"summary\":\"캐시만 패치한 stylelint를 벤치마크한다.\",\"support\":[]}]}"
+}

@@ -10,9 +10,9 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { estTokens, fingerprint, foldedRows, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
+import { buildCleared, estTokens, fingerprint, foldedRows, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
-import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens } from './fold-runtime'
+import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens, storedTopics } from './fold-runtime'
 import type { Opts } from './fold-runtime'
 import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
@@ -114,7 +114,7 @@ test('a swap whose io read rejects hands off to the engine summary exactly once'
 })
 
 // Regression caught: a ready plan whose ledger outweighed its dropped rows wrote the ledger, a snapshot and a new seq before the shrink check handed off, so the ledger history described a swap that never happened.
-test('a ready plan that would not shrink the context leaves the ledger, its snapshots and meta.seq unchanged', OPTS, async () => {
+test('a ready plan whose stable rows grow total context leaves the ledger, its snapshots and meta.seq unchanged', OPTS, async () => {
   const rows = handled(ROWS)
   const stored: Record<string, unknown> = {}
   const files: Record<string, string> = {}
@@ -131,7 +131,7 @@ test('a ready plan that would not shrink the context leaves the ledger, its snap
     append: async () => [], updateHeld: async () => undefined, ensureInstructionIndex: async () => undefined, readAll: async () => [],
     trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
     residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
-    stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }),
+    stableAttachments: async (headKept: boolean) => ({ rows: [stableAttachmentRow('output_style_instructions', 's'.repeat(20_000))], headKept }),
     logEvent: async () => undefined, log: (text: string) => { logs.push(text) },
   } as unknown as FoldJobIo
   const key = transcriptKey(await io.sessionId())
@@ -150,6 +150,21 @@ test('a ready plan that would not shrink the context leaves the ledger, its snap
   expect(stored[`ledger-snapshots:${key}`]).toBeUndefined()
   expect(metas.every(meta => meta.seq === 0)).toBe(true)
   expect(files[LEDGER_FILE]).toBeUndefined()
+})
+
+test('multiline goals survive topic restoration through the end of the 목표 section', async () => {
+  const notes = '## 목표\n- first line\n- second line\n\n## 사용자 지시\n- keep this'
+  const topics = await storedTopics({ topics: async () => undefined }, notes, 2, 's1:main')
+  expect(topics).toEqual([{ topic: '기존 세션 주제', summary: '- first line\n- second line', seq: 2 }])
+})
+
+test('a built-in compact summary enters the fold input and leaves the rebuilt head', () => {
+  const summary = M('user', 'BUILT-IN SUMMARY', { isCompactSummary: true } as Partial<SessionMessage>)
+  const rows = [summary, M('user', 'older'), M('assistant', 'answer'), M('user', 'newest'), M('assistant', 'latest')]
+  const plan = planClear(rows, 30, 1)
+  if (!plan) throw new Error('expected a clear plan')
+  expect(plan.dropped).toContain(summary)
+  expect(buildCleared(plan, M('user', '[clm ledger #1 · now]'))).not.toContain(summary)
 })
 
 // Regression caught: an auto compaction that joined an in-flight plugin rewind swap got that swap's grown rows back, so the engine's compaction left the context larger.
@@ -445,15 +460,14 @@ test('a mid-session CLAUDE.md edit is carried on the next fold', OPTS, async ($,
   await turnEnds($, s, seen)
   expect(seen.results).toHaveLength(1)
   const first = seen.results.at(0)?.messages ?? []
-  expect(first[1]?.text).toBe(stableAttachmentRow('instructions', instructions).text)
-  expect(first[2]?.text).toBe(stableAttachmentRow('session_context', context).text)
-  expect(first[3]?.text).toBe(stableAttachmentRow('coordinator_context', coordinator).text)
-  expect(first[4]?.text).toBe(stableAttachmentRow('context_sections', sections).text)
-  expect(first[5]?.text).toBe(stableAttachmentRow('output_style_instructions', style).text)
-  expect(first[6]?.text).toMatch(/^\[clm ledger #1 · /)
-  expect(first.slice(1, 6).every(row => row.handle === undefined)).toBe(true)
+  expect(first[1]?.text).toBe(stableAttachmentRow('session_context', context).text)
+  expect(first[2]?.text).toBe(stableAttachmentRow('coordinator_context', coordinator).text)
+  expect(first[3]?.text).toBe(stableAttachmentRow('context_sections', sections).text)
+  expect(first[4]?.text).toBe(stableAttachmentRow('output_style_instructions', style).text)
+  expect(first[5]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(first.slice(1, 5).every(row => row.handle === undefined)).toBe(true)
   await $.prompt.attachment(attachment('instructions', 'Subagent-only instructions', 'agent-1'))
-  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
+  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: instructions })
   await $.prompt.attachment(attachment('instructions', instructions))
   expect(await $.prompt.attachment(attachment('session_context', context))).toEqual({ text: null })
   expect(await $.prompt.attachment(attachment('coordinator_context', coordinator))).toEqual({ text: null })
@@ -469,19 +483,30 @@ test('a mid-session CLAUDE.md edit is carried on the next fold', OPTS, async ($,
   expect(seen.results).toHaveLength(2)
   const second = seen.results.at(1)?.messages ?? []
   expect(second[1]?.text).toBe(first[1]?.text)
-  expect(second[2]?.text).toBe(stableAttachmentRow('instructions', instructionDelta).text)
-  expect(second[3]?.text).toBe(stableAttachmentRow('instructions', secondInstructionDelta).text)
-  expect(second[4]?.text).toBe(first[2]?.text)
-  expect(second[5]?.text).toBe(first[3]?.text)
-  expect(second[6]?.text).toBe(first[4]?.text)
-  expect(second[7]?.text).toBe(first[5]?.text)
-  expect(second[8]?.text).toMatch(/^\[clm ledger #2 · /)
+  expect(second[2]?.text).toBe(first[2]?.text)
+  expect(second[3]?.text).toBe(first[3]?.text)
+  expect(second[4]?.text).toBe(first[4]?.text)
+  expect(second[5]?.text).toMatch(/^\[clm ledger #2 · /)
   expect(second.filter(row => row.text === first[1]?.text)).toHaveLength(1)
-  expect(second.filter(row => stableAttachmentOf(row)?.type === 'instructions')).toHaveLength(3)
-  expect(second.filter(row => row.text === first[5]?.text)).toHaveLength(1)
-  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
+  expect(second.filter(row => stableAttachmentOf(row)?.type === 'instructions')).toHaveLength(0)
+  expect(second.filter(row => row.text === first[4]?.text)).toHaveLength(1)
+  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: instructions })
   await $.prompt.attachment(attachment('instructions', instructions))
   await $.prompt.attachment(attachment('instructions', 'Instruction files were re-read after an edit; these differ from their earlier copies.\nUpdated instruction text.'))
+})
+
+// Regression caught: Claude Code re-attached instructions after a clm swap while clm also returned them as a stable row, doubling CLAUDE.md on every request.
+test('a fold leaves instructions to the harness so the post-fold chain receives exactly one copy', OPTS, async ($, on) => {
+  const instructions = 'Codebase and user instructions are shown below.\n# Stable instructions'
+  const s: State = { rows: ROWS, replies: [ledger('first fold')] }
+  const seen = bottoms(on, s)
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  const attachment = { type: 'instructions' as const, text: instructions, origin: 'dynamic' }
+  await $.prompt.attachment(attachment)
+  await turnEnds($, s, seen)
+  const folded = seen.results.at(0)?.messages ?? []
+  expect(folded.filter(row => stableAttachmentOf(row)?.type === 'instructions')).toEqual([])
+  expect(await $.prompt.attachment(attachment)).toEqual({ text: instructions })
 })
 
 // Regression caught: the harness re-announced the same MEMORY.md delta after every fold and clm carried one more copy each time (49 identical 31KB rows in one session).
@@ -498,25 +523,23 @@ test('MEMORY.md edits across folds leave one latest instructions row before the 
   await announce(full)
   await turnEnds($, s, seen)
   const first = seen.results.at(0)?.messages ?? []
-  expect(await announce(full)).toEqual({ text: null })
+  expect(await announce(full)).toEqual({ text: full })
   expect(await announce(delta('- memory v2'))).toEqual({ text: delta('- memory v2') })
   s.rows = [...first, ...more]
   await turnEnds($, s, seen)
   const second = seen.results.at(1)?.messages ?? []
-  expect(instructionRows(second).map(row => stableAttachmentOf(row)?.text)).toEqual([full.replace('- memory v1', '- memory v2')])
-  const at = second.findIndex(row => stableAttachmentOf(row)?.type === 'instructions')
-  expect(second[at + 1]?.text).toMatch(/^\[clm ledger #2 · /)
-  expect(await announce(delta('- memory v2'))).toEqual({ text: null })
-  expect(await announce(delta('- memory v2'))).toEqual({ text: null })
+  expect(instructionRows(second)).toEqual([])
+  expect(await announce(delta('- memory v2'))).toEqual({ text: delta('- memory v2') })
+  expect(await announce(delta('- memory v2'))).toEqual({ text: delta('- memory v2') })
   expect(await announce(delta('- memory v3'))).toEqual({ text: delta('- memory v3') })
   s.rows = [...second, ...more]
   await turnEnds($, s, seen)
   const third = seen.results.at(2)?.messages ?? []
-  expect(instructionRows(third).map(row => stableAttachmentOf(row)?.text)).toEqual([full.replace('- memory v1', '- memory v3')])
+  expect(instructionRows(third)).toEqual([])
 })
 
-// Regression caught: the kept first request brought back its session-start CLAUDE.md beside the newer carried copy.
-test('a head-held instructions copy made stale by an edit is replaced, not kept beside the latest', OPTS, async ($, on) => {
+// Regression caught: after a later fold dropped the head, carriedAtSeq suppressed the harness's only instructions copy.
+test('after a fold drops the head, re-announcing the same instructions passes through', OPTS, async ($, on) => {
   const full = 'Codebase and user instructions are shown below.\n\nContents of /w/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n- v1'
   const delta = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies:\n\nContents of /w/memory/MEMORY.md (user\'s auto-memory, persists across conversations):\n\n- v2'
   const s: State = { rows: ROWS.slice(0, 1), replies: [ledger('first fold'), ledger('second fold')] }
@@ -533,9 +556,8 @@ test('a head-held instructions copy made stale by an edit is replaced, not kept 
   await turnEnds($, s, seen)
   const second = seen.results.at(1)?.messages ?? []
   expect(second[0]?.handle).toBeUndefined()
-  expect(second[1]?.text).toBe(stableAttachmentRow('instructions', full.replace('- v1', '- v2')).text)
-  expect(second[2]?.text).toMatch(/^\[clm ledger #2 · /)
-  expect(await announce(delta)).toEqual({ text: null })
+  expect(second[1]?.text).toMatch(/^\[clm ledger #2 · /)
+  expect(await announce(delta)).toEqual({ text: delta })
 })
 
 // Regression caught: a note quoting the harness's "Contents of x (y):" header split the file, so an edit left its stale tail in the latest full text.
@@ -566,76 +588,13 @@ test('after a resume a stale head instructions copy is carried even when another
   await turnEnds($, s, seen)
   const first = seen.results.at(0)?.messages ?? []
   await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput)
-  expect(await announce('instructions', full)).toEqual({ text: null })
+  expect(await announce('instructions', full)).toEqual({ text: full })
   expect(await announce('instructions', delta)).toEqual({ text: delta })
   s.rows = [...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
   await turnEnds($, s, seen)
   const second = seen.results.at(1)?.messages ?? []
   const carried = second.filter(row => stableAttachmentOf(row)?.type === 'instructions')
-  expect(carried.map(row => row.text)).toEqual([stableAttachmentRow('instructions', full.replace('- v1', '- v2')).text])
-  const at = second.findIndex(row => stableAttachmentOf(row)?.type === 'instructions')
-  expect(second[at + 1]?.text).toMatch(/^\[clm ledger #2 · /)
-})
-
-test('the same re-read delta announced three times is carried once with the full instructions', OPTS, async ($, on) => {
-  const full = 'Codebase and user instructions are shown below.\n# Stable instructions\nKeep the exact bytes.'
-  const text = 'Instruction files were re-read after the conversation was compacted.\nStable instruction text.'
-  const attachment = { type: 'instructions' as const, text, origin: 'dynamic' }
-  const s: State = { rows: [...ROWS], replies: [ledger('first')] }
-  const seen = bottoms(on, s)
-  on('prompt.attachment', (_$, e) => ({ text: e.text }))
-
-  await $.prompt.attachment({ ...attachment, text: full })
-  await $.prompt.attachment(attachment)
-  await $.prompt.attachment(attachment)
-  await $.prompt.attachment(attachment)
-  await turnEnds($, s, seen)
-  const result = seen.results.at(-1)
-  if (!result || !('messages' in result)) throw new Error('compaction returned no messages')
-  expect(result.messages.filter(row => row.text === stableAttachmentRow('instructions', full).text)).toHaveLength(1)
-  expect(result.messages.filter(row => row.text === stableAttachmentRow('instructions', text).text)).toHaveLength(1)
-})
-
-test('a newer instruction delta replaces the earlier copy of the same file', OPTS, async ($, on) => {
-  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
-  const older = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:\n\nContents of /abs/path/MEMORY.md (user memory):\n\n# Memory Index\nold'
-  const latest = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:\n\nContents of /abs/path/MEMORY.md (user memory):\n\n# Memory Index\nlatest'
-  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second')] }
-  const seen = bottoms(on, s)
-  on('prompt.attachment', (_$, e) => ({ text: e.text }))
-
-  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
-  await turnEnds($, s, seen)
-  const first = seen.results.at(0)?.messages ?? []
-  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
-  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
-  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
-  await turnEnds($, s, seen)
-
-  const second = seen.results.at(1)?.messages ?? []
-  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, latest])
-})
-
-test('a newer instruction delta removes only the matching file section from an older delta', OPTS, async ($, on) => {
-  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
-  const header = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:'
-  const older = `${header}\n\nContents of /work/X.md:\n\nX old\n\nContents of /work/Y.md (project instructions):\n\nY retained`
-  const latest = `${header}\n\nContents of /work/X.md:\n\nX latest`
-  const retained = `${header}\n\nContents of /work/Y.md (project instructions):\n\nY retained`
-  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second')] }
-  const seen = bottoms(on, s)
-  on('prompt.attachment', (_$, e) => ({ text: e.text }))
-
-  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
-  await turnEnds($, s, seen)
-  const first = seen.results.at(0)?.messages ?? []
-  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
-  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
-  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
-  await turnEnds($, s, seen)
-
-  const second = seen.results.at(1)?.messages ?? []
-  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
+  expect(carried).toEqual([])
 })
 
 test('instruction removal notices supersede older file sections and survive later re-reads', OPTS, async ($, on) => {
@@ -659,58 +618,7 @@ test('instruction removal notices supersede older file sections and survive late
   await turnEnds($, s, seen)
 
   const second = seen.results.at(1)?.messages ?? []
-  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
-})
-
-test('instruction paths in parenthesized directories keep sibling files distinct', OPTS, async ($, on) => {
-  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
-  const header = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:'
-  const a = '/U/My Docs (copy)/a/CLAUDE.md'
-  const b = '/U/My Docs (copy)/b/CLAUDE.md'
-  const details = ' (project instructions, checked into the codebase):'
-  const older = `${header}\n\nContents of ${a}${details}\n\nA v1\n\nContents of ${b}${details}\n\nB rules`
-  const latest = `${header}\n\nContents of ${a}${details}\n\nA v2`
-  const retained = `${header}\n\nContents of ${b}${details}\n\nB rules`
-  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second')] }
-  const seen = bottoms(on, s)
-  on('prompt.attachment', (_$, e) => ({ text: e.text }))
-
-  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
-  await turnEnds($, s, seen)
-  const first = seen.results.at(0)?.messages ?? []
-  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
-  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
-  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
-  await turnEnds($, s, seen)
-
-  const second = seen.results.at(1)?.messages ?? []
-  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
-})
-
-test('a resumed session applies new instruction deltas to sections restored from carried rows', OPTS, async ($, on) => {
-  const full = 'Codebase and user instructions are shown below.\n# Stable instructions'
-  const header = 'Instruction files were re-read after the conversation was compacted; these differ from their earlier copies — each replaces its earlier copy, and the instructions preamble above still applies:'
-  const older = `${header}\n\nContents of /w/X.md:\n\nX old\n\nContents of /w/Y.md (project instructions):\n\nY retained`
-  const latest = `${header}\n\nContents of /w/X.md:\n\nX latest`
-  const retained = `${header}\n\nContents of /w/Y.md (project instructions):\n\nY retained`
-  const s: State = { rows: [...ROWS], replies: [ledger('first'), ledger('second'), ledger('third')] }
-  const seen = bottoms(on, s)
-  on('prompt.attachment', (_$, e) => ({ text: e.text }))
-
-  await $.prompt.attachment({ type: 'instructions', text: full, origin: 'dynamic' })
-  await turnEnds($, s, seen)
-  const first = seen.results.at(0)?.messages ?? []
-  await $.prompt.attachment({ type: 'instructions', text: older, origin: 'dynamic' })
-  s.rows = [...ROWS, ...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
-  await turnEnds($, s, seen)
-  const second = seen.results.at(1)?.messages ?? []
-  s.rows = [...second, M('user', 'resume work'), use('tu_e', 'Write'), res('tu_e', 'w ' + BIG), M('assistant', 'continued after resume'), M('user', 'wrap up'), M('assistant', 'wrapped')]
-  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput)
-  await $.prompt.attachment({ type: 'instructions', text: latest, origin: 'dynamic' })
-  await turnEnds($, s, seen)
-
-  const third = seen.results.at(2)?.messages ?? []
-  expect(third.map(stableAttachmentOf).filter(row => row?.type === 'instructions').map(row => row?.text)).toEqual([full, retained, latest])
+  expect(second.map(stableAttachmentOf).filter(row => row?.type === 'instructions')).toEqual([])
 })
 
 // Regression caught: a fold re-carried the first request's session-start attachments as user rows, so the UI showed them as typed by the user.
@@ -729,7 +637,7 @@ test('head group with attachments does not re-carry them as user rows', OPTS, as
   expect(out[0]).toEqual(handled(ROWS)[0]!)
   expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
   expect(out.filter(row => stableAttachmentOf(row) !== undefined)).toEqual([])
-  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: null })
+  expect(await $.prompt.attachment(attachment('instructions', instructions))).toEqual({ text: instructions })
   expect(await $.prompt.attachment(attachment('output_style_instructions', style))).toEqual({ text: null })
 })
 
@@ -745,7 +653,7 @@ test('a resumed session still drops the head-held re-announcement and carries no
   await turnEnds($, s, seen)
   const first = seen.results.at(0)?.messages ?? []
   await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true } satisfies SessionStartInput)
-  expect(await $.prompt.attachment(attachment)).toEqual({ text: null })
+  expect(await $.prompt.attachment(attachment)).toEqual({ text: instructions })
   s.rows = [...first, M('user', 'continue work'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'continued'), M('user', 'push'), M('assistant', 'pushed')]
   await turnEnds($, s, seen)
   expect(seen.results).toHaveLength(2)
@@ -770,8 +678,7 @@ test('deleting a CLAUDE.md mid-session keeps the original full text carried on t
   await turnEnds($, s, seen)
   expect(seen.results).toHaveLength(2)
   const second = seen.results.at(1)?.messages ?? []
-  expect(second[1]?.text).toBe(stableAttachmentRow('instructions', instructions).text)
-  expect(second[2]?.text).toBe(stableAttachmentRow('instructions', deletion).text)
+  expect(second.filter(row => stableAttachmentOf(row)?.type === 'instructions')).toEqual([])
 })
 
 test('token estimates count CJK scripts and other text separately', () => {

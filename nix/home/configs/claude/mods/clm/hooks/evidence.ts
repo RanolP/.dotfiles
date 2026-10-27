@@ -221,6 +221,7 @@ export function askedItems(question: Issue): ConfirmItem[] {
 
 /** Whole items while they fit, then a count of the rest; a lone item too long for the bound is clipped on its own. */
 function confirmTitle(items: readonly ConfirmItem[]): string {
+  items = items.filter(item => !item.title.startsWith(CONFIRM_PREFIX))
   const budget = CONFIRM_TITLE_MAX - CONFIRM_PREFIX.length
   const texts = items.map(confirmText)
   const tail = (n: number) => n ? `${CONFIRM_SEP}외 ${n}건` : ''
@@ -268,6 +269,7 @@ export function confirmQuestion(claimed: readonly Payload[], landed: readonly Pa
   const asksAbout = (o: Payload) => o.op !== 'status' || issues.some(issue => issue.id === o.issue && !closed(issue.status))
   const claims = claimed.filter(o => isDoneClaim(o) && asksAbout(o))
     .map((o): Item => o.op === 'status' ? { id: o.issue, title: title(o.issue) } : { title: o.op === 'create' ? o.title.trim() : '' })
+    .filter(item => !item.title.startsWith(CONFIRM_PREFIX))
     .filter(stillOpen)
   const open = questions.find(issue => issue.status === 'question' && statusAfter.get(issue.id) === 'question')
   const asked = open ? askedItems(open) : []

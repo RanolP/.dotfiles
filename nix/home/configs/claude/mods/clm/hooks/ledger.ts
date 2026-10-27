@@ -110,6 +110,7 @@ const instructionValue = (line: string): string | undefined => {
 /** The one key two spellings of an instruction share: whitespace runs, line breaks included, collapse to one space. */
 export const instructionKey = (text: string) => text.replace(/\s+/g, ' ').trim()
 const sectionOf = (notes: string, name: string) => sectionsOf(notes).find(p => isSection(p, name))
+export const sectionBody = (notes: string, name: string): string => sectionOf(notes, name)?.split('\n').slice(1).join('\n').trim() ?? ''
 export const instructionValues = (notes: string): string[] =>
   (sectionOf(notes, INSTRUCTIONS) ?? '').split('\n').slice(1).map(instructionValue).filter((v): v is string => v !== undefined)
 export const withdrawnInstructionKeys = (notes: string): Set<string> => new Set(instructionValues(notes).flatMap(value => {

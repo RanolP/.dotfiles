@@ -1,7 +1,7 @@
 import type { SessionMessage, SessionCompactResult } from 'claude-code'
 import {
   buildCleared, estTokens, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, keepsHeadGroup, kst, ledgerRowText, liveRows, planClear,
-  protectedIndex, stableAttachmentOf, sum, type ClearPlan,
+  protectedIndex, sum, type ClearPlan,
 } from './fold'
 import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import {
@@ -132,11 +132,8 @@ const isPromptStart = (message: SessionMessage) => isPrompt(message) && !isHarne
 
 export const foldJobIdle = (key: string): boolean => (foldJobs.get(key)?.state ?? 'idle') === 'idle'
 
-// Re-carried instruction attachments are context the engine re-injects after
-// any compaction, so only the conversation itself has to shrink.
-const conversation = (rows: readonly SessionMessage[]) => sum(rows.filter(row => stableAttachmentOf(row) === undefined))
 const notShrunk = (before: readonly SessionMessage[], after: readonly SessionMessage[]): NotShrunk | undefined =>
-  conversation(after) < conversation(before) ? undefined : { notShrunk: `the clm fold did not shrink the context (${conversation(before)} -> ${conversation(after)} est. tokens)` }
+  sum(after) < sum(before) ? undefined : { notShrunk: `the clm fold did not shrink the context (${sum(before)} -> ${sum(after)} est. tokens)` }
 
 /** After the engine summarized, its summary heads the live chain; a fold built on the old rows must never swap in. */
 export async function adoptEngineSummary(io: FoldJobIo, key: string, messages: readonly SessionMessage[] | undefined): Promise<void> {

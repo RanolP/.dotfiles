@@ -7,7 +7,7 @@ import {
   EMPTY_LEDGER, ageDecayPlan, fallbackLedger, factLines, instructionKey, instructionValues, issueList,
   LEDGER_COMPACT_SYSTEM, MERGE_SYSTEM, legacyItems, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseMerge,
   preservedLines, preserveInstructions, rememberFacts, rememberOversize, rememberPreserved,
-  withheldLines, WITHDRAWN_PREFIX, withNotes, type Fact,
+  sectionBody, withheldLines, WITHDRAWN_PREFIX, withNotes, type Fact,
 } from './ledger'
 import { archivedDone, injected, isRecord, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held, HeldClaims, ReviewInput, Reviewed } from './held'
@@ -87,7 +87,7 @@ function parseTopics(raw: string): TopicState[] | string {
 export async function storedTopics(io: Pick<FoldRuntimeIo, 'topics'>, notes: string, seq: number, key: string): Promise<TopicState[]> {
   const stored = await io.topics(key)
   if (isTopicList(stored)) return stored
-  const goal = /^## 목표\s*\n([\s\S]*?)(?=\n## |$)/m.exec(notes)?.[1]?.trim() ?? ''
+  const goal = sectionBody(notes, '목표')
   if (!goal || goal === '- (none yet)') return []
   return [{ topic: '기존 세션 주제', summary: goal, seq: Math.max(1, seq) }]
 }
@@ -97,7 +97,7 @@ export async function compressTopics(
 ): Promise<{ topics: TopicState[]; ledgerTokens: number }> {
   const normalized: (TopicState & { sourceTokens: number })[] = input.map(topic => ({ ...topic, sourceTokens: topic.sourceTokens ?? topicTokens(topic) }))
   const old = new Map(normalized.map(topic => [topicKey(topic), topic]))
-  const fixedNotes = notes.replace(/^## 목표\n[\s\S]*?(?=\n## |$)/m, '## 목표\n')
+  const fixedNotes = withNotes(notes, '## 목표\n')
   const origin = await io.captureOrigin()
   const events = await io.readAll()
   const state = focusOf(events, origin.session)
@@ -342,7 +342,7 @@ export async function fold(
     fullNotes = notesWithTopics(fullNotes, compressed.topics)
     topics = compressed.topics
   } else {
-    const goal = /^## 목표\s*\n([\s\S]*?)(?=\n## |$)/m.exec(notes)?.[1]?.trim() ?? ''
+    const goal = sectionBody(notes, '목표')
     if (goal && goal !== '- (none yet)') {
       const focus = currentView.issues.find(issue => issue.id === focusIssue)
       const latest: TopicState = { topic: focus?.title ?? '현재 작업', summary: goal, seq, sourceTokens: estTokens({ role: 'user', text: goal, toolUses: [] }), focusIssue }

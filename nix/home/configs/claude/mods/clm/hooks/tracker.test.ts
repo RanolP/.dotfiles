@@ -243,6 +243,6 @@ test('a fold with no op for an existing issue keeps it in the ledger', { options
   expect(prompts[0]).toContain('s1-1 | todo | migrate the db')
   const row = r.messages[1].text
   expect(row).toMatch(/^\[clm ledger #1 · /)
-  expect(row).toMatch(/Stack size\n0\nPending count\n0/)
+  expect(row).toContain('- stack 0 · pending 0')
   expect(row).not.toContain('migrate the db')
 })

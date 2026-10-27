@@ -67,6 +67,7 @@ export const isPrompt = (m: SessionMessage) =>
 
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 export const stripReminders = (text: string) => text.replace(REMINDER, '').trim()
+const isCompactSummary = (m: SessionMessage): boolean => (m as SessionMessage & { isCompactSummary?: boolean }).isCompactSummary === true
 // User-role rows the harness writes into the conversation: a subagent's
 // hand-back and a loaded skill's body. They still open a turn (isPrompt), so
 // a session driven by hand-backs keeps its fold boundaries, but they are not
@@ -74,12 +75,12 @@ export const stripReminders = (text: string) => text.replace(REMINDER, '').trim(
 const HARNESS_TEXT = /^(?:Another Claude session sent a message:|Base directory for this skill: )/
 export const isHarnessText = (text: string) => HARNESS_TEXT.test(text)
 /** A prompt the user wrote: what may be quoted as the user and kept under 사용자 지시. */
-export const isUserTyped = (m: SessionMessage) => isPrompt(m) && !isHarnessText(stripReminders(m.text))
+export const isUserTyped = (m: SessionMessage) => !isCompactSummary(m) && isPrompt(m) && !isHarnessText(stripReminders(m.text))
 
 // A ledger row ahead of every prompt means the first request was already
 // folded away; the ledger then marks the head, and buildCleared replaces it.
 export const protectedIndex = (msgs: readonly SessionMessage[]): number => {
-  const i = msgs.findIndex(m => isPrompt(m) || isLedgerRow(m))
+  const i = msgs.findIndex(m => !isCompactSummary(m) && (isPrompt(m) || isLedgerRow(m)))
   return i < 0 ? 0 : i
 }
 // Conversation rows ahead of the first request open a session whose first
@@ -198,7 +199,7 @@ export const keepsHeadGroup = (msgs: readonly SessionMessage[], first: number): 
 
 export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
   const kept = keepHead ? plan.head.find(isPrompt) : undefined
-  return [...plan.head.filter(m => !isLedgerRow(m) && !isCarriedAttachment(m)), ...attachments, ledgerRow, ...plan.tail.filter(m => !isCarriedAttachment(m))].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts))))
+  return [...plan.head.filter(m => !isCompactSummary(m) && !isLedgerRow(m) && !isCarriedAttachment(m)), ...attachments, ledgerRow, ...plan.tail.filter(m => !isCarriedAttachment(m))].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts))))
 }
 
 // clm-prompt
@@ -215,9 +216,9 @@ const ledgerSections = (ledger: string): LedgerSection[] => ledger.split(/\n\n(?
   return { name: heading?.startsWith('## ') ? heading.slice(3) : '', lines: lines.map(clipLedgerLine), dropped: 0 }
 })
 const renderLedgerSections = (sections: readonly LedgerSection[]) => sections.map(section => {
-  const lines = section.lines.filter(line => line !== LEDGER_NONE)
+  const lines = section.lines.filter(line => line !== '' && line !== LEDGER_NONE)
   if (section.name === 'where we are' && section.dropped) {
-    const metadata = lines.findIndex(line => line === 'Stack size' || line === 'Pending count')
+    const metadata = lines.findIndex(line => line.startsWith('- stack '))
     const before = metadata < 0 ? lines : lines.slice(0, metadata)
     const after = metadata < 0 ? [] : lines.slice(metadata)
     before.push(`${LEDGER_MORE}${section.dropped} older, see clm_recall`)
@@ -230,7 +231,7 @@ const dropOldestLedgerItem = (section: LedgerSection | undefined) => {
   if (!section) return false
   let index = -1
   if (section.name === 'where we are') {
-    const metadata = section.lines.findIndex(line => line === 'Stack size' || line === 'Pending count')
+    const metadata = section.lines.findIndex(line => line.startsWith('- stack '))
     const end = metadata < 0 ? section.lines.length : metadata
     for (let i = 1; i < end; i++) if (section.lines[i] !== LEDGER_NONE) { index = i; break }
   } else index = section.lines.findIndex(line => line !== LEDGER_NONE)

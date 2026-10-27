@@ -51,6 +51,15 @@ test('instruction preservation has no character cap', async () => {
   expect(out.notes).toContain(JSON.stringify(old[11]))
 })
 
+// Regression caught: a dropped built-in summary was preserved as a user constraint after its head row was folded into the ledger.
+test('a dropped built-in compact summary is not preserved as a user instruction', () => {
+  const notes = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- f'
+  const summary = M('user', 'This session is being continued from a previous conversation…') as SessionMessage & { isCompactSummary: boolean }
+  summary.isCompactSummary = true
+  const out = preserveInstructions(notes, [], [summary], '/ledger.md')
+  expect(instructionValues(out.notes)).toEqual([])
+})
+
 // Regression caught: a session whose transcript exceeds the fs size cap lost every instruction address, so preserved instructions showed @unknown.
 test('an instruction given in a session whose transcript exceeds the fs size cap still gets a real address', { options: { budget: 5000, tailTarget: 3000, queueTarget: 1, ledgerTarget: 750, reserve: 100 } }, async ($, on) => {
   const full = 'Do not change generated files. Keep every existing lockfile byte-for-byte stable, including all metadata and ordering.'
@@ -69,7 +78,7 @@ test('an instruction given in a session whose transcript exceeds the fs size cap
   const folded = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
   const ledgerRow = folded.find(row => row.text.startsWith('[clm ledger #'))
   if (!ledgerRow) throw new Error('fold omitted the ledger row')
-  expect(ledgerRow.text).toContain(`${[...full].slice(0, 80).join('')} ${address}`)
+  expect(ledgerRow.text).toContain(`${[...full].slice(0, 80).join('')}… ${address}`)
   expect(ledgerRow.text).not.toContain(full)
   expect(seen.store['instruction-index:s1:main']).toContainEqual({ address, issue: null, text: full })
   expect(recallRows(indexed as any, address).text).toContain(full)
@@ -104,7 +113,7 @@ test('the seven-section ledger keeps actions under the focused task and resource
   expect(row).toContain('verify package checksum — settling check: check the release digest')
   expect(row).toContain('## owned resources\n\n- metro :8081\n- mutex ipad held')
   expect(row).toContain('the build tool failed once')
-  expect(row).toContain('Stack size\n2\nPending count\n1')
+  expect(row).toContain('- stack 2 · pending 1')
 })
 
 // Regression caught: the merge model received B and moved it into the summary even though the swap keeps B verbatim.
@@ -150,6 +159,14 @@ test('a fold that closes the confirm question and adds a claim asks in a new que
   expect(out).toEqual([{ op: 'create', title: `${CONFIRM_PREFIX}s1-a "push the tag"`, status: 'question', note: `${CONFIRM_ITEMS}[{"id":"s1-a","title":"push the tag"}]` }])
 })
 
+// Regression caught: a done claim on the confirmation question itself became a nested confirmation item on each fold.
+test('confirmation questions never become their own confirmation items', () => {
+  const title = `${CONFIRM_PREFIX}s1-a "draft PR 만들기"`
+  const q = confirmIssue('s1-q', title, 'question')
+  expect(confirmQuestion([{ op: 'status', issue: q.id, status: 'done' }], [], [q], new Set())).toEqual([])
+  expect(confirmQuestion([{ op: 'create', title, status: 'done' }], [], [], new Set())).toEqual([])
+})
+
 // Regression caught: the main agent's resident ledger had no questions section, so it never saw the confirm question it should relay.
 test('the resident ledger lists open questions without the stored item list', () => {
   const [made] = confirmQuestion([{ op: 'create', title: 'tag the release', status: 'done' }], [], [], new Set())
@@ -159,6 +176,19 @@ test('the resident ledger lists open questions without the stored item list', ()
   expect(row).toContain(`## open questions\n\n- ${made.title} [s1-q]`)
   expect(row).not.toContain('answered before')
   expect(row).not.toContain(CONFIRM_ITEMS)
+})
+
+// Regression caught: resident metadata was four bare lines, long instructions were silently cut, and empty or fact sections rendered blank/unbulleted lines.
+test('the resident ledger renders compact metadata, marked clipping, bullets and placeholders', () => {
+  const long = 'x'.repeat(81)
+  const row = residentLedgerText(undefined, undefined, 2, 1, [{ address: '@abcd1234', issue: null, text: long }], new Set(), {
+    where: [''], constraints: ['keep it'], learned: [''], resources: ['port 8080'],
+  })
+  expect(section(row, 'where we are')).toContain('- stack 2 · pending 1')
+  expect(row).not.toContain('Stack size')
+  expect(section(row, 'constraints & preferences')).toContain(`- ${'x'.repeat(80)}… @abcd1234\n- keep it`)
+  expect(section(row, 'learned').trim()).toBe('- (none yet)')
+  expect(section(row, 'owned resources').trim()).toBe('- port 8080')
 })
 
 // Regression caught: a malformed note carrying the item prefix sent the re-read to the clipped title, losing the items behind "외 N건" and keeping that tail as an item.
@@ -532,7 +562,7 @@ test('a row built from oversized sections no longer exceeds ledgerTarget', async
   const items = (label: string, count: number) => Array.from({ length: count }, (_, i) => `- ${label} ${i} ${'x'.repeat(300)}`)
   const section = (name: string, lines: string[]) => `## ${name}\n${lines.join('\n')}`
   const ledger = [
-    section('where we are', ['- focused task @aabbccdd', ...items('old topic', 12), 'Stack size', '2', 'Pending count', '0']),
+    section('where we are', ['- focused task @aabbccdd', ...items('old topic', 12), '- stack 2 · pending 0']),
     section('what to do', items('child task', 6)),
     section('what to request', items('open request', 5)),
     section('constraints & preferences', ['- keep the migration constraint']),

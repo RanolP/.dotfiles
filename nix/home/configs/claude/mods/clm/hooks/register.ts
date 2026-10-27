@@ -515,7 +515,7 @@ export async function handleStableAttachment($: StableAttachmentIo, input: Stabl
     }
     // Re-announced carried attachments must not create duplicate rows.
     const progress = value as StableAttachmentProgress
-    const result = !changed && value.carriedAtSeq > 0 && (delta || value.carriedAtSeq > (progress.droppedAtSeq ?? 0)) ? { text: null } : undefined
+    const result = input.type !== 'instructions' && !changed && value.carriedAtSeq > 0 && (delta || value.carriedAtSeq > (progress.droppedAtSeq ?? 0)) ? { text: null } : undefined
     if (result) progress.droppedAtSeq = value.carriedAtSeq
     return { next: { ...sessions, [session]: state }, result }
   })
@@ -532,7 +532,7 @@ const stableAttachmentRows = async ($: StableAttachmentIo, headKept: boolean): P
     const stale = (value: StableAttachmentValue) => value.inHead === true && value.full !== undefined && textDigest(value.full) !== value.headDigest
     const held = Object.values(state).filter(value => value.inHead)
     const keep = headKept && !(held.every(value => value.full !== undefined) && held.some(stale))
-    const rows = STABLE_ATTACHMENT_TYPES.flatMap(type => {
+    const rows = STABLE_ATTACHMENT_TYPES.filter(type => type !== 'instructions').flatMap(type => {
       const value = state[type]
       return value ? [...(value.full === undefined || (keep && value.inHead && !stale(value)) ? [] : [stableAttachmentRow(type, value.full)]), ...value.deltas.map(text => stableAttachmentRow(type, text))] : []
     })
@@ -546,11 +546,11 @@ const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, 
     const state = sessions[session] ?? {}
     for (const row of rows) {
       const attachment = stableAttachmentOf(row)
-      const value = attachment && state[attachment.type]
+      const value = attachment?.type === 'instructions' ? undefined : attachment && state[attachment.type]
       if (value) value.carriedAtSeq = seq
     }
-    for (const value of Object.values(state)) {
-      if (headKept && value.inHead) value.carriedAtSeq = seq
+    for (const [type, value] of Object.entries(state)) {
+      if (type !== 'instructions' && headKept && value.inHead) value.carriedAtSeq = seq
       if (!headKept) { delete value.inHead; delete value.headDigest }
     }
     return { next: { ...sessions, [session]: state }, result: state }

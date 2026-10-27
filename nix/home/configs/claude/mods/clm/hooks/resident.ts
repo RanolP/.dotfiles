@@ -1,6 +1,6 @@
 import { isOpen, isRecord, shownNote, type Issue, type TrackerEvent } from './tracker'
 import {
-  EMPTY_LEDGER, constraintFactLines, instructionKey, instructionValues, learnedFactLines, notesOf, withdrawnInstructionKeys,
+  EMPTY_LEDGER, constraintFactLines, instructionKey, instructionValues, learnedFactLines, notesOf, sectionBody, withdrawnInstructionKeys,
   WITHDRAWN_PREFIX, type Topic,
 } from './ledger'
 import { stripReminders } from './fold'
@@ -95,7 +95,7 @@ export async function residentLedger(
   const scopedTopics = topics
     .map(topic => topic.focusIssue === undefined ? { ...topic, focusIssue: topId ?? null } : topic)
     .filter(topic => (topic.focusIssue ?? null) === (topId ?? null))
-  const fallbackGoal = /^## 목표\s*\n([\s\S]*?)(?=\n## |$)/m.exec(rawNotes)?.[1]?.trim() ?? ''
+  const fallbackGoal = sectionBody(rawNotes, '목표')
   const where = topics.length
     ? scopedTopics.map(topic => `${topic.topic}: ${topic.summary}`)
     : fallbackGoal && fallbackGoal !== '- (none yet)' ? [fallbackGoal] : []
@@ -123,13 +123,17 @@ export function residentLedgerText(
   instructions: readonly InstructionIndex[], ancestorIds: ReadonlySet<string>, sections: ResidentLedgerSections = {},
 ): string {
   const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim()
+  const bullet = (value: string) => `- ${oneLine(value).replace(/^-\s*/, '')}`
   const lastNote = top && shownNote(top)
   const focus = top
     ? `- ${oneLine(top.title)}${lastNote ? ` — ${oneLine(lastNote)}` : ''} ${topAddress ?? '@unknown'}`
     : '- (none)'
   const index = instructions.filter(item => item.issue === null || (item.issue !== null && ancestorIds.has(item.issue)))
-    .map(item => `- ${[...item.text].slice(0, 80).join('')} ${item.address}`)
-  const where = [focus, ...(sections.where ?? []).map(line => `- ${oneLine(line)}`), 'Stack size', String(stackSize), 'Pending count', String(pendingCount)]
+    .map(item => {
+      const chars = [...item.text]
+      return `- ${chars.slice(0, 80).join('')}${chars.length > 80 ? '…' : ''} ${item.address}`
+    })
+  const where = [focus, ...(sections.where ?? []).map(line => oneLine(line)).filter(Boolean).map(line => `- ${line}`), `- stack ${stackSize} · pending ${pendingCount}`]
   const tasks = (sections.children ?? []).filter(issue => issue.parent === top?.id && isOpen(issue))
     .map(issue => {
       const note = shownNote(issue)
@@ -137,7 +141,7 @@ export function residentLedgerText(
     })
   const requests = (sections.requests ?? []).filter(request => request.status === 'open')
     .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
-  const constraints = [...index, ...(sections.constraints ?? []).map(oneLine)]
+  const constraints = [...index, ...(sections.constraints ?? []).map(oneLine).filter(Boolean).map(bullet)]
   const questions = (sections.questions ?? []).filter(issue => issue.status === 'question')
     .map(issue => {
       const note = shownNote(issue)
@@ -145,8 +149,8 @@ export function residentLedgerText(
     })
   const uncertain = (sections.uncertain ?? []).filter(issue => issue.status === 'uncertain')
     .map(issue => `- ${oneLine(issue.title)} — settling check: ${oneLine(shownNote(issue) ?? 'verify the claim')} [${issue.id}]`)
-  const learned = (sections.learned ?? []).map(oneLine)
-  const resources = (sections.resources ?? []).map(oneLine)
+  const learned = (sections.learned ?? []).map(oneLine).filter(Boolean).map(bullet)
+  const resources = (sections.resources ?? []).map(oneLine).filter(Boolean).map(bullet)
   const body = (lines: readonly string[]) => lines.length ? lines.join('\n') : '- (none yet)'
   return [
     '## where we are', where.join('\n'),

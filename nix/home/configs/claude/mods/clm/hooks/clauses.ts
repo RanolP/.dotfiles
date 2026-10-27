@@ -3,15 +3,17 @@ import { isRecord } from './tracker'
 // The user's standing requests as restricted Prolog clauses. A newer clause
 // retracts an older one when both define the same key of a predicate: same
 // name/arity, leading `key` args unify, and the clauses are not identical.
+// When every arg is a key, a rule extends ground facts; narrowing needs an explicit retract.
 // Retracted clauses stay in the store so clm_recall can show what replaced them.
 
 export type Term = { atom: string } | { num: number } | { var: string } | { str: string }
   | { list: Term[] } | { fn: string; args: Term[] }
 export type Goal = { neg: boolean; name: string; args: Term[] }
+export type ClauseSource = { address: string; promptSeq: number; quote: string }
 export type Clause = {
   id: string; head: { name: string; args: Term[] }; neg: boolean; body: Goal[]
   // `text` is a one-sentence Korean rendering for display; conflicts are decided on the parsed head alone.
-  source: string; text: string; quote: string; address: string; promptSeq: number
+  source: string; text: string; quote: string; address: string; promptSeq: number; sources: ClauseSource[]
   issue: string | null; at: string; status: 'live' | 'retracted'
   retraction?: { at: string; by: string; bySource: string; reason: 'conflict' | 'explicit' | 'rewind' }
 }
@@ -23,7 +25,7 @@ export type ClauseStore = {
 export type ParsedClause = Pick<Clause, 'head' | 'neg' | 'body'>
 /** One clause to apply: parsed, its quote already checked against the prompt it came from. */
 export type IncomingClause = ParsedClause & { text: string; quote: string; address: string; issue: string | null; key?: number }
-export type BacklogEntry = { address: string; promptSeq: number; text: string }
+export type BacklogEntry = { address: string; promptSeq: number; text: string; attempts?: number }
 
 export const clauseStoreKey = (key: string) => `clauses:${key}`
 export const clauseBacklogKey = (key: string) => `clause-backlog:${key}`
@@ -188,6 +190,10 @@ const predicateOf = (clause: ParsedClause) => `${clause.head.name}/${clause.head
 const defaultKey = (arity: number) => arity >= 2 ? arity - 1 : arity
 
 function conflicts(a: ParsedClause & { source: string }, b: ParsedClause & { source: string }, key: number): boolean {
+  const ground = (terms: readonly Term[]): boolean => terms.every(term => 'var' in term ? false
+    : 'list' in term ? ground(term.list)
+      : 'fn' in term ? ground(term.args) : true)
+  if (key === a.head.args.length && ground(a.head.args) !== ground(b.head.args)) return false
   return predicateOf(a) === predicateOf(b) && a.source !== b.source
     && unifyTerms(a.head.args.slice(0, key), b.head.args.slice(0, key))
 }
@@ -208,7 +214,7 @@ export function applyClauses(
   store: ClauseStore, incoming: readonly IncomingClause[], promptSeq: number, now: string,
 ): { next: ClauseStore; added: Clause[]; retracted: Clause[] } {
   const predicates = { ...store.predicates }
-  let clauses = store.clauses.map(clause => ({ ...clause }))
+  let clauses = store.clauses.map(clause => ({ ...clause, sources: [...clause.sources] }))
   let nextId = store.nextId
   const added: Clause[] = []
   const retracted: Clause[] = []
@@ -222,11 +228,13 @@ export function applyClauses(
     if (!registered) predicates[name] = { key, example: source }
     const same = clauses.find(clause => clause.status === 'live' && clause.source === source)
     if (same) {
+      same.sources.push({ address: item.address, promptSeq, quote: item.quote })
       if (promptSeq >= same.promptSeq) Object.assign(same, { text: item.text, quote: item.quote, address: item.address, promptSeq, issue: item.issue, at: now })
       continue
     }
     const clause: Clause = {
-      id: `C${nextId++}`, ...parsed, source, text: item.text, quote: item.quote, address: item.address, promptSeq, issue: item.issue, at: now, status: 'live',
+      id: `C${nextId++}`, ...parsed, source, text: item.text, quote: item.quote, address: item.address, promptSeq,
+      sources: [{ address: item.address, promptSeq, quote: item.quote }], issue: item.issue, at: now, status: 'live',
     }
     const rivals = clauses.filter(other => other.status === 'live' && conflicts(clause, other, key))
     const newer = rivals.filter(other => other.promptSeq > promptSeq).sort((a, b) => b.promptSeq - a.promptSeq)[0]
@@ -268,9 +276,15 @@ export function applyRetract(
  * unless another live clause still outranks the revived one.
  */
 export function dropClauses(store: ClauseStore, addresses: ReadonlySet<string>, now: string): { next: ClauseStore; dropped: Clause[]; revived: Clause[] } {
-  const dropped = store.clauses.filter(clause => addresses.has(clause.address))
+  const updated = store.clauses.map(clause => {
+    const sources = clause.sources.filter(source => !addresses.has(source.address))
+    if (!sources.length) return undefined
+    const newest = sources.reduce((best, source) => source.promptSeq >= best.promptSeq ? source : best)
+    return { ...clause, sources, address: newest.address, promptSeq: newest.promptSeq, quote: newest.quote }
+  })
+  const dropped = store.clauses.filter((_, index) => updated[index] === undefined)
   const removed = new Set([...dropped.map(clause => clause.id), ...addresses])
-  const clauses = store.clauses.filter(clause => !addresses.has(clause.address)).map(clause => ({ ...clause }))
+  const clauses = updated.filter((clause): clause is Clause => clause !== undefined)
   const revived: Clause[] = []
   for (const clause of clauses.toSorted((a, b) => b.promptSeq - a.promptSeq)) {
     if (clause.status !== 'retracted' || !clause.retraction || !removed.has(clause.retraction.by)) continue
@@ -305,10 +319,18 @@ function isClause(value: unknown): value is Clause {
     && typeof value.at === 'string' && (value.status === 'live' || value.status === 'retracted')
 }
 
+const isClauseSource = (value: unknown): value is ClauseSource => isRecord(value)
+  && typeof value.address === 'string' && typeof value.promptSeq === 'number' && typeof value.quote === 'string'
+
 /** The stored clause store, or undefined when the session has none yet. */
 export function readClauseStore(value: unknown): ClauseStore | undefined {
   if (!isRecord(value) || value.version !== 1) return undefined
-  const clauses = Array.isArray(value.clauses) ? value.clauses.filter(isClause) : []
+  const clauses = Array.isArray(value.clauses) ? value.clauses.filter(isClause).map(clause => ({
+    ...clause,
+    sources: Array.isArray(clause.sources) && clause.sources.every(isClauseSource)
+      ? clause.sources
+      : [{ address: clause.address, promptSeq: clause.promptSeq, quote: clause.quote }],
+  })) : []
   const predicates = isRecord(value.predicates)
     ? Object.fromEntries(Object.entries(value.predicates).filter(([, p]) => isRecord(p) && typeof p.key === 'number' && typeof p.example === 'string')) as ClauseStore['predicates']
     : {}
@@ -319,6 +341,7 @@ export function readClauseStore(value: unknown): ClauseStore | undefined {
 
 export const isBacklogEntry = (value: unknown): value is BacklogEntry => isRecord(value)
   && typeof value.address === 'string' && typeof value.promptSeq === 'number' && typeof value.text === 'string'
+  && (value.attempts === undefined || typeof value.attempts === 'number')
 
 /** Heads of predicates with a live clause, newest first, each with one live example. */
 export function livePredicates(store: ClauseStore, cap = 40): string[] {
@@ -331,7 +354,7 @@ export function livePredicates(store: ClauseStore, cap = 40): string[] {
 /** Live clauses in scope as `- text (Cn @addr)`, capped with a pointer to clm_recall. */
 export function renderClauses(store: ClauseStore, inScope: (issue: string | null) => boolean, cap = 40): string[] {
   const live = store.clauses.filter(clause => clause.status === 'live' && inScope(clause.issue))
-  const lines = live.slice(-cap).map(clause => `- ${clause.text} (${clause.id} ${clause.address})`)
+  const lines = live.slice(-cap).map(clause => `- ${clause.text.replace(/\s+/g, ' ').trim()} (${clause.id} ${clause.address})`)
   if (live.length > cap) lines.push(`- ${live.length - cap} more: clm_recall clauses`)
   return lines
 }

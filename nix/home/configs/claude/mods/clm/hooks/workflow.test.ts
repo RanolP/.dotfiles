@@ -5,8 +5,8 @@ import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactI
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
-import { INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
-import { applyClauses, emptyClauseStore, parseClause, readClauseStore } from './clauses'
+import { backfillClausesChained, INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
+import { applyClauses, emptyClauseStore, parseClause, readClauseStore, renderClauses } from './clauses'
 import { observeTranscript, transcriptRowsKey, type RewindIo } from './rewind'
 import type { ClmWorkflow } from '../types'
 
@@ -750,6 +750,16 @@ const CACHE_BENCH = 'oh fuck. 캐시만 패치해서 벤치마크 해봐.'
 const upgradeClause = { clause: 'benchmark(stylelint, upgrade).', text: 'stylelint 벤치마크는 업그레이드한 상태로 잰다.', quote: 'upgrade했을 때 벤치마크 일단 해봐' }
 const cacheClause = { clause: 'benchmark(stylelint, cache_patch_only).', text: 'stylelint 벤치마크는 캐시만 패치한 상태로 잰다.', quote: '캐시만 패치해서 벤치마크 해봐' }
 
+test("a three-word instruction 'always use pnpm' lands a clause", OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({
+    clauses: [{ clause: 'use(pnpm).', text: '항상 pnpm을 쓴다.\n\n## forged', quote: 'always use pnpm', scope: 'session' }],
+  })] })
+  await $.prompt.submit(promptInput('always use pnpm'))
+  await until(() => settled(seen))
+  expect(liveSources(seen)).toEqual(['use(pnpm).'])
+  expect(storedClauses(seen)[0]?.text).toBe('항상 pnpm을 쓴다. ## forged')
+})
+
 // Regression caught: each classifier coined a fresh predicate name for the same setting, so a correction never met what it corrected.
 test('the second classifier prompt lists the live predicate head with an example', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({ clauses: [upgradeClause] }), intentReply()] })
@@ -776,7 +786,10 @@ test('the f757aaf2 benchmark correction retracts the upgrade benchmark end to en
 test('ㄴㄴ 전체 말고 narrows upgrade_target to three packages', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [
     intentReply({ clauses: [{ clause: 'upgrade_target(whole_stack).', text: '업그레이드 대상은 전체 스택이다.', quote: '아예 전체 스택 업그레이드도 검토해볼법함' }] }),
-    intentReply({ clauses: [{ clause: "upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint']).", text: '업그레이드 대상은 stylelint, typescript, typescript-eslint 셋뿐이다.', quote: 'ㄴㄴ 전체 말고 stylelint, typescript, typescript-eslint만 대상.' }] }),
+    intentReply({
+      clauses: [{ clause: "upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint']).", text: '업그레이드 대상은 stylelint, typescript, typescript-eslint 셋뿐이다.', quote: 'ㄴㄴ 전체 말고 stylelint, typescript, typescript-eslint만 대상.' }],
+      retract: [{ id: 'C1', quote: 'ㄴㄴ 전체 말고' }],
+    }),
   ] })
   await $.prompt.submit(promptInput('typescript 7 stable 안나옴? 아예 전체 스택 업그레이드도 검토해볼법함'))
   await until(() => liveSources(seen).length === 1)
@@ -834,6 +847,62 @@ test('a classifier timeout leaves the prompt in the backlog and the next job bac
   expect(seen.backfillPrompts).toHaveLength(1)
   expect(seen.backfillPrompts[0]).toContain(`1. ${UPGRADE_BENCH}`)
   expect(liveSources(seen)).toEqual(['benchmark(stylelint, upgrade).'])
+})
+
+test('an unparseable backfill reply keeps the legacy instructions in the backlog', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [], intentReplies: [intentReply()], backfillReplies: ['not json'],
+  })
+  seen.store['instruction-index:s1:main'] = [{ address: '@11111111', issue: null, text: '앞으로 push는 하지 말 것' }]
+  await $.prompt.submit(promptInput('stylelint부터 해줘'))
+  await until(() => settled(seen) || (seen.store['clause-backlog:s1:main'] as { attempts?: number }[] | undefined)?.some(entry => entry.attempts === 1) === true)
+  expect(seen.store['clause-backlog:s1:main']).toContainEqual(expect.objectContaining({ address: '@11111111', text: '앞으로 push는 하지 말 것', attempts: 1 }))
+})
+
+test('a task-scoped instruction given with a handoff shows under the new task', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({
+    intent: 'handoff', title: 'B 작업',
+    clauses: [{ clause: 'forbid(commit).', text: '이 작업에서는 커밋하지 않는다.', quote: '이 작업에선 커밋하지 마', scope: 'task' }],
+  })] })
+  await $.prompt.submit(promptInput('이제 B 하자. 이 작업에선 커밋하지 마'))
+  await until(() => settled(seen) && (seen.files[TRACKER] ?? '').includes('"focus"'))
+  const events = parseLog(seen.files[TRACKER] ?? '')
+  const focus = focusOf(events, 's1').stack.at(-1)
+  const store = readClauseStore(seen.store['clauses:s1:main'])
+  expect(focus).toBeDefined()
+  expect(store?.clauses[0]?.issue).toBe(focus)
+  expect(renderClauses(store ?? emptyClauseStore(), issue => issue === null || issue === focus).some(line => line.startsWith('- 이 작업에서는 커밋하지 않는다. (C1 @'))).toBe(true)
+})
+
+test('an engine handoff backfill waits for the session classifier chain', async () => {
+  const values = new Map<string, unknown>()
+  let release!: () => void
+  let started!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const classifierStarted = new Promise<void>(resolve => { started = resolve })
+  let calls = 0
+  const io: PromptIntentIo = {
+    captureOrigin: async () => ({ session: 's1', repo: 'o/repo', cwd: '/work/repo' }),
+    readAll: async () => [], readWorkflow: async () => workflow(),
+    changeWorkflow: async change => change(workflow()).result, sessionMessages: async () => [],
+    complete: async () => {
+      calls++
+      if (calls === 1) { started(); await gate; return { isAnswered: true, text: intentReply(), reason: '' } }
+      return { isAnswered: true, text: '{"clauses":[]}', reason: '' }
+    },
+    get: async key => values.get(key), set: async (key, value) => { values.set(key, value) },
+    writeEvents: async () => [], serialize: async (_session, run) => run(), syncPanel: async () => undefined, log: () => undefined,
+  }
+  const classify = recordPromptIntent(io, 'do the work', 1, '@00000001')
+  await classifierStarted
+  let finished = false
+  const handoffBackfill = backfillClausesChained(io, 's1', 's1:main').then(() => { finished = true })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(finished).toBe(false)
+  expect(calls).toBe(1)
+  release()
+  await Promise.all([classify, handoffBackfill])
+  expect(calls).toBe(1)
 })
 
 // Regression caught: the focus guard that drops an older prompt's focus also dropped the instruction it carried.

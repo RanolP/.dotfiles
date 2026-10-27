@@ -22,7 +22,7 @@ import {
 } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
-import { backfillClauses as backfillClauseStore, compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
+import { backfillClausesChained, compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, popLater, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
@@ -966,7 +966,7 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   readAll: () => readAll($),
   trackerView: (origin, ops) => trackerView($, origin, ops),
   updateHeld: (settled, hold) => updateHeld($, settled, hold),
-  backfillClauses: key => backfillClauseStore(intentIo($), key.split(':', 1)[0] ?? key, key),
+  backfillClauses: key => backfillClausesChained(intentIo($), key.split(':', 1)[0] ?? key, key),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
   append: (payloads, origin, project, knownTitles) => append($, payloads, origin, project, knownTitles),
   projectPanel: (origin, events) => projectPanel($, origin, events),

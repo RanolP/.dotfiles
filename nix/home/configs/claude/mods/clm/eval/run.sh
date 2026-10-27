@@ -62,9 +62,12 @@ lines = path.read_text().splitlines()
 end = next((i for i in range(len(lines) - 1, -1, -1) if lines[i] == 'by kind'), None)
 if end is None:
     raise SystemExit(0)
-start = end - 19
-probe = re.compile(r'^(?:PASS|FAIL) (?:release|auth|migration)-[a-z0-9-]+ (?:instruction|decision|focus|fact|stack)$')
-if start < 0 or lines[end - 1] != '' or not all(probe.fullmatch(line) for line in lines[start:end - 1]):
+probe_end = end - 1 if end > 0 and lines[end - 1] == '' else end
+probe = re.compile(r'^(?:PASS|FAIL) [a-z0-9-]+ (?:instruction|decision|focus|fact|stack)$')
+start = probe_end
+while start > 0 and probe.fullmatch(lines[start - 1]):
+    start -= 1
+if start == probe_end:
     raise SystemExit(0)
 table = lines[end + 1:end + 6]
 if len(table) != 5 or not all(re.fullmatch(r'(?:instruction|decision|focus|fact|stack)\s+[0-9]+/[0-9]+', line) for line in table):
@@ -73,6 +76,7 @@ path.write_text('\n'.join(lines[start:end + 6]) + '\n')
 PY
 
 cat "$output"
+if awk '/^(instruction|decision|focus|fact|stack)[[:space:]]+[0-9]+\/[0-9]+$/ { split($2, n, "/"); if (n[1] < n[2]) bad = 1 } END { exit !bad }' "$output"; then exit 1; fi
 if grep -q '^by kind$' "$output"; then
   if grep -q '^FAIL ' "$output"; then exit 1; fi
   exit 0

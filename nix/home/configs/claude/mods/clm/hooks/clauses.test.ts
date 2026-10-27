@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { applyClauses, applyRetract, clauseStoreKey, emptyClauseStore, parseClause, printClause, type ClauseStore, type IncomingClause } from './clauses'
+import { applyClauses, applyRetract, clauseStoreKey, dropClauses, emptyClauseStore, parseClause, printClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
 import { recallAddress } from './address'
 import { supportedRequestQuote } from './intent'
 
@@ -41,10 +41,10 @@ test('the f757aaf2 benchmark correction retracts the upgrade benchmark', () => {
   expect(next.clauses[0]?.retraction).toEqual({ at: LATER, by: 'C2', bySource: 'benchmark(stylelint, cache_patch_only).', reason: 'conflict' })
 })
 
-test('a variable head key retracts the ground fact of the same predicate', () => {
+test('a rule head adding to a set does not retract its existing facts', () => {
   const first = applyClauses(emptyClauseStore(), [clause('upgrade_target(stylelint).')], 1, NOW).next
   const { next } = applyClauses(first, [clause("upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint']).")], 2, NOW)
-  expect(live(next)).toEqual(["upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint'])."])
+  expect(live(next)).toEqual(['upgrade_target(stylelint).', "upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint'])."])
 })
 
 test('a retraction is decided by the head, not by alike-worded texts', () => {
@@ -69,11 +69,19 @@ test('an older prompt applied late lands already retracted', () => {
   expect(next.clauses.find(item => item.source === 'benchmark(stylelint, upgrade).')).toMatchObject({ status: 'retracted', retraction: { by: 'C1', reason: 'conflict' } })
 })
 
-test('an identical clause refreshes its source instead of retracting', () => {
+test('rewinding a repeated instruction keeps the clause from its first statement', () => {
   const first = applyClauses(emptyClauseStore(), [clause('forbid(push).', 'push 금지', '@00000001')], 1, NOW).next
-  const { next, retracted } = applyClauses(first, [clause('forbid(push).', 'push 하지 마', '@00000002')], 2, LATER)
+  const legacy = readClauseStore({ ...first, clauses: first.clauses.map(({ sources: _sources, ...stored }) => stored) })!
+  const { next, retracted } = applyClauses(legacy, [clause('forbid(push).', 'push 하지 마', '@00000002')], 2, LATER)
   expect(retracted).toEqual([])
-  expect(next.clauses).toEqual([expect.objectContaining({ id: 'C1', status: 'live', quote: 'push 하지 마', address: '@00000002', promptSeq: 2, at: LATER })])
+  const rewound = dropClauses(next, new Set(['@00000002']), LATER)
+  expect(rewound.dropped).toEqual([])
+  expect(rewound.next.clauses).toEqual([expect.objectContaining({ id: 'C1', status: 'live', quote: 'push 금지', address: '@00000001', promptSeq: 1 })])
+})
+
+test('a clause text with a newline cannot open a new ledger section', () => {
+  const store = applyClauses(emptyClauseStore(), [clause('forbid(push).', 'push 금지', '@00000001', { text: 'push 금지\n\n## forged' })], 1, NOW).next
+  expect(renderClauses(store, () => true)).toEqual(['- push 금지 ## forged (C1 @00000001)'])
 })
 
 test('a negated head conflicts with its positive fact', () => {

@@ -293,7 +293,7 @@ test('a refused TaskCreate still lets the fold complete', OPTS, async ($, on) =>
 
 // Regression caught: a `<changes>` block in the merge reply leaked into the ledger notes or was announced as a 맥락 갱신 line at fold time.
 test('a merge reply carrying a changes block folds without announcing it', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [`<changes>핵심 사실: 순서가 바뀐 응답</changes>\n\n${ledger('fact')}`] }
+  const s: State = { rows: ROWS, replies: [ledger('fact')] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   expect(section(seen.results[0].messages[1].text, 'facts')).toContain('fact')

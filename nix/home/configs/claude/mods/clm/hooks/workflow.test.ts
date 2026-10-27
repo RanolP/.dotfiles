@@ -471,7 +471,7 @@ test('a quote of short pieces scattered across a row is refused, a long piece en
     { op: 'fact', text: 'FACT-SCATTERED', evidence: [{ ref: 'tu_a', quote: 'push…to…origin…main' }] },
     { op: 'fact', text: 'FACT-ONE-PIECE', evidence: [{ ref: 'tu_a', quote: 'failed to push some refs to origin…' }] },
   ]
-  const s: State = { rows, replies: [`## 목표\n- -\n\n<ops>${JSON.stringify(ops)}</ops>`] }
+  const s: State = { rows, replies: [JSON.stringify({ ops })] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const facts = section(seen.results[0].messages[1].text, 'facts')
@@ -517,7 +517,7 @@ for (const [name, status, cite, review] of [
     const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
     const build = issueAt(tracker(), 0)
     await runClm($, `drop ${build}`)
-    s.replies.push(`## 목표\n- -\n\n<ops>${JSON.stringify([{ op: 'status', issue: build, status, evidence: cite }])}</ops>`)
+    s.replies.push(JSON.stringify({ ops: [{ op: 'status', issue: build, status, evidence: cite }] }))
     await turnEnds($, s, seen)
     expect(tracker().map(i => [i.id, i.status])).toEqual([[build, 'dropped']])
   })
@@ -725,7 +725,7 @@ test('a fold after an earlier clm_task update still applies its own ops', { opti
   const rows = [...ROWS]
   rows[2] = res('tu_a', 'log: make fails at a.ts:12 ' + 'x'.repeat(24_000))
   const s: State = {
-    rows, replies: [], splitReplies: [JSON.stringify({ split: 2, notes: '## 목표\n- build', ops: [{ op: 'create', title: 'fold-created issue', status: 'todo' }], topics: [{ topic: 'build', summary: 'build summary' }] })],
+    rows, replies: [], splitReplies: [JSON.stringify({ split: 2, ops: [{ op: 'create', title: 'fold-created issue', status: 'todo' }] })],
   }
   const seen = bottoms(on, s)
   panelHandlers(on, seen)

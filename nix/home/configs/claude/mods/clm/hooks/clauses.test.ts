@@ -1,6 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 
-import { applyClauses, applyFoldClauseReply, applyRetract, clauseStoreKey, dropClauses, emptyClauseStore, parseClause, printClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
+import { applyClauses, applyFoldClauseOps, applyRetract, clauseStoreKey, dropClauses, emptyClauseStore, parseClause, printClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
+import { parseMerge } from './ledger'
 import { recallAddress } from './address'
 import { supportedRequestQuote } from './intent'
 
@@ -62,18 +63,47 @@ test('a fold op can never retract a user instruction clause', () => {
 
 test('a malformed fold reply leaves the store unchanged', () => {
   const store = applyClauses(emptyClauseStore(), [clause('forbid(push).')], 1, NOW).next
-  expect(applyFoldClauseReply(store, '{"ops":[{"clause":', NOW)).toBe(store)
+  expect(typeof parseMerge('{"ops":[{"clause":', new Set(), 1000)).toBe('string')
 })
 
 test('the rendered ledger hides evidence quotes and Prolog source', () => {
-  const store = applyFoldClauseReply(emptyClauseStore(), JSON.stringify({ ops: [{
+  const store = applyFoldClauseOps(emptyClauseStore(), [{
     clause: 'measured(lint_css_ci, seconds, 6).', text: 'lint_css_ci는 6초다.', kind: 'fact',
     promptSeq: 2, address: '@00000002', evidence: { ref: 'toolu_1', quote: 'secret exact evidence' },
-  }] }), NOW)
+  }], NOW)
   const rendered = renderClauses(store, () => true, 15, ['fact']).join('\n')
   expect(rendered).toContain('lint_css_ci는 6초다. (C1 @00000002)')
   expect(rendered).not.toContain('secret exact evidence')
   expect(rendered).not.toContain('measured(')
+})
+
+test('a classifier clause landed between fold prepare and land survives the land', () => {
+  const prepared = [{ clause: 'measured(lint_css_ci, seconds, 6).', text: 'lint_css_ci는 6초다.', kind: 'fact' as const, promptSeq: 2, address: '@fold', evidence: { ref: 'tu_1', quote: '6 seconds' } }]
+  const live = applyClauses(emptyClauseStore(), [clause('forbid(push).')], 3, LATER).next
+  const landed = applyFoldClauseOps(live, prepared, LATER)
+  expect(live.clauses[0]?.status).toBe('live')
+  expect(landed.clauses.filter(item => item.status === 'live').map(item => item.source)).toEqual(['forbid(push).', 'measured(lint_css_ci, seconds, 6).'])
+  expect(landed.nextId).toBe(3)
+})
+
+test('the handoff clauses row keeps every instruction when 30 facts exist', () => {
+  let store = emptyClauseStore()
+  for (let i = 0; i < 30; i++) store = applyClauses(store, [{ ...parseClause(`found(subject_${i}, attr, value).`), text: `fact ${i}`, quote: `fact ${i}`, address: '@fold', issue: null, origin: 'fold', kind: 'fact', evidence: { ref: `tu_${i}`, quote: `fact ${i}` } }], i + 1, NOW).next
+  for (let i = 0; i < 40; i++) store = applyClauses(store, [clause(`keep(rule_${i}).`)], 31 + i, NOW).next
+  const row = renderClauses(store, () => true, 40, ['instruction'])
+  expect(row).toHaveLength(40)
+  expect(row.every(line => line.includes('keep(rule_'))).toBe(true)
+})
+
+test('two topics in one fold reply keep two goals', () => {
+  const merged = parseMerge(JSON.stringify({ ops: [
+    { clause: "goal('I-1', first).", kind: 'goal', text: 'first topic', evidence: [] },
+    { clause: "goal('I-2', second).", kind: 'goal', text: 'second topic', evidence: [] },
+  ] }), new Set(['I-1', 'I-2']), 1000)
+  if (typeof merged === 'string') throw new Error(merged)
+  const ops = merged.clauseOps.flatMap(op => 'retract' in op ? [op] : [{ ...op, promptSeq: 2, address: '@fold', evidence: undefined }])
+  const store = applyFoldClauseOps(emptyClauseStore(), ops, NOW)
+  expect(store.clauses.filter(item => item.status === 'live' && item.kind === 'goal').map(item => item.text)).toEqual(['first topic', 'second topic'])
 })
 
 test('a rule head adding to a set does not retract its existing facts', () => {

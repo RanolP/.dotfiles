@@ -11,6 +11,7 @@ import type { ClmWorkflow } from '../types'
 import { ageDecayPlan, fallbackLedger, instructionValues, LESSON_SYSTEM, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { estTokens, fingerprint } from './fold'
+import { fnv1a } from './address'
 
 export const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] } satisfies SessionMessage)
@@ -36,12 +37,10 @@ export const ROWS = [
 // which tests not about evidence rely on to pass the mechanical check.
 export const CITE = [{ ref: 'tu_a', quote: 'log: make fails at' }]
 export const ledger = (fact: string, ops = '[]', cite = CITE) => {
-  let hash = 2166136261
-  for (const char of fact) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
-  return `## 목표\n- -\n\n<ops>${JSON.stringify([{ clause: `legacy_fact('F${(hash >>> 0).toString(16)}').`, kind: 'fact', text: fact, evidence: cite }, ...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))])}</ops>`
+  return JSON.stringify({ ops: [{ clause: `legacy_fact('F${fnv1a(fact).toString(16)}').`, kind: 'fact', text: fact, evidence: cite }, ...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))] })
 }
 export const splitAnswer = (split = 2, topic = 'build', summary = 'build summary', note = 'build summary') => JSON.stringify({
-  split, notes: `## 목표\n- ${note}`, ops: [], topics: [{ topic, summary }],
+  split, ops: [{ clause: `goal('I-focus', '${topic}').`, kind: 'goal', text: `${topic}: ${summary || note}`, evidence: [] }],
 })
 export const compressedTopics = (topics: { topic: string; summary: string; seq: number }[]) => JSON.stringify({ topics })
 export const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } satisfies TurnCompleteInput

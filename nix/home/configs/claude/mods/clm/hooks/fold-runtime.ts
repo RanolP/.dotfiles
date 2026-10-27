@@ -12,10 +12,10 @@ import {
 import { archivedDone, injected, isRecord, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held, HeldClaims, ReviewInput, Reviewed } from './held'
 import type { RewindTopic } from './rewind'
-import type { SentAt } from './address'
+import { fnv1a, type SentAt } from './address'
 import type { LogEvent } from './events'
 import { xmlText } from './intent'
-import { applyFoldClauseOps, livePredicates, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
+import { applyFoldClauseOps, livePredicates, parseClause, printClause, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
 import type { AddressRow } from './address'
 import { migrateLegacyLedger } from './resident'
 
@@ -26,7 +26,7 @@ export type TopicDraft = { topic: string; summary: string }
 export type SplitAnswer = { split: number; mergeReply: string; topics: TopicDraft[] }
 export type PreparedFold = { plan: ClearPlan; mergeReply: string; topics: TopicDraft[] }
 export type TrackerView = { issues: Issue[]; dropped: Issue[]; finished: Issue[]; doneTitles: Set<string> }
-export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; asks: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; clauses?: ClauseStore; tailTokens: number }
+export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; asks: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; clauses?: ClauseStore; clauseOps?: FoldClauseOp[]; tailTokens: number }
 export type FoldPreview = { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: FocusState; clauses?: ClauseStore }
 
 export type FoldRuntimeIo = {
@@ -56,7 +56,6 @@ export const isTopic = (value: unknown): value is TopicState => isRecord(value) 
   && typeof value.summary === 'string' && value.summary.trim() !== '' && typeof value.seq === 'number' && Number.isInteger(value.seq) && value.seq > 0
   && (value.sourceTokens === undefined || (typeof value.sourceTokens === 'number' && Number.isInteger(value.sourceTokens) && value.sourceTokens >= 0))
   && (value.focusIssue === undefined || value.focusIssue === null || typeof value.focusIssue === 'string')
-const isTopicDraft = (value: unknown): value is TopicDraft => isRecord(value) && typeof value.topic === 'string' && value.topic.trim() !== '' && typeof value.summary === 'string' && value.summary.trim() !== ''
 const topicKey = (topic: Pick<TopicState, 'topic' | 'focusIssue'>) => `${instructionKey(topic.topic)}\0${topic.focusIssue ?? ''}`
 const ratioMin = 1, ratioMax = 4
 const clampRatio = (value: number) => Math.round(Math.min(ratioMax, Math.max(ratioMin, value)) * 1000) / 1000
@@ -67,11 +66,7 @@ export function parseSplitAnswer(raw: string): SplitAnswer | string {
   try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `split reply is not JSON (${String(err).slice(0, 80)})` }
   if (!isRecord(value) || typeof value.split !== 'number' || !Number.isInteger(value.split)) return `split must be an integer turn number (received ${JSON.stringify(isRecord(value) ? value.split : undefined)})`
   if (!Array.isArray(value.ops)) return 'split reply needs ops'
-  const drafts = Array.isArray(value.topics) && value.topics.every(isTopicDraft) ? value.topics : []
-  const mergeReply = typeof value.notes === 'string'
-    ? `${normalizeLedger(value.notes)}\n<ops>${JSON.stringify(value.ops)}</ops>`
-    : JSON.stringify({ ops: value.ops })
-  return { split: value.split, mergeReply, topics: drafts.map(topic => ({ topic: topic.topic.trim(), summary: topic.summary.trim() })) }
+  return { split: value.split, mergeReply: JSON.stringify({ ops: value.ops }), topics: [] }
 }
 
 function isTopicList(value: unknown): value is TopicState[] {
@@ -103,6 +98,9 @@ export function foldableTokens(rows: readonly SessionMessage[], reading: number 
   const overhead = usableOverhead(reading, rows, meta)
   return overhead === undefined ? visibleTokens(rows) * ratio : Math.max(0, reading - overhead)
 }
+
+export const foldClausePromptSeq = (addressPromptSeq: number | undefined, droppedPromptSeq: number, store: ClauseStore): number =>
+  addressPromptSeq ?? (droppedPromptSeq || store.clauses.reduce((highest, clause) => Math.max(highest, clause.promptSeq), 0))
 
 // Every fold gate reads this one scale, so the point the background fold
 // starts at is the point a ready plan applies at.
@@ -232,13 +230,7 @@ export async function fold(
     clauseOps = clauseOps.filter(op => 'retract' in op || op.kind === 'goal' || acceptedFacts.has(op.text))
     const draftedFacts = new Set(clauseOps.flatMap(op => 'retract' in op || op.kind !== 'fact' ? [] : [op.text]))
     for (const fact of facts) if (!draftedFacts.has(fact.text)) {
-      let hash = 2166136261
-      for (const char of fact.text) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
-      clauseOps.push({ clause: `legacy_fact('F${(hash >>> 0).toString(16)}').`, kind: 'fact', text: fact.text, evidence: fact.evidence })
-    }
-    for (const topic of prepared?.topics ?? []) {
-      const slug = topic.topic.replaceAll('\\', '\\\\').replaceAll("'", "\\'")
-      clauseOps.push({ clause: `goal(session, '${slug}').`, kind: 'goal', text: `${topic.topic}: ${topic.summary}`.replace(/\s+/g, ' ').slice(0, 200), evidence: [] })
+      clauseOps.push({ clause: `legacy_fact('F${fnv1a(fact.text).toString(16)}').`, kind: 'fact', text: fact.text, evidence: fact.evidence })
     }
     promoted = reviewed.promoted
     hold = reviewed.hold
@@ -254,6 +246,13 @@ export async function fold(
   let fullNotes = rememberPreserved(rememberOversize(preserved.fullNotes, oversizeLines(plan.tail, plan.cuts)), kept)
   const seq = meta.seq + 1
   const addressIndex = await io.addressRows(clauseKey)
+  const droppedPromptSeq = addressIndex.filter(address => plan.dropped.some(row => isUserTyped(row) && stripReminders(address.text) === stripReminders(row.text)))
+    .reduce((highest, address) => Math.max(highest, address.promptSeq ?? 0), 0)
+  const currentView = await io.trackerView(here, [...ops, ...asking, ...promoted])
+  const currentEvents = await io.readAll()
+  const focusState = focusOf(currentEvents, here.session)
+  const focusIssue = focusState.stack.at(-1)
+  const knownIssues = new Set(currentView.issues.map(issue => issue.id))
   const sourceRow = (ref: string): SessionMessage | undefined => {
     const user = /^m(\d+)$/.exec(ref)
     if (user) return plan.dropped[Number(user[1]) - 1]
@@ -267,15 +266,24 @@ export async function fold(
     if (!row) return []
     const address = [...addressIndex].reverse().find(item => stripReminders(item.text) === stripReminders(row.text))
     const source = proof ? range.sources.get(proof.ref) : undefined
-    return [{ clause: op.clause, kind: op.kind, text: op.text, issue: op.issue, key: op.key,
-      promptSeq: address?.promptSeq ?? seq, address: address?.address ?? '@unknown',
+    let clause = op.clause
+    let issue = op.issue
+    if (op.kind === 'goal') {
+      const parsed = parseClause(clause)
+      const first = parsed.head.args[0]
+      const named = first && ('atom' in first ? first.atom : 'str' in first ? first.str : undefined)
+      issue = issue ?? (named && knownIssues.has(named) ? named : focusIssue)
+      if (issue) {
+        parsed.head.args[0] = { str: issue }
+        clause = printClause(parsed)
+      }
+    }
+    return [{ clause, kind: op.kind, text: op.text, issue, key: op.key,
+      promptSeq: foldClausePromptSeq(address?.promptSeq, droppedPromptSeq, baseClauses), address: address?.address ?? '@unknown',
       ...(proof ? { evidence: { ref: proof.ref, quote: proof.quote, ...(source?.tool ? { tool: source.tool } : {}) } } : {}),
     }]
   })
   const clauses = resolvedOps.length ? applyFoldClauseOps(baseClauses, resolvedOps, await io.nowIso()) : baseClauses
-  const currentView = await io.trackerView(here, [...ops, ...asking, ...promoted])
-  const currentEvents = await io.readAll()
-  const focusState = focusOf(currentEvents, here.session)
   const preview = await io.residentLedger(clauseKey, currentView.issues, focusState, currentEvents, { notes: fullNotes, topics, issues: currentView.issues, state: focusState, clauses })
   const text = ledgerRowText(seq, kst(), await io.ledgerPath(), preview, opts.ledgerTarget)
   const tokensBefore = messageTokens(rows, observed, meta)
@@ -289,5 +297,5 @@ export async function fold(
   }
   if (Object.keys(plan.cuts).length) await io.logEvent('truncation', { keptTurns: plan.keptTurns, ratio, reason: `cut ${Object.keys(plan.cuts).length} tool result(s) to ~${Object.values(plan.cuts)[0]}t each` })
   if (calib !== undefined) meta.overhead = boundedOverhead(calib - estimated, meta)
-  return { plan, notes, fullNotes, ops, asks, seq, fallback, promoted, hold, settled, topics, clauses, tailTokens }
+  return { plan, notes, fullNotes, ops, asks, seq, fallback, promoted, hold, settled, topics, clauses, clauseOps: resolvedOps, tailTokens }
 }

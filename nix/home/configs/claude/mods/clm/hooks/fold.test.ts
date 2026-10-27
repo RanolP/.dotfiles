@@ -12,7 +12,8 @@ import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMer
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { buildCleared, estTokens, fingerprint, foldedRows, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
-import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens, readLegacyTopics } from './fold-runtime'
+import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, readLegacyTopics } from './fold-runtime'
+import { applyClauses, emptyClauseStore, parseClause } from './clauses'
 import type { Opts } from './fold-runtime'
 import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
@@ -28,6 +29,11 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
 const ENGINE_SUMMARY_TEXTS = ['ENGINE SUMMARY', '[clm clauses]\n- (none)']
+
+test('a fact from an address row recorded without promptSeq does not lose to an older fact', () => {
+  const older = applyClauses(emptyClauseStore(), [{ ...parseClause('measured(lint_css_ci, seconds, 48).'), text: '48 seconds', quote: '48 seconds', address: '@old', issue: null, origin: 'fold', kind: 'fact', evidence: { ref: 'tu_old', quote: '48 seconds' } }], 9, '2026-10-27T00:00:00Z').next
+  expect(foldClausePromptSeq(undefined, 0, older)).toBe(9)
+})
 
 // Regression caught: a session kept running the old store copy after a rebuild and its autocompact silently failed 40 times.
 test('a compaction under a mod whose installed path changed since load logs mod-stale once', async () => {
@@ -995,8 +1001,17 @@ test('a ready fold swaps on the next compaction even below the escape threshold'
   expect(crossed[1]?.text).toMatch(/^\[clm ledger #1 · /)
   expect(seen.engineCompactions).toBe(0)
   expect(seen.store['pending:s1']).toBeUndefined()
-  expect(storedLedger(seen)).toContain('build summary')
+  expect(section(crossed[1]!.text, 'where we are')).toContain('build summary')
   expect(seen.splitPrompts).toHaveLength(1)
+})
+
+test('a split fold prompt carries live_clauses', { options: { budget: 3000, tailTarget: 2200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
+  const s: State = { rows: ROWS, replies: [], splitReplies: [splitAnswer(2)], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 11_000 } } }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  expect(seen.splitPrompts[0]).toContain('<predicates>')
+  expect(seen.splitPrompts[0]).toContain('<live_clauses>')
 })
 
 // Regression caught: rewinding across an applied fold never restored the prior ledger snapshot.
@@ -1240,7 +1255,7 @@ test('auto compaction with no pending plan produces a clm ledger instead of an e
   // Nothing is left for clm to fold here, so the engine summary is the only way the context still shrinks.
   const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
   expect(manual[0]?.text).toBe('ENGINE SUMMARY')
-  expect(manual[1]?.text).toContain('INLINE-FACT')
+  expect(manual[1]?.text).not.toContain('INLINE-FACT')
   expect(seen.engineCompactions).toBe(1)
 })
 
@@ -1326,8 +1341,8 @@ test('a handoff after a clm fold keeps the ledger', OPTS, async ($, on) => {
   expect(section(auto[1].text, 'facts')).toContain('INLINE-FACT')
   const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
   expect(manual[0]?.text).toBe('ENGINE SUMMARY')
-  expect(manual[1]?.text).toContain('INLINE-FACT')
+  expect(manual[1]?.text).not.toContain('INLINE-FACT')
   s.rows = [...manual, M('user', 'next'), M('assistant', 'done')]
   await $.session.compact(compactInput('plugin', handled(s.rows)))
-  expect(manual.some(row => row.text.includes('INLINE-FACT'))).toBe(true)
+  expect(manual.some(row => row.text.includes('INLINE-FACT'))).toBe(false)
 })

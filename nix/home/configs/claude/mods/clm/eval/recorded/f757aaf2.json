@@ -1,5 +1,5 @@
 {
   "fixture": "f757aaf2",
-  "model": "haiku",
-  "reply": "{\"split\":7,\"notes\":\"## 목표\\n- stylelint CI 병목을 벤치마크한다.\",\"ops\":[],\"topics\":[{\"topic\":\"stylelint benchmark\",\"summary\":\"캐시만 패치한 stylelint를 벤치마크한다.\",\"support\":[]}]}"
+  "model": "hand-authored",
+  "reply": "{\"split\":7,\"ops\":[{\"retract\":\"C4\"},{\"clause\":\"measured(lint_css_ci, seconds, 6).\",\"kind\":\"fact\",\"text\":\"lint_css_ci는 캐시 패치 후 6초다.\",\"evidence\":[{\"ref\":\"tool-stylelint-after\",\"quote\":\"measured 6 seconds\"}]},{\"clause\":\"goal('F757-1', benchmark_cache_patch).\",\"kind\":\"goal\",\"text\":\"캐시만 패치한 stylelint를 벤치마크한다.\",\"evidence\":[]},{\"clause\":\"goal('F757-2', verify_ci_bottleneck).\",\"kind\":\"goal\",\"text\":\"CI 병목을 검증한다.\",\"evidence\":[]},{\"clause\":\"goal('F757-3', review_upgrade_scope).\",\"kind\":\"goal\",\"text\":\"업그레이드 범위를 검토한다.\",\"evidence\":[]}]}"
 }

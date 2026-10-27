@@ -27,6 +27,10 @@ test('the folded ledger retains or can resolve every declared fact', { options: 
       const residentTokens = residentTokenEstimate(compacted.messages)
       console.log(`CLM_EVAL_SIZE f757aaf2 ${residentTokens}`)
       expect(residentTokens).toBeLessThanOrEqual(1_500)
+      const resident = compacted.messages.map(message => message.text).join('\n')
+      const facts = /## facts\n\n([\s\S]*?)(?:\n\n##|$)/.exec(resident)?.[1] ?? ''
+      expect(facts).not.toContain('(none yet)')
+      expect(facts).not.toContain('STALE')
     }
     results.push(...harness.score(fixture, probeData as unknown as Probe[], compacted.messages))
   }

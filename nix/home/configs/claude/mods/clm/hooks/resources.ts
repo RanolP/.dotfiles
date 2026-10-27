@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ClmResourceInput } from '../types'
+import { fnv1a } from './address'
 
 export const RESOURCE_TOOL = 'mcp__clm__clm_resource'
 export const RESOURCE_DESCRIPTION = 'Track resources this session owns and shared exclusive resources. Call `register` with kind `mutex` when a device or service may be used by only one session at a time; call `who` before using one; call `release` the moment you finish with it. Bash commands that start an emulator, simulator, Metro, a web dev server, or a PR are recorded automatically; `register` with kind `owned` covers anything they miss.'
@@ -99,10 +100,8 @@ export const resourceLedgerLines = (value: unknown): string[] => {
 }
 const mutexSlug = (name: string) => {
   const value = normalized(name)
-  let hash = 2166136261
-  for (const char of value) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
   const base = value.normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'resource'
-  return `${base}-${(hash >>> 0).toString(16)}`
+  return `${base}-${fnv1a(value).toString(16)}`
 }
 const resourcesRoot = async (io: ResourceIo) => {
   const home = await io.home()

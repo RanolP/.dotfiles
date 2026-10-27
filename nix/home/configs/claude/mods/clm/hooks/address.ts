@@ -37,12 +37,13 @@ async function readIndex(io: AddressIo, key: string): Promise<AddressIndex> {
   return { rows, stamps }
 }
 
-// FNV-1a, so an address is stable for its input and needs no randomness.
-function coin(seed: string): string {
+export function fnv1a(seed: string): number {
   let h = 0x811c9dc5
   for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 0x01000193) >>> 0
-  return `@${h.toString(16).padStart(8, '0')}`
+  return h
 }
+// FNV-1a, so an address is stable for its input and needs no randomness.
+const coin = (seed: string): string => `@${fnv1a(seed).toString(16).padStart(8, '0')}`
 
 export async function addressRows(io: AddressIo, key: string): Promise<AddressRow[]> {
   return (await readIndex(io, key)).rows

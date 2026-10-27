@@ -68,38 +68,28 @@ const isFoldClause = (value: unknown): value is FoldClause => isRecord(value)
 const isFoldRetract = (value: unknown): value is { retract: string } => isRecord(value)
   && Object.keys(value).length === 1 && typeof value.retract === 'string'
 
-/** Strictly reads a fold reply; callers apply no partial result when this returns a reason. */
-export function parseFoldClauseOps(raw: string): FoldClauseOp[] | string {
-  let value: unknown
-  try { value = JSON.parse(raw.trim().replace(/^```(?:json)?\n([\s\S]*?)\n```$/i, '$1')) } catch (err) { return `fold reply is not JSON (${String(err).slice(0, 80)})` }
-  if (!isRecord(value) || !Array.isArray(value.ops)) return 'fold reply needs an ops array'
-  if (!value.ops.every(item => isFoldClause(item) || isFoldRetract(item))) return 'fold reply contains an invalid clause op'
-  return value.ops
-}
-
 /** Applies one already-validated fold batch atomically to a copy of the store. */
 export function applyFoldClauseOps(store: ClauseStore, ops: readonly FoldClauseOp[], now: string): ClauseStore {
+  const parsed = ops.map(op => {
+    if (isFoldRetract(op)) return op
+    if (!isFoldClause(op)) return undefined
+    try { return { op, parsed: parseClause(op.clause) } } catch { return undefined }
+  })
+  if (parsed.some(op => op === undefined)) return store
   let next = store
-  for (const op of ops) {
+  for (const item of parsed) {
+    if (!item) return store
+    const op = 'op' in item ? item.op : item
     if ('retract' in op) {
       next = applyRetract(next, [{ id: op.retract, quote: op.retract }], () => true, '@fold', now, 'fold').next
       continue
     }
-    if (op.kind === 'fact' && !op.evidence) continue
-    let parsed: ParsedClause
-    try { parsed = parseClause(op.clause) } catch { continue }
     next = applyClauses(next, [{
-      ...parsed, text: op.text, quote: op.evidence?.quote ?? op.text, address: op.address,
+      ...item.parsed, text: op.text, quote: op.evidence?.quote ?? op.text, address: op.address,
       issue: op.issue ?? null, key: op.key, origin: 'fold', kind: op.kind, evidence: op.evidence,
     }], op.promptSeq, now).next
   }
   return next
-}
-
-/** A malformed reply preserves object identity so landing cannot write a partial store. */
-export function applyFoldClauseReply(store: ClauseStore, raw: string, now: string): ClauseStore {
-  const ops = parseFoldClauseOps(raw)
-  return typeof ops === 'string' ? store : applyFoldClauseOps(store, ops, now)
 }
 
 // --- parse and print ---------------------------------------------------------

@@ -8,7 +8,7 @@ import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 import { migrateLegacyLedger, residentLedger } from './resident'
-import { emptyClauseStore } from './clauses'
+import { emptyClauseStore, parseClause } from './clauses'
 
 import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, issueList, MERGE_SYSTEM, parseMerge, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
@@ -19,7 +19,7 @@ import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, co
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 // Regression caught: the clause-only merge contract accidentally required a prose instruction section.
 test('a clause merge reply needs no prose instruction section', async () => {
-  const ok = parseMerge(NOTE_REPLY + '<ops>[]</ops>', new Set(), 1000)
+  const ok = parseMerge('{"ops":[]}', new Set(), 1000)
   expect(typeof ok).not.toBe('string')
   if (typeof ok !== 'string') expect(ok.clauseOps).toEqual([])
 })
@@ -119,8 +119,8 @@ test('the merge and review inputs exclude the verbatim tail after split selectio
 
 // Regression caught: an unverified constraint disappeared after the next fold because it was stored with decaying lessons.
 test('a quoted tool constraint survives two folds without entering topic decay', OPTS, async ($, on) => {
-  const first = `## 목표\n- build work\n\n<ops>${JSON.stringify([{ op: 'fact', kind: 'constraint', text: 'The build tool requires generated artifacts to stay checked in.', evidence: [{ ref: 'tu_a', quote: 'log: make fails at' }] }])}</ops>`
-  const second = '## 목표\n- build work continues\n\n<ops>[]</ops>'
+  const first = JSON.stringify({ ops: [{ op: 'fact', kind: 'constraint', text: 'The build tool requires generated artifacts to stay checked in.', evidence: [{ ref: 'tu_a', quote: 'log: make fails at' }] }] })
+  const second = '{"ops":[]}'
   const s: State = { rows: ROWS, replies: [first, second] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
@@ -197,6 +197,19 @@ test('the resident ledger shows the live clause text and hides the retracted one
   expect(section(row, 'what to request')).toContain('[R2]')
 })
 
+test('an open request stays visible when a goal clause covers the same topic', async () => {
+  const clauseStore = emptyClauseStore()
+  clauseStore.clauses = [{
+    id: 'C1', ...parseClause("goal('I-1', publish_report)."), source: "goal('I-1', publish_report).", text: 'Publish the report.', quote: '리포트를 올려줘', address: '@goal', promptSeq: 1, sources: [], issue: null, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'goal',
+  }]
+  clauseStore.nextId = 2
+  const row = await residentLedger({
+    get: async () => clauseStore, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
+    readRequests: async () => [{ id: 'R1', text: 'Publish the report.', quote: '리포트를 올려줘', status: 'open' }],
+  }, 's1:main', [], { stack: [], pending: [] }, [])
+  expect(section(row, 'what to request')).toContain('[R1]')
+})
+
 // Regression caught: a malformed note carrying the item prefix sent the re-read to the clipped title, losing the items behind "외 N건" and keeping that tail as an item.
 test('a malformed confirm note falls back to the last stored list, and the title tail is not an item', () => {
   const claims: Payload[] = ['one', 'two', 'three', 'four', 'five', 'six'].map(t => ({ op: 'create', title: `${t} ${'z'.repeat(25)}`, status: 'done' }))
@@ -249,7 +262,7 @@ test('extending the confirm question drops finished items, dedupes by title, and
 // Regression caught: the fold's uncited done claims were silently parked as uncertain instead of going to the user, and each fold would ask again in a new question.
 test('fold uncited dones become one confirm question, not uncertain', OPTS, async ($, on) => {
   const ops = JSON.stringify([{ op: 'create', title: 'verify the package checksum', status: 'done' }, { op: 'create', title: 'tag the release', status: 'done' }])
-  const s: State = { rows: ROWS, replies: [`## 목표\n- build summary\n\n<ops>${ops}</ops>`] }
+  const s: State = { rows: ROWS, replies: [JSON.stringify({ ops: JSON.parse(ops) })] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const tracker = () => snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
@@ -257,7 +270,7 @@ test('fold uncited dones become one confirm question, not uncertain', OPTS, asyn
   expect(tracker().filter(issue => issue.status === 'question').map(issue => issue.title)).toEqual(['이 항목들이 끝났는지 확인: "verify the package checksum" · "tag the release"'])
   expect(section(storedLedger(seen), '미결 질문')).toContain('이 항목들이 끝났는지 확인')
   s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
-  s.replies.push(`## 목표\n- build summary\n\n<ops>${JSON.stringify([{ op: 'create', title: 'push the tag', status: 'done' }])}</ops>`)
+  s.replies.push(JSON.stringify({ ops: [{ op: 'create', title: 'push the tag', status: 'done' }] }))
   await turnEnds($, s, seen)
   expect(tracker().filter(issue => issue.status === 'question').map(issue => issue.title)).toEqual(['이 항목들이 끝났는지 확인: "verify the package checksum" · "tag the release" · "push the tag"'])
 })
@@ -265,12 +278,12 @@ test('fold uncited dones become one confirm question, not uncertain', OPTS, asyn
 // Regression caught: a fold landed confirm ops computed before the user answered the question mid-fold, retitling the closed question with the answered items instead of asking the new claim.
 test('a confirm answer given while a fold runs is not undone when the fold lands', OPTS, async ($, on) => {
   const ops = JSON.stringify([{ op: 'create', title: 'verify the package checksum', status: 'done' }, { op: 'create', title: 'tag the release', status: 'done' }])
-  const s: State = { rows: ROWS, replies: [`## 목표\n- build summary\n\n<ops>${ops}</ops>`] }
+  const s: State = { rows: ROWS, replies: [JSON.stringify({ ops: JSON.parse(ops) })] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
   s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
-  s.replies.push(`## 목표\n- build summary\n\n<ops>${JSON.stringify([{ op: 'create', title: 'push the tag', status: 'done' }])}</ops>`)
+  s.replies.push(JSON.stringify({ ops: [{ op: 'create', title: 'push the tag', status: 'done' }] }))
   s.mergeBlock = async () => {
     s.mergeBlock = undefined
     const log = seen.files[TRACKER] ?? ''

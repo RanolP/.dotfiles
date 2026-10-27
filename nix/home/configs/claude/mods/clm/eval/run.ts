@@ -72,7 +72,13 @@ function installHarness(
       if (!reply || reply.fixture !== current().id || typeof reply.reply !== 'string') throw new Error(`missing recorded reply for ${current().id}`)
       return { value: { isAnswered: true, text: reply.reply, usage: {} } }
     }
-    if (event.system === REVIEW_SYSTEM) return { value: { isAnswered: true, text: '{"verdicts":[]}', usage: {} } }
+    if (event.system === REVIEW_SYSTEM) {
+      const claims = /<claims>\n([\s\S]*?)\n<\/claims>/.exec(event.prompt)?.[1] ?? ''
+      const verdicts = claims.split('\n').flatMap(line => {
+        try { const value: unknown = JSON.parse(line); return isRecord(value) && typeof value.id === 'string' ? [{ id: value.id, accept: true, reason: 'fixture evidence' }] : [] } catch { return [] }
+      })
+      return { value: { isAnswered: true, text: JSON.stringify({ verdicts }), usage: {} } }
+    }
     logs.push(`unmocked model.complete: ${event.system.slice(0, 100)}`)
     return next(event)
   })
@@ -107,10 +113,18 @@ export function createHarness(on: On, fixtures: readonly Fixture[], replies: Rea
         const upgrade = rows.find(text => text.includes('upgrade했을 때 벤치마크'))
         const cache = rows.find(text => text.includes('캐시만 패치해서 벤치마크'))
         if (!upgrade || !cache) throw new Error('f757aaf2 is missing benchmark correction rows')
+        const origin = { session: fixture.sessionId, repo: 'example.invalid/synthetic/clm-eval', cwd: '/work/clm-eval' }
+        files[`/home/t/.claude-work/tracker/events/${fixture.sessionId}.jsonl`] = [1, 2, 3].map(seq => JSON.stringify({ ts: `2026-10-15T00:00:0${seq}Z`, seq, issue: `F757-${seq}`, origin, op: 'create', title: `fixture issue ${seq}`, status: seq === 1 ? 'doing' : 'todo' })).join('\n') + '\n'
+        const facts = [
+          { source: 'measured(lint_css_ci, seconds, 48).', text: 'STALE lint_css_ci는 48초다.' },
+          { source: 'found(stale_subject, stale_attr, stale_value).', text: 'STALE explicit retract fact.' },
+          ...Array.from({ length: 10 }, (_, index) => ({ source: `found(subject_${index}, metric, value_${index}).`, text: `tool-derived fixture fact ${index}` })),
+        ].map((fact, index) => ({ id: `C${index + 3}`, head: index === 0 ? { name: 'measured', args: [{ atom: 'lint_css_ci' }, { atom: 'seconds' }, { num: 48 }] } : { name: 'found', args: [{ atom: index === 1 ? 'stale_subject' : `subject_${index - 2}` }, { atom: index === 1 ? 'stale_attr' : 'metric' }, { atom: index === 1 ? 'stale_value' : `value_${index - 2}` }] }, neg: false, body: [], source: fact.source, text: fact.text, quote: fact.text, address: `@fact${index}`, promptSeq: index + 1, sources: [], issue: null, at: '2026-10-15T00:00:03Z', status: 'live', origin: 'fold', kind: 'fact', evidence: { ref: 'tool-stylelint-before', quote: 'measured 48 seconds' } }))
         files[`/home/t/.claude-work/plans/clm-${fixture.sessionId}.state.json`] = JSON.stringify({ [`clauses:${key}`]: {
-          version: 1, nextId: 3, predicates: { benchmark: { key: 1, example: 'benchmark(tool, method).' } }, clauses: [
+          version: 1, nextId: 15, predicates: { benchmark: { key: 1, example: 'benchmark(tool, method).' } }, clauses: [
             { id: 'C1', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'upgrade' }] }, neg: false, body: [], source: 'benchmark(stylelint, upgrade).', text: 'stylelint를 업그레이드한 상태로 벤치마크한다.', quote: upgrade, address: '@00000004', promptSeq: 4, issue: null, at: '2026-10-15T00:00:04Z', status: 'retracted', retraction: { at: '2026-10-15T00:00:05Z', by: 'C2', bySource: 'benchmark(stylelint, cache_patch_only).', reason: 'conflict' } },
             { id: 'C2', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'cache_patch_only' }] }, neg: false, body: [], source: 'benchmark(stylelint, cache_patch_only).', text: '캐시만 패치한 상태로 stylelint 벤치마크를 돌린다.', quote: cache, address: '@00000005', promptSeq: 5, issue: null, at: '2026-10-15T00:00:05Z', status: 'live' },
+            ...facts,
           ],
         } })
         return
@@ -140,9 +154,10 @@ export function createHarness(on: On, fixtures: readonly Fixture[], replies: Rea
       files[`/home/t/.claude-work/tracker/events/${fixture.sessionId}.jsonl`] = events.map(event => JSON.stringify(event)).join('\n') + '\n'
       files[`/home/t/.claude-work/plans/clm-${fixture.sessionId}.state.json`] = JSON.stringify({
         [`clauses:${key}`]: {
-        version: 1, nextId: 3, predicates: { preserve: { key: 0, example: 'preserve(scope).' } }, clauses: [
+        version: 1, nextId: 4, predicates: { preserve: { key: 0, example: 'preserve(scope).' } }, clauses: [
           { id: 'C1', head: { name: 'preserve', args: [{ atom: 'global' }] }, neg: false, body: [], source: 'preserve(global).', text: globalRule, quote: globalRule, address: '@00000001', promptSeq: 1, issue: null, at: at(1), status: 'live' },
           { id: 'C2', head: { name: 'preserve', args: [{ atom: 'scope' }] }, neg: false, body: [], source: 'preserve(scope).', text: scopedRule, quote: scopedRule, address: '@00000002', promptSeq: 2, issue: mainIssue, at: at(2), status: 'live' },
+          { id: 'C3', head: { name: 'found', args: [{ atom: 'stale' }, { atom: 'artifact' }, { atom: 'old' }] }, neg: false, body: [], source: 'found(stale, artifact, old).', text: 'STALE fixture fact.', quote: 'STALE fixture fact.', address: '@00000003', promptSeq: 3, sources: [], issue: null, at: at(3), status: 'live', origin: 'fold', kind: 'fact', evidence: { ref: 'm1', quote: focusPrompt } },
         ],
         },
         [`issue-addresses:${key}`]: { [mainIssue]: '@00000003' },

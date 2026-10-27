@@ -1,6 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 
-import type { SentAt } from './address'
+import { fnv1a, type SentAt } from './address'
+import { parseClause } from './clauses'
 import { readEvidence, sentStamp, type Evidence } from './evidence'
 import { estTokens, isUserTyped, stripReminders } from './fold'
 import { isTrackerSection, parseOps, sectionLines, shownNote, type Issue, type Payload } from './tracker'
@@ -332,9 +333,12 @@ export function parseChanges(reply: string): string[] {
 }
 const isOp = (o: unknown, op: string): o is Record<string, unknown> => typeof o === 'object' && o !== null && 'op' in o && o.op === op
 export type FoldClauseDraft = { clause: string; kind: 'fact' | 'goal'; text: string; evidence: Evidence[]; issue?: string; key?: number }
-const isFoldClauseDraft = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+const isFoldClauseDraft = (value: unknown): value is { clause: string; kind: 'fact' | 'goal'; text: string; evidence?: unknown; issue?: unknown; key?: unknown } => typeof value === 'object' && value !== null
   && 'clause' in value && typeof value.clause === 'string' && 'text' in value && typeof value.text === 'string'
   && 'kind' in value && (value.kind === 'fact' || value.kind === 'goal')
+const validClauseEvidence = (value: unknown): value is Evidence[] => Array.isArray(value)
+  && value.every(item => typeof item === 'object' && item !== null && !Array.isArray(item)
+    && 'ref' in item && typeof item.ref === 'string' && 'quote' in item && typeof item.quote === 'string')
 export type Merge = { notes?: string; ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; clauseOps: (FoldClauseDraft | { retract: string })[]; retracted: string[]; rejected: number }
 /**
  * Splits a merge reply into notes, validated tracker ops (with the evidence
@@ -343,25 +347,25 @@ export type Merge = { notes?: string; ops: Payload[]; evidence: Evidence[][]; fa
  * counted as rejected. Evidence is only read here; the caller checks it.
  */
 export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number, facts: readonly string[] = []): Merge | string {
-  const m = /<ops>([\s\S]*?)<\/ops>/.exec(reply)
-  let notes: string | undefined
   let rawOps: unknown
-  if (m) {
-    notes = normalizeLedger(reply.slice(0, m.index))
-    const heads = [...notes.matchAll(/^##\s+(.+?)\s*$/gm)].map(h => h[1])
-    if (heads.join('|') !== NOTE_SECTIONS.join('|')) return `headers were [${heads.join(', ')}], expected the ${NOTE_SECTIONS.length} note sections in order`
-    const notesTokens = estTokens({ role: 'user', text: notes, toolUses: [] })
-    if (notesTokens > maxTokens) return `notes are ~${notesTokens}t, over the ${maxTokens}t cap`
-    try { rawOps = JSON.parse(normalizeLedger(m[1] ?? '')) } catch (err) { return 'ops are not JSON (' + String(err).slice(0, 80) + ')' }
-  } else {
-    try {
-      const value: unknown = JSON.parse(normalizeLedger(reply))
-      rawOps = typeof value === 'object' && value !== null && 'ops' in value ? value.ops : undefined
-    } catch (err) { return 'reply is not JSON (' + String(err).slice(0, 80) + ')' }
-  }
+  try {
+    const value: unknown = JSON.parse(normalizeLedger(reply))
+    rawOps = typeof value === 'object' && value !== null && 'ops' in value ? value.ops : undefined
+  } catch (err) { return 'reply is not JSON (' + String(err).slice(0, 80) + ')' }
   if (!Array.isArray(rawOps)) return 'ops are not a JSON array'
+  for (const raw of rawOps) {
+    if (typeof raw !== 'object' || raw === null) return 'ops contain a non-object'
+    if ('clause' in raw) {
+      if (!isFoldClauseDraft(raw)) return 'ops contain an invalid clause op'
+      if (raw.evidence !== undefined && !validClauseEvidence(raw.evidence)) return 'ops contain invalid clause evidence'
+      if (raw.issue !== undefined && typeof raw.issue !== 'string') return 'ops contain an invalid clause issue'
+      if (raw.key !== undefined && (!Number.isInteger(raw.key) || Number(raw.key) < 0)) return 'ops contain an invalid clause key'
+      try { parseClause(raw.clause) } catch (err) { return `ops contain an invalid clause (${String(err).slice(0, 80)})` }
+    }
+    if ('retract' in raw && (Object.keys(raw).length !== 1 || typeof raw.retract !== 'string')) return 'ops contain an invalid clause retract'
+  }
   const clauseDrafts: FoldClauseDraft[] = rawOps.filter(isFoldClauseDraft).map(o => ({
-    clause: String(o.clause), kind: o.kind as 'fact' | 'goal', text: oneLine(String(o.text)).slice(0, 200), evidence: readEvidence(o.evidence),
+    clause: o.clause, kind: o.kind, text: oneLine(o.text).slice(0, 200), evidence: readEvidence(o.evidence),
     ...(typeof o.issue === 'string' ? { issue: o.issue } : {}), ...(typeof o.key === 'number' ? { key: o.key } : {}),
   }))
   const clauseRetracts = rawOps.flatMap(o => typeof o === 'object' && o !== null && 'retract' in o && typeof o.retract === 'string' ? [{ retract: o.retract }] : [])
@@ -371,9 +375,7 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
     kind: o.kind === 'constraint' ? 'constraint' as const : 'learned' as const,
   }] : []))
   const legacyClauseFacts: FoldClauseDraft[] = proposed.map(fact => {
-    let hash = 2166136261
-    for (const char of fact.text) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619)
-    return { clause: `legacy_fact('F${(hash >>> 0).toString(16)}').`, kind: 'fact', text: fact.text, evidence: fact.evidence }
+    return { clause: `legacy_fact('F${fnv1a(fact.text).toString(16)}').`, kind: 'fact', text: fact.text, evidence: fact.evidence }
   })
   const knownFacts = new Set(facts.map(instructionKey))
   const retractOps = rawOps.filter(o => isOp(o, 'retract'))
@@ -383,7 +385,7 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens:
   if (typeof ops === 'string') return ops
   const clauseFacts = clauseDrafts.filter(item => item.kind === 'fact').map(item => ({ text: item.text, evidence: item.evidence }))
   const rejected = ops.rejected + factOps.length - proposed.length + retractOps.length - retracted.length
-  return { ...(notes === undefined ? {} : { notes }), ops: ops.ops, evidence: ops.evidence, facts: [...proposed, ...clauseFacts], clauseOps: [...clauseDrafts, ...legacyClauseFacts, ...clauseRetracts], retracted, rejected }
+  return { ops: ops.ops, evidence: ops.evidence, facts: [...proposed, ...clauseFacts], clauseOps: [...clauseDrafts, ...legacyClauseFacts, ...clauseRetracts], retracted, rejected }
 }
 
 // --- review -------------------------------------------------------------------

@@ -1,5 +1,5 @@
 {
   "fixture": "migration",
-  "model": "haiku",
-  "reply": "{\"split\":5,\"notes\":\"## 목표\\n- schema migration: Use UUIDs for migration checkpoints.\",\"ops\":[],\"topics\":[{\"topic\":\"schema migration\",\"summary\":\"Use UUIDs for migration checkpoints. Interleave SYNTH-71 above SYNTH-933 and keep the migration open under it. Receipt SYNTH-933 remains the lookup address for the detailed artifact.\",\"support\":[\"tool-migration-scan\"]}]}"
+  "model": "hand-authored",
+  "reply": "{\"split\":5,\"ops\":[{\"retract\":\"C3\"},{\"clause\":\"found(schema_migration, artifact, rollback_plan).\",\"kind\":\"fact\",\"text\":\"s3://db-evidence/SYNTH-933/rollback-plan.sql\",\"evidence\":[{\"ref\":\"tool-migration-scan\",\"quote\":\"s3://db-evidence/SYNTH-933/rollback-plan.sql\"}]},{\"clause\":\"goal('SYNTH-933', schema_migration).\",\"kind\":\"goal\",\"text\":\"Use UUIDs for migration checkpoints.\",\"evidence\":[]}]}"
 }

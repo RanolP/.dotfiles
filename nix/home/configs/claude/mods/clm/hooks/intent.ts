@@ -123,7 +123,7 @@ export function intentPrompt({ state, issues, lastAssistantReply, userPrompt, la
     tag('open_requests', list(requests.map(request => `${request.id} | ${request.text}`))),
     tag('open_issues', list(otherOpen)),
     tag('predicates', list(livePredicates(clauses))),
-    tag('live_clauses', list(clauses.clauses.filter(clause => clause.status === 'live').slice(-40).map(clause => `${clause.id} | ${clause.source}`))),
+    tag('live_clauses', list(clauses.clauses.filter(clause => clause.status === 'live' && clause.kind === 'instruction').slice(-40).map(clause => `${clause.id} | ${clause.source}`))),
     tag('live_facts', list(clauses.clauses.filter(clause => clause.status === 'live' && clause.kind === 'fact').slice(-20).map(clause => `${clause.id} | ${clause.source}`))),
     tag('last_assistant_reply', lastAssistantReply.slice(-1500)),
     tag('user_prompt', userPrompt.slice(0, 4000)),

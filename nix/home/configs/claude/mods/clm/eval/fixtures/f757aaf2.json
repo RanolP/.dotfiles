@@ -23,6 +23,28 @@
       "toolUses": []
     },
     {
+      "role": "assistant",
+      "text": "",
+      "toolUses": [{"tool_use_id":"tool-stylelint-before","tool":"Bash","input":{"command":"measure stylelint"},"text":"measure"}]
+    },
+    {
+      "role": "user",
+      "text": "",
+      "toolUses": [],
+      "toolResults": [{"tool_use_id":"tool-stylelint-before","text":"stylelint CI measured 48 seconds before the cache patch","isError":false}]
+    },
+    {
+      "role": "assistant",
+      "text": "",
+      "toolUses": [{"tool_use_id":"tool-stylelint-after","tool":"Bash","input":{"command":"measure cache patch"},"text":"measure"}]
+    },
+    {
+      "role": "user",
+      "text": "",
+      "toolUses": [],
+      "toolResults": [{"tool_use_id":"tool-stylelint-after","text":"stylelint CI measured 6 seconds with only the cache patch","isError":false}]
+    },
+    {
       "role": "user",
       "text": "파서를 oxc로 교체해야 하겠군",
       "toolUses": []

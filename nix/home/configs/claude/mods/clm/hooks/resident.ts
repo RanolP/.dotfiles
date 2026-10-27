@@ -103,7 +103,7 @@ export async function residentLedger(
   const instructions = renderClauses(clauseStore, inScope, 40, ['instruction'])
   const facts = renderClauses(clauseStore, inScope, 15, ['fact'])
   const where = renderClauses(clauseStore, inScope, 20, ['goal'])
-  const liveQuotes = clauseStore.clauses.filter(clause => clause.status === 'live').map(clause => clause.quote)
+  const liveQuotes = clauseStore.clauses.filter(clause => clause.status === 'live' && clause.kind === 'instruction').map(clause => clause.quote)
   const requests = (await io.readRequests(key)).filter(request => request.status === 'open' && !liveQuotes.some(quote => clauseQuoteOverlaps(request.quote, quote)))
   const resources = await resourceLedgerForSession(key.split(':')[0] ?? '')
   const sections: ResidentLedgerSections = {

@@ -233,7 +233,7 @@ test('a fold with no op for an existing issue keeps it in the ledger', { options
   }))
   on('fs.read', (_$: any, e: any) => ({ value: files[e.path] }))
   on('fs.write', (_$: any, e: any) => { files[e.path] = e.text; return { value: undefined } })
-  on('model.complete', (_$: any, e: any) => { prompts.push(e.prompt); return { value: { isAnswered: true, text: `${NOTES}\n\n<ops>[]</ops>`, usage: {} } } })
+  on('model.complete', (_$: any, e: any) => { prompts.push(e.prompt); return { value: { isAnswered: true, text: '{"ops":[]}', usage: {} } } })
   on('ui.log', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: [] }))
   on('session.compact', () => ({ messages: [M('user', 'ENGINE SUMMARY')] }))

@@ -1,8 +1,10 @@
 import type { SessionMessage } from 'claude-code'
-import { fingerprint, liveRows, protectedIndex, type Boundary } from './fold'
+import { fingerprint, liveRows, protectedIndex, stripReminders, type Boundary } from './fold'
 import { EMPTY_LEDGER, notesOf } from './ledger'
 import { isRecord, type Payload } from './tracker'
 import { instructionIndexKey, issueAddressKey } from './resident'
+import { addressRows } from './address'
+import { clauseBacklogKey, clauseStoreKey, dropClauses, isBacklogEntry, readClauseStore } from './clauses'
 
 export type RewindTopic = { topic: string; summary: string; seq: number; sourceTokens?: number; focusIssue?: string | null }
 export type RewindMeta = {
@@ -17,6 +19,7 @@ export type RewindPlan = {
 
 export type LedgerSnapshot = {
   seq: number; ledgerFp: string; coveredRows: string[]; ledger: string; topics?: RewindTopic[]; instructions?: unknown; addresses?: unknown
+  clauses?: unknown; clauseBacklog?: unknown
 }
 export type RewindIo = {
   storeGet(key: string): Promise<unknown>
@@ -67,11 +70,15 @@ export async function saveLedgerSnapshot(
   const history = await readLedgerSnapshots(io, key)
   const instructions = await io.storeGet(instructionIndexKey(key))
   const addresses = await io.storeGet(issueAddressKey(key))
+  const clauses = await io.storeGet(clauseStoreKey(key))
+  const clauseBacklog = await io.storeGet(clauseBacklogKey(key))
   const next: LedgerSnapshot = {
     seq, ledgerFp, ledger, coveredRows: [...new Set(coveredRows)],
     ...(topics ? { topics } : {}),
     ...(instructions === undefined ? {} : { instructions }),
     ...(addresses === undefined ? {} : { addresses }),
+    ...(clauses === undefined ? {} : { clauses }),
+    ...(clauseBacklog === undefined ? {} : { clauseBacklog }),
   }
   await io.storeSet(ledgerSnapshotsKey(key), [...history, next].slice(-32))
 }
@@ -84,6 +91,31 @@ async function restoreLedgerSnapshot(io: RewindIo, key: string, snapshot: Ledger
   else await io.storeSet(instructionIndexKey(key), snapshot.instructions)
   if (snapshot?.addresses === undefined) await io.storeDelete(issueAddressKey(key))
   else await io.storeSet(issueAddressKey(key), snapshot.addresses)
+  // A snapshot taken before clauses existed says nothing about them; the caller still drops the rewound prompts' clauses.
+  if (snapshot?.clauses !== undefined) await io.storeSet(clauseStoreKey(key), snapshot.clauses)
+  if (snapshot?.clauseBacklog !== undefined) await io.storeSet(clauseBacklogKey(key), snapshot.clauseBacklog)
+}
+
+/** Drops the clauses of rewound user prompts and revives what they retracted. */
+async function dropRewoundClauses(io: RewindIo, key: string, removed: readonly string[]): Promise<void> {
+  const texts = removed.filter(ref => ref.startsWith('user|||')).map(ref => ref.slice('user|||'.length))
+  if (!texts.length) return
+  const rows = await addressRows({ get: io.storeGet, set: io.storeSet }, key)
+  const addresses = new Set<string>()
+  for (const text of texts) {
+    // The most recent prompt with that text: a rewind removes the tail of the transcript.
+    const row = rows.findLast(row => !addresses.has(row.address) && (row.text.slice(0, 160) === text || stripReminders(row.text).slice(0, 160) === text))
+    if (row) addresses.add(row.address)
+  }
+  if (!addresses.size) return
+  const backlog = await io.storeGet(clauseBacklogKey(key))
+  if (Array.isArray(backlog)) await io.storeSet(clauseBacklogKey(key), backlog.filter(entry => isBacklogEntry(entry) && !addresses.has(entry.address)))
+  const store = readClauseStore(await io.storeGet(clauseStoreKey(key)))
+  if (!store) return
+  const { next, dropped, revived } = dropClauses(store, addresses, new Date().toISOString())
+  if (!dropped.length && !revived.length) return
+  await io.storeSet(clauseStoreKey(key), next)
+  io.log(`clm: rewind dropped ${dropped.length} clause(s) and revived ${revived.length}`)
 }
 
 function removedRows(previous: readonly string[], current: readonly string[]): string[] {
@@ -134,7 +166,7 @@ export async function observeTranscript(io: RewindIo, key: string, all: readonly
     await io.clearReadyFold(key)
     io.log('clm: rewound rows overlapped the pending summary; discarded its plan')
   }
-  if (!ledgerWasRemoved) return
+  if (!ledgerWasRemoved) return dropRewoundClauses(io, key, removed)
 
   if (restored) {
     const restoredIndex = history.indexOf(restored)
@@ -143,6 +175,7 @@ export async function observeTranscript(io: RewindIo, key: string, all: readonly
     await io.storeDelete(ledgerSnapshotsKey(key))
   }
   await restoreLedgerSnapshot(io, key, restored)
+  await dropRewoundClauses(io, key, removed)
   const plan = await rewindOnlyPlan(rows, restored)
   io.setRewindReady(key, plan, current)
   await io.storeSet(await io.pendingKey(key), plan)

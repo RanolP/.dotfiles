@@ -127,5 +127,13 @@
     "kind": "stack",
     "expect": "SYNTH-71 is complete and popped; SYNTH-933 is active again.",
     "mustBe": "resident-or-recall"
+  },
+  {
+    "id": "f757aaf2-benchmark",
+    "fixture": "f757aaf2",
+    "kind": "instruction",
+    "expect": "benchmark(stylelint, cache_patch_only).",
+    "mustBe": "resident",
+    "forbid": "benchmark(stylelint, upgrade)."
   }
 ]

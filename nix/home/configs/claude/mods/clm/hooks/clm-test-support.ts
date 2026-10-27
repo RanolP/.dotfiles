@@ -5,7 +5,7 @@ import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactI
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, isHeld, register, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
-import { INTENT_SYSTEM } from './intent'
+import { CLAUSE_BACKFILL_SYSTEM, INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, LEDGER_COMPACT_SYSTEM, LESSON_SYSTEM, MERGE_SYSTEM, parseMerge, preserveInstructions, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
@@ -15,7 +15,7 @@ import { estTokens, fingerprint } from './fold'
 export const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] } satisfies SessionMessage)
 export const intentReply = (fields: Record<string, unknown> = {}) => JSON.stringify({
-  intent: 'continue', target: null, title: null, rule: null, later: [], laterDrop: [], raised: [], resolved: [], ...fields,
+  intent: 'continue', target: null, title: null, rule: null, later: [], laterDrop: [], raised: [], resolved: [], clauses: [], ...fields,
 })
 export const use = (id: string, tool: string) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input: { id }, text: 'ok' }] })
 export const res = (id: string, text: string) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError: false }] })
@@ -74,7 +74,7 @@ export const metaIn = (seen: { store: Record<string, unknown> }): Meta => {
   return value
 }
 
-export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; storeKeysBlock?: () => Promise<void> }
+export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; backfillReplies?: (string | Error)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; storeKeysBlock?: () => Promise<void> }
 export function modDetectionHarness(realpaths: { exitCode: number; stdout: string; stderr: string }[], env: Record<string, string | undefined>) {
   const hooks: Record<string, unknown> = {}
   const capture: Parameters<typeof register>[0] = (event, matcherOrHook, hook) => { hooks[event] = hook ?? matcherOrHook }
@@ -158,7 +158,7 @@ export function bottoms(on: any, s: State) {
       return true
     },
   })
-  const seen = { clock, store, engineStore, files, prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[] }
+  const seen = { clock, store, engineStore, files, prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], backfillPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.engineStore[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.engineStore[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.engineStore[e.key]; return { value: undefined } })
@@ -186,6 +186,12 @@ export function bottoms(on: any, s: State) {
       seen.intentPrompts.push(e.prompt)
       const text = s.intentReplies?.shift() ?? intentReply()
       await s.intentBlocks?.shift()?.()
+      if (text instanceof Error) return { value: { isAnswered: false, reason: text.message } }
+      return { value: { isAnswered: true, text, usage: {} } }
+    }
+    if (e.system === CLAUSE_BACKFILL_SYSTEM) {
+      seen.backfillPrompts.push(e.prompt)
+      const text = s.backfillReplies?.shift() ?? JSON.stringify({ clauses: [] })
       if (text instanceof Error) return { value: { isAnswered: false, reason: text.message } }
       return { value: { isAnswered: true, text, usage: {} } }
     }

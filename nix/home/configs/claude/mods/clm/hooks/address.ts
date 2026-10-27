@@ -2,6 +2,7 @@ import type { SessionMessage } from 'claude-code'
 
 import { fingerprint, stripReminders } from './fold'
 import { isRecord } from './tracker'
+import { clauseStoreKey, readClauseStore, recallClauses } from './clauses'
 
 // clm builds its own address index from the hooks it receives and never reads
 // the transcript file: the engine refuses large reads, and a long session is
@@ -109,8 +110,10 @@ export function recallRows(rows: readonly AddressRow[], address: string): { text
 }
 
 export async function recallAddress(io: AddressIo, key: string, address: unknown) {
-  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d or @first..@last.' }
-  const recalled = recallRows(await addressRows(io, key), address)
+  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d, @first..@last, #C12 or clauses.' }
+  const recalled = /^\s*(?:#C\d+|clauses)\s*$/i.test(address)
+    ? recallClauses(readClauseStore(await io.get(clauseStoreKey(key))), address)
+    : recallRows(await addressRows(io, key), address)
   if (recalled.error) return { result: recalled.error, isError: true, isReadOnly: true }
   return { result: recalled.text ?? '', isReadOnly: true }
 }

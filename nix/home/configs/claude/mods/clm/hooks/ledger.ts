@@ -276,10 +276,10 @@ export const MERGE_SYSTEM = [
   '  {"retract":"<C-id from live_clauses>"} when a newer fact or goal makes it stale.',
   'Every done (a create with status done, or a status op to done) and every fact carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
   'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
-  'A fact stands when the cited row states it. Mark a stable constraint or preference discovered in tool output as kind constraint; mark a lesson from a failure or user correction as kind learned.',
-  'A constraint carries a quote from a tool result. A learned item carries the failed result or the user correction verbatim as its quote.',
+  'A fact stands when the cited row states it. Every fact clause has kind fact. State a stable constraint or preference discovered in tool output in the clause and text; likewise state a lesson from a failure or user correction in the clause and text.',
+  'A constraint carries a quote from a tool result. A lesson carries the failed result or the user correction verbatim as its quote.',
   'Every id, number and date in one claim comes from the same row and names the same object as that row; a `(=...)` date beside a relative expression comes from that row\'s header time plus the expression.',
-  'A clause with kind instruction is outside your authority. Use only fact and goal.',
+  'Instruction clauses are outside your authority. Use only fact and goal clauses.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'For each existing issue changed by the turns, write an update using its existing id so its history stays attached. Omit an op for each unchanged issue. Items listed under <legacy> have no issue yet: create one for each that still holds.',
   'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
@@ -339,14 +339,14 @@ const isFoldClauseDraft = (value: unknown): value is { clause: string; kind: 'fa
 const validClauseEvidence = (value: unknown): value is Evidence[] => Array.isArray(value)
   && value.every(item => typeof item === 'object' && item !== null && !Array.isArray(item)
     && 'ref' in item && typeof item.ref === 'string' && 'quote' in item && typeof item.quote === 'string')
-export type Merge = { notes?: string; ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; clauseOps: (FoldClauseDraft | { retract: string })[]; retracted: string[]; rejected: number }
+export type Merge = { ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; clauseOps: (FoldClauseDraft | { retract: string })[]; retracted: string[]; rejected: number }
 /**
- * Splits a merge reply into notes, validated tracker ops (with the evidence
- * each cited), proposed facts and retracted facts, or says why it is unusable.
+ * Splits a merge reply into validated tracker ops (with the evidence each
+ * cited), proposed facts and retracted facts, or says why it is unusable.
  * A retract naming no line of `facts` and a fact with no text are dropped and
  * counted as rejected. Evidence is only read here; the caller checks it.
  */
-export function parseMerge(reply: string, known: ReadonlySet<string>, maxTokens: number, facts: readonly string[] = []): Merge | string {
+export function parseMerge(reply: string, known: ReadonlySet<string>, facts: readonly string[] = []): Merge | string {
   let rawOps: unknown
   try {
     const value: unknown = JSON.parse(normalizeLedger(reply))

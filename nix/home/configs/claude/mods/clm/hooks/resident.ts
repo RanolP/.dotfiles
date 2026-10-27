@@ -91,6 +91,7 @@ export async function residentLedger(
   }
   let clauseStore = preview.clauses ?? readClauseStore(await io.get(clauseStoreKey(key))) ?? emptyClauseStore()
   const inScope = (issue: string | null) => issue === null || ancestors.has(issue)
+  const goalInScope = (issue: string | null) => issue === null || shownIssues.some(candidate => candidate.id === issue && isOpen(candidate))
   const rawNotes = preview.notes ?? notesOf((await io.readLedger()) ?? EMPTY_LEDGER)
   const meta = await io.readMeta()
   const topics = preview.topics ?? await io.readLegacyTopics(rawNotes, meta.seq, key)
@@ -102,7 +103,7 @@ export async function residentLedger(
   }
   const instructions = renderClauses(clauseStore, inScope, 40, ['instruction'])
   const facts = renderClauses(clauseStore, inScope, 15, ['fact'])
-  const where = renderClauses(clauseStore, inScope, 20, ['goal'])
+  const where = renderClauses(clauseStore, goalInScope, 20, ['goal'])
   const liveQuotes = clauseStore.clauses.filter(clause => clause.status === 'live' && clause.kind === 'instruction').map(clause => clause.quote)
   const requests = (await io.readRequests(key)).filter(request => request.status === 'open' && !liveQuotes.some(quote => clauseQuoteOverlaps(request.quote, quote)))
   const resources = await resourceLedgerForSession(key.split(':')[0] ?? '')

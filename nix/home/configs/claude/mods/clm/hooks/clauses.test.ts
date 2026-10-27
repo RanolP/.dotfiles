@@ -63,7 +63,7 @@ test('a fold op can never retract a user instruction clause', () => {
 
 test('a malformed fold reply leaves the store unchanged', () => {
   const store = applyClauses(emptyClauseStore(), [clause('forbid(push).')], 1, NOW).next
-  expect(typeof parseMerge('{"ops":[{"clause":', new Set(), 1000)).toBe('string')
+  expect(typeof parseMerge('{"ops":[{"clause":', new Set())).toBe('string')
 })
 
 test('the rendered ledger hides evidence quotes and Prolog source', () => {
@@ -99,7 +99,7 @@ test('two topics in one fold reply keep two goals', () => {
   const merged = parseMerge(JSON.stringify({ ops: [
     { clause: "goal('I-1', first).", kind: 'goal', text: 'first topic', evidence: [] },
     { clause: "goal('I-2', second).", kind: 'goal', text: 'second topic', evidence: [] },
-  ] }), new Set(['I-1', 'I-2']), 1000)
+  ] }), new Set(['I-1', 'I-2']))
   if (typeof merged === 'string') throw new Error(merged)
   const ops = merged.clauseOps.flatMap(op => 'retract' in op ? [op] : [{ ...op, promptSeq: 2, address: '@fold', evidence: undefined }])
   const store = applyFoldClauseOps(emptyClauseStore(), ops, NOW)

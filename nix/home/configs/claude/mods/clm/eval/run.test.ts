@@ -28,9 +28,15 @@ test('the folded ledger retains or can resolve every declared fact', { options: 
       console.log(`CLM_EVAL_SIZE f757aaf2 ${residentTokens}`)
       expect(residentTokens).toBeLessThanOrEqual(1_500)
       const resident = compacted.messages.map(message => message.text).join('\n')
-      const facts = /## facts\n\n([\s\S]*?)(?:\n\n##|$)/.exec(resident)?.[1] ?? ''
-      expect(facts).not.toContain('(none yet)')
+      const facts = /## facts\n+([\s\S]*?)(?:\n\n##|$)/.exec(resident)?.[1] ?? ''
+      expect(facts).toContain('6초')
       expect(facts).not.toContain('STALE')
+      const where = /## where we are\n+([\s\S]*?)(?:\n\n##|$)/.exec(resident)?.[1] ?? ''
+      expect([
+        '캐시만 패치한 stylelint를 벤치마크한다.',
+        'CI 병목을 검증한다.',
+        '업그레이드 범위를 검토한다.',
+      ].filter(goal => where.includes(goal))).toHaveLength(3)
     }
     results.push(...harness.score(fixture, probeData as unknown as Probe[], compacted.messages))
   }

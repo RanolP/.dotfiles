@@ -22,7 +22,7 @@ import { applyFoldClauseOps, clauseStoreKey, emptyClauseStore, livePredicates, r
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; asks?: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: TopicState[]
-  clauses?: ClauseStore; clauseOps?: FoldClauseOp[]
+  clauseOps?: FoldClauseOp[]
   rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]; coveredRows?: string[]
 }
 type PendingJob =
@@ -255,13 +255,13 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       if (attempt === 1) io.log(`clm: split summary rejected (${retryRule}); the next turn end may retry`, { to: 'debug' })
       continue
     }
-    const merge = parseMerge(answer.mergeReply, known, Math.max(500, Math.floor(opts.budget / 4)), factLines(notesOf(previous)))
+    const merge = parseMerge(answer.mergeReply, known, factLines(notesOf(previous)))
     if (typeof merge === 'string') {
-      retryRule = `The previous summary failed validation: ${merge}. Return valid note sections and ops in the required JSON object.`
+      retryRule = `The previous summary failed validation: ${merge}. Return the required {"split","ops"} JSON object.`
       if (attempt === 1) io.log(`clm: split summary rejected (${merge}); the next turn end may retry`, { to: 'debug' })
       continue
     }
-    const prepared: PreparedFold = { plan, mergeReply: answer.mergeReply, topics: answer.topics.map(({ topic, summary }) => ({ topic, summary })) }
+    const prepared: PreparedFold = { plan, mergeReply: answer.mergeReply }
     const folded = await io.fold(opts, rows, meta, false, undefined, true, prepared, key)
     if (typeof folded === 'string') {
       await logFoldOutcome(io, `background fold skipped (${folded})`)
@@ -534,7 +534,7 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
   const liveFocus = focusOf(stateEvents, here.session)
   const fullLedger = composeLedger(use.fullNotes, view.issues)
-  const ledger = await persistStep(io, fullLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus, clauses: use.clauses }))
+  const ledger = await persistStep(io, fullLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus }))
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const row: SessionMessage = { role: 'user', text, toolUses: [] }
   const plan: ClearPlan = {
@@ -550,7 +550,6 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
   const offset = messages.findIndex(message => message.text === text)
   return persistCompactResult(io, result, async () => {
     await io.writeFile(await io.ledgerPath(), fullLedger + '\n')
-    if (use.clauses) await io.serialize(here.session, () => io.storeSet(clauseStoreKey(key), use.clauses))
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(row), fullLedger, use.topics, use.coveredRows ?? [])

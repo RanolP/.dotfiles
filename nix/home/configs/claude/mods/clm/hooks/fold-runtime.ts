@@ -7,7 +7,7 @@ import {
   EMPTY_LEDGER, fallbackLedger, factLines, instructionKey, instructionValues, issueList,
   MERGE_SYSTEM, legacyItems, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseMerge,
   preservedLines, carryLegacyInstructions, rememberFacts, rememberOversize, rememberPreserved,
-  sectionBody, withheldLines, WITHDRAWN_PREFIX, withNotes, type Fact,
+  sectionBody, withheldLines, WITHDRAWN_PREFIX, type Fact,
 } from './ledger'
 import { archivedDone, injected, isRecord, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held, HeldClaims, ReviewInput, Reviewed } from './held'
@@ -22,9 +22,8 @@ import { migrateLegacyLedger } from './resident'
 export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
 export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; firstObserved?: number; estimatorVersion?: number }
 export type TopicState = RewindTopic
-export type TopicDraft = { topic: string; summary: string }
-export type SplitAnswer = { split: number; mergeReply: string; topics: TopicDraft[] }
-export type PreparedFold = { plan: ClearPlan; mergeReply: string; topics: TopicDraft[] }
+export type SplitAnswer = { split: number; mergeReply: string }
+export type PreparedFold = { plan: ClearPlan; mergeReply: string }
 export type TrackerView = { issues: Issue[]; dropped: Issue[]; finished: Issue[]; doneTitles: Set<string> }
 export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; asks: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; clauses?: ClauseStore; clauseOps?: FoldClauseOp[]; tailTokens: number }
 export type FoldPreview = { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: FocusState; clauses?: ClauseStore }
@@ -66,7 +65,7 @@ export function parseSplitAnswer(raw: string): SplitAnswer | string {
   try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `split reply is not JSON (${String(err).slice(0, 80)})` }
   if (!isRecord(value) || typeof value.split !== 'number' || !Number.isInteger(value.split)) return `split must be an integer turn number (received ${JSON.stringify(isRecord(value) ? value.split : undefined)})`
   if (!Array.isArray(value.ops)) return 'split reply needs ops'
-  return { split: value.split, mergeReply: JSON.stringify({ ops: value.ops }), topics: [] }
+  return { split: value.split, mergeReply: JSON.stringify({ ops: value.ops }) }
 }
 
 function isTopicList(value: unknown): value is TopicState[] {
@@ -197,10 +196,9 @@ export async function fold(
           `<removed_turns>\n${range.text}\n</removed_turns>`,
         ].join('\n\n'), maxTokens: 4096, timeoutMs: 120_000,
       })
-    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id)), Math.max(500, Math.floor(opts.budget / 4)), priorFacts) : `merge model gave no text (${response.reason})`
+    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id)), priorFacts) : `merge model gave no text (${response.reason})`
     const bad = typeof merged === 'string' ? merged : undefined
     if (typeof merged !== 'string') {
-      if (merged.notes !== undefined) notes = withNotes(notes, merged.notes)
       ;({ ops, evidence, facts, retracted, clauseOps } = merged)
       claimed = ops
       meta.fails = 0

@@ -17,9 +17,18 @@ import { describe, focusOf, parseLog, snapshot, toEvents, type Issue, type Paylo
 import { estTokens, fingerprint, ledgerRowText, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
+
+test('a merge prompt never asks for a clause kind the validator rejects', () => {
+  const accepted = new Set(['fact', 'goal'])
+  for (const prompt of [MERGE_SYSTEM, SPLIT_MERGE_SYSTEM]) {
+    const named = [...prompt.matchAll(/\bkind ([a-z-]+)/g)].map(match => match[1])
+    expect(named.every(kind => accepted.has(kind!))).toBe(true)
+  }
+})
+
 // Regression caught: the clause-only merge contract accidentally required a prose instruction section.
 test('a clause merge reply needs no prose instruction section', async () => {
-  const ok = parseMerge('{"ops":[]}', new Set(), 1000)
+  const ok = parseMerge('{"ops":[]}', new Set())
   expect(typeof ok).not.toBe('string')
   if (typeof ok !== 'string') expect(ok.clauseOps).toEqual([])
 })

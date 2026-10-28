@@ -636,10 +636,10 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
       const { payloads, next } = compose(currentState, classification, currentIssues, newId)
       const createdId = payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue
       const deferredIssues: { id: string; title: string }[] = []
-      if (!io.isCoworker) for (const item of deferred) {
-        const reused = classification.intent === 'pending'
-          ? payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create' && payload.title === item.text)?.issue
-          : undefined
+      if (!io.isCoworker) for (const [index, item] of deferred.entries()) {
+        const matchingOpen = currentIssues.find(issue => isOpen(issue) && issue.title.trim() === item.text.trim())
+        if (matchingOpen) continue
+        const reused = classification.intent === 'pending' && index === 0 ? createdId ?? classification.target : undefined
         const id = reused ?? newId()
         if (!reused) payloads.push({ op: 'create', issue: id, title: item.text, status: 'todo' })
         deferredIssues.push({ id, title: item.text })

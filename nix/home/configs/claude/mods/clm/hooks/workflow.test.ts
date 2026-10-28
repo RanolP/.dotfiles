@@ -127,13 +127,14 @@ test('a whole-message deferral creates exactly one issue', OPTS, async ($, on) =
     rows: ROWS, replies: [],
     intentReplies: [intentReply({
       intent: 'pending', title: 'B 고쳐',
-      deferred: [{ text: 'B 고쳐', quote: 'B는 나중에 해줘' }],
+      deferred: [{ text: 'B 수정해', quote: 'B는 나중에 해줘' }],
     })],
   })
   await $.prompt.submit(promptInput('B는 나중에 해줘'))
-  await waitForLog(seen, 'clm: deferred issue s1-1: B 고쳐')
-  const issues = snapshot(parseLog(seen.files[TRACKER] ?? '')).filter(issue => issue.title === 'B 고쳐')
+  await waitForLog(seen, 'clm: deferred issue s1-1: B 수정해')
+  const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
   expect(issues).toHaveLength(1)
+  expect(issues[0]?.title).toBe('B 고쳐')
   expect(issues[0]?.status).toBe('todo')
 })
 

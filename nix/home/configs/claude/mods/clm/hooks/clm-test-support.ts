@@ -76,7 +76,7 @@ export const metaIn = (seen: { store: Record<string, unknown> }): Meta => {
   return value
 }
 
-export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; backfillReplies?: (string | Error)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined }
+export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; backfillReplies?: (string | Error)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; nextSessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined; fsWriteBlock?: (path: string, text: string) => Promise<void>; promptDrops?: string[] }
 export function modDetectionHarness(realpaths: { exitCode: number; stdout: string; stderr: string }[], env: Record<string, string | undefined>) {
   const hooks: Record<string, unknown> = {}
   const capture: Parameters<typeof register>[0] = (event, matcherOrHook, hook) => { hooks[event] = hook ?? matcherOrHook }
@@ -205,6 +205,10 @@ export function bottoms(on: any, s: State) {
       if (!seen.dirs.has(argv[1]!) && !(argv[1]! in seen.files)) return { value: { exitCode: 1, stdout: '', stderr: 'No such file' } }
       move(argv[1]!, argv[2]!)
     }
+    if (argv[0] === 'ln') {
+      if (!(argv[1]! in seen.files) || argv[2]! in seen.files) return { value: { exitCode: 1, stdout: '', stderr: 'File exists' } }
+      seen.files[argv[2]!] = seen.files[argv[1]!]!
+    }
     if (argv[0] === 'rm') {
       const path = argv.at(-1)!
       for (const dir of [...seen.dirs]) if (dir === path || dir.startsWith(`${path}/`)) seen.dirs.delete(dir)
@@ -233,7 +237,7 @@ export function bottoms(on: any, s: State) {
   })
   on('ui.panes', () => ({ value: [] }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
-  on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
+  on('fs.write', async (_$: any, e: any) => { await s.fsWriteBlock?.(e.path, e.text); seen.files[e.path] = e.text; return { value: undefined } })
   // The merge call answers from s.replies, the turn-time change call from s.turnReplies.
   on('model.complete', async (_$: any, e: any) => {
     if (e.system === INTENT_SYSTEM) {
@@ -290,9 +294,15 @@ export function bottoms(on: any, s: State) {
   on('tool.register', (_$: any, e: any) => ({ value: { tool: e.name } }))
   on('prompt.submit', (_$: any, e: any) => {
     seen.submissions.push({ text: e.text, ...(e.origin?.asUser ? { asUser: true as const } : {}) })
+    const drop = s.promptDrops?.shift()
+    if (drop !== undefined) return { drop }
     return { text: e.text, context: e.context }
   })
   on('session.start', () => ({ cwd: '/tmp' }))
+  on('session.end', (_$: any, e: any) => {
+    if (e.reason === 'clear' && s.nextSessionId) s.sessionId = s.nextSessionId
+    return { sessionId: e.sessionId }
+  })
   on('turn.complete', async ($: any) => {
     return { text: '' }
   })

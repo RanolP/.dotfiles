@@ -70,7 +70,7 @@ Land: `land` runs in main for a `ready-to-land` issue with a claimant and worktr
 
 Auto-spawn: main polls every 5 s and after `plan`, `revoke` and `land`. When a ready unclaimed issue exists it mails an idle live co-worker to claim it. A new co-worker is launched only when no live co-worker of this main is idle or starting, the live count is below `maxCoworkers`, and the one-minute load average is under 0.75 times the core count. The launch is a `clm-coworker-<n>` session started unfocused in the repository root with a brief to claim, work only in the returned worktree, and call `ready`.
 
-Multiplexer detection reads the environment: `HERDR_SOCKET_PATH` or `HERDR_ENV` selects herdr (`herdr tab create --no-focus`, then `herdr agent start`), `ZELLIJ` selects zellij (`zellij run --no-focus`), `TMUX` selects tmux (`tmux new-window -d`). With none, no co-worker starts and the debug log records a manual command. The tmux launch is unverified: tmux is not installed on this machine. Load reading uses the macOS `sysctl` path only.
+Multiplexer detection reads the environment: `HERDR_SOCKET_PATH` or `HERDR_ENV` selects herdr (`herdr tab create --no-focus`, then `herdr agent start`), `ZELLIJ` selects zellij (`zellij run --no-focus`), `TMUX` selects tmux (`tmux new-window -d`). With none, no co-worker starts and the debug log records a manual command. The tmux launch is unverified: tmux is not installed on this machine. Load reading uses `/proc/loadavg` and `nproc` when `/proc/loadavg` is readable (Linux), otherwise `sysctl -n vm.loadavg` and `sysctl -n hw.ncpu` (macOS).
 
 ## Statusline
 

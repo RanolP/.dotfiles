@@ -1,5 +1,7 @@
+import { isRecord } from './tracker'
+
 export type Mux = 'herdr' | 'zellij' | 'tmux' | 'none'
-export type CoworkerEnvironment = { CLM_COWORKER: '1'; CLM_MAIN_SESSION: string }
+export type CoworkerEnvironment = { CLM_COWORKER: '1'; CLM_MAIN_SESSION: string; CLM_COWORKER_NAME: string }
 export type ProcessResult = { exitCode: number; stdout: string; stderr: string }
 export type SpawnIo = {
   run: (argv: readonly string[], options?: { cwd?: string; timeoutMs?: number }) => Promise<ProcessResult>
@@ -22,11 +24,13 @@ const environmentArgs = (env: CoworkerEnvironment) => Object.entries(env).map(([
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`
 
 export function parseHerdrPaneId(stdout: string): string {
-  let value: unknown
-  try { value = JSON.parse(stdout) } catch { throw new Error('Herdr tab creation did not return JSON') }
-  if (!value || typeof value !== 'object') throw new Error('Herdr tab creation returned an invalid response')
-  const rootPane = (value as { root_pane?: unknown }).root_pane
-  const paneId = rootPane && typeof rootPane === 'object' ? (rootPane as { pane_id?: unknown }).pane_id : undefined
+  const value: unknown = (() => {
+    try { return JSON.parse(stdout) }
+    catch { throw new Error('Herdr tab creation did not return JSON') }
+  })()
+  if (!isRecord(value)) throw new Error('Herdr tab creation returned an invalid response')
+  const rootPane = value.root_pane
+  const paneId = isRecord(rootPane) ? rootPane.pane_id : undefined
   if (typeof paneId !== 'string' || !paneId) throw new Error('Herdr tab creation response has no root_pane.pane_id')
   return paneId
 }
@@ -71,15 +75,11 @@ const checked = async (io: SpawnIo, argv: readonly string[]) => {
   return result.stdout
 }
 
-export async function readLoad(io: SpawnIo, platform: 'darwin' | 'linux'): Promise<{ load1: number; cores: number }> {
-  if (platform === 'darwin') {
-    const load = await checked(io, ['sysctl', '-n', 'vm.loadavg'])
-    const cores = await checked(io, ['sysctl', '-n', 'hw.ncpu'])
-    return { load1: parseDarwinLoad(load), cores: parseCoreCount(cores) }
-  }
+export async function readLoad(io: SpawnIo): Promise<{ load1: number; cores: number }> {
   const load = await io.read('/proc/loadavg')
-  if (load === undefined) throw new Error('/proc/loadavg is unavailable')
-  return { load1: parseLinuxLoad(load), cores: parseCoreCount(await checked(io, ['nproc'])) }
+  return load !== undefined
+    ? { load1: parseLinuxLoad(load), cores: parseCoreCount(await checked(io, ['nproc'])) }
+    : { load1: parseDarwinLoad(await checked(io, ['sysctl', '-n', 'vm.loadavg'])), cores: parseCoreCount(await checked(io, ['sysctl', '-n', 'hw.ncpu'])) }
 }
 
 export function coworkerBrief(input: { main: string; repo: string }): string {

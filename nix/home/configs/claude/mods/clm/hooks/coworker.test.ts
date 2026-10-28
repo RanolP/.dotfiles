@@ -37,6 +37,9 @@ function filesystemIo(root: string, fs: Filesystem = { files: new Map(), dirs: n
           let current = ''; for (const part of argv[2]!.split('/').filter(Boolean)) { current += `/${part}`; fs.dirs.add(current) }
         } else if (argv[0] === 'mkdir') {
           if (fs.dirs.has(argv[1]!)) throw new Error('exists'); fs.dirs.add(argv[1]!)
+        } else if (argv[0] === 'ln') {
+          if (!fs.files.has(argv[1]!) || fs.files.has(argv[2]!)) throw new Error('link failed')
+          fs.files.set(argv[2]!, fs.files.get(argv[1]!)!)
         } else if (argv[0] === 'mv') moveTree(fs, argv[1]!, argv[2]!)
         else if (argv[0] === 'rm' && argv[1] === '-rf') removeTree(fs, argv[2]!)
         else if (argv[0] === 'rm' && argv[1] === '-f') fs.files.delete(argv[2]!)
@@ -61,8 +64,30 @@ test('two concurrent claims of one issue leave exactly one owner', async () => {
     claimIssue(io, { issueId: 'issue-1', session: 'worker-b', now: 100 }),
   ])
   expect(results.filter(result => result.claimed)).toHaveLength(1)
-  const owner = JSON.parse(fs.files.get(`${root}/claims/issue-1/owner.json`)!) as { session: string }
+  const owner = JSON.parse(fs.files.get(`${root}/claims/issue-1.json`)!) as { session: string }
   expect(['worker-a', 'worker-b']).toContain(owner.session)
+})
+
+// Regression caught: a claimant could expose its lock before its owner was written, letting another worker steal it.
+test('a delayed owner write still leaves exactly one claimant', async () => {
+  const root = tempDir()
+  const fs: Filesystem = { files: new Map(), dirs: new Set() }
+  const base = filesystemIo(root, fs)
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let firstWrite = true
+  const delayed: CoworkerIo = { ...base, write: async (path, value) => {
+    if (path.includes('/claims/.issue-1-') && firstWrite) { firstWrite = false; await gate }
+    return base.write(path, value)
+  } }
+  await writeCoworker(base, { session: 'worker-a', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 })
+  await writeCoworker(base, { session: 'worker-b', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 })
+  const first = claimIssue(delayed, { issueId: 'issue-1', session: 'worker-a', now: 100 })
+  const second = await claimIssue(base, { issueId: 'issue-1', session: 'worker-b', now: 100 })
+  release()
+  const results = [await first, second]
+  expect(results.filter(result => result.claimed)).toHaveLength(1)
+  expect(fs.files.has(`${root}/claims/issue-1.json`)).toBe(true)
 })
 
 // Regression caught: a crashed worker's claim could remain locked after its registry heartbeat expired.
@@ -85,13 +110,13 @@ test('shouldSpawn is false while a live co-worker is idle and false above the lo
 })
 
 // Regression caught: lexicographic file reads could reorder mail or deliver it repeatedly.
-test('mailbox drains each message once in send order', async () => {
+test('mailbox reads messages in send order without deleting them', async () => {
   const root = tempDir()
   const io = filesystemIo(root)
   await sendMail(io, { from: 'main', to: 'worker', text: 'first', now: 10 })
   await sendMail(io, { from: 'peer', to: 'worker', text: 'second', now: 20 })
-  expect((await drainMail(io, 'worker')).map(message => message.text)).toEqual(['first', 'second'])
-  expect(await drainMail(io, 'worker')).toEqual([])
+  expect((await drainMail(io, 'worker')).map(item => item.message.text)).toEqual(['first', 'second'])
+  expect((await drainMail(io, 'worker')).map(item => item.message.text)).toEqual(['first', 'second'])
 })
 
 // Regression caught: stale claims could block ready work, while a non-owner could release a live claim.

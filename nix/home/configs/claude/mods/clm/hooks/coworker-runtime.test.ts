@@ -65,8 +65,8 @@ test('a co-worker claim takes the highest-priority ready issue and records its w
 test('a second co-worker cannot claim an issue already claimed', async ($, on) => {
   const seen = bottoms(on, coworkerState('worker-second', 'main-second'))
   seedBoard(seen, 'board-second', [{ op: 'create', issue: 'one', title: 'One', status: 'todo' }, { op: 'plan', issue: 'one', priority: 1, ready: true }])
-  seen.dirs.add(`${ROOT}/claims`); seen.dirs.add(`${ROOT}/claims/one`)
-  seen.files[`${ROOT}/claims/one/owner.json`] = JSON.stringify({ session: 'worker-first' })
+  seen.dirs.add(`${ROOT}/claims`)
+  seen.files[`${ROOT}/claims/one.json`] = JSON.stringify({ session: 'worker-first' })
   seedRecord(seen, { session: 'worker-first', main: 'main-second', repo: 'github.com/o/repo', state: 'busy', issue: 'one', heartbeat: Date.parse('2026-10-06T00:00:00Z') })
   await $.session.start(startInput)
   expect(denial(await tool($, { action: 'claim', issue: 'one' }))).toContain('already claimed by worker-first')
@@ -92,8 +92,8 @@ const seedReadyToLand = (seen: ReturnType<typeof bottoms>, session: string, issu
     { op: 'create', issue, title: 'Land one', status: 'todo' }, { op: 'claim', issue, by: 'worker-land' }, { op: 'status', issue, status: 'ready-to-land' },
     { op: 'worktree', issue, dir, baseSha: SHA_B, headSha: SHA_A, originBranch: 'main', repoRoot: '/work/repo', worktreesRoot: `${ROOT}/worktrees` },
   ])
-  seen.dirs.add(`${ROOT}/claims`); seen.dirs.add(`${ROOT}/claims/${issue}`)
-  seen.files[`${ROOT}/claims/${issue}/owner.json`] = JSON.stringify({ session: 'worker-land' })
+  seen.dirs.add(`${ROOT}/claims`)
+  seen.files[`${ROOT}/claims/${issue}.json`] = JSON.stringify({ session: 'worker-land' })
 }
 
 // Regression caught: a successful hand-back left the issue and worktree open after applying its commits.
@@ -106,6 +106,20 @@ test('land cherry-picks a ready-to-land issue, removes its worktree and marks it
   expect(seen.runs.some(argv => argv.join(' ') === `git -C /work/repo cherry-pick --no-commit ${SHA_B}..${SHA_A}`)).toBe(true)
   expect(issues(seen).find(issue => issue.id === 'land-one')).toMatchObject({ status: 'done', landCommandsShown: true })
   expect(seen.dirs.has(`${ROOT}/worktrees/worker-land/land-one`)).toBe(false)
+})
+
+// Regression caught: a worktree cleanup error left an already cherry-picked issue ready-to-land, so retrying failed on the staged checkout.
+test('a land cleanup failure still marks the issue done', async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-cleanup-failure',
+    processRun: argv => argv.includes('worktree') && argv.includes('remove') ? { exitCode: 1, stdout: '', stderr: 'busy worktree' } : undefined,
+  })
+  seedReadyToLand(seen, 'board-cleanup-failure', 'cleanup-failure-one')
+  await $.session.start(startInput)
+  const output = await tool($, { action: 'land', issue: 'cleanup-failure-one' })
+  expect(resultText(output)).toContain('changes are staged')
+  expect(issues(seen).find(issue => issue.id === 'cleanup-failure-one')).toMatchObject({ status: 'done' })
+  expect(seen.logs.some(line => line.includes('worktree cleanup failed for cleanup-failure-one'))).toBe(true)
 })
 
 // Regression caught: a conflicting cherry-pick orphaned the issue instead of returning it to its current owner.
@@ -142,7 +156,7 @@ test('revoke frees the claim so another co-worker can take it', async ($, on) =>
   seedReadyToLand(seen, 'board-revoke', 'revoke-one')
   await $.session.start(startInput)
   await tool($, { action: 'revoke', issue: 'revoke-one' })
-  expect(seen.dirs.has(`${ROOT}/claims/revoke-one`)).toBe(false)
+  expect(`${ROOT}/claims/revoke-one.json` in seen.files).toBe(false)
   expect(issues(seen).find(issue => issue.id === 'revoke-one')).toMatchObject({ status: 'todo' })
   expect(issues(seen).find(issue => issue.id === 'revoke-one')?.claimedBy).toBeUndefined()
 })
@@ -172,6 +186,54 @@ test('mail waits while a turn is active and is delivered after it ends', async (
   current = workflow()
   await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
   expect(seen.submissions).toEqual([{ text: '[clm message from worker-a]\nwait for idle' }])
+})
+
+// Regression caught: a rejected prompt submission deleted the only durable copy of co-worker mail.
+test('a dropped prompt keeps the mail for the next tick', async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [], sessionId: 'main-drop-mail', promptDrops: ['busy'] })
+  setWorkflow(on, () => workflow())
+  await $.session.start(startInput)
+  seedMail(seen, 'main-drop-mail', 'worker-a', 'retry me')
+  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
+  expect(Object.keys(seen.files).some(path => path.startsWith(`${ROOT}/mail/main-drop-mail/`))).toBe(true)
+  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
+  expect(seen.submissions).toHaveLength(2)
+  expect(Object.keys(seen.files).some(path => path.startsWith(`${ROOT}/mail/main-drop-mail/`))).toBe(false)
+})
+
+// Regression caught: /clear cancelled polling under the old id and stranded mail addressed by co-workers to that main id.
+test('after /clear the main session still drains co-worker mail', async ($, on) => {
+  const state: State = { rows: [], replies: [], sessionId: 'main-before-clear', nextSessionId: 'main-after-clear' }
+  const seen = bottoms(on, state)
+  setWorkflow(on, () => workflow())
+  await $.session.start(startInput)
+  await $.session.end({ sessionId: 'main-before-clear', reason: 'clear' } as Parameters<typeof $.session.end>[0])
+  seedMail(seen, 'main-before-clear', 'worker-a', 'addressed to the stable main id')
+  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
+  expect(seen.submissions.at(-1)).toEqual({ text: '[clm message from worker-a]\naddressed to the stable main id' })
+  expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-after-clear.json`]!)).toMatchObject({ main: 'main-before-clear' })
+})
+
+// Regression caught: a poll heartbeat could publish an older idle snapshot after claim had moved the worker to busy.
+test('a tick during claim does not revert the co-worker to idle', async ($, on) => {
+  let entered!: () => void
+  let release!: () => void
+  const writingBusy = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let blocked = false
+  const seen = bottoms(on, coworkerState('worker-tick-claim', 'main-tick-claim', {
+    fsWriteBlock: async (path, text) => {
+      if (!blocked && path.includes('/coworkers/.worker-tick-claim-') && text.includes('"state":"busy"')) { blocked = true; entered(); await gate }
+    },
+  }))
+  seedBoard(seen, 'board-tick-claim', [{ op: 'create', issue: 'tick-one', title: 'Tick one', status: 'todo' }, { op: 'plan', issue: 'tick-one', ready: true }])
+  await $.session.start(startInput)
+  const claiming = tool($, { action: 'claim', issue: 'tick-one' })
+  await writingBusy
+  const ticking = seen.clock.advance(5_000)
+  release()
+  await claiming; await ticking; await new Promise(resolve => setTimeout(resolve, 0))
+  expect(JSON.parse(seen.files[`${ROOT}/coworkers/worker-tick-claim.json`]!)).toMatchObject({ state: 'busy', issue: 'tick-one' })
 })
 
 // Regression caught: deferred work reached the board without telling any available co-worker that the queue changed.
@@ -224,4 +286,19 @@ test('load above the cap skips the spawn and logs the reading', async ($, on) =>
   await tool($, { action: 'plan', issue: 'load-one', ready: true })
   expect(seen.runs.some(argv => argv[0] === 'herdr')).toBe(false)
   expect(seen.logs.some(line => line.includes('spawn skipped: load1=7 cap=6 cores=8'))).toBe(true)
+})
+
+// Regression caught: a successful mux command whose Claude process died caused a fresh launch on every poll after the placeholder expired.
+test('a co-worker that never registers is not relaunched every tick', async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-stale-start', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-stale' } })) : undefined,
+  })
+  seedBoard(seen, 'board-stale-start', [{ op: 'create', issue: 'stale-start-one', title: 'Stale start one', status: 'todo' }])
+  await $.session.start(startInput)
+  await tool($, { action: 'plan', issue: 'stale-start-one', ready: true })
+  await seen.clock.advance(75_000); await new Promise(resolve => setTimeout(resolve, 0))
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
+  expect(Object.values(seen.files).some(value => value.includes('"state":"failed"') && value.includes('"failedAt"'))).toBe(true)
+  expect(seen.logs.some(line => line.includes('failed to register'))).toBe(true)
 })

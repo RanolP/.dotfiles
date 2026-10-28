@@ -1,4 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
+import type { ClmCoworkerInput } from '../types'
 import { append as appendEvents, captureOrigin, readAll, type EventsIo } from './events'
 import {
   DEFAULT_COWORKER_TTL_MS, claimIssue, drainMail, isLive, pickNext, readCoworkers, releaseClaim, revokeClaim,
@@ -8,27 +9,21 @@ import { coworkerBrief, detectMux, launchPlan, readLoad } from './spawn'
 import { snapshot, type Issue, type Origin, type Payload } from './tracker'
 import type { PromptIntentIo } from './intent'
 import { checkpointCommit, removeWorktree, startWorktree, type Worktree, type WorktreeIo } from './worktree'
+import { readWorkflow } from './workflow'
 
 export const COWORKER_TOOL = 'mcp__clm__clm_coworker'
-const HEARTBEAT_MS = 15_000
 const POLL_MS = 5_000
 const DEFAULT_MAX_COWORKERS = 2
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 
-type RuntimeRole = { isCoworker: boolean; session: string; main: string; repo: string; repoRoot: string }
-type RuntimeInput = {
-  action?: string
-  issue?: string
-  priority?: number
-  ready?: boolean
-  maxCoworkers?: number
-  to?: string
-  text?: string
-}
+type RuntimeRole = { isCoworker: boolean; session: string; main: string; repo: string; repoRoot: string; placeholder?: string }
 
 const roles = new Map<string, RuntimeRole>()
 const timers = new Map<string, { cancel: () => void }[]>()
 const intents = new Map<string, Pick<PromptIntentIo, 'isCoworker' | 'announce'>>()
+const localRecords = new Map<string, CoworkerRecord>()
+const registryWrites = new Map<string, Promise<void>>()
+const ticksInFlight = new Set<string>()
 
 const optionalRead = async ($: EngineInterface, path: string) => {
   try { return (await $.fs.exists(path)) ? await $.fs.read(path) : undefined } catch { return undefined }
@@ -67,33 +62,37 @@ const worktreeIo = ($: EngineInterface): WorktreeIo => ({
 const append = ($: EngineInterface, payloads: readonly Payload[], origin?: Origin) =>
   appendEvents(trackerIo($), payloads, origin, false)
 
-const currentRole = async ($: EngineInterface): Promise<RuntimeRole> => {
+const currentRole = async ($: EngineInterface, stableMain?: string): Promise<RuntimeRole> => {
   const session = await $.session.id()
   const known = roles.get(session)
   if (known) return known
   const isCoworker = await $.env.get('CLM_COWORKER') === '1'
-  const main = isCoworker ? (await $.env.get('CLM_MAIN_SESSION'))?.trim() : session
+  const main = isCoworker ? (await $.env.get('CLM_MAIN_SESSION'))?.trim() : stableMain ?? session
   if (!main) throw new Error('CLM_MAIN_SESSION is required when CLM_COWORKER=1')
   const origin = await captureOrigin(trackerIo($))
   const root = await $.process.run(['git', '-C', origin.cwd, 'rev-parse', '--show-toplevel'], { timeoutMs: 5_000 })
   if (root.exitCode !== 0 || !root.stdout.trim()) throw new Error(`could not resolve repository root: ${root.stderr.trim()}`)
-  const role = { isCoworker, session, main, repo: origin.repo, repoRoot: root.stdout.trim() }
+  const placeholder = isCoworker ? (await $.env.get('CLM_COWORKER_NAME'))?.trim() : undefined
+  const role = { isCoworker, session, main, repo: origin.repo, repoRoot: root.stdout.trim(), ...(placeholder ? { placeholder } : {}) }
   roles.set(session, role)
   return role
 }
 
-const registryRecord = async ($: EngineInterface, role: RuntimeRole, update: Partial<CoworkerRecord> = {}): Promise<CoworkerRecord> => {
+const updateRegistry = async ($: EngineInterface, role: RuntimeRole, update: Partial<CoworkerRecord> = {}): Promise<void> => {
   const now = await $.clock.now()
-  const existing = (await readCoworkers(runtimeIo($))).find(record => record.session === role.session)
-  return {
+  const existing = localRecords.get(role.session)
+  const record: CoworkerRecord = {
     session: role.session, main: role.main, repo: role.repo, state: existing?.state ?? 'idle', heartbeat: now,
     ...(existing?.issue ? { issue: existing.issue } : {}), ...(existing?.mux ? { mux: existing.mux } : {}),
     ...(!role.isCoworker ? { maxCoworkers: existing?.maxCoworkers ?? DEFAULT_MAX_COWORKERS } : {}), ...update,
   }
+  if (update.issue === undefined && 'issue' in update) delete record.issue
+  localRecords.set(role.session, record)
+  const previous = registryWrites.get(role.session) ?? Promise.resolve()
+  const write = previous.catch(() => undefined).then(() => writeCoworker(runtimeIo($), record))
+  registryWrites.set(role.session, write)
+  await write
 }
-
-const updateRegistry = async ($: EngineInterface, role: RuntimeRole, update: Partial<CoworkerRecord> = {}) =>
-  writeCoworker(runtimeIo($), await registryRecord($, role, update))
 
 const issuesForRepo = async ($: EngineInterface, role: RuntimeRole) =>
   snapshot(await readAll(trackerIo($))).filter(issue => issue.origin.repo === role.repo)
@@ -180,7 +179,7 @@ const release = async ($: EngineInterface, role: RuntimeRole, issueId?: string) 
   return `Released ${issue.id}; its worktree remains attached to the issue.`
 }
 
-const plan = async ($: EngineInterface, role: RuntimeRole, input: RuntimeInput) => {
+const plan = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInput) => {
   requireMain(role)
   const issue = issueById(await issuesForRepo($, role), input.issue)
   if (input.priority === undefined && input.ready === undefined && input.maxCoworkers === undefined)
@@ -194,7 +193,7 @@ const plan = async ($: EngineInterface, role: RuntimeRole, input: RuntimeInput) 
   return `Planned ${issue.id}: priority=${input.priority ?? issue.priority ?? 'unset'}, ready=${input.ready ?? issue.ready ?? false}, maxCoworkers=${input.maxCoworkers ?? await maxCoworkers($, role)}.`
 }
 
-const revoke = async ($: EngineInterface, role: RuntimeRole, input: RuntimeInput) => {
+const revoke = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInput) => {
   requireMain(role)
   const issue = issueById(await issuesForRepo($, role), input.issue)
   const old = issue.claimedBy
@@ -229,18 +228,20 @@ const land = async ($: EngineInterface, role: RuntimeRole, issueId?: string) => 
       text: `Landing ${issue.id} conflicted at main HEAD ${mainHead}. Rebase the issue worktree onto ${mainHead}, resolve it, and call ready again.`,
       now: await $.clock.now(),
     })
-    await updateRegistry($, { ...role, session: issue.claimedBy, isCoworker: true }, { state: 'busy', issue: issue.id })
     return `Landing ${issue.id} conflicted. The cherry-pick was aborted and ${issue.claimedBy} was asked to rebase onto ${mainHead}.`
   }
-  await removeWorktree(worktreeIo($), issue.worktree)
   await append($, [{ op: 'status', issue: issue.id, status: 'done' }, { op: 'claim', issue: issue.id, by: null }, { op: 'land', issue: issue.id }])
   await revokeClaim(runtimeIo($), issue.id)
-  await sendMail(runtimeIo($), { from: role.session, to: issue.claimedBy, text: `${issue.id} landed successfully; its worktree was removed.`, now: await $.clock.now() })
+  const removed = await (async () => {
+    try { await removeWorktree(worktreeIo($), issue.worktree); return true }
+    catch (error) { $.ui.log(`clm co-worker worktree cleanup failed for ${issue.id}: ${String(error).slice(0, 160)}`); return false }
+  })()
+  await sendMail(runtimeIo($), { from: role.session, to: issue.claimedBy, text: `${issue.id} landed successfully; its worktree ${removed ? 'was removed' : 'still needs cleanup'}.`, now: await $.clock.now() })
   await dispatchReadyWork($, role)
   return `Landed ${issue.id}. Its changes are staged in ${role.repoRoot}; commit them with the repository's own subject format after final verification.`
 }
 
-const message = async ($: EngineInterface, role: RuntimeRole, input: RuntimeInput) => {
+const message = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInput) => {
   if (!input.to || !input.text?.trim()) throw new Error('message requires to and non-empty text')
   const records = await readCoworkers(runtimeIo($))
   const now = await $.clock.now()
@@ -263,8 +264,12 @@ const list = async ($: EngineInterface, role: RuntimeRole) => {
   ].join('\n')
 }
 
-const maxCoworkers = async ($: EngineInterface, role: RuntimeRole) =>
-  (await readCoworkers(runtimeIo($))).find(record => record.session === role.main)?.maxCoworkers ?? DEFAULT_MAX_COWORKERS
+const maxCoworkers = async ($: EngineInterface, role: RuntimeRole) => {
+  const records = await readCoworkers(runtimeIo($))
+  return records.find(record => record.session === role.session)?.maxCoworkers
+    ?? records.find(record => record.session === role.main)?.maxCoworkers
+    ?? DEFAULT_MAX_COWORKERS
+}
 
 const removeRegistry = async ($: EngineInterface, session: string) => {
   const home = (await $.env.get('HOME')) ?? '.'
@@ -282,7 +287,8 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
   while (used.has(`clm-coworker-${index}`)) index += 1
   const name = `clm-coworker-${index}`
   await writeCoworker(runtimeIo($), { session: name, main: role.main, repo: role.repo, state: 'starting', heartbeat: await $.clock.now(), mux })
-  const launch = launchPlan({ mux, cwd: role.repoRoot, name, env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: role.main }, brief: coworkerBrief({ main: role.main, repo: role.repoRoot }) })
+  const failures = records.filter(record => record.main === role.main && record.state === 'failed').length + 1
+  const launch = launchPlan({ mux, cwd: role.repoRoot, name, env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: role.main, CLM_COWORKER_NAME: name }, brief: coworkerBrief({ main: role.main, repo: role.repoRoot }) })
   if ('manual' in launch) {
     $.ui.log(`clm co-worker launch unavailable: mux=none command=${launch.manual} exitCode=unavailable stderr=${JSON.stringify('no supported multiplexer detected')}`, { to: 'debug' })
     await removeRegistry($, name)
@@ -300,13 +306,22 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
     }
     stdout = result.stdout
   }
+  const placeholder = (await readCoworkers(runtimeIo($))).find(record => record.session === name)
+  if (placeholder) await writeCoworker(runtimeIo($), { ...placeholder, failures })
 }
 
 async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise<void> {
   if (role.isCoworker) return
   const now = await $.clock.now()
   const issues = await issuesForRepo($, role)
-  const records = await readCoworkers(runtimeIo($))
+  const observed = await readCoworkers(runtimeIo($))
+  const records = await Promise.all(observed.map(async record => {
+    if (record.main !== role.main || record.state !== 'starting' || isLive(record, now, DEFAULT_COWORKER_TTL_MS)) return record
+    const failed = { ...record, state: 'failed' as const, failedAt: now, failures: record.failures ?? 1 }
+    await writeCoworker(runtimeIo($), failed)
+    $.ui.log(`clm co-worker ${record.session} failed to register before its ${DEFAULT_COWORKER_TTL_MS} ms startup deadline`)
+    return failed
+  }))
   const next = pickNext(issues.map(selectableIssue), role.repo)
   if (!next) return
   const idle = records.find(record => record.main === role.main && record.session !== role.main && record.state === 'idle' && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
@@ -314,12 +329,11 @@ async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise
     await sendMail(runtimeIo($), { from: role.session, to: idle.session, text: `Claim the next ready issue; ${next.id} currently has the highest priority.`, now })
     return
   }
-  let load: { load1: number; cores: number }
-  try { load = await readLoad({ run: (argv, options) => $.process.run([...argv], options), read: path => optionalRead($, path) }, 'darwin') }
-  catch (error) {
-    $.ui.log(`clm co-worker load reading failed: ${String(error).slice(0, 160)}`, { to: 'debug' })
-    return
-  }
+  const load = await (async () => {
+    try { return await readLoad({ run: (argv, options) => $.process.run([...argv], options), read: path => optionalRead($, path) }) }
+    catch (error) { $.ui.log(`clm co-worker load reading failed: ${String(error).slice(0, 160)}`, { to: 'debug' }); return undefined }
+  })()
+  if (!load) return
   const cap = 0.75 * load.cores
   if (load.load1 >= cap) {
     $.ui.log(`clm co-worker spawn skipped: load1=${load.load1} cap=${cap} cores=${load.cores}`, { to: 'debug' })
@@ -330,21 +344,31 @@ async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise
 }
 
 const deliverMail = async ($: EngineInterface, role: RuntimeRole) => {
-  const workflow = (await $.state.get(WORKFLOW)).value as { activeTurnId?: string | null } | undefined
-  if (workflow?.activeTurnId) return
-  const messages = await drainMail(runtimeIo($), role.session)
+  const workflow = await readWorkflow({ get: async () => (await $.state.get(WORKFLOW)).value })
+  if (workflow.activeTurnId) return
+  const mailboxes = role.isCoworker || role.session === role.main ? [role.session] : [role.session, role.main]
+  const messages = (await Promise.all([...new Set(mailboxes)].map(session => drainMail(runtimeIo($), session)))).flat()
   if (!messages.length) return
-  const text = messages.map(item => `[clm message from ${item.from}]\n${item.text}`).join('\n\n')
-  await $.prompt.submit({ text })
+  const text = messages.map(item => `[clm message from ${item.message.from}]\n${item.message.text}`).join('\n\n')
+  const result = await $.prompt.submit({ text })
+  if (result.drop !== undefined) {
+    $.ui.log(`clm co-worker mail delivery dropped: ${String(result.drop).slice(0, 160)}`, { to: 'debug' })
+    return
+  }
+  await Promise.all(messages.map(item => $.process.run(['rm', '-f', item.path], { timeoutMs: 1_000 })))
 }
 
 const tick = async ($: EngineInterface, role: RuntimeRole) => {
-  await updateRegistry($, role)
-  await deliverMail($, role)
-  await dispatchReadyWork($, role)
+  if (ticksInFlight.has(role.session)) return
+  ticksInFlight.add(role.session)
+  try {
+    await updateRegistry($, role)
+    await deliverMail($, role)
+    await dispatchReadyWork($, role)
+  } finally { ticksInFlight.delete(role.session) }
 }
 
-const handleTool = async ($: EngineInterface, input: RuntimeInput) => {
+const handleTool = async ($: EngineInterface, input: ClmCoworkerInput) => {
   const role = await currentRole($)
   switch (input.action) {
     case 'claim': return claim($, role, input.issue)
@@ -371,32 +395,58 @@ const announceDeferred = async ($: EngineInterface, ids: string[]) => {
 
 export const coworkerIntent = (session: string) => intents.get(session)
 
+const startRuntime = async ($: EngineInterface, stableMain?: string) => {
+  const role = await currentRole($, stableMain)
+  intents.set(role.session, { isCoworker: role.isCoworker, announce: ids => announceDeferred($, ids) })
+  await updateRegistry($, role, { state: 'idle' })
+  if (role.placeholder && role.placeholder !== role.session) await removeRegistry($, role.placeholder)
+  for (const timer of timers.get(role.session) ?? []) timer.cancel()
+  timers.set(role.session, [
+    $.clock.every(POLL_MS, () => { void tick($, role).catch(error => $.ui.log(`clm co-worker poll failed: ${String(error).slice(0, 160)}`, { to: 'debug' })) }),
+  ])
+  await $.tool.register({
+    name: 'clm_coworker',
+    description: 'Coordinate clm board work between the main session and detached co-worker sessions: plan, claim, hand back, land, reassign, list, or message.',
+    inputSchema: {
+      type: 'object', properties: {
+        action: { type: 'string', enum: ['claim', 'ready', 'release', 'plan', 'revoke', 'land', 'list', 'message'] },
+        issue: { type: 'string' }, priority: { type: 'integer' }, ready: { type: 'boolean' }, maxCoworkers: { type: 'integer', minimum: 1 },
+        to: { type: 'string' }, text: { type: 'string' },
+      }, required: ['action'], additionalProperties: false,
+    },
+  })
+}
+
+const stopRuntime = (session: string) => {
+  intents.delete(session)
+  roles.delete(session)
+  localRecords.delete(session)
+  registryWrites.delete(session)
+  ticksInFlight.delete(session)
+  for (const timer of timers.get(session) ?? []) timer.cancel()
+  timers.delete(session)
+}
+
+const promptContext = async ($: EngineInterface, role: RuntimeRole): Promise<string | undefined> => {
+  const issues = await issuesForRepo($, role)
+  if (role.isCoworker) {
+    const record = (await readCoworkers(runtimeIo($))).find(item => item.session === role.session)
+    const issue = record?.issue ? issues.find(item => item.id === record.issue) : undefined
+    return `Role: clm co-worker for main session ${role.main}.${issue ? ` Claimed issue: ${issue.id} (${issue.title}). Worktree: ${issue.worktree?.dir ?? 'not recorded'}.` : ' Claim ready work with clm_coworker before editing.'}`
+  }
+  const unplanned = issues.filter(issue => issue.status === 'todo' && issue.priority === undefined && issue.ready === undefined)
+  const waiting = issues.filter(issue => issue.status === 'ready-to-land')
+  if (!unplanned.length && !waiting.length) return undefined
+  return [
+    ...(unplanned.length ? [`Unplanned deferred issues: ${unplanned.map(issue => `${issue.id} (${issue.title})`).join('; ')}.`] : []),
+    ...(waiting.length ? [`Ready-to-land issues: ${waiting.map(issue => `${issue.id} (${issue.title})`).join('; ')}.`] : []),
+  ].join('\n')
+}
+
 export const registerCoworkers: Register = (on) => {
   on('session.start', { isInteractive: [true, false] }, async ($, e, next) => {
-    try {
-      const role = await currentRole($)
-      intents.set(role.session, {
-        isCoworker: role.isCoworker,
-        announce: ids => announceDeferred($, ids),
-      })
-      await updateRegistry($, role, { state: 'idle' })
-      for (const timer of timers.get(role.session) ?? []) timer.cancel()
-      timers.set(role.session, [
-        $.clock.every(HEARTBEAT_MS, () => { void updateRegistry($, role).catch(error => $.ui.log(`clm co-worker heartbeat failed: ${String(error).slice(0, 160)}`, { to: 'debug' })) }),
-        $.clock.every(POLL_MS, () => { void tick($, role).catch(error => $.ui.log(`clm co-worker poll failed: ${String(error).slice(0, 160)}`, { to: 'debug' })) }),
-      ])
-      await $.tool.register({
-        name: 'clm_coworker',
-        description: 'Coordinate clm board work between the main session and detached co-worker sessions: plan, claim, hand back, land, reassign, list, or message.',
-        inputSchema: {
-          type: 'object', properties: {
-            action: { type: 'string', enum: ['claim', 'ready', 'release', 'plan', 'revoke', 'land', 'list', 'message'] },
-            issue: { type: 'string' }, priority: { type: 'integer' }, ready: { type: 'boolean' }, maxCoworkers: { type: 'integer', minimum: 1 },
-            to: { type: 'string' }, text: { type: 'string' },
-          }, required: ['action'], additionalProperties: false,
-        },
-      })
-    } catch (error) { $.ui.log(`clm co-worker start failed: ${String(error).slice(0, 160)}`, { to: 'debug' }) }
+    try { await startRuntime($) }
+    catch (error) { $.ui.log(`clm co-worker start failed: ${String(error).slice(0, 160)}`, { to: 'debug' }) }
     return next(e)
   })
 
@@ -410,20 +460,7 @@ export const registerCoworkers: Register = (on) => {
     if (e.traits.includes('bare')) return result
     try {
       const role = await currentRole($)
-      const issues = await issuesForRepo($, role)
-      let text: string | undefined
-      if (role.isCoworker) {
-        const record = (await readCoworkers(runtimeIo($))).find(item => item.session === role.session)
-        const issue = record?.issue ? issues.find(item => item.id === record.issue) : undefined
-        text = `Role: clm co-worker for main session ${role.main}.${issue ? ` Claimed issue: ${issue.id} (${issue.title}). Worktree: ${issue.worktree?.dir ?? 'not recorded'}.` : ' Claim ready work with clm_coworker before editing.'}`
-      } else {
-        const unplanned = issues.filter(issue => issue.status === 'todo' && issue.priority === undefined && issue.ready === undefined)
-        const waiting = issues.filter(issue => issue.status === 'ready-to-land')
-        if (unplanned.length || waiting.length) text = [
-          ...(unplanned.length ? [`Unplanned deferred issues: ${unplanned.map(issue => `${issue.id} (${issue.title})`).join('; ')}.`] : []),
-          ...(waiting.length ? [`Ready-to-land issues: ${waiting.map(issue => `${issue.id} (${issue.title})`).join('; ')}.`] : []),
-        ].join('\n')
-      }
+      const text = await promptContext($, role)
       return text ? { ...result, sections: [...result.sections, { id: 'clm:coworker', text, scope: 'session' as const }] } : result
     } catch (error) {
       $.ui.log(`clm co-worker prompt context failed: ${String(error).slice(0, 160)}`, { to: 'debug' })
@@ -432,10 +469,13 @@ export const registerCoworkers: Register = (on) => {
   })
 
   on('session.end', { sessionId: /.*/ }, async ($, e, next) => {
-    intents.delete(e.sessionId)
-    roles.delete(e.sessionId)
-    for (const timer of timers.get(e.sessionId) ?? []) timer.cancel()
-    timers.delete(e.sessionId)
-    return next(e)
+    const stableMain = roles.get(e.sessionId)?.main
+    stopRuntime(e.sessionId)
+    const result = await next(e)
+    if (e.reason === 'clear') {
+      try { await startRuntime($, stableMain) }
+      catch (error) { $.ui.log(`clm co-worker clear restart failed: ${String(error).slice(0, 160)}`, { to: 'debug' }) }
+    }
+    return result
   })
 }

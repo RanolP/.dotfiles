@@ -1,0 +1,87 @@
+export type Mux = 'herdr' | 'zellij' | 'tmux' | 'none'
+export type CoworkerEnvironment = { CLM_COWORKER: '1'; CLM_MAIN_SESSION: string }
+export type ProcessResult = { exitCode: number; stdout: string; stderr: string }
+export type SpawnIo = {
+  run: (argv: readonly string[], options?: { cwd?: string; timeoutMs?: number }) => Promise<ProcessResult>
+  read: (path: string) => Promise<string | undefined>
+}
+export type LaunchStep = {
+  argv?: readonly string[]
+  argvFromPrevious?: (stdout: string) => readonly string[]
+}
+export type LaunchPlan = { steps: readonly LaunchStep[] } | { manual: string }
+
+export function detectMux(env: Record<string, string | undefined>): Mux {
+  if (env.HERDR_SOCKET_PATH || env.HERDR_ENV) return 'herdr'
+  if (env.ZELLIJ) return 'zellij'
+  if (env.TMUX) return 'tmux'
+  return 'none'
+}
+
+const environmentArgs = (env: CoworkerEnvironment) => Object.entries(env).map(([key, value]) => `${key}=${value}`)
+const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`
+
+export function parseHerdrPaneId(stdout: string): string {
+  let value: unknown
+  try { value = JSON.parse(stdout) } catch { throw new Error('Herdr tab creation did not return JSON') }
+  if (!value || typeof value !== 'object') throw new Error('Herdr tab creation returned an invalid response')
+  const rootPane = (value as { root_pane?: unknown }).root_pane
+  const paneId = rootPane && typeof rootPane === 'object' ? (rootPane as { pane_id?: unknown }).pane_id : undefined
+  if (typeof paneId !== 'string' || !paneId) throw new Error('Herdr tab creation response has no root_pane.pane_id')
+  return paneId
+}
+
+export function launchPlan(input: { mux: Mux; cwd: string; name: string; env: CoworkerEnvironment; brief: string }): LaunchPlan {
+  const envArgs = environmentArgs(input.env)
+  if (input.mux === 'herdr') return { steps: [
+    { argv: ['herdr', 'tab', 'create', '--cwd', input.cwd, '--label', input.name, ...envArgs.flatMap(value => ['--env', value]), '--no-focus'] },
+    { argvFromPrevious: stdout => ['herdr', 'agent', 'start', input.name, '--kind', 'claude', '--pane', parseHerdrPaneId(stdout), '--', input.brief] },
+  ] }
+  if (input.mux === 'zellij') return { steps: [
+    { argv: ['zellij', 'run', '--name', input.name, '--cwd', input.cwd, '--no-focus', '--', 'env', ...envArgs, 'claude', input.brief] },
+  ] }
+  if (input.mux === 'tmux') return { steps: [
+    { argv: ['tmux', 'new-window', '-d', '-c', input.cwd, ...envArgs.flatMap(value => ['-e', value]), '-n', input.name, 'claude', input.brief] },
+  ] }
+  return { manual: `sh -c 'cd "$1" && shift && exec "$@"' sh ${shellQuote(input.cwd)} env ${envArgs.map(shellQuote).join(' ')} claude ${shellQuote(input.brief)}` }
+}
+
+export function parseDarwinLoad(stdout: string): number {
+  const match = stdout.match(/\{?\s*([0-9]+(?:\.[0-9]+)?)/)
+  const value = match ? Number(match[1]) : Number.NaN
+  if (!Number.isFinite(value)) throw new Error(`invalid Darwin load average: ${JSON.stringify(stdout)}`)
+  return value
+}
+
+export function parseLinuxLoad(contents: string): number {
+  const value = Number(contents.trim().split(/\s+/)[0])
+  if (!Number.isFinite(value)) throw new Error(`invalid Linux load average: ${JSON.stringify(contents)}`)
+  return value
+}
+
+export function parseCoreCount(stdout: string): number {
+  const value = Number(stdout.trim())
+  if (!Number.isInteger(value) || value < 1) throw new Error(`invalid CPU core count: ${JSON.stringify(stdout)}`)
+  return value
+}
+
+const checked = async (io: SpawnIo, argv: readonly string[]) => {
+  const result = await io.run(argv, { timeoutMs: 1_000 })
+  if (result.exitCode !== 0) throw new Error(`${argv.join(' ')} failed: ${result.stderr.trim()}`)
+  return result.stdout
+}
+
+export async function readLoad(io: SpawnIo, platform: 'darwin' | 'linux'): Promise<{ load1: number; cores: number }> {
+  if (platform === 'darwin') {
+    const load = await checked(io, ['sysctl', '-n', 'vm.loadavg'])
+    const cores = await checked(io, ['sysctl', '-n', 'hw.ncpu'])
+    return { load1: parseDarwinLoad(load), cores: parseCoreCount(cores) }
+  }
+  const load = await io.read('/proc/loadavg')
+  if (load === undefined) throw new Error('/proc/loadavg is unavailable')
+  return { load1: parseLinuxLoad(load), cores: parseCoreCount(await checked(io, ['nproc'])) }
+}
+
+export function coworkerBrief(input: { main: string; repo: string }): string {
+  return `You are a clm co-worker for main session ${input.main} in ${input.repo}. Call the clm_coworker tool with action claim, work only inside the returned worktree, checkpoint your completed work, then call clm_coworker with action ready. Use action message to discuss the work with the main session or other co-workers.`
+}

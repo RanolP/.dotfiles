@@ -91,7 +91,8 @@ export async function residentLedger(
   }
   let clauseStore = preview.clauses ?? readClauseStore(await io.get(clauseStoreKey(key))) ?? emptyClauseStore()
   const inScope = (issue: string | null) => issue === null || ancestors.has(issue)
-  const goalInScope = (issue: string | null) => issue === null || shownIssues.some(candidate => candidate.id === issue && isOpen(candidate))
+  // With no focus there is no position to narrow to, so show every open goal.
+  const goalInScope = ancestors.size ? inScope : (issue: string | null) => issue === null || shownIssues.some(candidate => candidate.id === issue && isOpen(candidate))
   const rawNotes = preview.notes ?? notesOf((await io.readLedger()) ?? EMPTY_LEDGER)
   const meta = await io.readMeta()
   const topics = preview.topics ?? await io.readLegacyTopics(rawNotes, meta.seq, key)

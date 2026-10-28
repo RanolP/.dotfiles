@@ -14,7 +14,7 @@ import {
 import {
   composeLedger, EMPTY_LEDGER, factLine, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, withdrawnInstructionKeys, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
   parseChanges, parseMerge, parseReview, preservedLines, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
-  withNotes, WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective, type Fact,
+  WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective, type Fact,
 } from './ledger'
 import {
   archivedDone, injected, normalizeRemote, parseLog, parseOps, snapshot, toEvents,

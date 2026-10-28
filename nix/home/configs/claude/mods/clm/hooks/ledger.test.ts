@@ -219,6 +219,23 @@ test('an open request stays visible when a goal clause covers the same topic', a
   expect(section(row, 'what to request')).toContain('[R1]')
 })
 
+test("with a focus, where we are shows only the focus chain's goals", async () => {
+  const focus = confirmIssue('I-1', 'focused issue', 'doing')
+  const sibling = confirmIssue('I-2', 'open sibling', 'todo')
+  const clauseStore = emptyClauseStore()
+  clauseStore.migratedLedger = true
+  clauseStore.clauses = [
+    { id: 'C1', ...parseClause("goal('I-1', focused)."), source: "goal('I-1', focused).", text: 'focused goal', quote: '', address: '@focus', promptSeq: 1, sources: [], issue: focus.id, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'goal' },
+    { id: 'C2', ...parseClause("goal('I-2', sibling)."), source: "goal('I-2', sibling).", text: 'sibling goal', quote: '', address: '@sibling', promptSeq: 1, sources: [], issue: sibling.id, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'goal' },
+  ]
+  clauseStore.nextId = 3
+  const row = await residentLedger({
+    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
+  }, 's1:main', [focus, sibling], { stack: [focus.id], pending: [] }, [], { clauses: clauseStore })
+  expect(section(row, 'where we are')).toContain('focused goal')
+  expect(section(row, 'where we are')).not.toContain('sibling goal')
+})
+
 // Regression caught: a malformed note carrying the item prefix sent the re-read to the clipped title, losing the items behind "외 N건" and keeping that tail as an item.
 test('a malformed confirm note falls back to the last stored list, and the title tail is not an item', () => {
   const claims: Payload[] = ['one', 'two', 'three', 'four', 'five', 'six'].map(t => ({ op: 'create', title: `${t} ${'z'.repeat(25)}`, status: 'done' }))

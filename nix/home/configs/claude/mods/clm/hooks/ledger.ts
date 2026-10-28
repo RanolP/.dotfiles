@@ -68,9 +68,6 @@ const STORED_SECTIONS = SECTIONS.filter(s => !isTrackerSection(s))
 const EMPTY_NOTES = STORED_SECTIONS.map(s => `## ${s}\n- (none yet)`).join('\n\n')
 export const notesOf = (ledger: string) =>
   sectionsOf(ledger).filter(p => STORED_SECTIONS.some(s => isSection(p, s))).join('').trimEnd() || EMPTY_NOTES
-/** The stored notes with the merge model's sections taken from `merged`. */
-export const withNotes = (stored: string, merged: string) =>
-  STORED_SECTIONS.map(s => (sectionsOf(NOTE_SECTIONS.includes(s) ? merged : stored).find(p => isSection(p, s))?.trimEnd() ?? `## ${s}\n- (none yet)`)).join('\n\n')
 /** The notes the merge model rewrites. */
 export const mergeableNotes = (notes: string) =>
   sectionsOf(notes).filter(p => NOTE_SECTIONS.some(s => isSection(p, s))).join('').trimEnd()

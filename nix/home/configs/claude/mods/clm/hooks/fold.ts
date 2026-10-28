@@ -49,6 +49,7 @@ export const stableAttachmentOf = (m: SessionMessage): { type: StableAttachmentT
 const isCarriedAttachment = (m: SessionMessage) => stableAttachmentOf(m) !== undefined
 const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
 const isLocalCommand = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.localCommand.test(m.text)
+const isReminderRow = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.remindersOnly.test(m.text)
 const isEmptyRow = (m: SessionMessage) => isBare(m) && (m.text.trim() === '' || (m.role === 'assistant' && m.text.trim() === '(no content)'))
 export const isSystemRow = (m: SessionMessage): boolean => {
   if (!isBare(m)) return false
@@ -108,6 +109,17 @@ export function liveRows(msgs: readonly SessionMessage[], b: Boundary | undefine
 // and on --resume the loader pulls the pre-fold chain back in.
 const strip = (m: SessionMessage): SessionMessage =>
   ({ role: m.role, text: m.text, toolUses: m.toolUses, ...(m.toolResults ? { toolResults: m.toolResults } : {}) })
+
+// A subagent opens on harness reminders no later row repeats, the
+// SubagentHandback delivery rule among them. The engine summary of a subagent
+// dropped them, and the worker then ended on plain text its caller never got,
+// so each one the compacted rows lack goes back right after the summary.
+export function keepSpawnReminders(before: readonly SessionMessage[], after: readonly SessionMessage[]): SessionMessage[] {
+  const firstReply = before.findIndex(m => m.role === 'assistant')
+  const missing = before.slice(0, firstReply < 0 ? before.length : firstReply)
+    .filter(m => isReminderRow(m) && !after.some(kept => kept.text === m.text)).map(strip)
+  return after.length && missing.length ? [after[0]!, ...missing, ...after.slice(1)] : [...after]
+}
 
 // --- planning a fold -----------------------------------------------------
 

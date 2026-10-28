@@ -486,6 +486,17 @@ test('precompute skips and subagent compaction leaves the main ledger and metada
   expect(seen.engineCompactions).toBe(1)
 })
 
+// Regression caught: a subagent's engine compaction dropped its spawn-time SubagentHandback reminder, so the worker ended on plain text that never reached its caller.
+test('a subagent compaction keeps the spawn-time SubagentHandback reminder after the summary', OPTS, async ($, on) => {
+  bottoms(on, { rows: ROWS, replies: [] })
+  const handback = M('user', '<system-reminder>\nYour final report is delivered through SubagentHandback; plain text you write at the end is not delivered.\n</system-reminder>')
+  const rows = [ROWS[0]!, handback, ...ROWS.slice(1)]
+  const first = compactedMessages(await $.session.compact(compactInput('auto', handled(rows), { agentId: 'a1' })))
+  expect(first.map(message => message.text)).toEqual(['ENGINE SUMMARY', handback.text])
+  const again = compactedMessages(await $.session.compact(compactInput('auto', handled([...first, ...ROWS.slice(1)]), { agentId: 'a1' })))
+  expect(again.map(message => message.text)).toEqual(['ENGINE SUMMARY', handback.text])
+})
+
 test("a precompute compaction without messages still skips as 'clm replaces compaction'", OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [], replies: [] })
   const input = { trigger: 'precompute' } as SessionCompactInput

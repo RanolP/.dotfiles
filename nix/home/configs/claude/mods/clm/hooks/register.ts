@@ -4,7 +4,7 @@ import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentT
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
-  buildCleared, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
+  buildCleared, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, keepSpawnReminders, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
   type Boundary, type ClearPlan, type StableAttachmentType,
 } from './fold'
 import {
@@ -1166,7 +1166,10 @@ export const register: Register = (on, options) => {
 
   // The engine and the turn-end check share one per-transcript job.
   on('session.compact', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined) {
+      const result = await next(e)
+      return Array.isArray(e.messages) && 'messages' in result && result.messages ? { ...result, messages: keepSpawnReminders(e.messages, result.messages) } : result
+    }
     if (e.trigger === 'plugin' && forceCompacts.delete(transcriptKey(await sid($)))) {
       const key = transcriptKey(await sid($))
       return handOffFoldJob(foldJobIo($, loadedFromPath), key, () => next(e), 'force-compact requested')

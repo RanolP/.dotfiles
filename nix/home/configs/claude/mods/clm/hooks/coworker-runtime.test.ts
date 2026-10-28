@@ -26,9 +26,9 @@ const tool = ($: any, input: Record<string, unknown>) => $.tool.call({ tool: COW
 const resultText = (result: any) => String(result?.result ?? '')
 const denial = (result: any) => String(result?.deny ?? '')
 
-const seedRecord = (seen: ReturnType<typeof bottoms>, record: CoworkerRecord) => {
+const seedRecord = (seen: ReturnType<typeof bottoms>, record: Omit<CoworkerRecord, 'role'> & { role?: CoworkerRecord['role'] }) => {
   seen.dirs.add(`${ROOT}/coworkers`)
-  seen.files[`${ROOT}/coworkers/${record.session}.json`] = JSON.stringify(record)
+  seen.files[`${ROOT}/coworkers/${record.session}.json`] = JSON.stringify({ role: 'coworker', ...record })
 }
 
 const seedMail = (seen: ReturnType<typeof bottoms>, to: string, from: string, text: string, n = 1) => {
@@ -203,15 +203,31 @@ test('a dropped prompt keeps the mail for the next tick', async ($, on) => {
 
 // Regression caught: /clear cancelled polling under the old id and stranded mail addressed by co-workers to that main id.
 test('after /clear the main session still drains co-worker mail', async ($, on) => {
-  const state: State = { rows: [], replies: [], sessionId: 'main-before-clear', nextSessionId: 'main-after-clear' }
+  const state: State = {
+    rows: [], replies: [], sessionId: 'main-before-clear', nextSessionId: 'main-after-clear', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-after-clear' } })) : undefined,
+  }
   const seen = bottoms(on, state)
   setWorkflow(on, () => workflow())
+  seedBoard(seen, 'board-after-clear', [{ op: 'create', issue: 'after-clear-ready', title: 'After clear ready', status: 'todo' }, { op: 'plan', issue: 'after-clear-ready', ready: true }])
   await $.session.start(startInput)
   await $.session.end({ sessionId: 'main-before-clear', reason: 'clear' } as Parameters<typeof $.session.end>[0])
   seedMail(seen, 'main-before-clear', 'worker-a', 'addressed to the stable main id')
-  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
-  expect(seen.submissions.at(-1)).toEqual({ text: '[clm message from worker-a]\naddressed to the stable main id' })
+  await seen.clock.advance(10_000); await new Promise(resolve => setTimeout(resolve, 0))
+  expect(seen.submissions).toEqual([{ text: '[clm message from worker-a]\naddressed to the stable main id' }])
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
   expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-after-clear.json`]!)).toMatchObject({ main: 'main-before-clear' })
+})
+
+// Regression caught: /clear created a new main record whose default worker cap shadowed the stable main's planned cap.
+test('maxCoworkers set by plan survives /clear', async ($, on) => {
+  const state: State = { rows: [], replies: [], sessionId: 'main-cap-before', nextSessionId: 'main-cap-after' }
+  const seen = bottoms(on, state)
+  seedBoard(seen, 'board-cap-clear', [{ op: 'create', issue: 'cap-clear', title: 'Cap clear', status: 'todo' }])
+  await $.session.start(startInput)
+  expect(resultText(await tool($, { action: 'plan', issue: 'cap-clear', maxCoworkers: 4 }))).toContain('maxCoworkers=4')
+  await $.session.end({ sessionId: 'main-cap-before', reason: 'clear' } as Parameters<typeof $.session.end>[0])
+  expect(resultText(await tool($, { action: 'plan', issue: 'cap-clear', priority: 1 }))).toContain('maxCoworkers=4')
 })
 
 // Regression caught: a poll heartbeat could publish an older idle snapshot after claim had moved the worker to busy.
@@ -299,6 +315,32 @@ test('a co-worker that never registers is not relaunched every tick', async ($, 
   await tool($, { action: 'plan', issue: 'stale-start-one', ready: true })
   await seen.clock.advance(75_000); await new Promise(resolve => setTimeout(resolve, 0))
   expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
-  expect(Object.values(seen.files).some(value => value.includes('"state":"failed"') && value.includes('"failedAt"'))).toBe(true)
+  expect(Object.values(seen.files).some(value => value.includes('"failures":1') && value.includes('"lastFailedAt"'))).toBe(true)
   expect(seen.logs.some(line => line.includes('failed to register'))).toBe(true)
+})
+
+// Regression caught: deleting a failed launch placeholder erased all retry state, so every poll launched again.
+test('a failing launch command backs off instead of retrying every tick', async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-launch-failure', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? { exitCode: 1, stdout: '', stderr: 'mux failed' } : undefined,
+  })
+  seedBoard(seen, 'board-launch-failure', [{ op: 'create', issue: 'launch-failure', title: 'Launch failure', status: 'todo' }])
+  await $.session.start(startInput)
+  await tool($, { action: 'plan', issue: 'launch-failure', ready: true })
+  await seen.clock.advance(15_000); await new Promise(resolve => setTimeout(resolve, 0))
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
+  expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-launch-failure.spawn-backoff.json`]!)).toMatchObject({ failures: 1 })
+})
+
+// Regression caught: a recovered co-worker left the prior launch failures active, extending later retry delays indefinitely.
+test('a successful co-worker start resets the spawn backoff', async ($, on) => {
+  const seen = bottoms(on, coworkerState('worker-reset-backoff', 'main-reset-backoff', {
+    env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: 'main-reset-backoff', CLM_COWORKER_NAME: 'clm-coworker-1' },
+  }))
+  seen.dirs.add(`${ROOT}/coworkers`)
+  seen.files[`${ROOT}/coworkers/main-reset-backoff.spawn-backoff.json`] = JSON.stringify({ failures: 4, lastFailedAt: 100 })
+  seedRecord(seen, { session: 'clm-coworker-1', main: 'main-reset-backoff', repo: 'github.com/o/repo', state: 'starting', heartbeat: 100 })
+  await $.session.start(startInput)
+  expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-reset-backoff.spawn-backoff.json`]!)).toEqual({ failures: 0 })
 })

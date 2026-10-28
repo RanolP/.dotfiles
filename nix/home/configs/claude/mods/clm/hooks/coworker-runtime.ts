@@ -2,8 +2,8 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ClmCoworkerInput } from '../types'
 import { append as appendEvents, captureOrigin, readAll, type EventsIo } from './events'
 import {
-  DEFAULT_COWORKER_TTL_MS, claimIssue, drainMail, isLive, pickNext, readCoworkers, releaseClaim, revokeClaim,
-  sendMail, sendMailToMany, shouldSpawn, writeCoworker, type CoworkerIo, type CoworkerRecord,
+  DEFAULT_COWORKER_TTL_MS, claimIssue, drainMail, isLive, pickNext, readCoworkers, readSpawnBackoff, releaseClaim, revokeClaim,
+  sendMail, sendMailToMany, shouldSpawn, writeCoworker, writeSpawnBackoff, type CoworkerIo, type CoworkerRecord,
 } from './coworker'
 import { coworkerBrief, detectMux, launchPlan, readLoad } from './spawn'
 import { snapshot, type Issue, type Origin, type Payload } from './tracker'
@@ -82,9 +82,9 @@ const updateRegistry = async ($: EngineInterface, role: RuntimeRole, update: Par
   const now = await $.clock.now()
   const existing = localRecords.get(role.session)
   const record: CoworkerRecord = {
-    session: role.session, main: role.main, repo: role.repo, state: existing?.state ?? 'idle', heartbeat: now,
+    session: role.session, main: role.main, role: role.isCoworker ? 'coworker' : 'main', repo: role.repo, state: existing?.state ?? 'idle', heartbeat: now,
     ...(existing?.issue ? { issue: existing.issue } : {}), ...(existing?.mux ? { mux: existing.mux } : {}),
-    ...(!role.isCoworker ? { maxCoworkers: existing?.maxCoworkers ?? DEFAULT_MAX_COWORKERS } : {}), ...update,
+    ...(role.session === role.main && existing?.maxCoworkers !== undefined ? { maxCoworkers: existing.maxCoworkers } : {}), ...update,
   }
   if (update.issue === undefined && 'issue' in update) delete record.issue
   localRecords.set(role.session, record)
@@ -92,6 +92,16 @@ const updateRegistry = async ($: EngineInterface, role: RuntimeRole, update: Par
   const write = previous.catch(() => undefined).then(() => writeCoworker(runtimeIo($), record))
   registryWrites.set(role.session, write)
   await write
+}
+
+const updateMainRegistry = async ($: EngineInterface, role: RuntimeRole, maxCoworkers: number): Promise<void> => {
+  if (role.session === role.main) return updateRegistry($, role, { maxCoworkers })
+  const existing = (await readCoworkers(runtimeIo($))).find(record => record.role === 'main' && record.session === role.main)
+  await writeCoworker(runtimeIo($), {
+    session: role.main, main: role.main, role: 'main', repo: role.repo,
+    state: existing?.state ?? 'idle', heartbeat: existing?.heartbeat ?? await $.clock.now(),
+    maxCoworkers,
+  })
 }
 
 const issuesForRepo = async ($: EngineInterface, role: RuntimeRole) =>
@@ -188,9 +198,9 @@ const plan = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInp
   if (input.priority !== undefined && !Number.isInteger(input.priority)) throw new Error('priority must be an integer')
   if (input.priority !== undefined || input.ready !== undefined)
     await append($, [{ op: 'plan', issue: issue.id, ...(input.priority === undefined ? {} : { priority: input.priority }), ...(input.ready === undefined ? {} : { ready: input.ready }) }])
-  await updateRegistry($, role, input.maxCoworkers === undefined ? {} : { maxCoworkers: input.maxCoworkers })
+  if (input.maxCoworkers !== undefined) await updateMainRegistry($, role, input.maxCoworkers)
   if (input.ready === true) await dispatchReadyWork($, role)
-  return `Planned ${issue.id}: priority=${input.priority ?? issue.priority ?? 'unset'}, ready=${input.ready ?? issue.ready ?? false}, maxCoworkers=${input.maxCoworkers ?? await maxCoworkers($, role)}.`
+  return `Planned ${issue.id}: priority=${input.priority ?? issue.priority ?? 'unset'}, ready=${input.ready ?? issue.ready ?? false}, maxCoworkers=${input.maxCoworkers ?? await readMaxCoworkers($, role)}.`
 }
 
 const revoke = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInput) => {
@@ -246,7 +256,7 @@ const message = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworker
   const records = await readCoworkers(runtimeIo($))
   const now = await $.clock.now()
   const recipients = input.to === 'main' ? [role.main]
-    : input.to === 'all' ? records.filter(record => record.main === role.main && record.session !== role.session && isLive(record, now, DEFAULT_COWORKER_TTL_MS)).map(record => record.session)
+    : input.to === 'all' ? records.filter(record => record.role === 'coworker' && record.main === role.main && record.session !== role.session && isLive(record, now, DEFAULT_COWORKER_TTL_MS)).map(record => record.session)
       : [input.to]
   await sendMailToMany(runtimeIo($), { from: role.session, to: [...new Set(recipients)], text: input.text.trim(), now })
   return `Sent the message to ${[...new Set(recipients)].join(', ') || 'no live sessions'}.`
@@ -254,7 +264,7 @@ const message = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworker
 
 const list = async ($: EngineInterface, role: RuntimeRole) => {
   const now = await $.clock.now()
-  const coworkers = (await readCoworkers(runtimeIo($))).filter(record => record.main === role.main && record.session !== role.main)
+  const coworkers = (await readCoworkers(runtimeIo($))).filter(record => record.role === 'coworker' && record.main === role.main)
   const issues = await issuesForRepo($, role)
   return [
     'Co-workers:',
@@ -264,16 +274,19 @@ const list = async ($: EngineInterface, role: RuntimeRole) => {
   ].join('\n')
 }
 
-const maxCoworkers = async ($: EngineInterface, role: RuntimeRole) => {
+const readMaxCoworkers = async ($: EngineInterface, role: RuntimeRole) => {
   const records = await readCoworkers(runtimeIo($))
-  return records.find(record => record.session === role.session)?.maxCoworkers
-    ?? records.find(record => record.session === role.main)?.maxCoworkers
-    ?? DEFAULT_MAX_COWORKERS
+  return records.find(record => record.session === role.main)?.maxCoworkers ?? DEFAULT_MAX_COWORKERS
 }
 
 const removeRegistry = async ($: EngineInterface, session: string) => {
   const home = (await $.env.get('HOME')) ?? '.'
   await $.process.run(['rm', '-f', `${home}/.claude-work/clm/coworkers/${session}.json`], { timeoutMs: 1_000 })
+}
+
+const recordSpawnFailure = async ($: EngineInterface, role: RuntimeRole, now: number) => {
+  const current = await readSpawnBackoff(runtimeIo($), role.main)
+  await writeSpawnBackoff(runtimeIo($), role.main, { failures: current.failures + 1, lastFailedAt: now })
 }
 
 const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: readonly CoworkerRecord[]) => {
@@ -286,8 +299,7 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
   let index = 1
   while (used.has(`clm-coworker-${index}`)) index += 1
   const name = `clm-coworker-${index}`
-  await writeCoworker(runtimeIo($), { session: name, main: role.main, repo: role.repo, state: 'starting', heartbeat: await $.clock.now(), mux })
-  const failures = records.filter(record => record.main === role.main && record.state === 'failed').length + 1
+  await writeCoworker(runtimeIo($), { session: name, main: role.main, role: 'coworker', repo: role.repo, state: 'starting', heartbeat: await $.clock.now(), mux })
   const launch = launchPlan({ mux, cwd: role.repoRoot, name, env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: role.main, CLM_COWORKER_NAME: name }, brief: coworkerBrief({ main: role.main, repo: role.repoRoot }) })
   if ('manual' in launch) {
     $.ui.log(`clm co-worker launch unavailable: mux=none command=${launch.manual} exitCode=unavailable stderr=${JSON.stringify('no supported multiplexer detected')}`, { to: 'debug' })
@@ -302,29 +314,28 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
     if (result.exitCode !== 0) {
       $.ui.log(`clm co-worker launch failed: command=${JSON.stringify(argv)} exitCode=${result.exitCode} stderr=${JSON.stringify(result.stderr)}`, { to: 'debug' })
       await removeRegistry($, name)
+      await recordSpawnFailure($, role, await $.clock.now())
       return
     }
     stdout = result.stdout
   }
-  const placeholder = (await readCoworkers(runtimeIo($))).find(record => record.session === name)
-  if (placeholder) await writeCoworker(runtimeIo($), { ...placeholder, failures })
 }
 
 async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise<void> {
   if (role.isCoworker) return
   const now = await $.clock.now()
   const issues = await issuesForRepo($, role)
-  const observed = await readCoworkers(runtimeIo($))
-  const records = await Promise.all(observed.map(async record => {
-    if (record.main !== role.main || record.state !== 'starting' || isLive(record, now, DEFAULT_COWORKER_TTL_MS)) return record
-    const failed = { ...record, state: 'failed' as const, failedAt: now, failures: record.failures ?? 1 }
-    await writeCoworker(runtimeIo($), failed)
-    $.ui.log(`clm co-worker ${record.session} failed to register before its ${DEFAULT_COWORKER_TTL_MS} ms startup deadline`)
-    return failed
-  }))
+  const records: CoworkerRecord[] = []
+  for (const record of await readCoworkers(runtimeIo($))) {
+    if (record.role === 'coworker' && record.main === role.main && record.state === 'starting' && !isLive(record, now, DEFAULT_COWORKER_TTL_MS)) {
+      await recordSpawnFailure($, role, now)
+      await removeRegistry($, record.session)
+      $.ui.log(`clm co-worker ${record.session} failed to register before its ${DEFAULT_COWORKER_TTL_MS} ms startup deadline`)
+    } else records.push(record)
+  }
   const next = pickNext(issues.map(selectableIssue), role.repo)
   if (!next) return
-  const idle = records.find(record => record.main === role.main && record.session !== role.main && record.state === 'idle' && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
+  const idle = records.find(record => record.role === 'coworker' && record.main === role.main && record.state === 'idle' && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
   if (idle) {
     await sendMail(runtimeIo($), { from: role.session, to: idle.session, text: `Claim the next ready issue; ${next.id} currently has the highest priority.`, now })
     return
@@ -339,7 +350,10 @@ async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise
     $.ui.log(`clm co-worker spawn skipped: load1=${load.load1} cap=${cap} cores=${load.cores}`, { to: 'debug' })
     return
   }
-  if (shouldSpawn({ issues: issues.map(selectableIssue), coworkers: records.filter(record => record.session !== role.main), repo: role.repo, main: role.main, ...load, maxCoworkers: await maxCoworkers($, role), now, ttlMs: DEFAULT_COWORKER_TTL_MS }))
+  if (shouldSpawn({
+    issues: issues.map(selectableIssue), coworkers: records.filter(record => record.role === 'coworker'), repo: role.repo, main: role.main,
+    ...load, maxCoworkers: await readMaxCoworkers($, role), backoff: await readSpawnBackoff(runtimeIo($), role.main), now, ttlMs: DEFAULT_COWORKER_TTL_MS,
+  }))
     await launchCoworker($, role, records)
 }
 
@@ -388,7 +402,7 @@ const announceDeferred = async ($: EngineInterface, ids: string[]) => {
   if (role.isCoworker) return
   const now = await $.clock.now()
   const recipients = (await readCoworkers(runtimeIo($)))
-    .filter(record => record.main === role.main && record.session !== role.main && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
+    .filter(record => record.role === 'coworker' && record.main === role.main && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
     .map(record => record.session)
   await sendMailToMany(runtimeIo($), { from: role.session, to: recipients, text: `New deferred board issue${ids.length === 1 ? '' : 's'}: ${ids.join(', ')}.`, now })
 }
@@ -400,6 +414,7 @@ const startRuntime = async ($: EngineInterface, stableMain?: string) => {
   intents.set(role.session, { isCoworker: role.isCoworker, announce: ids => announceDeferred($, ids) })
   await updateRegistry($, role, { state: 'idle' })
   if (role.placeholder && role.placeholder !== role.session) await removeRegistry($, role.placeholder)
+  if (role.isCoworker) await writeSpawnBackoff(runtimeIo($), role.main, { failures: 0 })
   for (const timer of timers.get(role.session) ?? []) timer.cancel()
   timers.set(role.session, [
     $.clock.every(POLL_MS, () => { void tick($, role).catch(error => $.ui.log(`clm co-worker poll failed: ${String(error).slice(0, 160)}`, { to: 'debug' })) }),

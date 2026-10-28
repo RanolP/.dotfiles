@@ -3,15 +3,16 @@ export const DEFAULT_COWORKER_TTL_MS = 60_000
 export type CoworkerRecord = {
   session: string
   main: string
+  role: 'main' | 'coworker'
   repo: string
-  state: 'starting' | 'idle' | 'busy' | 'failed'
+  state: 'starting' | 'idle' | 'busy'
   issue?: string
   heartbeat: number
   mux?: string
   maxCoworkers?: number
-  failedAt?: number
-  failures?: number
 }
+
+export type SpawnBackoff = { failures: number; lastFailedAt?: number }
 
 export type CoworkerIssue = {
   id: string
@@ -55,14 +56,16 @@ const parse = (value: string | undefined): unknown => {
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 const isCoworkerRecord = (value: unknown): value is CoworkerRecord => isRecord(value)
   && typeof value.session === 'string' && typeof value.main === 'string' && typeof value.repo === 'string'
-  && (value.state === 'starting' || value.state === 'idle' || value.state === 'busy' || value.state === 'failed')
+  && (value.role === 'main' || value.role === 'coworker')
+  && (value.state === 'starting' || value.state === 'idle' || value.state === 'busy')
   && typeof value.heartbeat === 'number'
   && (value.issue === undefined || typeof value.issue === 'string')
   && (value.mux === undefined || typeof value.mux === 'string')
   && (value.maxCoworkers === undefined || typeof value.maxCoworkers === 'number')
-  && (value.failedAt === undefined || typeof value.failedAt === 'number')
-  && (value.failures === undefined || typeof value.failures === 'number')
 const claimOwner = (value: unknown): string | undefined => isRecord(value) && typeof value.session === 'string' ? value.session : undefined
+const isSpawnBackoff = (value: unknown): value is SpawnBackoff => isRecord(value)
+  && Number.isInteger(value.failures) && typeof value.failures === 'number' && value.failures >= 0
+  && (value.lastFailedAt === undefined || typeof value.lastFailedAt === 'number')
 
 export function isLive(record: CoworkerRecord, now: number, ttlMs: number): boolean {
   return now - record.heartbeat <= ttlMs
@@ -92,6 +95,27 @@ export async function readCoworkers(io: CoworkerIo): Promise<CoworkerRecord[]> {
     if (isCoworkerRecord(record)) records.push(record)
   }
   return records
+}
+
+export async function readSpawnBackoff(io: CoworkerIo, main: string): Promise<SpawnBackoff> {
+  const root = await rootFor(io)
+  const value = parse(await io.read(`${root}/coworkers/${safeSegment(main, 'main session')}.spawn-backoff.json`))
+  return isSpawnBackoff(value) ? value : { failures: 0 }
+}
+
+export async function writeSpawnBackoff(io: CoworkerIo, main: string, backoff: SpawnBackoff): Promise<void> {
+  const root = await rootFor(io)
+  const session = safeSegment(main, 'main session')
+  const dir = `${root}/coworkers`
+  await run(io, ['mkdir', '-p', dir])
+  const target = `${dir}/${session}.spawn-backoff.json`
+  const temporary = `${dir}/.${session}-spawn-backoff-${nonce(io)}.tmp`
+  await io.write(temporary, JSON.stringify(backoff))
+  const moved = await run(io, ['mv', temporary, target])
+  if (moved.exitCode !== 0) {
+    await run(io, ['rm', '-f', temporary])
+    throw new Error(`could not publish spawn backoff for ${session}: ${moved.stderr}`)
+  }
 }
 
 async function coworkerFor(io: CoworkerIo, session: string): Promise<CoworkerRecord | undefined> {
@@ -208,12 +232,13 @@ export function shouldSpawn(input: {
   load1: number
   cores: number
   maxCoworkers?: number
+  backoff?: SpawnBackoff
   now: number
   ttlMs: number
 }): boolean {
   if (!pickNext(input.issues, input.repo) || input.load1 >= 0.75 * input.cores) return false
-  if (input.coworkers.some(record => record.main === input.main && record.state === 'failed' && record.failedAt !== undefined
-    && input.now - record.failedAt < 2 ** (record.failures ?? 1) * 60_000)) return false
-  const live = input.coworkers.filter(record => record.session !== input.main && record.main === input.main && isLive(record, input.now, input.ttlMs))
+  if (input.backoff?.failures && input.backoff.lastFailedAt !== undefined
+    && input.now - input.backoff.lastFailedAt < Math.min(2 ** Math.min(input.backoff.failures, 6), 60) * 60_000) return false
+  const live = input.coworkers.filter(record => record.role === 'coworker' && record.main === input.main && isLive(record, input.now, input.ttlMs))
   return live.length < (input.maxCoworkers ?? 2) && !live.some(record => record.state === 'idle' || record.state === 'starting')
 }

@@ -57,8 +57,8 @@ test('two concurrent claims of one issue leave exactly one owner', async () => {
   const root = tempDir()
   const fs: Filesystem = { files: new Map(), dirs: new Set() }
   const io = filesystemIo(root, fs)
-  await writeCoworker(io, { session: 'worker-a', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 })
-  await writeCoworker(io, { session: 'worker-b', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 })
+  await writeCoworker(io, { session: 'worker-a', main: 'main', role: 'coworker', repo: '/repo', state: 'idle', heartbeat: 100 })
+  await writeCoworker(io, { session: 'worker-b', main: 'main', role: 'coworker', repo: '/repo', state: 'idle', heartbeat: 100 })
   const results = await Promise.all([
     claimIssue(io, { issueId: 'issue-1', session: 'worker-a', now: 100 }),
     claimIssue(io, { issueId: 'issue-1', session: 'worker-b', now: 100 }),
@@ -80,8 +80,8 @@ test('a delayed owner write still leaves exactly one claimant', async () => {
     if (path.includes('/claims/.issue-1-') && firstWrite) { firstWrite = false; await gate }
     return base.write(path, value)
   } }
-  await writeCoworker(base, { session: 'worker-a', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 })
-  await writeCoworker(base, { session: 'worker-b', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 })
+  await writeCoworker(base, { session: 'worker-a', main: 'main', role: 'coworker', repo: '/repo', state: 'idle', heartbeat: 100 })
+  await writeCoworker(base, { session: 'worker-b', main: 'main', role: 'coworker', repo: '/repo', state: 'idle', heartbeat: 100 })
   const first = claimIssue(delayed, { issueId: 'issue-1', session: 'worker-a', now: 100 })
   const second = await claimIssue(base, { issueId: 'issue-1', session: 'worker-b', now: 100 })
   release()
@@ -94,8 +94,8 @@ test('a delayed owner write still leaves exactly one claimant', async () => {
 test('an expired registry heartbeat lets a live worker reclaim the issue', async () => {
   const root = tempDir()
   const io = filesystemIo(root)
-  await writeCoworker(io, { session: 'stale', main: 'main', repo: '/repo', state: 'busy', heartbeat: 10 })
-  await writeCoworker(io, { session: 'live', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 })
+  await writeCoworker(io, { session: 'stale', main: 'main', role: 'coworker', repo: '/repo', state: 'busy', heartbeat: 10 })
+  await writeCoworker(io, { session: 'live', main: 'main', role: 'coworker', repo: '/repo', state: 'idle', heartbeat: 100 })
   expect(await claimIssue(io, { issueId: 'issue-1', session: 'stale', now: 10 })).toEqual({ claimed: true })
   expect(await claimIssue(io, { issueId: 'issue-1', session: 'live', now: 100, ttlMs: 50 })).toEqual({ claimed: true })
 })
@@ -104,7 +104,7 @@ test('an expired registry heartbeat lets a live worker reclaim the issue', async
 test('shouldSpawn is false while a live co-worker is idle and false above the load cap', () => {
   const issues = [{ id: 'i1', status: 'todo', ready: true, repo: '/repo', createdAt: 1 }]
   const base = { issues, repo: '/repo', main: 'main', cores: 8, now: 100, ttlMs: 50 }
-  expect(shouldSpawn({ ...base, load1: 1, coworkers: [{ session: 'w1', main: 'main', repo: '/repo', state: 'idle', heartbeat: 100 }] })).toBe(false)
+  expect(shouldSpawn({ ...base, load1: 1, coworkers: [{ session: 'w1', main: 'main', role: 'coworker', repo: '/repo', state: 'idle', heartbeat: 100 }] })).toBe(false)
   expect(shouldSpawn({ ...base, load1: 6, coworkers: [] })).toBe(false)
   expect(shouldSpawn({ ...base, load1: 5.99, coworkers: [] })).toBe(true)
 })
@@ -123,7 +123,7 @@ test('mailbox reads messages in send order without deleting them', async () => {
 test('only the owner releases a live claim and the orchestrator can revoke it', async () => {
   const root = tempDir()
   const io = filesystemIo(root)
-  await writeCoworker(io, { session: 'worker', main: 'main', repo: '/repo', state: 'busy', heartbeat: 100 })
+  await writeCoworker(io, { session: 'worker', main: 'main', role: 'coworker', repo: '/repo', state: 'busy', heartbeat: 100 })
   expect(await claimIssue(io, { issueId: 'i1', session: 'worker', now: 100 })).toEqual({ claimed: true })
   expect(await releaseClaim(io, 'i1', 'intruder')).toBe(false)
   expect(await releaseClaim(io, 'i1', 'worker')).toBe(true)

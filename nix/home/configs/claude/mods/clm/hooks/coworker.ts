@@ -8,6 +8,7 @@ export type CoworkerRecord = {
   issue?: string
   heartbeat: number
   mux?: string
+  maxCoworkers?: number
 }
 
 export type CoworkerIssue = {
@@ -192,6 +193,6 @@ export function shouldSpawn(input: {
   ttlMs: number
 }): boolean {
   if (!pickNext(input.issues, input.repo) || input.load1 >= 0.75 * input.cores) return false
-  const live = input.coworkers.filter(record => record.main === input.main && isLive(record, input.now, input.ttlMs))
+  const live = input.coworkers.filter(record => record.session !== input.main && record.main === input.main && isLive(record, input.now, input.ttlMs))
   return live.length < (input.maxCoworkers ?? 2) && !live.some(record => record.state === 'idle' || record.state === 'starting')
 }

@@ -76,7 +76,7 @@ export const metaIn = (seen: { store: Record<string, unknown> }): Meta => {
   return value
 }
 
-export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; backfillReplies?: (string | Error)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; storeKeysBlock?: () => Promise<void> }
+export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; backfillReplies?: (string | Error)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined }
 export function modDetectionHarness(realpaths: { exitCode: number; stdout: string; stderr: string }[], env: Record<string, string | undefined>) {
   const hooks: Record<string, unknown> = {}
   const capture: Parameters<typeof register>[0] = (event, matcherOrHook, hook) => { hooks[event] = hook ?? matcherOrHook }
@@ -160,7 +160,7 @@ export function bottoms(on: any, s: State) {
       return true
     },
   })
-  const seen = { clock, store, engineStore, files, prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], backfillPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[] }
+  const seen = { clock, store, engineStore, files, dirs: new Set<string>(), prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], backfillPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[], runs: [] as string[][] }
   on('store.get', (_$: any, e: any) => ({ value: seen.engineStore[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.engineStore[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.engineStore[e.key]; return { value: undefined } })
@@ -168,16 +168,68 @@ export function bottoms(on: any, s: State) {
   on('session.id', () => ({ value: s.sessionId ?? 's1' }))
   on('session.messages', (_$: any, e: any) => ({ value: e.agentId === undefined ? s.rows : s.agentRows?.[e.agentId] ?? [] }))
   on('session.usage', () => ({ value: s.usage ?? { startedAt: 0, context: { window: 200000, tokens: 6000 }, rateLimits: [] } }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.exists', (_$: any, e: any) => ({ value: e.path in seen.files || Object.keys(seen.files).some(f => f.startsWith(`${e.path}/`)) }))
+  on('env.get', (_$: any, e: any) => ({ value: s.env?.[e.name] ?? (e.name === 'HOME' ? '/home/t' : undefined) }))
+  on('fs.exists', (_$: any, e: any) => ({ value: seen.dirs.has(e.path) || e.path in seen.files || Object.keys(seen.files).some(f => f.startsWith(`${e.path}/`)) }))
   on('fs.list', (_$: any, e: any) => ({
-    value: Object.keys(seen.files).filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/'))
-      .map(f => ({ name: f.slice(e.path.length + 1), kind: 'file', size: seen.files[f]!.length, mtimeMs: 0, isLink: false })),
+    value: [
+      ...[...seen.dirs].filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/')).map(f => ({ name: f.slice(e.path.length + 1), kind: 'dir', size: 0, mtimeMs: 0, isLink: false })),
+      ...Object.keys(seen.files).filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/')).map(f => ({ name: f.slice(e.path.length + 1), kind: 'file', size: seen.files[f]!.length, mtimeMs: 0, isLink: false })),
+    ],
   }))
-  on('session.cwd', () => ({ value: '/work/repo' }))
+  on('session.cwd', () => ({ value: s.cwd ?? '/work/repo' }))
   on('process.run', (_$: any, e: any) => {
-    if (e.argv[0] === 'rm') for (const path of e.argv.slice(e.argv.indexOf('--') + 1)) delete seen.files[path]
-    return { value: { exitCode: 0, stdout: e.argv[0] === 'realpath' ? `${e.argv[1]}\n` : e.argv.includes('get-url') ? 'git@github.com:o/repo.git\n' : 'main\n', stderr: '' } }
+    const argv = [...e.argv]
+    seen.runs.push(argv)
+    const custom = s.processRun?.(argv, e.options)
+    if (custom) return { value: custom }
+    const mkdirs = (path: string) => {
+      let current = ''
+      for (const part of path.split('/').filter(Boolean)) { current += `/${part}`; seen.dirs.add(current) }
+    }
+    const move = (from: string, to: string) => {
+      for (const path of [...seen.dirs].filter(path => path === from || path.startsWith(`${from}/`))) {
+        seen.dirs.delete(path)
+        seen.dirs.add(`${to}${path.slice(from.length)}`)
+      }
+      for (const [path, value] of Object.entries(seen.files)) if (path === from || path.startsWith(`${from}/`)) {
+        delete seen.files[path]
+        seen.files[`${to}${path.slice(from.length)}`] = value
+      }
+    }
+    if (argv[0] === 'mkdir' && argv[1] === '-p') mkdirs(argv.at(-1)!)
+    if (argv[0] === 'mkdir' && argv[1] !== '-p') {
+      if (seen.dirs.has(argv[1]!)) return { value: { exitCode: 1, stdout: '', stderr: 'File exists' } }
+      mkdirs(argv[1]!)
+    }
+    if (argv[0] === 'mv') {
+      if (!seen.dirs.has(argv[1]!) && !(argv[1]! in seen.files)) return { value: { exitCode: 1, stdout: '', stderr: 'No such file' } }
+      move(argv[1]!, argv[2]!)
+    }
+    if (argv[0] === 'rm') {
+      const path = argv.at(-1)!
+      for (const dir of [...seen.dirs]) if (dir === path || dir.startsWith(`${path}/`)) seen.dirs.delete(dir)
+      for (const key of Object.keys(seen.files)) if (key === path || key.startsWith(`${path}/`)) delete seen.files[key]
+    }
+    const gitArgs = argv[0] === 'git' && argv[1] === '-C' ? argv.slice(3) : argv[0] === 'git' ? argv.slice(1) : []
+    const gitCwd = argv[0] === 'git' && argv[1] === '-C' ? argv[2]! : e.options?.cwd ?? s.cwd ?? '/work/repo'
+    if (gitArgs[0] === 'worktree' && gitArgs[1] === 'add') mkdirs(gitArgs[3]!)
+    if (gitArgs[0] === 'worktree' && gitArgs[1] === 'remove') {
+      const path = gitArgs.at(-1)!
+      for (const dir of [...seen.dirs]) if (dir === path || dir.startsWith(`${path}/`)) seen.dirs.delete(dir)
+    }
+    let stdout = ''
+    if (argv[0] === 'realpath') stdout = `${argv[1]}\n`
+    else if (gitArgs[0] === 'remote' && gitArgs[1] === 'get-url') stdout = 'git@github.com:o/repo.git\n'
+    else if (gitArgs[0] === 'rev-parse' && gitArgs[1] === '--show-toplevel') stdout = `${gitCwd.startsWith('/home/t/.claude-work/clm/worktrees/') ? gitCwd : '/work/repo'}\n`
+    else if (gitArgs[0] === 'rev-parse' && gitArgs[1] === '--abbrev-ref') stdout = 'main\n'
+    else if (gitArgs[0] === 'rev-parse' && gitArgs[1] === 'HEAD') stdout = `${'a'.repeat(40)}\n`
+    else if (gitArgs[0] === 'merge-base') stdout = `${'b'.repeat(40)}\n`
+    else if (gitArgs[0] === 'worktree' && gitArgs[1] === 'list') {
+      const paths = [...seen.dirs].filter(path => /^\/home\/t\/\.claude-work\/clm\/worktrees\/[^/]+\/[^/]+$/.test(path))
+      stdout = [`worktree /work/repo`, ...[...new Set(paths)].map(path => `worktree ${path}`)].join('\n') + '\n'
+    } else if (argv[0] === 'sysctl' && argv.includes('vm.loadavg')) stdout = '{ 1.0 1.0 1.0 }\n'
+    else if (argv[0] === 'sysctl' && argv.includes('hw.ncpu')) stdout = '8\n'
+    return { value: { exitCode: 0, stdout, stderr: '' } }
   })
   on('ui.panes', () => ({ value: [] }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
@@ -235,6 +287,7 @@ export function bottoms(on: any, s: State) {
     return { value: undefined }
   })
   on('command.register', (_$: any, e: any) => ({ value: { command: e.name } }))
+  on('tool.register', (_$: any, e: any) => ({ value: { tool: e.name } }))
   on('prompt.submit', (_$: any, e: any) => {
     seen.submissions.push({ text: e.text, ...(e.origin?.asUser ? { asUser: true as const } : {}) })
     return { text: e.text, context: e.context }

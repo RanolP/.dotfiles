@@ -143,6 +143,8 @@ path = [
     "nix/home/configs/claude/mods/clm/hooks/coworker.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/spawn.ts",
     "nix/home/configs/claude/mods/clm/hooks/spawn.test.ts",
+    "nix/home/configs/claude/mods/clm/hooks/coworker-runtime.ts",
+    "nix/home/configs/claude/mods/clm/hooks/coworker-runtime.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/fold-job.ts",
     "nix/home/configs/claude/mods/clm/hooks/fold-runtime.ts",
     "nix/home/configs/claude/mods/clm/hooks/held.ts",

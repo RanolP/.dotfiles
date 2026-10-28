@@ -31,6 +31,7 @@ import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
 import { registerResources } from './resources'
+import { coworkerIntent, registerCoworkers } from './coworker-runtime'
 import { clauseStoreKey, emptyClauseStore, readClauseStore } from './clauses'
 
 export { recallRows } from './address'
@@ -900,7 +901,10 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   log: (text, options) => $.ui.log(text, options),
   logEvent: (event, fields) => logEvent($, event, fields),
 })
-const recordPromptIntent = ($: EngineInterface, text: string, promptSeq: number, address?: string) => classifyPrompt(intentIo($), text, promptSeq, address)
+const recordPromptIntent = async ($: EngineInterface, text: string, promptSeq: number, address?: string) => {
+  const coworker = coworkerIntent(await sid($))
+  return classifyPrompt({ ...intentIo($), ...coworker }, text, promptSeq, address)
+}
 
 /** Options resolved against the live context window, so the threshold point follows the model in use. */
 async function liveOpts($: EngineInterface, options: Record<string, unknown>): Promise<Opts> {
@@ -1085,7 +1089,7 @@ export const register: Register = (on, options) => {
     }
     await $.command.register({
       name: 'clm',
-      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session.',
+      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board, while `clm_coworker` plans, claims, hands back, lands, reassigns, lists, and messages shared board work.',
       immediate: true,
     })
     await $.command.register({ name: 'force-compact', description: 'Compact once with Claude Code\'s own summarizer instead of the clm fold; text after it becomes the summary instructions.', immediate: true })
@@ -1283,4 +1287,5 @@ export const register: Register = (on, options) => {
   })
 
   registerResources(on, options)
+  registerCoworkers(on, options)
 }

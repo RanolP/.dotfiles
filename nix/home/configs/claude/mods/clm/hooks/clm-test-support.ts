@@ -16,7 +16,7 @@ import { fnv1a } from './address'
 export const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] } satisfies SessionMessage)
 export const intentReply = (fields: Record<string, unknown> = {}) => JSON.stringify({
-  intent: 'continue', target: null, title: null, rule: null, raised: [], resolved: [], clauses: [], ...fields,
+  intent: 'continue', target: null, title: null, rule: null, deferred: [], raised: [], resolved: [], clauses: [], ...fields,
 })
 export const use = (id: string, tool: string) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input: { id }, text: 'ok' }] })
 export const res = (id: string, text: string) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError: false }] })

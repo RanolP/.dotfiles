@@ -92,6 +92,51 @@ test('an unknown classifier target writes no tracker events', OPTS, async ($, on
   expect(seen.logs.some(line => line.includes('unknown target id ghost-1'))).toBe(true)
 })
 
+// Regression caught: work explicitly bounded for later vanished instead of becoming a shared todo.
+test('a bounded deferral becomes one todo issue on the board', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({
+      intent: 'handoff', title: 'A 고쳐',
+      deferred: [{ text: 'B 고쳐', quote: 'B는 나중에' }],
+    })],
+  })
+  await $.prompt.submit(promptInput('A 고쳐, B는 나중에'))
+  await until(() => snapshot(parseLog(seen.files[TRACKER] ?? '')).some(issue => issue.title === 'B 고쳐'))
+  const deferred = snapshot(parseLog(seen.files[TRACKER] ?? '')).filter(issue => issue.title === 'B 고쳐')
+  expect(deferred).toHaveLength(1)
+  expect(deferred[0]?.status).toBe('todo')
+})
+
+// Regression caught: classifier-authored deferred work entered the board without a supporting user quote.
+test('a deferred item the prompt does not support creates no issue', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({
+      deferred: [{ text: 'Publish the release', quote: 'Publish the release later' }],
+    })],
+  })
+  await $.prompt.submit(promptInput('Continue the current task'))
+  await waitForLog(seen, 'clm: deferred item dropped (not supported by prompt): Publish the release')
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).some(issue => issue.title === 'Publish the release')).toBe(false)
+})
+
+// Regression caught: a whole-message deferral created both the pending focus issue and a duplicate deferred issue.
+test('a whole-message deferral creates exactly one issue', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({
+      intent: 'pending', title: 'B 고쳐',
+      deferred: [{ text: 'B 고쳐', quote: 'B는 나중에 해줘' }],
+    })],
+  })
+  await $.prompt.submit(promptInput('B는 나중에 해줘'))
+  await waitForLog(seen, 'clm: deferred issue s1-1: B 고쳐')
+  const issues = snapshot(parseLog(seen.files[TRACKER] ?? '')).filter(issue => issue.title === 'B 고쳐')
+  expect(issues).toHaveLength(1)
+  expect(issues[0]?.status).toBe('todo')
+})
+
 // Regression caught: a slow earlier classifier overwrote the focus chosen by a newer prompt.
 test('a newer classifier waits for a slow earlier one and focus ends on B', OPTS, async ($, on) => {
   let releaseA!: () => void

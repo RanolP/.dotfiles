@@ -9,7 +9,7 @@
 import { CONFIRM_ITEMS, readEvidence, storedItems, type Evidence } from './evidence'
 import type { Worktree } from './worktree'
 
-export const STATUSES = ['todo', 'doing', 'done', 'question', 'uncertain', 'dropped'] as const
+export const STATUSES = ['todo', 'doing', 'ready-to-land', 'done', 'question', 'uncertain', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
 export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' && (STATUSES as readonly string[]).includes(v)
 export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -34,6 +34,8 @@ export type TrackerEvent = Base & (
   | { op: 'progress'; done: number; total: number }
   | { op: 'task'; taskId: string }
   | { op: 'note'; text: string }
+  | { op: 'plan'; priority?: number; ready?: boolean }
+  | { op: 'claim'; by: string | null }
   // Links `issue` to `origin.session`, so it is injected there whatever its repo.
   | { op: 'link' }
   | { op: 'parent'; parent: string | null }
@@ -54,6 +56,8 @@ export type Payload =
   | { op: 'progress'; issue: string; done: number; total: number }
   | { op: 'task'; issue: string; taskId: string }
   | { op: 'note'; issue: string; text: string }
+  | { op: 'plan'; issue: string; priority?: number; ready?: boolean }
+  | { op: 'claim'; issue: string; by: string | null }
   | { op: 'link'; issue: string }
   | { op: 'parent'; issue: string; parent: string | null }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
@@ -93,6 +97,9 @@ export type Issue = {
   checkpoints?: Array<{ sha: string; ts: string }>
   /** The one-time landing commands were already handed back to the main agent. */
   landCommandsShown?: boolean
+  priority?: number
+  ready?: boolean
+  claimedBy?: string
 }
 
 export const issueId = (session: string, seq: number) => `${session.slice(0, 8)}-${seq}`
@@ -140,6 +147,14 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
     else if (e.op === 'progress') i.progress = { done: e.done, total: e.total }
     else if (e.op === 'task') i.taskId = e.taskId
     else if (e.op === 'note') i.notes.push(e.text)
+    else if (e.op === 'plan') {
+      if (e.priority !== undefined) i.priority = e.priority
+      if (e.ready !== undefined) i.ready = e.ready
+    }
+    else if (e.op === 'claim') {
+      if (e.by === null) delete i.claimedBy
+      else i.claimedBy = e.by
+    }
     else if (e.op === 'parent') {
       if (e.parent === null) delete i.parent
       else i.parent = e.parent
@@ -191,6 +206,11 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       case 'progress': return { ...base, issue: p.issue, op: 'progress', done: p.done, total: p.total }
       case 'task': return { ...base, issue: p.issue, op: 'task', taskId: p.taskId }
       case 'note': return { ...base, issue: p.issue, op: 'note', text: p.text }
+      case 'plan': return {
+        ...base, issue: p.issue, op: 'plan',
+        ...(p.priority === undefined ? {} : { priority: p.priority }), ...(p.ready === undefined ? {} : { ready: p.ready }),
+      }
+      case 'claim': return { ...base, issue: p.issue, op: 'claim', by: p.by }
       case 'link': return { ...base, issue: p.issue, op: 'link' }
       case 'parent': return { ...base, issue: p.issue, op: 'parent', parent: p.parent }
       case 'stepped': return { ...base, issue: p.issue, op: 'stepped' }
@@ -216,7 +236,7 @@ export function focusOf(events: readonly TrackerEvent[], session: string): Focus
   return latest?.op === 'focus' ? { stack: [...latest.stack], pending: [...latest.pending] } : { stack: [], pending: [] }
 }
 
-export const isOpen = (i: Issue) => i.status === 'todo' || i.status === 'doing' || i.status === 'question' || i.status === 'uncertain'
+export const isOpen = (i: Issue) => i.status === 'todo' || i.status === 'doing' || i.status === 'ready-to-land' || i.status === 'question' || i.status === 'uncertain'
 
 // The ledger's 한 일 and the task panel show only a session's newest
 // completions; the tracker log keeps every issue as the searchable history.
@@ -255,7 +275,7 @@ export function normalizeRemote(url: string): string {
 // --- fold ops and ledger sections ------------------------------------------
 
 /** Ledger section -> the statuses it lists; these sections are rendered, never merged. */
-export const TRACKER_SECTIONS: Record<string, readonly IssueStatus[]> = { '한 일': ['done'], '할 일': ['doing', 'todo'], '미결 질문': ['question'], 'uncertain': ['uncertain'] }
+export const TRACKER_SECTIONS: Record<string, readonly IssueStatus[]> = { '한 일': ['done'], '할 일': ['doing', 'ready-to-land', 'todo'], '미결 질문': ['question'], 'uncertain': ['uncertain'] }
 export const isTrackerSection = (s: string) => s in TRACKER_SECTIONS
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
@@ -299,10 +319,10 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
   for (const o of list as Record<string, unknown>[]) {
     const before = ops.length
     const title = text(o?.title, 200), note = text(o?.note ?? o?.text, 300)
-    // `uncertain` stays parseable in stored events, but no new op may produce it.
-    if (o?.op === 'create' && title && isStatus(o.status) && o.status !== 'dropped' && o.status !== 'uncertain')
+    // `uncertain` and `ready-to-land` stay parseable in stored events, but no fold op may produce them.
+    if (o?.op === 'create' && title && isStatus(o.status) && o.status !== 'dropped' && o.status !== 'uncertain' && o.status !== 'ready-to-land')
       ops.push({ op: 'create', title, status: o.status, ...(note ? { note } : {}) })
-    else if (o?.op === 'status' && typeof o.issue === 'string' && known.has(o.issue) && isStatus(o.status) && o.status !== 'uncertain')
+    else if (o?.op === 'status' && typeof o.issue === 'string' && known.has(o.issue) && isStatus(o.status) && o.status !== 'uncertain' && o.status !== 'ready-to-land')
       ops.push({ op: 'status', issue: o.issue, status: o.status })
     else if (o?.op === 'retitle' && typeof o.issue === 'string' && known.has(o.issue) && title)
       ops.push({ op: 'retitle', issue: o.issue, title })
@@ -317,7 +337,7 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
 }
 
 const statusText: Record<IssueStatus, string> = {
-  doing: '착수', done: '완수', todo: '대기', question: '질문 대기', uncertain: '불확실', dropped: '중단',
+  doing: '착수', 'ready-to-land': '반영 대기', done: '완수', todo: '대기', question: '질문 대기', uncertain: '불확실', dropped: '중단',
 }
 
 /** Describes the notices caused by one append, using the state before it. */
@@ -335,6 +355,11 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       if (current) current.status = e.status
     } else if (e.op === 'progress') {
       out.push(`작업 '${title}' 진행 (${e.done}/${e.total})`)
+    } else if (e.op === 'plan') {
+      const fields = [e.priority === undefined ? undefined : `priority ${e.priority}`, e.ready === undefined ? undefined : `ready ${e.ready}`].filter(Boolean).join(', ')
+      out.push(`작업 '${title}' 계획 갱신${fields ? ` (${fields})` : ''}`)
+    } else if (e.op === 'claim') {
+      out.push(`작업 '${title}' 담당: ${e.by ?? '(none)'}`)
     } else if (e.op === 'retitle') {
       out.push(`작업 '${title}' 재조정 -> '${e.title}'`)
       if (current) current.title = e.title

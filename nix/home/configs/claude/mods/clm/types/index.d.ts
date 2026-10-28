@@ -3,10 +3,13 @@ import type { StableAttachmentType } from '../hooks/fold'
 export type ClmBoardIssue = {
   id: string
   title: string
-  status: 'todo' | 'doing' | 'done' | 'question' | 'dropped'
+  status: 'todo' | 'doing' | 'ready-to-land' | 'done' | 'question' | 'dropped'
   repo: string
   branch?: string
   updated: string
+  priority?: number
+  ready?: boolean
+  claimedBy?: string
 }
 
 export type ClmIssueStatus = ClmBoardIssue['status']
@@ -38,10 +41,10 @@ export type ClmWorkflow = {
 }
 
 export type ClmStatus = {
-  focus: { id: string; title: string; status: 'todo' | 'doing' | 'done' | 'question' | 'uncertain' | 'dropped' } | null
+  focus: { id: string; title: string; status: 'todo' | 'doing' | 'ready-to-land' | 'done' | 'question' | 'uncertain' | 'dropped' } | null
   stackDepth: number
   pending: Array<{ id: string; title: string }>
-  agents: Array<{ agentId: string; taskId: string; title: string; status: 'todo' | 'doing' | 'done' | 'question' | 'uncertain' | 'dropped' }>
+  agents: Array<{ agentId: string; taskId: string; title: string; status: 'todo' | 'doing' | 'ready-to-land' | 'done' | 'question' | 'uncertain' | 'dropped' }>
   resumeRequest: { text: string } | null
   lastFoldAt: number | null
   ledgerPath: string

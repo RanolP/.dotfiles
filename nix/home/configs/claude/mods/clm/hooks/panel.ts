@@ -48,7 +48,7 @@ export type PanelIo = {
 }
 
 const panelStatus: Record<Issue['status'], 'pending' | 'in_progress' | 'completed' | 'deleted'> = {
-  todo: 'pending', doing: 'in_progress', done: 'completed', dropped: 'deleted', question: 'pending',
+  todo: 'pending', doing: 'in_progress', 'ready-to-land': 'pending', done: 'completed', dropped: 'deleted', question: 'pending',
 }
 const taskStatus: Record<string, Issue['status'] | undefined> = {
   pending: 'todo', in_progress: 'doing', completed: 'done', deleted: 'dropped',
@@ -601,6 +601,8 @@ export async function openBoard(io: Pick<PanelIo, 'readAll' | 'captureOrigin' | 
   const [events, here] = await Promise.all([io.readAll(), io.captureOrigin()])
   const issues = snapshot(events).map(issue => ({
     id: issue.id, title: issue.title, status: issue.status, repo: issue.origin.repo, ...(issue.origin.branch ? { branch: issue.origin.branch } : {}), updated: issue.updated,
+    ...(issue.priority === undefined ? {} : { priority: issue.priority }), ...(issue.ready === undefined ? {} : { ready: issue.ready }),
+    ...(issue.claimedBy === undefined ? {} : { claimedBy: issue.claimedBy }),
   }))
   const path = await io.boardPath()
   await io.writeBoard(path, boardHtml(issues, here.repo, io.now()))

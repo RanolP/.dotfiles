@@ -1,9 +1,10 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { SessionCompactInput, SessionMessage } from 'claude-code'
 
-import { describe, focusOf, injected, parseLog, snapshot, toEvents, type Issue, type TrackerEvent } from './tracker'
+import { describe, focusOf, injected, isStatus, parseLog, parseOps, snapshot, toEvents, type Issue, type TrackerEvent } from './tracker'
 import { compose } from './intent'
 import { describeOp } from './evidence'
+import { openBoard } from './panel'
 
 const at = (session: string, repo: string) => ({ session, repo, cwd: '/w' })
 const line = (e: TrackerEvent) => JSON.stringify(e)
@@ -183,6 +184,65 @@ test('merging two session logs, the later status of one issue wins', async () =>
   // B's file is read last, but A's status is the later one.
   const [issue] = snapshot([...parseLog(logA), ...parseLog(logB)])
   expect(issue!.status).toBe('done')
+})
+
+// Regression caught: co-worker planning and ownership events were ignored when another session wrote them for the issue.
+test('snapshot applies plan and claim ops written by another session', () => {
+  const owner = at('owner', 'github.com/o/r'), worker = at('worker', 'github.com/o/r')
+  const created = toEvents([{ op: 'create', issue: 'owner-1', title: 'ship it', status: 'todo' }], owner, 0, '2026-10-06T01:00:00Z')
+  const planned = toEvents([
+    { op: 'plan', issue: 'owner-1', priority: 3 },
+    { op: 'plan', issue: 'owner-1', ready: true },
+    { op: 'claim', issue: 'owner-1', by: 'worker' },
+  ], worker, 0, '2026-10-06T02:00:00Z')
+  const [claimed] = snapshot([...created, ...planned])
+  expect(claimed).toMatchObject({ priority: 3, ready: true, claimedBy: 'worker' })
+  expect(describe(planned, snapshot(created))).toEqual([
+    "작업 'ship it' 계획 갱신 (priority 3)",
+    "작업 'ship it' 계획 갱신 (ready true)",
+    "작업 'ship it' 담당: worker",
+  ])
+
+  const released = toEvents([{ op: 'claim', issue: 'owner-1', by: null }], worker, planned.at(-1)!.seq, '2026-10-06T03:00:00Z')
+  expect(snapshot([...created, ...planned, ...released])[0]).not.toHaveProperty('claimedBy')
+})
+
+// Regression caught: making the landing status valid also let the fold model assign it without the dedicated tool.
+test('a fold op cannot set ready-to-land', () => {
+  expect(isStatus('ready-to-land')).toBe(true)
+  expect(parseOps(JSON.stringify([
+    { op: 'create', title: 'new', status: 'ready-to-land' },
+    { op: 'status', issue: 'owner-1', status: 'ready-to-land' },
+    { op: 'status', issue: 'owner-1', status: 'todo' },
+  ]), new Set(['owner-1']))).toEqual({
+    ops: [{ op: 'status', issue: 'owner-1', status: 'todo' }],
+    evidence: [[]],
+    rejected: 2,
+  })
+})
+
+// Regression caught: landing-ready work was absent from the board and its orchestration metadata was lost in projection.
+test('the board renders a Ready to land column with claimant and priority', async () => {
+  const origin = at('owner', 'github.com/o/r')
+  const events = toEvents([
+    { op: 'create', issue: 'owner-1', title: 'land this', status: 'ready-to-land' },
+    { op: 'plan', issue: 'owner-1', priority: 4, ready: true },
+    { op: 'claim', issue: 'owner-1', by: 'worker-1' },
+  ], origin, 0, '2026-10-06T01:00:00Z')
+  let html = ''
+  await openBoard({
+    readAll: async () => events,
+    captureOrigin: async () => origin,
+    boardPath: async () => '/tmp/clm-board.html',
+    writeBoard: async (_path, contents) => { html = contents },
+    open: async () => ({ exitCode: 0, stderr: '' }),
+    now: () => '2026-10-06T02:00:00Z',
+    log: () => undefined,
+  })
+  expect(html).toContain('Ready to land (<span class="count">1</span>)')
+  expect(html).toContain('priority 4')
+  expect(html).toContain('ready true')
+  expect(html).toContain('claimant worker-1')
 })
 
 // Regression caught (c): every session's ledger listed the open issues of other sessions in the same repo, so one session's steps showed up as another's to-do list.

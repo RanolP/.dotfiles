@@ -6,7 +6,7 @@ import { kst } from './fold'
 // embedded, so the page works from a file:// URL with no network.
 
 // Status order with done last; within a column issues keep snapshot order, which is creation order.
-const COLUMNS = [['todo', 'To do'], ['doing', 'Doing'], ['question', 'Question'], ['done', 'Done']] as const
+const COLUMNS = [['todo', 'To do'], ['doing', 'Doing'], ['ready-to-land', 'Ready to land'], ['question', 'Question'], ['done', 'Done']] as const
 
 export const shortRepo = (repo: string) => repo.split('/').slice(-2).join('/')
 
@@ -53,8 +53,9 @@ apply('repo');
 
 function card(i: ClmBoardIssue): string {
   const where = [esc(shortRepo(i.repo)), ...(i.branch ? [esc(i.branch)] : [])].join(' · ')
+  const plan = `priority ${i.priority ?? '-'} · ready ${i.ready ?? '-'} · claimant ${i.claimedBy ? esc(i.claimedBy) : '-'}`
   return `<div class="card" data-repo="${esc(i.repo)}"><div>${esc(i.title)}</div>`
-    + `<div class="sub">${esc(i.id)} · ${where}</div><div class="sub">updated <time datetime="${esc(i.updated)}">${esc(kst(i.updated))}</time></div></div>`
+    + `<div class="sub">${esc(i.id)} · ${where}</div><div class="sub">${plan}</div><div class="sub">updated <time datetime="${esc(i.updated)}">${esc(kst(i.updated))}</time></div></div>`
 }
 
 export function boardHtml(issues: ClmBoardIssue[], repo: string, generatedAt: string): string {

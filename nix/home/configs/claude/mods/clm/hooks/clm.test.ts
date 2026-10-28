@@ -1,10 +1,10 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
 import { clmStatus as readClmStatus } from './panel'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -12,7 +12,7 @@ import type { ClmWorkflow } from '../types'
 import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
+import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 
 // Regression caught: the time-budget noun could not create, update, filter, or reject cross-session tracker issues.
@@ -53,11 +53,10 @@ test('the clm noun tracks only this session\'s issues', OPTS, async ($, on) => {
   expect(error instanceof Error ? error.message : String(error)).toContain('does not belong')
 })
 
-// Regression: clm status omitted the queued follow-up or pending resume, or changed state while reading it.
+// Regression: clm status omitted the pending resume or changed state while reading it.
 test('the clm status noun reports its read-only session view', async () => {
   const workflow: ClmWorkflow = {
-    later: [{ text: 'review the release' }], resumeRequest: { text: 'continue the audit' },
-    lastSubmittedTurn: null, activeTurnId: 'turn-1', promptSeq: 0, focusAppliedSeq: 0, replayed: null,
+    resumeRequest: { text: 'continue the audit' }, lastSubmittedTurn: null, activeTurnId: 'turn-1', promptSeq: 0, focusAppliedSeq: 0,
   }
   const eventFile = '/home/t/.claude-work/tracker/events/status-session.jsonl'
   const events = [
@@ -97,7 +96,6 @@ test('the clm status noun reports its read-only session view', async () => {
     stackDepth: 0,
     pending: [],
     agents: [],
-    later: [{ text: 'review the release' }],
     resumeRequest: { text: 'continue the audit' },
     lastFoldAt: 1_791_926_400_000,
     ledgerPath: '/home/t/.claude-work/plans/clm-status-session.md',
@@ -121,7 +119,7 @@ test('clm status names the focus top, stack depth, pending and live subagent tas
     intentReplies: [
       intentReply({ intent: 'handoff', title: 'Main task' }),
       intentReply({ intent: 'interleave', title: 'Focused subtask' }),
-      intentReply({ intent: 'pending', title: 'Deferred task', later: ['Deferred task'] }),
+      intentReply({ intent: 'pending', title: 'Deferred task' }),
     ],
   })
   const agentId = 'worker-agent-123456'

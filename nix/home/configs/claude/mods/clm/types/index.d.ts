@@ -29,19 +29,12 @@ export type ClmIssueQuery = {
   status?: ClmIssueStatus
 }
 
-export type ClmLaterItem = {
-  text: string
-  issue?: string
-}
-
 export type ClmWorkflow = {
-  later: ClmLaterItem[]
   resumeRequest: { text: string } | null
   lastSubmittedTurn: string | null
   activeTurnId: string | null
   promptSeq: number
   focusAppliedSeq: number
-  replayed: { issue: string } | null
 }
 
 export type ClmStatus = {
@@ -49,7 +42,6 @@ export type ClmStatus = {
   stackDepth: number
   pending: Array<{ id: string; title: string }>
   agents: Array<{ agentId: string; taskId: string; title: string; status: 'todo' | 'doing' | 'done' | 'question' | 'uncertain' | 'dropped' }>
-  later: ClmLaterItem[]
   resumeRequest: { text: string } | null
   lastFoldAt: number | null
   ledgerPath: string
@@ -86,7 +78,7 @@ export type Clm = {
   issues(query?: ClmIssueQuery): Promise<ClmIssue[]>
   /** Queue a continuation prompt for clm's turn-end arbiter. */
   resume(input: { text: string }): Promise<'submitted' | 'queued'>
-  /** Read the queue, pending resume request, last fold, ledger path, and open issue count. */
+  /** Read the pending resume request, last fold, ledger path, and open issue count. */
   status(): Promise<ClmStatus>
 }
 

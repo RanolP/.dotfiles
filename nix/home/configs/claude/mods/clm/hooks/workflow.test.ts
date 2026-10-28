@@ -1,9 +1,9 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { backfillClausesChained, INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
 import { applyClauses, emptyClauseStore, parseClause, readClauseStore, renderClauses } from './clauses'
@@ -14,41 +14,8 @@ import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValue
 import { CONFIRM_ITEMS, CONFIRM_PREFIX } from './evidence'
 import { focusOf, parseLog, parseOps, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, LATER_BAND_PROPS, waitForLog } from './clm-test-support'
+import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
-// Regression caught: chat deferrals disappeared when session hooks rebound instead of remaining visible in the numbered band.
-test('chat deferrals stay in session state and the band numbers them', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: [], replies: [], intentReplies: [intentReply({ later: ['Check the release notes', 'Verify the changelog'] })],
-  })
-  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true })
-  await $.prompt.submit(promptInput('Check the release notes and verify the changelog later'))
-  await waitForLog(seen, 'clm: queued later item 2')
-  expect(seen.logs).toContain('clm: queued later item 1')
-  expect(seen.logs).toContain('clm: queued later item 2')
-  await $.session.start({ cwd: '/work/repo', surface: 'terminal', isInteractive: true })
-  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
-  const drawn = JSON.stringify(await band.drawn())
-  expect(drawn).toContain('1. Check the release notes')
-  expect(drawn).toContain('2. Verify the changelog')
-  expect(drawn.indexOf('Check the release notes')).toBeLessThan(drawn.indexOf('Verify the changelog'))
-})
-
-// Regression caught: a turn end submitted a deferred later item as the next prompt before the human popped it.
-test('the later queue survives a turn end unsubmitted', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: [], replies: [], intentReplies: [intentReply({ later: ['Run the focused verification'] })],
-  })
-  await $.prompt.submit(promptInput('Run the focused verification later'))
-  await waitForLog(seen, 'clm: queued later item 1')
-  seen.submissions.length = 0
-  await $.turn.complete(turnInput('t1'))
-  await $.turn.complete(turnInput('t2'))
-  expect(seen.submissions).toEqual([])
-  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
-  expect(JSON.stringify(await band.drawn())).toContain('1. Run the focused verification')
-})
-
 const seedWorkflow = (on: On, seed: ClmWorkflow) => {
   const isWorkflow = (e: { plugin: string; key: string }) => e.plugin === 'clm' && e.key === 'workflow'
   let written: ClmWorkflow = seed
@@ -89,46 +56,6 @@ test('a duplicate completion of one turn submits a queued resume once', OPTS, as
   expect(seen.submissions).toEqual([{ text: 'continue the audit' }])
 })
 
-// Regression caught: a refused pop lost its later item or moved it
-test('a refused /clm pop puts the item back in place and clears its replay', OPTS, async ($, on) => {
-  on('prompt.submit', { text: 'second' }, () => ({ drop: 'refused' }))
-  const seen = bottoms(on, { rows: [], replies: [] })
-  const later = [{ text: 'first' }, { text: 'second', issue: 's1-9' }, { text: 'third' }]
-  const stored = seedWorkflow(on, workflow({ later }))
-  await runClm($, 'pop 2')
-  await seen.clock.advance(1)
-  const drawn = JSON.stringify(await (await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })).drawn())
-  expect(drawn).toContain('1. first')
-  expect(drawn).toContain('2. second')
-  expect(drawn).toContain('3. third')
-  expect(stored().later).toEqual(later)
-  expect(stored().replayed).toBeNull()
-  expect(seen.logs).toContain('clm: continuation submit failed (Error: refused)')
-  expect(seen.submissions).toEqual([])
-})
-
-// Regression caught: /clm pop n submitted or removed a different item than the one the human named.
-test('/clm pop 2 submits item 2 as the user and removes only it', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: [], replies: [], intentReplies: [intentReply({ later: ['first request', 'second request', 'third request'] })],
-  })
-  await $.prompt.submit(promptInput('Do these later: first request, second request, third request'))
-  await waitForLog(seen, 'clm: queued later item 3')
-  seen.submissions.length = 0
-  await runClm($, 'pop 2')
-  await seen.clock.advance(1)
-  expect(seen.submissions).toEqual([{ text: 'second request', asUser: true }])
-  expect(seen.logs).toContain('clm: popped later item 2: second request')
-  const drawn = JSON.stringify(await (await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })).drawn())
-  expect(drawn).toContain('1. first request')
-  expect(drawn).toContain('2. third request')
-  expect(drawn).not.toContain('second request')
-  await runClm($, 'pop 5')
-  await seen.clock.advance(1)
-  expect(seen.logs).toContain('clm: no later item 5; the queue has 2')
-  expect(seen.submissions).toHaveLength(1)
-})
-
 // Regression caught: a hand-back fabricated a handoff in the main session.
 test('intent classification skips harness hand-backs but records a composer prompt', OPTS, async ($, on) => {
   const s: State = {
@@ -165,19 +92,6 @@ test('an unknown classifier target writes no tracker events', OPTS, async ($, on
   expect(seen.logs.some(line => line.includes('unknown target id ghost-1'))).toBe(true)
 })
 
-// Regression caught: a pop during Haiku classification changed the queue positions and removed a different later item.
-test('a pop between snapshot and apply still drops the intended later item', async () => {
-  const snapshot = [{ text: 'first' }, { text: 'target' }, { text: 'last' }]
-  const live = [{ text: 'first' }, { text: 'last' }, { text: 'new arrival' }]
-  expect(removeQueueSnapshotTargets(live, snapshot, [2])).toEqual({
-    remaining: [{ text: 'first' }, { text: 'last' }, { text: 'new arrival' }], dropped: [],
-  })
-  const withTargetStillPresent = [{ text: 'first' }, { text: 'target' }, { text: 'last' }, { text: 'new arrival' }]
-  expect(removeQueueSnapshotTargets(withTargetStillPresent, snapshot, [2])).toEqual({
-    remaining: [{ text: 'first' }, { text: 'last' }, { text: 'new arrival' }], dropped: [{ item: 'target', number: 2 }],
-  })
-})
-
 // Regression caught: a slow earlier classifier overwrote the focus chosen by a newer prompt.
 test('a newer classifier waits for a slow earlier one and focus ends on B', OPTS, async ($, on) => {
   let releaseA!: () => void
@@ -203,18 +117,6 @@ test('a newer classifier waits for a slow earlier one and focus ends on B', OPTS
   await until(() => focusedTitle() === 'B task')
   expect(focusedTitle()).toBe('B task')
   expect(seen.intentPrompts).toHaveLength(2)
-})
-
-// Regression caught: a valid deferred request vanished when the independent focus label was malformed.
-test('valid later survives invalid focus output', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: ROWS, replies: [], intentReplies: [intentReply({ intent: 'not-an-intent', later: ['Please verify the release notes'] })],
-  })
-  await $.prompt.submit(promptInput('Please verify the release notes later'))
-  await waitForLog(seen, 'clm: queued later item 1')
-  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
-  expect(JSON.stringify(await band.drawn())).toContain('1. Please verify the release notes')
-  expect(seen.logs.some(line => line.includes('unknown intent not-an-intent'))).toBe(true)
 })
 
 // Regression caught: a concrete rebuild request without a question mark was omitted from the request ledger.
@@ -301,97 +203,6 @@ test('a request quoted only from assistant text is rejected', OPTS, async ($, on
   expect(seen.logs.some(line => line.includes('dropped unsupported raised quote'))).toBe(true)
 })
 
-// Regression caught: a chat deferral was silently dropped instead of being queued alongside the active focus label.
-test('a mixed chat queues exactly its deferred part and still applies its focus label', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: ROWS, replies: [], intentReplies: [intentReply({ intent: 'handoff', title: 'A 고쳐', later: ['B 고쳐'] })],
-  })
-  await $.prompt.submit(promptInput('A 고쳐, B는 나중에'))
-  await waitForLog(seen, 'clm: queued later item 1')
-  const events = parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? '')
-  const focus = focusOf(events, 's1')
-  const focusedIssue = snapshot(events).find(issue => issue.id === focus.stack.at(-1))
-  expect(focusedIssue?.title).toBe('A 고쳐')
-  expect(focusedIssue?.status).toBe('doing')
-})
-
-// Regression caught: a later item re-queued itself forever when the arbiter replayed it as a plugin continuation.
-test('a replayed later continuation is not classified', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: ROWS, replies: [], intentReplies: [intentReply({ intent: 'pending', title: 'Run the focused verification', later: ['Run the focused verification'] })],
-  })
-  await $.prompt.submit(promptInput('Run the focused verification later'))
-  await waitForLog(seen, 'clm: queued later item 1')
-  await runClm($, 'pop')
-  await seen.clock.advance(1)
-  expect(seen.submissions).toContainEqual({ text: 'Run the focused verification', asUser: true })
-  expect(seen.intentPrompts).toHaveLength(1)
-})
-
-// Regression caught: replaying a linked later item did not return its tracker issue to the doing focus, or reconciliation repeated writes.
-test('a linked later replay reconciles once to its issue and then stays unchanged', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: [], replies: [], intentReplies: [intentReply({ intent: 'pending', title: 'Do deferred task', later: ['Do deferred task'] })],
-  })
-  await $.prompt.submit(promptInput('Do deferred task later'))
-  await waitForLog(seen, 'clm: queued later item 1')
-  await runClm($, 'pop')
-  await seen.clock.advance(1)
-  expect(seen.submissions).toContainEqual({ text: 'Do deferred task', asUser: true })
-  await $.turn.complete(turnInput('replay-finished'))
-  const path = '/home/t/.claude-work/tracker/events/s1.jsonl'
-  const afterReconcile = seen.files[path] ?? ''
-  const events = parseLog(afterReconcile)
-  const focus = focusOf(events, 's1')
-  const top = snapshot(events).find(issue => issue.id === focus.stack.at(-1))
-  expect(top?.title).toBe('Do deferred task')
-  expect(top?.status).toBe('doing')
-  await $.turn.complete(turnInput('next-turn'))
-  expect(seen.files[path]).toBe(afterReconcile)
-})
-
-// Regression caught: assistant-only wording entered the queue, or a queue-wide drop ran without a queue reference in the user's prompt.
-test('assistant wording is rejected and an unsupported all drop is ignored', OPTS, async ($, on) => {
-  const s: State = {
-    rows: [], replies: [], intentReplies: [
-      intentReply({ later: ['Keep this queued item'] }),
-      intentReply({ later: ['secret phrase from the assistant'], laterDrop: 'all' }),
-    ],
-  }
-  const seen = bottoms(on, s)
-  await $.prompt.submit(promptInput('Keep this queued item later'))
-  await waitForLog(seen, 'clm: queued later item 1')
-  s.rows = [M('assistant', 'The secret phrase from the assistant was: secret phrase from the assistant')]
-  await $.prompt.submit(promptInput('Continue the current task'))
-  await waitForLog(seen, 'ignored laterDrop=all without a queue reference')
-  expect(seen.logs).toContain('clm: later item dropped (not supported by prompt): secret phrase from the assistant')
-  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
-  const drawn = JSON.stringify(await band.drawn())
-  expect(drawn).toContain('1. Keep this queued item')
-  expect(drawn).not.toContain('secret phrase')
-})
-
-// Regression caught: chat removal deleted the wrong queued item or changed the order of the remaining requests.
-test('a chat drop removes exactly the named item and keeps the rest in order', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: ROWS, replies: [], intentReplies: [
-      intentReply({ later: ['first request', 'second request', 'third request'] }),
-      intentReply({ laterDrop: [2] }),
-    ],
-  })
-  await $.prompt.submit(promptInput('Do these later: first request, second request, third request'))
-  await waitForLog(seen, 'clm: queued later item 3')
-  await $.prompt.submit(promptInput('later 2번 빼'))
-  await waitForLog(seen, 'clm: dropped later item 2: second request')
-  const band = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'AbovePrompt', props: LATER_BAND_PROPS })
-  const drawn = JSON.stringify(await band.drawn())
-  expect(drawn).toContain('1. first request')
-  expect(drawn).toContain('2. third request')
-  expect(drawn.indexOf('first request')).toBeLessThan(drawn.indexOf('third request'))
-  expect(drawn).not.toContain('second request')
-  expect(seen.logs).toContain('clm: dropped later item 2: second request')
-})
-
 // Regression caught: a failed continuation submission consumed the resume request and blocked retrying the same turn.
 test('a rejected continuation submission restores its resume request and clears its turn claim', async () => {
   let currentWorkflow: ClmWorkflow = workflow({ lastSubmittedTurn: 'retry-turn' })
@@ -407,20 +218,19 @@ test('a rejected continuation submission restores its resume request and clears 
   expect(logs).toContain('clm: continuation submit failed (Error: settings hook refused prompt)')
 })
 
-// Regression caught: the turn-end selector consumed the later queue, or skipped a queued resume while later items waited.
-test('the continuation selector consumes a resume request and leaves the later queue', async () => {
-  const start = workflow({ later: [{ text: 'verify the release' }], resumeRequest: { text: 'time-budget resume' } })
+// Regression caught: the turn-end selector submitted the same queued resume more than once.
+test('the continuation selector consumes a resume request once', async () => {
+  const start = workflow({ resumeRequest: { text: 'time-budget resume' } })
   const resumed = chooseContinuation(start, 't1')
   expect(resumed.continuation).toEqual({ text: 'time-budget resume' })
-  expect(resumed.workflow.later).toEqual([{ text: 'verify the release' }])
   expect(chooseContinuation(resumed.workflow, 't2').continuation).toBeUndefined()
 })
 
 // Regression caught: task notifications cleared queued away-resume requests, or a human return left one stale.
 test('only human-origin prompts clear queued resumes', async () => {
   const pending: ClmWorkflow = {
-    later: [], resumeRequest: { text: 'stale away reminder' },
-    lastSubmittedTurn: 'claimed-turn', activeTurnId: null,
+    resumeRequest: { text: 'stale away reminder' }, lastSubmittedTurn: 'claimed-turn', activeTurnId: null,
+    promptSeq: 0, focusAppliedSeq: 0,
   }
   expect(resetUserWorkflow(pending, { kind: 'task-notification' })).toBe(pending)
   const returned = resetUserWorkflow(pending, { kind: 'composer' })

@@ -22,8 +22,8 @@ import {
 } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
-import { backfillClausesChained, compose, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
-import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, popLater, queueResume, readWorkflow as readWorkflowDomain, reconcileReplay as reconcileWorkflowReplay, removeQueueSnapshotTargets, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type ReplayIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
+import { backfillClausesChained, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
+import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
@@ -35,7 +35,7 @@ import { clauseStoreKey, emptyClauseStore, readClauseStore } from './clauses'
 
 export { recallRows } from './address'
 export { residentLedgerText } from './resident'
-export { chooseContinuation, removeQueueSnapshotTargets, resetUserWorkflow, restoreFailedContinuation } from './workflow'
+export { chooseContinuation, resetUserWorkflow, restoreFailedContinuation } from './workflow'
 export { messageTokens, type Meta, type Opts }
 
 // Each transcript has one background compaction job; engine compactions join
@@ -988,19 +988,6 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
 
 export const report = foldJobReport
 
-const replayIo = ($: EngineInterface): ReplayIo => ({
-  read: () => readWorkflow($),
-  change: change => changeWorkflow($, change),
-  log: message => $.ui.log(message),
-  captureOrigin: () => captureOrigin($),
-  readEvents: () => readAll($),
-  serialize: (session, run) => serialized(session, run),
-  compose,
-  writeEvents: (payloads, origin) => writeEvents($, payloads, origin),
-  syncPanel: (origin, events) => syncPanelSafely($, origin, events),
-})
-const reconcileReplay = ($: EngineInterface) => reconcileWorkflowReplay(replayIo($))
-
 const workflowIo = ($: EngineInterface): WorkflowIo => ({
   read: () => readWorkflow($),
   change: change => changeWorkflow($, change),
@@ -1012,7 +999,6 @@ export const submitWithRecovery = recoverWorkflowSubmit
 
 const mainTurnCompletionIo = ($: EngineInterface, opts: Opts): MainTurnCompletionIo => ({
   showChanges: answer => { void showFoldTurnChanges(foldJobIo($), answer).catch(err => $.ui.log(`clm: turn context refresh failed (${String(err).slice(0, 160)})`, { to: 'debug' })) },
-  reconcileReplay: () => reconcileReplay($),
   maybeClear: () => maybeClearFoldJob(foldJobIo($), opts),
   arbitrate: turnId => arbitrateWorkflow(workflowIo($), turnId),
   clearActiveTurn: turnId => changeWorkflow($, current => ({
@@ -1099,7 +1085,7 @@ export const register: Register = (on, options) => {
     }
     await $.command.register({
       name: 'clm',
-      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session, `pop [n]` sends later queue item n (default 1) as your next prompt (shown to you only).',
+      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board in the browser, `link <id>` brings another repo\'s issue into this session, `drop <id…|all>` drops open issues of this session.',
       immediate: true,
     })
     await $.command.register({ name: 'force-compact', description: 'Compact once with Claude Code\'s own summarizer instead of the clm fold; text after it becomes the summary instructions.', immediate: true })
@@ -1131,8 +1117,6 @@ export const register: Register = (on, options) => {
       append: payloads => append($, payloads),
       issues: () => sessionIssues($),
       openBoard: () => openPanelBoard(panelIo($)),
-      // The host refuses a prompt submit from inside command.run, so the popped item is submitted once the command has returned.
-      popLater: number => popLater(workflowIo($), number, run => { $.clock.after(0, run) }),
       log: text => $.ui.log(text),
     }, e.args)
     if (outcome === 'handled') return {}
@@ -1257,28 +1241,6 @@ export const register: Register = (on, options) => {
     return Text({ children: [text] })
   })
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const base = await next(e).catch(err => {
-      if (!String(err).includes('no implementation for ui.render')) throw err
-      return null
-    })
-    try {
-      const later = (await readWorkflow($)).later
-      if (!later.length || e.props.hasSurvey) {
-        if (base) return base
-        throw new Error('no implementation for ui.render')
-      }
-      const { Box, Text } = $.ui.resolve(e)
-      const queue = Text({ dimColor: true, children: `Later queue (/clm pop [n]):\n${later.map((item, i) => `${i + 1}. ${item.text}`).join('\n')}` })
-      return Box({ gap: 1, children: base === null ? [queue] : [base, queue] })
-    } catch (err) {
-      if (String(err).includes('no implementation for ui.render')) throw err
-      $.ui.log(`clm: later band failed (${String(err).slice(0, 160)})`, { to: 'debug' })
-      if (base) return base
-      throw err
-    }
-  })
-
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)
     if (e.traits.includes('bare')) return r
@@ -1303,7 +1265,6 @@ export const register: Register = (on, options) => {
         await changeWorkflow($, current => ({ next: resetUserWorkflow(current, e.origin), result: undefined }))
         promptSeq = await stampHumanPrompt($)
         address = await recordPrompt(addressIo($), key, e.text, await nowIso($), promptSeq)
-        await reconcileReplay($)
       } catch (err) {
         $.ui.log(`clm: prompt state update failed (${String(err).slice(0, 160)})`)
       }

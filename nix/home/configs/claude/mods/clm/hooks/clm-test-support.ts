@@ -1,9 +1,9 @@
 import { mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, register, resetUserWorkflow, removeQueueSnapshotTargets, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, isHeld, register, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { CLAUSE_BACKFILL_SYSTEM, INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -16,7 +16,7 @@ import { fnv1a } from './address'
 export const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] } satisfies SessionMessage)
 export const intentReply = (fields: Record<string, unknown> = {}) => JSON.stringify({
-  intent: 'continue', target: null, title: null, rule: null, later: [], laterDrop: [], raised: [], resolved: [], clauses: [], ...fields,
+  intent: 'continue', target: null, title: null, rule: null, raised: [], resolved: [], clauses: [], ...fields,
 })
 export const use = (id: string, tool: string) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input: { id }, text: 'ok' }] })
 export const res = (id: string, text: string) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError: false }] })
@@ -62,8 +62,8 @@ export const compactedMessages = (result: SessionCompactResult): readonly Sessio
   return result.messages
 }
 export const workflow = (fields: Partial<ClmWorkflow> = {}): ClmWorkflow => ({
-  later: [], resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null,
-  promptSeq: 0, focusAppliedSeq: 0, replayed: null, ...fields,
+  resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null,
+  promptSeq: 0, focusAppliedSeq: 0, ...fields,
 })
 export const heldIn = (seen: { store: Record<string, unknown> }): Held[] => {
   const value = seen.store['held:s1']
@@ -319,10 +319,6 @@ export const issueAt = (issues: readonly { id: string }[], n: number): string =>
 // Regression caught: a quote copied from a clipped tool result kept the clip's `…`, or came from text past the clip, and was rejected, so 핵심 사실·경로 stayed empty.
 
 export const runClm = ($: { command: { run(e: { command: string; args: string }): Promise<unknown> } }, args: string) => $.command.run({ command: 'clm', args })
-export const LATER_BAND_PROPS: RenderPropsOf['AbovePrompt'] = {
-  hasSurvey: false, isWorking: false, maxRows: 8, bodyColumns: 80, scroll: { offset: 0, bodyRows: 8 }, view: {},
-}
-
 export const waitForLog = async (seen: { logs: string[] }, message: string) => {
   for (let i = 0; i < 50 && !seen.logs.includes(message); i++)
     await new Promise(resolve => setTimeout(resolve, 5))

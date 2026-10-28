@@ -63,14 +63,14 @@ const localIssue = (id: string, title: string, status: Issue['status']): Issue =
 test('interleave then continue back pops the side task and restores one doing issue', async () => {
   const issues = [localIssue('s1-a', 'main task', 'doing'), localIssue('s1-b', 'side task', 'todo')]
   const interleaved = compose({ stack: ['s1-a'], pending: [] }, {
-    intent: 'interleave', target: 's1-b', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'interleave', target: 's1-b', title: null, rule: null,
   }, issues, () => 'unused')
   const afterInterleave = issues.map(issue => {
     const status = interleaved.payloads.filter(p => p.op === 'status' && p.issue === issue.id).at(-1)
     return status?.op === 'status' ? { ...issue, status: status.status } : issue
   })
   const returned = compose(interleaved.next, {
-    intent: 'continue', target: 's1-a', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'continue', target: 's1-a', title: null, rule: null,
   }, afterInterleave, () => 'unused')
   const afterReturn = afterInterleave.map(issue => {
     const status = returned.payloads.filter(p => p.op === 'status' && p.issue === issue.id).at(-1)
@@ -83,7 +83,7 @@ test('interleave then continue back pops the side task and restores one doing is
 // Regression caught: a handed-off task disappeared from both the focus stack and pending set.
 test('handoff moves the old focus to pending as todo', async () => {
   const result = compose({ stack: ['s1-a'], pending: [] }, {
-    intent: 'handoff', target: 's1-b', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'handoff', target: 's1-b', title: null, rule: null,
   }, [localIssue('s1-a', 'old task', 'doing'), localIssue('s1-b', 'new task', 'todo')], () => 'unused')
   expect(result.next).toEqual({ stack: ['s1-b'], pending: ['s1-a'] })
   expect(result.payloads).toContainEqual({ op: 'status', issue: 's1-a', status: 'todo' })
@@ -92,7 +92,7 @@ test('handoff moves the old focus to pending as todo', async () => {
 // Regression caught: every follow-up prompt rewrote the focused issue's status event.
 test('continue to the current top emits no payloads', async () => {
   const result = compose({ stack: ['s1-a'], pending: [] }, {
-    intent: 'continue', target: 's1-a', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'continue', target: 's1-a', title: null, rule: null,
   }, [localIssue('s1-a', 'focused task', 'doing')], () => 'unused')
   expect(result.payloads).toEqual([])
 })
@@ -100,7 +100,7 @@ test('continue to the current top emits no payloads', async () => {
 // Regression caught: closed focus entries were reopened when a new task replaced the old top.
 test('closed focus and pending entries are pruned before handoff', async () => {
   const result = compose({ stack: ['s1-a', 's1-done'], pending: ['s1-dropped'] }, {
-    intent: 'handoff', target: 's1-b', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'handoff', target: 's1-b', title: null, rule: null,
   }, [
     localIssue('s1-a', 'old task', 'doing'),
     localIssue('s1-done', 'finished task', 'done'),
@@ -115,7 +115,7 @@ test('closed focus and pending entries are pruned before handoff', async () => {
 // Regression caught: an untracked doing issue stayed active beside the focus stack's new top.
 test('stray doing issues are demoted to preserve one doing focus', async () => {
   const result = compose({ stack: ['s1-a'], pending: [] }, {
-    intent: 'handoff', target: 's1-b', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'handoff', target: 's1-b', title: null, rule: null,
   }, [
     localIssue('s1-a', 'old task', 'doing'),
     localIssue('s1-b', 'new task', 'todo'),
@@ -133,23 +133,23 @@ test('stack targets normalize to continue or leave the stack before pending', as
     localIssue('s1-c', 'top task', 'doing'),
   ]
   const handoff = compose({ stack: ['s1-a', 's1-b', 's1-c'], pending: [] }, {
-    intent: 'handoff', target: 's1-a', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'handoff', target: 's1-a', title: null, rule: null,
   }, issues, () => 'unused')
   expect(handoff.next).toEqual({ stack: ['s1-a'], pending: ['s1-c', 's1-b'] })
   expect(handoff.payloads).not.toContainEqual({ op: 'parent', issue: 's1-a', parent: 's1-c' })
 
   const interleaveTop = compose({ stack: ['s1-c'], pending: [] }, {
-    intent: 'interleave', target: 's1-c', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'interleave', target: 's1-c', title: null, rule: null,
   }, issues, () => 'unused')
   expect(interleaveTop.payloads.some(payload => payload.op === 'parent' && payload.issue === 's1-c')).toBe(false)
 
   const pendingStackTarget = compose({ stack: ['s1-a', 's1-c'], pending: [] }, {
-    intent: 'pending', target: 's1-a', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'pending', target: 's1-a', title: null, rule: null,
   }, issues, () => 'unused')
   expect(pendingStackTarget.next).toEqual({ stack: ['s1-c'], pending: ['s1-a'] })
 
   const pendingTop = compose({ stack: ['s1-a', 's1-c'], pending: [] }, {
-    intent: 'pending', target: 's1-c', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'pending', target: 's1-c', title: null, rule: null,
   }, [
     localIssue('s1-a', 'first task', 'todo'),
     localIssue('s1-c', 'top task', 'todo'),
@@ -161,7 +161,7 @@ test('stack targets normalize to continue or leave the stack before pending', as
 // Regression caught: returning to a lower task lost open todo entries between it and the old top.
 test('continuing to a lower task pends every popped open issue', async () => {
   const result = compose({ stack: ['s1-a', 's1-b', 's1-c'], pending: [] }, {
-    intent: 'continue', target: 's1-a', title: null, rule: null, later: [], laterDrop: [],
+    intent: 'continue', target: 's1-a', title: null, rule: null,
   }, [
     localIssue('s1-a', 'main task', 'todo'),
     localIssue('s1-b', 'intermediate task', 'todo'),

@@ -36,6 +36,7 @@ These are present but not yet declared in nix — they get wiped on rebuild:
 | editor.fontLigatures | true |
 | editor.formatOnSave | true |
 | editor.minimap.enabled | true |
+| editor.unicodeHighlight.nonBasicASCII | false |
 | workbench.colorTheme | Nord |
 | workbench.iconTheme | vscode-icons |
 | update.mode | none |

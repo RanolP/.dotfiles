@@ -68,6 +68,7 @@
         "editor.fontLigatures" = true;
         "editor.formatOnSave" = true;
         "editor.minimap.enabled" = true;
+        "editor.unicodeHighlight.nonBasicASCII" = false;
         "workbench.colorTheme" = "Nord";
         "workbench.iconTheme" = "vscode-icons";
         "terminal.integrated.defaultProfile.osx" = "nu";

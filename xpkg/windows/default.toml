@@ -56,6 +56,7 @@ packages = [
 # Nvidia.GeForceExperience on a machine that has them).
 [profiles.RanolP-Desktop]
 packages = [
+  "BlenderFoundation.Blender",
   "Gyan.FFmpeg",
   "Logitech.GHUB",
 ]

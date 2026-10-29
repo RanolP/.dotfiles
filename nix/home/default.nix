@@ -502,6 +502,9 @@ in
       # tool-compose: the exec tool runs a script whose tools.* calls relay to
       # $.tool.call; the child runs under sandbox-exec + node --permission.
       ".claude/mods/tool-compose".source = ./configs/claude/mods/tool-compose;
+      # ask-later: a non-blocking AskUserQuestion; the model queues questions
+      # and keeps working, and /answers walks them when the user chooses.
+      ".claude/mods/ask-later".source = ./configs/claude/mods/ask-later;
       # On "command not found", point at mise/project shims before installs.
       ".claude/hooks/missing-tool-hint.py" = {
         source = ./configs/claude/hooks/missing-tool-hint.py;

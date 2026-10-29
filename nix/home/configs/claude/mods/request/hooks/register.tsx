@@ -87,32 +87,35 @@ const shownCommand = (r: ApprovalRequest) => (isEscaped(r.command)
 // like the review's prose still reads as part of the command.
 const INDENT = '    '
 
-const asker = (r: ApprovalRequest) => `In ${oneLine(r.cwd)}, ${r.agentId ? `subagent ${oneLine(r.agentId)}` : 'the main session'} asks to run`
+const asker = (r: ApprovalRequest) => `In ${oneLine(r.cwd)}, ${r.agentId ? `subagent ${oneLine(r.agentId)}` : 'the main session'} asks to run:`
 const escapedNote = (r: ApprovalRequest) => (isEscaped(r.command) ? ['(it holds tabs, hidden or control characters; shown JSON-escaped)'] : [])
-const theCase = (r: ApprovalRequest) => [
-  '',
-  `Why: ${oneLine(r.why_only_way)}`,
-  ...r.alternatives.map(a => `Not: ${oneLine(a.approach)} — ${oneLine(a.rejected_because)}`),
-  `Unblocks: ${oneLine(r.blocks)}`,
-  'Run this command once?',
+// The case for the command, one labelled row each: the same rows in the
+// asked question and in the drawn review.
+type CaseRow = { key: string; label: string; value: string }
+const caseRows = (r: ApprovalRequest): CaseRow[] => [
+  { key: 'why', label: 'Why', value: oneLine(r.why_only_way) },
+  ...r.alternatives.map((a, i) => ({ key: `not-${i}`, label: 'Not', value: `${oneLine(a.approach)} — ${oneLine(a.rejected_because)}` })),
+  { key: 'unblocks', label: 'Unblocks', value: oneLine(r.blocks) },
 ]
 
 // The dialog's question: where it runs and who asked, the command indented,
 // then the case for it, one labelled line each, and the question last. The
 // command stays in it so the engine's own drawing (a refused tree) shows it.
 export const reviewQuestion = (r: ApprovalRequest): string => [
-  `${asker(r)}:`,
+  asker(r),
   ...escapedNote(r),
   ...shownCommand(r).split('\n').map(line => `${INDENT}${line}`),
-  ...theCase(r),
+  '',
+  ...caseRows(r).map(c => `${c.label}: ${c.value}`),
+  'Run this command once?',
 ].join('\n')
 
-// The question drawn under the highlighted command, which it no longer repeats.
-export const questionBelowCode = (r: ApprovalRequest): string => [
-  `${asker(r)} the command above:`,
-  ...escapedNote(r),
-  ...theCase(r),
-].join('\n')
+// The question drawn under the whole review the tree draws above the dialog.
+const shortQuestion = (r: ApprovalRequest): string => `Run ${r.id} once?`
+// The question drawn under only the header and command, when the case does
+// not fit the engine's rows around the dialog: the case moves into it.
+const caseQuestion = (r: ApprovalRequest): string =>
+  [...caseRows(r).map(c => `${c.label}: ${c.value}`), shortQuestion(r)].join('\n')
 
 // The engine cuts a question longer than this many characters with "…".
 // Approve needs the asked question under it, which also keeps the command
@@ -302,10 +305,40 @@ export const bandPreview = (first: ApprovalRequest, room: number): string =>
 // line) with slack for the surface's chrome. A guess at the engine's layout,
 // made tall: the engine wraps the question (bold Text, no truncation).
 const DIALOG_CHROME_ROWS = 10
-export const dialogRows = (question: string, columns: number): number => {
-  const inner = Math.max(1, columns - 6)
-  return question.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / inner)), 0) + DIALOG_CHROME_ROWS
+const rowsAt = (text: string, width: number) =>
+  text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / Math.max(1, width))), 0)
+export const dialogRows = (question: string, columns: number): number => rowsAt(question, columns - 6) + DIALOG_CHROME_ROWS
+
+// The engine refuses a tree that draws more than 12 rows around the dialog,
+// by its own static count, mirrored here (claude 2.1.288): a block Text is
+// one row plus a row per newline and per 40 cells of each text child; a Code
+// is its lines plus a row per 40 cells of its source.
+const AROUND_DIALOG_ROWS = 12
+const ROW_CELLS = 40
+const textCost = (texts: readonly string[]) =>
+  1 + texts.reduce((n, t) => n + (t.split('\n').length - 1) + Math.floor(cells(t) / ROW_CELLS), 0)
+const codeCost = (source: string) => source.split('\n').length + Math.floor(cells(source) / ROW_CELLS)
+
+// What the tree draws above the dialog, and the question under it: the whole
+// review when the engine's count allows it, else the header and command with
+// the case left in the question, else nothing (the engine's plain dialog).
+type Layout = { hasCase: boolean; question: string }
+const layoutOf = (r: ApprovalRequest): Layout | undefined => {
+  const head = textCost([asker(r)]) + escapedNote(r).reduce((n, note) => n + textCost([note]), 0) + codeCost(shownCommand(r))
+  const whole = head + caseRows(r).reduce((n, c) => n + textCost([`${c.label}:`, ` ${c.value}`]), 0)
+  if (whole <= AROUND_DIALOG_ROWS) return { hasCase: true, question: shortQuestion(r) }
+  if (head <= AROUND_DIALOG_ROWS) return { hasCase: false, question: caseQuestion(r) }
+  return undefined
 }
+
+// Rows a layout needs on the surface: the header, note and command wrapped
+// at the dialog's width, each case row's value wrapped beside its label, and
+// the dialog under them with the layout's question. Counted at the dialog's
+// inner width, so it errs tall.
+const layoutRows = (r: ApprovalRequest, layout: Layout, columns: number): number =>
+  rowsAt([asker(r), ...escapedNote(r), shownCommand(r)].join('\n'), columns - 6)
+  + (layout.hasCase ? caseRows(r).reduce((n, c) => n + rowsAt(c.value, columns - 6 - c.label.length - 2), 0) : 0)
+  + dialogRows(layout.question, columns)
 
 // The review dialogs open now, by request id (the dialog's chip). The hooks
 // below know one by its chip, question and labels: the tool.call hook adds
@@ -507,30 +540,39 @@ export const register: Register = on => {
   // command included, is drawn uncut: under the engine's length cap and
   // within the surface's rows. A rewrite may change descriptions but not the
   // options, so otherwise Approve stays listed and its description says it
-  // will not run and why. When it fits, the command is drawn highlighted
-  // above the dialog and the question drops its copy; the rows needed are
-  // the taller of that layout and the plain one the engine falls back to.
+  // will not run and why. When it fits, the review is drawn above the dialog
+  // (the command highlighted, the case as labelled rows) and the dialog asks
+  // only the one-line question (see layoutOf for a review over the engine's
+  // rows around the dialog); the rows needed are the taller of that layout
+  // and the plain one the engine falls back to on a refused tree.
   on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
     const ours = ourDialog(e.props.questions)
     if (!ours) return next(e)
     const { open, q } = ours
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
+    const layout = r ? layoutOf(r) : undefined
     const tooLong = open.question.length > QUESTION_LIMIT
     const needs = r && e.viewport
-      ? Math.max(dialogRows(open.question, e.viewport.columns), dialogRows(`${shownCommand(r)}\n${questionBelowCode(r)}`, e.viewport.columns))
+      ? Math.max(dialogRows(open.question, e.viewport.columns), layout ? layoutRows(r, layout, e.viewport.columns) : 0)
       : undefined
     const fits = !tooLong && needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
     open.isApprovable = fits
-    if (fits && r) {
-      const { Box, Code } = $.ui.resolve(e)
-      const dialog = await next({ ...e, props: { ...e.props, questions: [{ ...q, question: questionBelowCode(r) }] } })
+    if (fits && r && layout) {
+      const { Box, Code, Text } = $.ui.resolve(e)
+      const dialog = await next({ ...e, props: { ...e.props, questions: [{ ...q, question: layout.question }] } })
       return (
         <Box flexDirection="column">
+          <Text key="request-asker" bold>{asker(r)}</Text>
+          {escapedNote(r).map(note => <Text key="request-escaped">{note}</Text>)}
           <Code key="request-command" language="bash" source={shownCommand(r)} wrap="wrap" />
+          {(layout.hasCase ? caseRows(r) : []).map(c => (
+            <Text key={`request-${c.key}`} wrap="wrap"><Text bold>{`${c.label}:`}</Text>{` ${c.value}`}</Text>
+          ))}
           {dialog}
         </Box>
       )
     }
+    if (fits) return next(e)
     const why = !r ? 'it is no longer pending'
       : tooLong ? `the review is ${open.question.length} characters and the dialog cuts it at ${QUESTION_LIMIT}; run it yourself or ask for a shorter command`
         : !e.viewport || needs === undefined ? 'this surface did not report its size'

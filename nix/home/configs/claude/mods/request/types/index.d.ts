@@ -1,16 +1,16 @@
 export type Alternative = { approach: string; rejected_because: string }
 
 export type ExecResult = {
-  /** null when the child did not exit on its own (timeout, or it could not start). */
+  /** null when the child did not exit on its own (timeout, start failure, interruption). */
   exitCode: number | null
   stdout: string
   stderr: string
-  /** Why the run ended abnormally: the timeout, or the start failure. */
+  /** Why the run ended abnormally: the timeout, the start failure, or an interruption. */
   failure?: string
   durationMs: number
 }
 
-export type ApprovalRequest = {
+export type RequestBase = {
   /** `R<n>`, unique within the session. */
   id: string
   /** The exact Bash command; shown to the user and executed byte-for-byte. */
@@ -22,13 +22,18 @@ export type ApprovalRequest = {
   blocks: string
   /** The loop that raised it: a subagent's id; absent for main. */
   agentId?: string
-  /** `running`: approved and claimed for its single execution. */
-  status: 'pending' | 'running' | 'executed' | 'rejected'
-  reason?: string
-  result?: ExecResult
-  /** The outcome has reached the requester (or main, as the fallback). */
-  delivered?: boolean
 }
+
+/**
+ * `running`: approved and claimed for its single execution; `runId` names the claim that may run it.
+ * `delivered`: the outcome reached the requester (or main, as the fallback).
+ */
+export type ApprovalRequest = RequestBase & (
+  | { status: 'pending' }
+  | { status: 'running'; runId: string }
+  | { status: 'executed'; result: ExecResult; delivered: boolean }
+  | { status: 'rejected'; reason?: string; delivered: boolean }
+)
 
 declare module 'claude-code' {
   interface PluginState {

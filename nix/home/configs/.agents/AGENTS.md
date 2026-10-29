@@ -78,7 +78,7 @@
 
 ## The user's message and denials govern the turn
 - Answer the user's message first and in full, even when a hook blocks or a reminder fires in that turn; the hook's requirement gets one closing line.
-- A denial, rejection, interrupt, or "stop"/"cancel"/"never mind" halts that line of work: say what was denied and what you attempted, in text only, and take no retry, rewording or alternate tool. Exception: an auto-mode classifier denial of a Bash call that is the only correct way may be escalated once with `raise_approval_request`, giving the reason and rejected alternatives.
+- A denial, rejection, interrupt, or "stop"/"cancel"/"never mind" halts that line of work: say what was denied and what you attempted, in text only, and take no retry, rewording or alternate tool.
 
 ## Mutations the outside world can see need an explicit go
 - `git commit` onto a shared branch only when the user asked for a commit in those words; everything else stops at the working tree. A checkpoint onto `claude/local-dev` is exempt.

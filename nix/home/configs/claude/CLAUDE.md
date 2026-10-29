@@ -28,4 +28,5 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - (plan) When the shared non-trivial bar is met and nothing is mutated yet, finish research inline and present the plan in chat for agreement, continuing in the same context (clm carries state; no EnterPlanMode round trip); act directly on a ready-made plan, "skip planning", or a few-line fix.
 - (question) A message asking about work already done, or starting with "ask:", gets a file-grounded explanation in text, read as a question rather than a correction or undo; a directive clause ("why is X slow -- fix it") means answer AND act.
 - (PR) One thread of work = one PR: search `gh pr list --state open --author @me --json number,title,headRefName,files` first, and get approval for a 2+ PR split.
+- (classifier denial) An auto-mode classifier denial of a Bash call that is the only correct way may be escalated once with `raise_approval_request`, giving the reason and rejected alternatives; a user's denial still halts the work.
 - (push) Push only to `claude/*` branches; `.nanno-workers.json` and its `git_push_guard_bypass` are the user's to create, never yours.

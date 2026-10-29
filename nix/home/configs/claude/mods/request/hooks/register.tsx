@@ -44,55 +44,72 @@ const TOOLS = [
 ] satisfies ToolSpec[]
 
 type Ctx = EngineInterface
+type Outcome = Extract<ApprovalRequest, { status: 'executed' | 'rejected' }>
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const log = ($: Ctx, text: string) => $.ui.log(`[request] ${text}`, { to: 'debug' })
 const toolError = (text: string) => ({ result: text, isError: true as const, text })
 const ok = (text: string) => ({ result: text, text })
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== ''
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-async function requests($: Ctx): Promise<ApprovalRequest[]> {
-  return (await $.state.get(REQUESTS)).value ?? []
+const isUndelivered = (r: ApprovalRequest): r is Outcome =>
+  (r.status === 'executed' || r.status === 'rejected') && !r.delivered
+
+const requests = async ($: Ctx): Promise<ApprovalRequest[]> => (await $.state.get(REQUESTS)).value ?? []
+
+const showStatus = async ($: Ctx) => {
+  const all = await requests($)
+  const pending = all.filter(r => r.status === 'pending').length
+  const undelivered = all.filter(isUndelivered).length
+  const parts = [
+    ...(pending ? [`${plural(pending, 'approval request')} pending`] : []),
+    ...(undelivered ? [`${plural(undelivered, 'result')} undelivered`] : []),
+  ]
+  $.ui.status(parts.length ? `${parts.join(' · ')} · /approvals` : undefined)
 }
 
-async function showStatus($: Ctx) {
-  const n = (await requests($)).filter(r => r.status === 'pending').length
-  $.ui.status(n ? `${n} approval request${n === 1 ? '' : 's'} pending · /approvals` : undefined)
-}
+const isAlternative = (a: unknown): a is Alternative =>
+  typeof a === 'object' && a !== null && 'approach' in a && 'rejected_because' in a
+  && nonEmpty(a.approach) && nonEmpty(a.rejected_because)
 
-function isAlternatives(v: unknown): v is Alternative[] {
-  return Array.isArray(v) && v.length >= 1
-    && v.every(a => a && typeof a === 'object' && nonEmpty((a as Alternative).approach) && nonEmpty((a as Alternative).rejected_because))
-}
+const isAlternatives = (v: unknown): v is Alternative[] => Array.isArray(v) && v.length >= 1 && v.every(isAlternative)
 
 // Control characters (other than tab and newline), C1, and bidi/zero-width
 // marks can make a terminal show something other than the bytes that run.
 const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/
 
-// The text the user approves. It carries `command` itself, unaltered, so what
-// is shown is what runs; a command with hidden characters also gets an escaped copy.
-export function reviewText(r: ApprovalRequest): string {
-  return [
-    `${r.id}: run this Bash command in ${r.cwd}?`,
-    '',
-    r.command,
-    '',
-    ...(HIDDEN.test(r.command) ? [`WARNING: the command contains hidden or control characters. Escaped: ${JSON.stringify(r.command)}`, ''] : []),
-    `Requested by: ${r.agentId ? `subagent ${r.agentId}` : 'main session'}`,
-    `Why only way: ${r.why_only_way}`,
-    'Rejected alternatives:',
-    ...r.alternatives.map(a => `  - ${a.approach}: ${a.rejected_because}`),
-    `Blocks: ${r.blocks}`,
-  ].join('\n')
+// A fence longer than any backtick run inside keeps the text literal whether
+// the dialog renders Markdown or plain text.
+const fenced = (text: string) => {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(run => run.length))
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${fence}\n${text}\n${fence}`
 }
 
-function cap(text: string): string {
+// The text the user approves. It carries `command` itself, unaltered, so what
+// is shown is what runs; a command with hidden characters also gets an escaped copy.
+export const reviewText = (r: ApprovalRequest): string => [
+  `${r.id}: run this Bash command?`,
+  'cwd:',
+  fenced(r.cwd),
+  'command:',
+  fenced(r.command),
+  ...(HIDDEN.test(r.command) ? [`WARNING: the command contains hidden or control characters. Escaped: ${JSON.stringify(r.command)}`] : []),
+  `Requested by: ${r.agentId ? `subagent ${r.agentId}` : 'main session'}`,
+  `Why only way: ${r.why_only_way}`,
+  'Rejected alternatives:',
+  ...r.alternatives.map(a => `  - ${a.approach}: ${a.rejected_because}`),
+  `Blocks: ${r.blocks}`,
+].join('\n')
+
+const cap = (text: string): string => {
   if (text.length <= OUTPUT_CAP) return text
   const half = OUTPUT_CAP / 2
   return `${text.slice(0, half)}\n[... ${text.length - OUTPUT_CAP} characters omitted by the request mod ...]\n${text.slice(-half)}`
 }
 
-async function execute($: Ctx, r: ApprovalRequest): Promise<ExecResult> {
+const execute = async ($: Ctx, r: ApprovalRequest): Promise<ExecResult> => {
   const started = Date.now()
   try {
     const out = await $.process.run(['bash', '-c', r.command], { cwd: r.cwd, timeoutMs: TIMEOUT_MS })
@@ -112,12 +129,12 @@ async function execute($: Ctx, r: ApprovalRequest): Promise<ExecResult> {
   }
 }
 
-function outcomeText(r: ApprovalRequest): string {
+const outcomeText = (r: Outcome): string => {
   const head = `Approval request ${r.id} (request mod) for: ${r.command}\n  cwd: ${r.cwd}`
   if (r.status === 'rejected') {
     return `${head}\nThe user REJECTED it${r.reason ? `: ${r.reason}` : ' (no reason given)'}. Nothing was run. Treat this as the user's denial: halt that line of work.`
   }
-  const x = r.result!
+  const x = r.result
   return [
     `${head}\nThe user approved it and the request mod ran it once (${x.durationMs} ms). The approval is spent; running it again needs a new request.`,
     x.failure ? `Run failure: ${x.failure}` : `Exit code: ${x.exitCode}`,
@@ -127,7 +144,7 @@ function outcomeText(r: ApprovalRequest): string {
   ].join('\n\n')
 }
 
-async function toMain($: Ctx, text: string, ids: string): Promise<boolean> {
+const toMain = async ($: Ctx, text: string, ids: string): Promise<boolean> => {
   const turnId = (await $.state.get(TURN)).value ?? null
   if (turnId) {
     try {
@@ -150,27 +167,43 @@ async function toMain($: Ctx, text: string, ids: string): Promise<boolean> {
 
 // A subagent's request goes back to that subagent (a finished one is resumed,
 // as SendMessage does); if that fails, main gets it with the requester named.
-async function deliverOne($: Ctx, r: ApprovalRequest): Promise<boolean> {
+const deliverOne = async ($: Ctx, r: Outcome): Promise<boolean> => {
   const text = outcomeText(r)
-  if (r.agentId) {
-    try {
-      const sent = await $.session.send({ to: { agentId: r.agentId }, text })
-      if (sent.isDelivered) return true
-      log($, `session.send to ${r.agentId} for ${r.id} not delivered: ${sent.reason}; delivering to main`)
-    } catch (err) {
-      log($, `session.send to ${r.agentId} for ${r.id} failed: ${errText(err)}; delivering to main`)
-    }
-    return toMain($, `${text}\n\nThis outcome is for subagent ${r.agentId}, which raised ${r.id}; the request mod could not reach it. Relay this message to it with SendMessage.`, r.id)
+  if (!r.agentId) return toMain($, text, r.id)
+  try {
+    const sent = await $.session.send({ to: { agentId: r.agentId }, text })
+    if (sent.isDelivered) return true
+    log($, `session.send to ${r.agentId} for ${r.id} not delivered: ${sent.reason}; delivering to main`)
+  } catch (err) {
+    log($, `session.send to ${r.agentId} for ${r.id} failed: ${errText(err)}; delivering to main`)
   }
-  return toMain($, text, r.id)
+  return toMain($, `${text}\n\nThis outcome is for subagent ${r.agentId}, which raised ${r.id}; the request mod could not reach it. Relay this message to it with SendMessage.`, r.id)
 }
 
-async function deliverUndelivered($: Ctx) {
-  const due = (await requests($)).filter(r => (r.status === 'executed' || r.status === 'rejected') && !r.delivered)
-  for (const r of due) {
+const deliverUndelivered = async ($: Ctx) => {
+  for (const r of (await requests($)).filter(isUndelivered)) {
     if (!(await deliverOne($, r))) continue
-    await update($, REQUESTS, rs => (rs ?? []).map(x => (x.id === r.id ? { ...x, delivered: true } : x)))
+    await update($, REQUESTS, rs => (rs ?? []).map(x => (x.id === r.id && isUndelivered(x) ? { ...x, delivered: true } : x)))
   }
+}
+
+const INTERRUPTED = 'interrupted (session ended or mod reloaded) while running; it may or may not have completed'
+
+// A run cut off by a reload or exit is settled as interrupted, never re-run.
+const settleInterrupted = async ($: Ctx) => {
+  const rs = await requests($)
+  if (!rs.some(r => r.status === 'running')) return
+  await update($, REQUESTS, list => (list ?? []).map((x): ApprovalRequest => (x.status === 'running'
+    ? { ...x, status: 'executed', delivered: false, result: { exitCode: null, stdout: '', stderr: '', failure: INTERRUPTED, durationMs: 0 } }
+    : x)))
+  await deliverUndelivered($)
+}
+
+// Single use: only the walk whose runId lands on the pending request runs it.
+const claim = async ($: Ctx, id: string): Promise<ApprovalRequest | undefined> => {
+  const runId = `${id}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === id && x.status === 'pending' ? { ...x, status: 'running', runId } : x)))
+  return written.find(x => x.id === id && x.status === 'running' && x.runId === runId)
 }
 
 const APPROVE = 'Approve and run'
@@ -193,6 +226,11 @@ export const register: Register = on => {
     } catch (err) {
       log($, `command.register(approvals) failed: ${errText(err)}`)
     }
+    try {
+      await settleInterrupted($)
+    } catch (err) {
+      log($, `settling interrupted runs failed: ${errText(err)}`)
+    }
     await showStatus($)
     return started
   })
@@ -210,39 +248,40 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: RAISE_TOOL }, async ($, e) => {
-    const a = e as unknown as Record<string, unknown>
-    if (!nonEmpty(a.command)) return toolError('Call raise_approval_request with command as the exact denied Bash command.')
-    if (typeof a.cwd !== 'string' || !a.cwd.startsWith('/')) return toolError('cwd must be an absolute directory path.')
-    if (!nonEmpty(a.why_only_way)) return toolError('why_only_way must say why this command is the only correct way.')
-    if (!isAlternatives(a.alternatives)) return toolError('alternatives must be one or more {approach, rejected_because} objects with non-empty strings.')
-    if (!nonEmpty(a.blocks)) return toolError('blocks must name the work that waits on this command.')
-    let id = ''
-    try {
-      await update($, REQUESTS, rs => {
-        const list = rs ?? []
-        id = `R${list.reduce((max, r) => Math.max(max, Number(r.id.slice(1)) || 0), 0) + 1}`
-        const r: ApprovalRequest = {
-          id, command: a.command as string, cwd: a.cwd as string, why_only_way: a.why_only_way as string,
-          alternatives: (a.alternatives as Alternative[]).map(x => ({ approach: x.approach, rejected_because: x.rejected_because })),
-          blocks: a.blocks as string, status: 'pending',
-          ...(e.agentId ? { agentId: e.agentId } : {}),
-        }
-        return [...list, r]
-      })
-    } catch (err) {
-      log($, `raise: state write failed for "${a.command}": ${errText(err)}`)
-      return toolError(`raise_approval_request failed to queue: ${errText(err)}`)
+    const { command, cwd, why_only_way, alternatives, blocks } = e
+    if (!nonEmpty(command)) return toolError('Call raise_approval_request with command as the exact denied Bash command.')
+    if (typeof cwd !== 'string' || !cwd.startsWith('/') || /[\n\r]/.test(cwd) || HIDDEN.test(cwd)) {
+      return toolError('cwd must be an absolute directory path with no control, bidi or zero-width characters.')
     }
-    $.ui.toast(`${id} approval requested: ${a.command}`)
+    if (!nonEmpty(why_only_way)) return toolError('why_only_way must say why this command is the only correct way.')
+    if (!isAlternatives(alternatives)) return toolError('alternatives must be one or more {approach, rejected_because} objects with non-empty strings.')
+    if (!nonEmpty(blocks)) return toolError('blocks must name the work that waits on this command.')
+    const base = {
+      command, cwd, why_only_way, blocks,
+      alternatives: alternatives.map(a => ({ approach: a.approach, rejected_because: a.rejected_because })),
+      ...(e.agentId ? { agentId: e.agentId } : {}),
+    }
+    const written = await update($, REQUESTS, rs => {
+      const list = rs ?? []
+      const n = list.reduce((max, r) => Math.max(max, Number(r.id.slice(1)) || 0), 0) + 1
+      return [...list, { ...base, id: `R${n}`, status: 'pending' as const }]
+    }).catch((err: unknown) => new Error(errText(err)))
+    if (written instanceof Error) {
+      log($, `raise: state write failed for "${command}": ${written.message}`)
+      return toolError(`raise_approval_request failed to queue: ${written.message}`)
+    }
+    // The change appends last, so the written list ends with this request.
+    const id = written.at(-1)?.id ?? '(unknown)'
+    $.ui.toast(`${id} approval requested: ${command}`)
     await showStatus($)
-    return ok(`${id} queued for the user's review (/approvals). The outcome arrives as a message; until then continue with work that does not depend on it (${a.blocks}).`)
+    return ok(`${id} queued for the user's review (/approvals). The outcome arrives as a message; until then continue with work that does not depend on it (${blocks}).`)
   })
 
   on('command.run', { command: 'approvals' }, async $ => {
     if (walking) return { text: 'request: /approvals is already open.' }
     const pending = (await requests($)).filter(r => r.status === 'pending')
     if (!pending.length) {
-      void deliverUndelivered($).catch(err => log($, `redelivery failed: ${errText(err)}`))
+      void deliverUndelivered($).then(() => showStatus($), err => log($, `redelivery failed: ${errText(err)}`))
       return { text: 'request: no pending approval requests.' }
     }
     walking = true
@@ -261,24 +300,16 @@ export const register: Register = on => {
             continue
           }
           if (answer === APPROVE) {
-            // Single use: only the walk that moves it out of pending runs it.
-            let claimed: ApprovalRequest | undefined
-            await update($, REQUESTS, rs => (rs ?? []).map(x => {
-              if (x.id !== q.id || x.status !== 'pending') return x
-              claimed = { ...x, status: 'running' }
-              return claimed
-            }))
-            if (!claimed) continue
-            const run = claimed
+            const run = await claim($, q.id)
+            if (!run) continue
             $.ui.toast(`${run.id} running: ${run.command}`)
             const result = await execute($, run)
-            await update($, REQUESTS, rs => (rs ?? []).map(x => (x.id === run.id ? { ...x, status: 'executed', result } : x)))
+            await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === run.id ? { ...x, status: 'executed', result, delivered: false } : x)))
           } else {
             const reason = answer === REJECT ? undefined : answer
-            await update($, REQUESTS, rs => (rs ?? []).map(x => (x.id === q.id && x.status === 'pending'
-              ? { ...x, status: 'rejected', ...(reason ? { reason } : {}) } : x)))
+            await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === q.id && x.status === 'pending'
+              ? { ...x, status: 'rejected', delivered: false, ...(reason ? { reason } : {}) } : x)))
           }
-          await showStatus($)
           await deliverUndelivered($)
         }
       } catch (err) {
@@ -288,6 +319,6 @@ export const register: Register = on => {
         await showStatus($)
       }
     })()
-    return { text: `request: ${pending.length} pending approval request${pending.length === 1 ? '' : 's'}; Esc skips one, text under Other rejects with that reason.` }
+    return { text: `request: ${plural(pending.length, 'pending approval request')}; Esc skips one, text under Other rejects with that reason.` }
   })
 }

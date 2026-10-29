@@ -276,6 +276,13 @@ test('a space after a full row counts as the start of the next row', async () =>
   expect(dialogRows('aaaaaaaaaa bbbbbbbbbb', 16)).toBeGreaterThanOrEqual(13)
 })
 
+// Regression: the row count breaking an over-wide word every `width` cells, when a wide character that would end
+// on a row's last column is pushed whole to the next row, so a word took a row more than counted.
+test('a wide character pushed past a hard break gets its own row', async () => {
+  // 8 columns leave 2 for the question: "a", "가", "a" are 3 rows, plus the dialog's 10.
+  expect(dialogRows('a가a', 8)).toBeGreaterThanOrEqual(13)
+})
+
 // Regression: a review over the engine's 12 rows around the dialog sent as a tree the engine refuses (dropping the
 // highlight), or its case or command lost from every drawing. The engine's plain dialog is the drawing's root alone.
 const LONG = 'the reason runs long enough to wrap across several rows of the dialog '.repeat(4).trim()

@@ -311,8 +311,9 @@ export const bandPreview = (first: ApprovalRequest, room: number): string =>
 const DIALOG_CHROME_ROWS = 10
 // Rows a text takes as Text wraps it (word wrap keeping every space, a word
 // wider than the row broken across rows): a space that falls on a full row
-// starts the next one. Wide characters and tabs count as cells counts them,
-// so it errs tall.
+// starts the next one, and a wide character that would straddle a broken
+// row's last column moves whole to the next. Wide characters and tabs count
+// as cells counts them, so it errs tall.
 const wrappedRows = (line: string, width: number) => {
   let rows = 1
   let col = 0
@@ -321,11 +322,15 @@ const wrappedRows = (line: string, width: number) => {
       if (col >= width) { rows += 1; col = 0 }
       col += 1
     }
-    let w = cells(word)
+    const w = cells(word)
     if (col + w <= width) { col += w; return }
-    if (col > 0) rows += 1
-    for (; w > width; w -= width) rows += 1
-    col = w
+    if (col > 0) { rows += 1; col = 0 }
+    if (w <= width) { col = w; return }
+    for (const ch of word) {
+      const c = cells(ch)
+      if (col > 0 && col + c > width) { rows += 1; col = 0 }
+      col += c
+    }
   })
   return rows
 }

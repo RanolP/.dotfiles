@@ -1079,7 +1079,7 @@ export const register: Register = (on, options) => {
           properties: {
             id: { type: 'string' }, title: { type: 'string' }, status: { type: 'string', enum: ['todo', 'doing', 'done', 'dropped'] },
             method: { type: 'string', description: 'The current approach for a stepped goal task; use a short distinct description.' },
-            note: { type: 'string' }, evidence: { type: 'object', properties: { ref: { type: 'string' }, quote: { type: 'string' } }, required: ['ref', 'quote'], additionalProperties: false },
+            note: { type: 'string' }, evidence: { type: 'object', properties: { ref: { type: 'string', description: '"user" for a user message (clm finds the row by the quote), a row ref such as m3, or a tool_use id.' }, quote: { type: 'string', description: 'At least four words, or eight Korean characters, copied verbatim from that row.' } }, required: ['ref', 'quote'], additionalProperties: false },
           },
           required: ['status'], additionalProperties: false,
         },

@@ -563,6 +563,32 @@ test('clm_task refuses drop and re-open without a quote from the user', OPTS, as
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-child')?.status).toBe('doing')
 })
 
+// Regression caught: the main agent sees no m<N> row refs in its own transcript, so every drop it tried failed on the ref and the error never named the accepted format.
+test('clm_task finds the user row by quote when the ref is not a row ref, and names the format when it fails', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', '그 README 작업은 이제 하지 않아도 돼, 빼버려')], replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
+    { op: 'create', issue: 's1-child', title: 'child work', status: 'todo' },
+    { op: 'parent', issue: 's1-child', parent: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
+  ])
+  const wrongQuote = await $.tool.call({ tool: TASK_TOOL, id: 's1-child', status: 'dropped', evidence: { ref: 'user', quote: '이 문장은 사용자가 쓴 적이 없다' } } satisfies ToolCallInput)
+  expect('deny' in wrongQuote && wrongQuote.deny).toContain('evidence.ref to "user"')
+  const dropped = await $.tool.call({ tool: TASK_TOOL, id: 's1-child', status: 'dropped', evidence: { ref: 'user', quote: '그 README 작업은 이제 하지 않아도 돼' } } satisfies ToolCallInput)
+  if ('deny' in dropped) throw new Error(dropped.deny)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-child')?.status).toBe('dropped')
+})
+
+// Regression caught: with no focus, a todo clm_task was refused with a hint to use "doing", so work the user deferred became the agent's doing focus.
+test('a todo clm_task with no focus records the task for later without focusing it', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'README는 나중에 고쳐')], replies: [] })
+  const result = await $.tool.call({ tool: TASK_TOOL, title: 'README 고치기', status: 'todo' } satisfies ToolCallInput)
+  if ('deny' in result) throw new Error(result.deny)
+  const events = parseLog(seen.files[TRACKER] ?? '')
+  expect(snapshot(events).map(issue => [issue.title, issue.status])).toEqual([['README 고치기', 'todo']])
+  expect(focusOf(events, 's1').stack).toEqual([])
+})
+
 // Regression caught: clm_task or a fold op could still write the retired uncertain status.
 test('neither clm_task nor a fold op can write uncertain', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [M('user', 'Investigate.')], replies: [] })

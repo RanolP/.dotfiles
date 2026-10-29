@@ -1,7 +1,7 @@
 import type { BuiltinToolInputs, SessionMessage } from 'claude-code'
 import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { boardHtml } from './board'
-import { checkEvidence, describeOp, renderRange, type Evidence, type Source, type SourceKind } from './evidence'
+import { checkEvidence, describeOp, renderRange, resolveRef, type Evidence, type Source, type SourceKind } from './evidence'
 import { compose } from './intent'
 import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, shownNote, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { FocusState } from './tracker'
@@ -230,9 +230,18 @@ async function taskEvidenceProblem(
   if (!evidence) return missing
   const transcript = await io.sessionMessages(agentId)
   if (!Array.isArray(transcript)) return `could not read the caller's transcript (${transcript.deny})`
-  const checked = checkEvidence([evidence], renderRange(transcript).sources, admissible, forDone)
-  return checked.held.length ? undefined : checked.problems.join('; ') || 'the evidence did not match this transcript.'
+  const { sources } = renderRange(transcript)
+  const checked = checkEvidence([evidence], sources, admissible, forDone)
+  if (checked.held.length) return undefined
+  // The caller's own transcript shows it no row refs, so an unresolved ref falls back to the newest admissible row that holds the quote.
+  if (resolveRef(evidence.ref, sources) === undefined) {
+    const byQuote = [...sources.keys()].reverse().find(key => checkEvidence([{ ref: key, quote: evidence.quote }], sources, admissible, forDone).held.length)
+    if (byQuote) return undefined
+  }
+  return `${checked.problems.join('; ') || 'the evidence did not match this transcript'}. ${EVIDENCE_FORMAT}`
 }
+
+export const EVIDENCE_FORMAT = 'Set evidence.ref to "user" (or a row ref such as m3) and evidence.quote to at least four words, or eight Korean characters, copied verbatim from one user message.'
 
 async function createChildTask(
   io: PanelIo, origin: Origin, title: string, status: ClmTaskInput['status'], note: string, parent: string,
@@ -338,6 +347,14 @@ async function focusMainTask(
   io: PanelIo, origin: Origin, input: ClmTaskInput, focus: FocusState,
   roots: Readonly<Record<string, string>>, byId: ReadonlyMap<string, Issue>,
 ): Promise<{ result: string }> {
+  const todoTitle = input.status === 'todo' && input.id === undefined ? input.title?.trim() : undefined
+  if (todoTitle) {
+    const note = input.note?.trim()
+    const created = await io.append([{ op: 'create', title: todoTitle, status: 'todo', ...(note ? { note } : {}) }], origin)
+    const todoId = created.find(event => event.op === 'create')?.issue
+    if (!todoId) return { result: 'clm_task: task creation did not return an issue id.' }
+    return { result: `clm_task: ${todoId} todo; recorded for later, focus unchanged.` }
+  }
   if (input.status !== 'doing') return { result: `clm_task: the main agent has no focused task to own. ${FOCUS_HINT}` }
   let taskId: string | undefined
   if (input.id !== undefined) {
@@ -383,7 +400,7 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   if (input.id === undefined && !title) return { result: 'clm_task: provide an issue id to update or a title to create a child task.' }
   const reopensDropped = target?.status === 'dropped' && input.status !== 'dropped'
   const directionProblem = input.status === 'dropped' || reopensDropped
-    ? await taskEvidenceProblem(io, undefined, input.evidence, ['user'], false, 'drop or re-open requires a quote from a user message.')
+    ? await taskEvidenceProblem(io, undefined, input.evidence, ['user'], false, `drop or re-open requires a quote from a user message. ${EVIDENCE_FORMAT}`)
     : undefined
   if (directionProblem) return { deny: `clm_task: ${directionProblem}` }
   const status = input.status

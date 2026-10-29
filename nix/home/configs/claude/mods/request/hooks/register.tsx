@@ -198,12 +198,19 @@ const deliverUndelivered = ($: Ctx): Promise<void> => {
 
 const INTERRUPTED = 'interrupted (session ended or mod reloaded) while running; it may or may not have completed'
 
+// runIds this module instance is executing right now. A reload starts it empty,
+// so a session.start mid-run (a /clear) leaves a live run alone while an orphan
+// from a reload or exit is still settled.
+const liveRuns = new Set<string>()
+const withoutRun = ({ runId: _, ...rest }: ApprovalRequest & { runId?: string }) => rest
+const isOrphan = (r: ApprovalRequest) => r.status === 'running' && !liveRuns.has(r.runId)
+
 // A run cut off by a reload or exit is settled as interrupted, never re-run.
 const settleInterrupted = async ($: Ctx) => {
   const rs = await requests($)
-  if (!rs.some(r => r.status === 'running')) return
-  await update($, REQUESTS, list => (list ?? []).map((x): ApprovalRequest => (x.status === 'running'
-    ? { ...x, status: 'executed', delivered: false, result: { exitCode: null, stdout: '', stderr: '', failure: INTERRUPTED, durationMs: 0 } }
+  if (!rs.some(isOrphan)) return
+  await update($, REQUESTS, list => (list ?? []).map((x): ApprovalRequest => (isOrphan(x)
+    ? { ...withoutRun(x), status: 'executed', delivered: false, result: { exitCode: null, stdout: '', stderr: '', failure: INTERRUPTED, durationMs: 0 } }
     : x)))
   await deliverUndelivered($)
 }
@@ -212,7 +219,9 @@ const settleInterrupted = async ($: Ctx) => {
 const claim = async ($: Ctx, id: string): Promise<ApprovalRequest | undefined> => {
   const runId = `${id}-${Date.now()}-${Math.random().toString(36).slice(2)}`
   const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === id && x.status === 'pending' ? { ...x, status: 'running', runId } : x)))
-  return written.find(x => x.id === id && x.status === 'running' && x.runId === runId)
+  const claimed = written.find(x => x.id === id && x.status === 'running' && x.runId === runId)
+  if (claimed) liveRuns.add(runId)
+  return claimed
 }
 
 const APPROVE = 'Approve and run'
@@ -306,14 +315,18 @@ export const register: Register = on => {
           if (answer === APPROVE) {
             const run = await claim($, q.id)
             if (!run) continue
-            $.ui.toast(`${run.id} running: ${run.command}`)
-            const result = await execute($, run)
-            // A session.start mid-run (a /clear) settles it as interrupted; that report stands, sent once.
             const runId = run.status === 'running' ? run.runId : ''
-            const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === run.id && x.status === 'running' && x.runId === runId
-              ? { ...x, status: 'executed', result, delivered: false } : x)))
-            if (!written.some(x => x.id === run.id && x.status === 'executed' && x.result === result)) {
-              log($, `${run.id} finished after it was settled as interrupted (exit ${result.exitCode ?? result.failure}); its result was not delivered`)
+            try {
+              $.ui.toast(`${run.id} running: ${run.command}`)
+              const result = await execute($, run)
+              // Only the run that claimed it completes it; a settled entry keeps its report, sent once.
+              const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === run.id && x.status === 'running' && x.runId === runId
+                ? { ...x, status: 'executed', result, delivered: false } : x)))
+              if (!written.some(x => x.id === run.id && x.status === 'executed' && x.runId === runId)) {
+                log($, `${run.id} finished after it was settled as interrupted (exit ${result.exitCode ?? result.failure}); its result was not delivered`)
+              }
+            } finally {
+              liveRuns.delete(runId)
             }
           } else {
             const reason = answer === REJECT ? undefined : answer

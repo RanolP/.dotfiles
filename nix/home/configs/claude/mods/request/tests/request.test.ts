@@ -150,9 +150,10 @@ test('an undeliverable subagent outcome falls back to main with a relay note', a
   expect(text).toContain('Relay this message to it')
 })
 
-// Regression: a run cut off by a reload, exit or /clear being re-run, left `running` forever, or reported twice.
-// The kit cannot reload a module or write its state, so a second session.start lands while the run is held.
-test('an interrupted run is reported once and never re-run', async ($, on) => {
+// Regression: a session.start mid-run (a /clear) settled the live run as interrupted and dropped its real
+// result, or a run was re-run or reported twice. The kit cannot reload a module or seed its state, so a
+// genuine orphan (a running entry no live module instance owns) is not reachable here.
+test('a session.start mid-run keeps the live run and reports its real outcome once', async ($, on) => {
   let release = () => {}
   const hold = new Promise<void>(resolve => { release = resolve })
   const { runs, submits, delivered } = await start($, on, 'Approve and run', { hold })
@@ -160,10 +161,13 @@ test('an interrupted run is reported once and never re-run', async ($, on) => {
   void $.command.run(APPROVALS)
   for (let i = 0; i < 10_000 && !runs.length; i++) await Promise.resolve()
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  const text = await delivered
-  expect(text).toContain('interrupted')
+  for (let i = 0; i < 1_000; i++) await Promise.resolve()
+  expect(submits).toHaveLength(0)
   release()
-  // The held walk ends on its own schedule; /approvals answers "already open" until it has.
+  const text = await delivered
+  expect(text).toContain('Exit code: 3')
+  expect(text).not.toContain('interrupted')
+  // The walk ends on its own schedule; /approvals answers "already open" until it has.
   let again = ''
   for (let i = 0; i < 200 && !again.includes('no pending'); i++) {
     again = String((await $.command.run(APPROVALS)).text)

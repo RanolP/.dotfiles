@@ -26,12 +26,13 @@ export type RequestBase = {
 
 /**
  * `running`: approved and claimed for its single execution; `runId` names the claim that may run it.
+ * `executed`: `runId` names the run that produced `result`; absent when settled as interrupted.
  * `delivered`: the outcome reached the requester (or main, as the fallback).
  */
 export type ApprovalRequest = RequestBase & (
   | { status: 'pending' }
   | { status: 'running'; runId: string }
-  | { status: 'executed'; result: ExecResult; delivered: boolean }
+  | { status: 'executed'; result: ExecResult; delivered: boolean; runId?: string }
   | { status: 'rejected'; reason?: string; delivered: boolean }
 )
 

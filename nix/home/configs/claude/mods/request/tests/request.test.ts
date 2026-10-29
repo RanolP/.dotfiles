@@ -254,6 +254,19 @@ for (const [name, command, source] of [
   })
 }
 
+// Regression: a default-ignorable or bidi character (soft hyphen, word joiner, a tag, Arabic letter mark, line
+// separator) drawn raw, so the dialog showed other bytes than the ones that ran.
+test('a command with invisible characters is shown escaped, exact to the bytes', async ($, on) => {
+  const { asked, trees, runs, nextStatus } = await start($, on, APPROVE)
+  const command = 'git push origin ma\u00adin\u2060 # \u{e0041}\u061c\u2028x'
+  await raise($, nextStatus, { command })
+  const source = '"git push origin ma\\u00adin\\u2060 # \\udb40\\udc41\\u061c\\u2028x"'
+  expect(JSON.parse(source)).toBe(command)
+  expect(trees[0]?.find(x => x.type === 'Code')?.text).toBe(source)
+  expect(asked[0]?.question).toContain(`\n    ${source}\n`)
+  expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
+})
+
 // Regression: a review over the engine's 12 rows around the dialog sent as a tree the engine refuses (dropping the
 // highlight), or its case or command lost from every drawing. The engine's plain dialog is the drawing's root alone.
 const LONG = 'the reason runs long enough to wrap across several rows of the dialog '.repeat(4).trim()

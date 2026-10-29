@@ -63,9 +63,11 @@ const isAlternative = (a: unknown): a is Alternative =>
 
 const isAlternatives = (v: unknown): v is Alternative[] => Array.isArray(v) && v.length >= 1 && v.every(isAlternative)
 
-// Control characters (other than tab and newline), C1, and bidi/zero-width
-// marks can make a terminal show something other than the bytes that run.
-const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/
+// Control characters (other than tab and newline), C1, line and paragraph
+// separators, bidi controls and default-ignorables (zero-width, soft hyphen,
+// variation selectors, tags, Hangul fillers) can make a terminal show
+// something other than the bytes that run.
+const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u
 
 // Prose the model wrote (why, alternatives, blocks) is drawn as text with any
 // hidden character spelled out, so nothing it holds can restyle the row.
@@ -76,11 +78,12 @@ const oneLine = (text: string) => visible(text).replace(/\s+/g, ' ').trim()
 
 // The engine draws the question as plain text (no Markdown), with a tab drawn
 // as a space and hidden characters dropped or replaced, so such a command is
-// shown as a JSON string with those characters as \uXXXX: exact, since JSON
-// doubles every literal backslash.
+// shown as a JSON string with those characters as \uXXXX (one per UTF-16
+// unit, so a tag character is its surrogate pair): exact, since JSON doubles
+// every literal backslash.
 const isEscaped = (command: string) => HIDDEN.test(command) || command.includes('\t')
 const shownCommand = (r: ApprovalRequest) => (isEscaped(r.command)
-  ? JSON.stringify(r.command).replace(HIDDEN_ALL, c => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`)
+  ? JSON.stringify(r.command).replace(HIDDEN_ALL, c => Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join(''))
   : r.command)
 
 // Each command line indented by this, so a line the command holds that looks
@@ -305,8 +308,25 @@ export const bandPreview = (first: ApprovalRequest, room: number): string =>
 // line) with slack for the surface's chrome. A guess at the engine's layout,
 // made tall: the engine wraps the question (bold Text, no truncation).
 const DIALOG_CHROME_ROWS = 10
+// Rows a text takes when wrapped by word, as Text wraps: a word that does
+// not fit the row moves to the next, and a word wider than the row breaks
+// across rows. Wide characters and tabs count as cells counts them, so it
+// errs tall.
+const wrappedRows = (line: string, width: number) => {
+  let rows = 1
+  let col = 0
+  for (const word of line.split(' ')) {
+    let w = cells(word)
+    const end = col === 0 ? w : col + 1 + w
+    if (end <= width) { col = end; continue }
+    if (col > 0) rows += 1
+    for (; w > width; w -= width) rows += 1
+    col = w
+  }
+  return rows
+}
 const rowsAt = (text: string, width: number) =>
-  text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / Math.max(1, width))), 0)
+  text.split('\n').reduce((n, line) => n + wrappedRows(line, Math.max(1, width)), 0)
 export const dialogRows = (question: string, columns: number): number => rowsAt(question, columns - 6) + DIALOG_CHROME_ROWS
 
 // The engine refuses a tree that draws more than 12 rows around the dialog,
@@ -331,13 +351,11 @@ const layoutOf = (r: ApprovalRequest): Layout | undefined => {
   return undefined
 }
 
-// Rows a layout needs on the surface: the header, note and command wrapped
-// at the dialog's width, each case row's value wrapped beside its label, and
-// the dialog under them with the layout's question. Counted at the dialog's
-// inner width, so it errs tall.
+// Rows a layout needs on the surface: the header, note, command and case
+// rows wrapped at the dialog's inner width, though the tree above it is
+// wider, and the dialog under them with the layout's question.
 const layoutRows = (r: ApprovalRequest, layout: Layout, columns: number): number =>
-  rowsAt([asker(r), ...escapedNote(r), shownCommand(r)].join('\n'), columns - 6)
-  + (layout.hasCase ? caseRows(r).reduce((n, c) => n + rowsAt(c.value, columns - 6 - c.label.length - 2), 0) : 0)
+  rowsAt([asker(r), ...escapedNote(r), shownCommand(r), ...(layout.hasCase ? caseRows(r).map(c => `${c.label}: ${c.value}`) : [])].join('\n'), columns - 6)
   + dialogRows(layout.question, columns)
 
 // The review dialogs open now, by request id (the dialog's chip). The hooks

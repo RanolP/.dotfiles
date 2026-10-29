@@ -2,7 +2,7 @@ import type { BuiltinToolInputs, SessionMessage } from 'claude-code'
 import type { ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { boardHtml } from './board'
 import { checkEvidence, describeOp, renderRange, resolveRef, type Evidence, type Source, type SourceKind } from './evidence'
-import { compose } from './intent'
+import { compose, deferralsFiled, sameInstruction } from './intent'
 import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, shownNote, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { FocusState } from './tracker'
 import { debateRubric, outermostSteppedRootOf, rubricText, type ModelIo } from './stepped'
@@ -380,6 +380,15 @@ async function focusMainTask(
 
 export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: string): Promise<{ result: string } | { deny: string }> {
   const origin = await io.captureOrigin()
+  // The classifier files the user's deferrals in the background; a main-agent todo for the same work reuses that issue.
+  const deferredTitle = agentId === undefined && input.id === undefined && input.status === 'todo' ? input.title?.trim() : undefined
+  if (deferredTitle) {
+    const filed = new Set(await deferralsFiled(origin.session))
+    const same = filed.size
+      ? snapshot(await io.readAll()).find(issue => issue.origin.session === origin.session && filed.has(issue.id) && isOpen(issue) && sameInstruction(issue.title, deferredTitle))
+      : undefined
+    if (same) return { result: `clm_task: ${same.id} ${same.status}; clm already filed this deferral from the user's prompt as "${same.title}". Use id ${same.id} for its later updates.` }
+  }
   const events = await io.readAll()
   const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
   const byId = new Map(issues.map(issue => [issue.id, issue]))

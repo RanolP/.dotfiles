@@ -555,6 +555,37 @@ function chained(session: string, run: () => Promise<void>): Promise<void> {
   return job
 }
 
+// The deferred issues the latest classification of each session filed, read by clm_task so the model's own record of that deferral reuses the issue.
+const filedDeferrals = new Map<string, string[]>()
+
+/** The ids of the deferred issues the session's latest prompt filed, read once its in-flight classification settles or `waitMs` passes. */
+export async function deferralsFiled(session: string, waitMs = 20_000): Promise<string[]> {
+  const running = classifierChains.get(session)
+  if (running) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([running.catch(() => undefined), new Promise(resolve => { timer = setTimeout(resolve, waitMs) })])
+    clearTimeout(timer)
+  }
+  return filedDeferrals.get(session) ?? []
+}
+
+const bigrams = (text: string) => {
+  const flat = text.toLowerCase().replace(/\s+/g, '')
+  return Array.from({ length: Math.max(flat.length - 1, 0) }, (_, i) => flat.slice(i, i + 2))
+}
+/** Two titles name one instruction when their character bigrams mostly overlap (Dice >= 0.6), so a reworded title still matches. */
+export function sameInstruction(a: string, b: string): boolean {
+  const left = bigrams(a), right = bigrams(b)
+  if (!left.length || !right.length) return a.trim() === b.trim()
+  const pool = [...right]
+  let shared = 0
+  for (const gram of left) {
+    const at = pool.indexOf(gram)
+    if (at >= 0) { shared++; pool.splice(at, 1) }
+  }
+  return (2 * shared) / (left.length + right.length) >= 0.6
+}
+
 export const backfillClausesChained = (io: PromptIntentIo, session: string, key: string) =>
   chained(session, () => backfillClauses(io, session, key))
 
@@ -644,13 +675,15 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
       const { payloads, next } = compose(currentState, classification, currentIssues, newId)
       const createdId = payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue
       const deferredIssues: { id: string; title: string }[] = []
+      const filed: string[] = []
       if (!io.isCoworker) for (const [index, item] of deferred.entries()) {
         const matchingOpen = currentIssues.find(issue => isOpen(issue) && issue.title.trim() === item.text.trim())
-        if (matchingOpen) continue
+        if (matchingOpen) { filed.push(matchingOpen.id); continue }
         const reused = classification.intent === 'pending' && index === 0 ? createdId ?? classification.target : undefined
         const id = reused ?? newId()
         if (!reused) payloads.push({ op: 'create', issue: id, title: item.text, status: 'todo' })
         deferredIssues.push({ id, title: item.text })
+        filed.push(id)
       }
       if (entry && clauseClassification) {
         try {
@@ -665,6 +698,7 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
         ...payloads,
         { op: 'focus', stack: next.stack, pending: next.pending, intent: classification.intent, ...(classification.rule === null ? {} : { rule: classification.rule }) },
       ], origin)
+      filedDeferrals.set(origin.session, filed)
       for (const item of deferredIssues) io.log(`clm: deferred issue ${item.id}: ${item.title}`)
       if (deferredIssues.length && io.announce) {
         try { await io.announce(deferredIssues.map(item => item.id)) }

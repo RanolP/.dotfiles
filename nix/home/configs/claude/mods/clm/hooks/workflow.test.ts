@@ -589,6 +589,32 @@ test('a todo clm_task with no focus records the task for later without focusing 
   expect(focusOf(events, 's1').stack).toEqual([])
 })
 
+// Regression caught: a deferred prompt produced two board issues, one filed by the classifier and one the model created with clm_task under a reworded title.
+test('a clm_task create of work the classifier just deferred reuses the filed issue', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [M('user', "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘. 지금은 하지 말고")], replies: [],
+    intentReplies: [intentReply({
+      intent: 'pending', title: "README.md 끝에 'hello from co-worker' 추가",
+      deferred: [{ text: "README.md 끝에 'hello from co-worker' 추가", quote: "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘" }],
+    })],
+    intentBlocks: [async () => { started(); await gate }],
+  })
+  let release!: () => void
+  let started!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const classifying = new Promise<void>(resolve => { started = resolve })
+  await $.prompt.submit(promptInput("나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘. 지금은 하지 말고"))
+  await classifying
+  const call = $.tool.call({ tool: TASK_TOOL, title: "README.md 끝에 'hello from co-worker' 한 줄 추가", status: 'todo' } satisfies ToolCallInput)
+  release()
+  const result = await call
+  if ('deny' in result) throw new Error(result.deny)
+  await waitForLog(seen, "clm: deferred issue s1-1: README.md 끝에 'hello from co-worker' 추가")
+  const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  expect(issues.map(issue => issue.id)).toEqual(['s1-1'])
+  expect(result.result).toContain('s1-1')
+})
+
 // Regression caught: clm_task or a fold op could still write the retired uncertain status.
 test('neither clm_task nor a fold op can write uncertain', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [M('user', 'Investigate.')], replies: [] })

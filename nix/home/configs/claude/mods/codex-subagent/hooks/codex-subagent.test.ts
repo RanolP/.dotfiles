@@ -270,6 +270,17 @@ test('relaySet excludes mutating MCP tools but keeps read-only tools', async () 
   expect(Object.values(set.mcp)).toEqual(keep.map(name => `mcp__x__${name}`))
 })
 
+// Regression: a codex worker whose sandbox blocks a command had no way to escalate it, because the
+// read-only filter dropped the request mod's tool; the exception must not widen to other mutating tools.
+test('relaySet relays raise_approval_request by name and still drops other mutating MCP tools', async () => {
+  const set = relaySet([
+    { name: 'mcp__request__raise_approval_request', description: '', mcp: true },
+    { name: 'mcp__other__raise_approval_request', description: '', mcp: true },
+    { name: 'mcp__x__slack_send_message', description: '', mcp: true },
+  ])
+  expect(Object.values(set.mcp)).toEqual(['mcp__request__raise_approval_request'])
+})
+
 // Regression: codex rejects thread/start ("dynamic tool name is reserved:
 // mcp__…", or a name past the Responses API's 64 characters), so every codex
 // agent in a session with MCP servers fails before its first turn.

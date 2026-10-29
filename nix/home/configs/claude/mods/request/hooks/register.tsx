@@ -15,16 +15,16 @@ const TOOLS = [
   {
     name: 'raise_approval_request',
     description: [
-      'Escalate one Bash command that the auto-mode permission classifier denied, when that command is the only correct way to do the work.',
+      'Escalate one shell command that was denied, when that command is the only correct way to do the work: for Claude, a Bash call the auto-mode permission classifier denied; for a codex worker, a command its sandbox blocked.',
       'Returns at once with a request id (R<n>); keep working on what does not depend on it.',
-      'The user reviews it with /approvals. On approval this tool\'s mod runs the exact command once in cwd (bash -c) and the stdout, stderr and exit code arrive as a message; on rejection the rejection and its reason arrive. Re-issuing the denied Bash call would be denied again, so wait for that message.',
-      'Bash only. Use it only for a classifier denial: a denial, rejection or "stop"/"cancel" from the user still halts that line of work.',
+      'The user reviews it with /approvals. On approval this tool\'s mod runs the exact command once on the host, outside any sandbox, in cwd (bash -c), and the stdout, stderr and exit code arrive as a message; on rejection the rejection and its reason arrive. Re-issuing the denied command would be denied again, so wait for that message.',
+      'Use it only for a classifier or sandbox denial: a denial, rejection or "stop"/"cancel" from the user still halts that line of work.',
       'Each approval runs the command once; running it again needs a new request.',
     ].join(' '),
     inputSchema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'The exact Bash command the classifier denied, byte for byte' },
+        command: { type: 'string', description: 'The exact command that was denied, byte for byte, as bash -c will run it' },
         cwd: { type: 'string', description: 'Absolute directory to run it in' },
         why_only_way: { type: 'string', description: 'Why this command is the only correct way to do the work' },
         alternatives: {

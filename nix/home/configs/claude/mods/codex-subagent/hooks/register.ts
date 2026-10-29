@@ -63,6 +63,10 @@ export function codexName(claudeName: string): string {
 export type DynamicTool = { type: 'function'; name: string; description: string; inputSchema: JsonSchema }
 // `mcp` maps each MCP tool's codex name to its Claude name, the key the bridge's harvested schemas use.
 export type Relay = { tools: DynamicTool[]; claudeName: Map<string, string>; mcp: Record<string, string> }
+// Mutating MCP tools relayed despite the read-only filter, by exact name.
+// raise_approval_request only queues a command for the user's /approvals review: a codex worker's
+// sandbox-blocked command reaches the user instead of dead-ending, and nothing runs without approval.
+export const RELAY_ALLOW = new Set(['mcp__request__raise_approval_request'])
 export function relaySet(tools: readonly { name: string; description: string; mcp: boolean }[]): Relay {
   const claudeName = new Map<string, string>()
   const mcp: Record<string, string> = {}
@@ -71,7 +75,7 @@ export function relaySet(tools: readonly { name: string; description: string; mc
   for (const t of tools) {
     if (!t.mcp && !(t.name in BUILTIN_RELAY)) continue
     const toolName = t.name.slice(t.name.lastIndexOf('__') + 2)
-    if (t.mcp && (!t.name.startsWith('mcp__') || !readOnly.test(toolName))) continue
+    if (t.mcp && (!t.name.startsWith('mcp__') || !(readOnly.test(toolName) || RELAY_ALLOW.has(t.name)))) continue
     const name = codexName(t.name)
     claudeName.set(name, t.name)
     if (t.mcp) mcp[name] = t.name

@@ -17,6 +17,7 @@ async function start($: Engine, on: On) {
   on('turn.start', async (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   on('ui.log', async (_$, e) => { logs.push(e.text); return { value: undefined } })
+  on('ui.toast', async () => ({ value: undefined }))
   on('ui.status', async () => {
     const ready = waiters
     waiters = []
@@ -110,27 +111,26 @@ test('answers start a turn through prompt.submit when idle', async ($, on) => {
   expect(logs.some(l => l.includes('session.append'))).toBe(false)
 })
 
-// Regression: Chat button missing on /answers dialogs. The engine refuses a tree that
-// draws below the AskUserQuestion dialog and draws its own, dropping the Button.
-// The dialog here never answers, so only the plugin's dismissal can close it.
-test('the Chat button on an /answers dialog dismisses it and fills the prompt', async ($, on) => {
-  on('ui.render', { component: 'AskUserQuestion' }, async () => ({ type: 'engine', ref: 0 }))
-  const chat = new Promise<unknown>(resolve => {
-    on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
-      const ui = await $.ui.mount({ plugin: 'ask-later', surface: 'terminal', component: 'AskUserQuestion', props: { tool: 'AskUserQuestion', questions: e.questions } })
-      resolve(await ui.find({ key: 'chat' }))
-      void ui.press({ key: 'chat' })
-      return new Promise<never>(() => {})
-    })
+// Regression: the native "Chat about this" row was treated as a skip. It denies the
+// AskUserQuestion permission with clarify feedback (claude 2.1.288), which $.ui.ask rejects with,
+// keeping only the first 120 characters of it: the feedback here fits.
+test('native Chat about this on an /answers dialog fills the prompt and leaves the question pending', async ($, on) => {
+  const opened: string[] = []
+  on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
+    const question = e.questions[0]?.question ?? ''
+    opened.push(question)
+    return { deny: `The user wants to clarify these questions.\nQuestions asked:\n- "${question}"\n  (No answer provided)\n  User notes: both?` }
   })
   const filled = new Promise<string>(resolve => {
     on('prompt.fill', async (_$, e) => { resolve(e.text); return { isFilled: true } as never })
   })
   await start($, on)
   await $.tool.call({ tool: ASK, question: 'Chat?', options: OPTIONS })
+  await $.tool.call({ tool: ASK, question: 'Later?', options: OPTIONS })
   const out = await $.command.run(ANSWERS)
-  expect(String(out.text)).toBe('대기 질문 1개, Esc로 건너뛴다.')
-  expect(await chat).toBeDefined()
-  expect(await filled).toBe('[Q1] Chat?\n')
+  expect(String(out.text)).toBe('대기 질문 2개, Esc로 건너뛴다.')
+  expect(await filled).toBe('[Q1] Chat?\nboth?\n')
+  // Chat leaves the walk: the second dialog never opens.
+  expect(opened).toEqual(['Chat?'])
   expect(await listText($)).toContain('Q1 [pending] Chat?')
 })

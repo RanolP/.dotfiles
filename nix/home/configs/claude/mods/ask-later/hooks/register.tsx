@@ -45,9 +45,26 @@ const TOOLS = [
 
 type Ctx = EngineInterface
 
-// One /answers walk at a time. `current` is the question whose dialog is open;
-// `dismiss` closes it (the tool.call hook below races the dialog against it).
-type Walk = { current?: Question; chat?: Question; dismiss?: () => void }
+// One /answers walk at a time. `chat` is the question the user dropped out of
+// the walk on, through the dialog's native "Chat about this" row.
+type Walk = { chat?: Question; chatNotes?: string }
+
+// The native "Chat about this" row resolves the AskUserQuestion permission as a
+// deny whose feedback opens with this sentence (claude 2.1.288, M3e), so
+// $.ui.ask rejects with it; Esc rejects without it.
+const CHAT_MARK = 'The user wants to clarify these questions'
+
+/** Reads a $.ui.ask rejection: undefined for a plain dismissal, else the chat request and any "User notes:" text. */
+export function chatRequest(reason: string): { notes?: string } | undefined {
+  if (!reason.includes(CHAT_MARK)) return undefined
+  // $.ui.ask wraps the deny text as "...: no answer (<first 120 chars>)", so a
+  // notes line that ends the text carries the wrapper's closing parenthesis.
+  const m = /User notes:[ \t]*([^\n]*)/.exec(reason)
+  if (!m) return {}
+  const atEnd = m.index + m[0].length === reason.length
+  const notes = (atEnd ? m[1].replace(/\)$/, '') : m[1]).trim()
+  return notes ? { notes } : {}
+}
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const log = ($: Ctx, text: string) => $.ui.log(`[ask-later] ${text}`, { to: 'debug' })
@@ -214,39 +231,6 @@ export const register: Register = on => {
     return ok(open.length ? open.map(describe).join('\n') : 'No pending questions or undelivered answers.')
   })
 
-  // Dismissal: a $.ui.ask is a tool.call of AskUserQuestion; returning while
-  // `next` is pending aborts the dialog beneath, which rejects that ask.
-  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
-    const asked = (e as unknown as { questions?: { question?: string }[] }).questions?.[0]?.question
-    const w = walk
-    if (!w?.current || asked !== w.current.question) return next(e)
-    const dismissed = new Promise<{ deny: string }>(resolve => {
-      w.dismiss = () => resolve({ deny: `ask-later: chat about ${w.current?.id}` })
-    })
-    return Promise.race([next(e), dismissed])
-  })
-
-  on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
-    const drawn = await next(e)
-    const asked = (e.props.questions[0] as { question?: string } | undefined)?.question
-    const w = walk
-    const q = w?.current
-    if (!w || !q || asked !== q.question) return drawn
-    const { Box, Button } = $.ui.resolve(e)
-    // The Button goes above the dialog: the engine refuses a tree that draws
-    // below AskUserQuestion ("draws below the dialog") and draws its own.
-    return (
-      <Box flexDirection="column">
-        <Button key="chat" label="Chat with this question" hotkey="c" onPress={() => {
-          w.chat = q
-          if (w.dismiss) w.dismiss()
-          else log($, `chat on ${q.id}: no dismiss armed for this dialog`)
-        }} />
-        {drawn}
-      </Box>
-    )
-  })
-
   on('command.run', { command: 'answers' }, async $ => {
     if (walk) return { text: '/answers가 이미 열려 있다.' }
     const pending = (await questions($)).filter(q => q.status === 'pending')
@@ -260,8 +244,6 @@ export const register: Register = on => {
           // The model may have resolved it while an earlier dialog was open.
           const q = (await questions($)).find(x => x.id === queued.id)
           if (!q || q.status !== 'pending') continue
-          w.current = q
-          w.dismiss = undefined
           let answer: string
           try {
             answer = await $.ui.ask(q.question, {
@@ -270,8 +252,15 @@ export const register: Register = on => {
               ...(q.multiSelect ? { multiSelect: true as const } : {}),
             })
           } catch (err) {
-            if (w.chat) break
-            log($, `${q.id} skipped: ${errText(err)}`)
+            const reason = errText(err)
+            const chat = chatRequest(reason)
+            if (chat) {
+              w.chat = q
+              if (chat.notes) w.chatNotes = chat.notes
+              break
+            }
+            log($, `${q.id} skipped: ${reason}`)
+            $.ui.toast(`${q.id} 건너뜀: ${reason.replace(/^.*?\$\.ui\.ask: no answer \(/, '').slice(0, 80)}`)
             continue
           }
           const done: Question = { ...q, status: 'answered', answer }
@@ -287,7 +276,7 @@ export const register: Register = on => {
         await deliver($, answered)
         await showStatus($)
         if (w.chat) {
-          const filled = await $.prompt.fill({ text: `[${w.chat.id}] ${w.chat.question}\n` })
+          const filled = await $.prompt.fill({ text: `[${w.chat.id}] ${w.chat.question}\n${w.chatNotes ? `${w.chatNotes}\n` : ''}` })
           if (!filled.isFilled) log($, `prompt.fill for ${w.chat.id} refused: ${filled.refusal ?? 'unknown'}`)
         }
       } catch (err) {

@@ -4,13 +4,14 @@ import type { Option, Question } from '../types'
 
 const QUESTIONS = { plugin: 'ask-later', key: 'questions' } as const
 const TURN = { plugin: 'ask-later', key: 'turnId' } as const
+const WALKING = { plugin: 'ask-later', key: 'isWalking' } as const
 
 const RESOLVE_TOOL = 'mcp__ask-later__resolve'
 
 const TOOLS = [
   {
     name: 'ask',
-    description: 'Queue a question for the user without waiting for the answer. Returns at once; the user answers later with /answers and the answer arrives as a message. Give `assumption` to keep working under it, or `blocks` to name the work that waits for the answer.',
+    description: 'Queue a question for the user without waiting for the answer. Returns at once; the user answers later from the 답하기 button and the answer arrives as a message. Give `assumption` to keep working under it, or `blocks` to name the work that waits for the answer.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -45,8 +46,8 @@ const TOOLS = [
 
 type Ctx = EngineInterface
 
-// One /answers walk at a time. `chat` is the question the user dropped out of
-// the walk on, through the dialog's native "Chat about this" row.
+// `chat` is the question the user dropped out of the walk on, through the
+// dialog's native "Chat about this" row.
 type Walk = { chat?: Question; chatNotes?: string }
 
 // The native "Chat about this" row resolves the AskUserQuestion permission as a
@@ -73,11 +74,6 @@ const ok = (text: string) => ({ result: text, text })
 
 async function questions($: Ctx): Promise<Question[]> {
   return (await $.state.get(QUESTIONS)).value ?? []
-}
-
-async function showStatus($: Ctx) {
-  const n = (await questions($)).filter(q => q.status === 'pending').length
-  $.ui.status(n ? `질문 ${n}개 대기 · /answers` : undefined)
 }
 
 function isOptions(v: unknown): v is Option[] {
@@ -139,8 +135,66 @@ async function deliver($: Ctx, answered: Question[]) {
   await update($, QUESTIONS, qs => (qs ?? []).map(q => (ids.has(q.id) ? { ...q, delivered: true } : q)))
 }
 
+/** Walks the pending questions through $.ui.ask, one dialog each, then delivers the answers. One walk at a time. */
+export async function answerPending($: Ctx) {
+  let isStarted = false
+  await update($, WALKING, w => {
+    isStarted = !w
+    return true
+  })
+  if (!isStarted) return
+  const w: Walk = {}
+  const answered: Question[] = []
+  try {
+    const pending = (await questions($)).filter(q => q.status === 'pending')
+    for (const queued of pending) {
+      // The model may have resolved it while an earlier dialog was open.
+      const q = (await questions($)).find(x => x.id === queued.id)
+      if (!q || q.status !== 'pending') continue
+      let answer: string
+      try {
+        answer = await $.ui.ask(q.question, {
+          options: q.options.map(o => o.label),
+          ...(q.header ? { header: q.header } : {}),
+          ...(q.multiSelect ? { multiSelect: true as const } : {}),
+        })
+      } catch (err) {
+        const reason = errText(err)
+        const chat = chatRequest(reason)
+        if (chat) {
+          w.chat = q
+          if (chat.notes) w.chatNotes = chat.notes
+          break
+        }
+        log($, `${q.id} skipped: ${reason}`)
+        $.ui.toast(`${q.id} 건너뜀: ${reason.replace(/^.*?\$\.ui\.ask: no answer \(/, '').slice(0, 80)}`)
+        continue
+      }
+      const done: Question = { ...q, status: 'answered', answer }
+      await update($, QUESTIONS, qs => (qs ?? []).map(x => (x.id === q.id ? done : x)))
+      answered.push(done)
+    }
+  } catch (err) {
+    log($, `answer walk failed: ${errText(err)}`)
+  } finally {
+    try {
+      await $.state.set(WALKING, false)
+    } catch (err) {
+      log($, `answer walk: clearing isWalking failed: ${errText(err)}`)
+    }
+  }
+  try {
+    await deliver($, answered)
+    if (w.chat) {
+      const filled = await $.prompt.fill({ text: `[${w.chat.id}] ${w.chat.question}\n${w.chatNotes ? `${w.chatNotes}\n` : ''}` })
+      if (!filled.isFilled) log($, `prompt.fill for ${w.chat.id} refused: ${filled.refusal ?? 'unknown'}`)
+    }
+  } catch (err) {
+    log($, `delivery of answers ${answered.map(q => q.id).join(',') || 'nothing'} failed: ${errText(err)}`)
+  }
+}
+
 export const register: Register = on => {
-  let walk: Walk | undefined
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -151,12 +205,8 @@ export const register: Register = on => {
         log($, `tool.register(${t.name}) failed: ${errText(err)}`)
       }
     }
-    try {
-      await $.command.register({ name: 'answers', description: 'Answer the questions the model queued (Esc skips one)' })
-    } catch (err) {
-      log($, `command.register(answers) failed: ${errText(err)}`)
-    }
-    await showStatus($)
+    // A walk cut short (a reload) would leave isWalking true and the 답하기 button hidden all session.
+    await $.state.set(WALKING, false)
     return started
   })
 
@@ -200,7 +250,6 @@ export const register: Register = on => {
       return toolError(`ask failed to queue the question: ${errText(err)}`)
     }
     $.ui.toast(`${id} 대기: ${a.question}`)
-    await showStatus($)
     const how = a.assumption
       ? `Proceed under the assumption "${a.assumption}" and note which work depends on it.`
       : `Park only the work this blocks${a.blocks ? ` (${a.blocks})` : ''} and continue with other work.`
@@ -222,7 +271,6 @@ export const register: Register = on => {
       return toolError(`resolve failed: ${errText(err)}`)
     }
     if (!found) return toolError(`No queued question ${a.id}.`)
-    await showStatus($)
     return ok(`${a.id} resolved: ${a.answer}`)
   })
 
@@ -231,59 +279,24 @@ export const register: Register = on => {
     return ok(open.length ? open.map(describe).join('\n') : 'No pending questions or undelivered answers.')
   })
 
-  on('command.run', { command: 'answers' }, async $ => {
-    if (walk) return { text: '/answers가 이미 열려 있다.' }
-    const pending = (await questions($)).filter(q => q.status === 'pending')
-    if (!pending.length) return { text: '대기 질문이 없다.' }
-    const w: Walk = {}
-    walk = w
-    void (async () => {
-      const answered: Question[] = []
-      try {
-        for (const queued of pending) {
-          // The model may have resolved it while an earlier dialog was open.
-          const q = (await questions($)).find(x => x.id === queued.id)
-          if (!q || q.status !== 'pending') continue
-          let answer: string
-          try {
-            answer = await $.ui.ask(q.question, {
-              options: q.options.map(o => o.label),
-              ...(q.header ? { header: q.header } : {}),
-              ...(q.multiSelect ? { multiSelect: true as const } : {}),
-            })
-          } catch (err) {
-            const reason = errText(err)
-            const chat = chatRequest(reason)
-            if (chat) {
-              w.chat = q
-              if (chat.notes) w.chatNotes = chat.notes
-              break
-            }
-            log($, `${q.id} skipped: ${reason}`)
-            $.ui.toast(`${q.id} 건너뜀: ${reason.replace(/^.*?\$\.ui\.ask: no answer \(/, '').slice(0, 80)}`)
-            continue
-          }
-          const done: Question = { ...q, status: 'answered', answer }
-          await update($, QUESTIONS, qs => (qs ?? []).map(x => (x.id === q.id ? done : x)))
-          answered.push(done)
-        }
-      } catch (err) {
-        log($, `/answers walk failed: ${errText(err)}`)
-      } finally {
-        walk = undefined
-      }
-      try {
-        await deliver($, answered)
-        await showStatus($)
-        if (w.chat) {
-          const filled = await $.prompt.fill({ text: `[${w.chat.id}] ${w.chat.question}\n${w.chatNotes ? `${w.chatNotes}\n` : ''}` })
-          if (!filled.isFilled) log($, `prompt.fill for ${w.chat.id} refused: ${filled.refusal ?? 'unknown'}`)
-        }
-      } catch (err) {
-        log($, `/answers delivery of ${answered.map(q => q.id).join(',') || 'nothing'} failed: ${errText(err)}`)
-      }
-    })()
-    return { text: `대기 질문 ${pending.length}개, Esc로 건너뛴다.` }
+  // 질문 N개 대기  [답하기] above the prompt while questions wait; the state reads subscribe it.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const n = (await questions($)).filter(q => q.status === 'pending').length
+    if (!n) return next(e)
+    const isWalking = (await $.state.get(WALKING)).value ?? false
+    const below = await next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="column">
+        <Box key="ask-later-band" flexDirection="row">
+          <Text color="yellow" bold>{`질문 ${n}개 대기`}</Text>
+          {isWalking ? <Text dimColor>  답하는 중</Text> : <Text>  </Text>}
+          {isWalking ? null : <Button key="answer" label="답하기" variant="primary" onPress={() => void answerPending($)} />}
+        </Box>
+        {below}
+      </Box>
+    )
   })
 
   on('prompt.submit', async ($, e, next) => {

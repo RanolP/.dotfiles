@@ -1,7 +1,7 @@
 {
   "name": "ask-later",
   "version": "0.1.0",
-  "description": "Non-blocking AskUserQuestion: the model queues questions and keeps working; /answers walks them when the user chooses.",
+  "description": "Non-blocking AskUserQuestion: the model queues questions and keeps working; the 답하기 button above the prompt walks them when the user chooses.",
   "author": { "name": "RanolP" },
   "types": "./types/index.d.ts"
 }

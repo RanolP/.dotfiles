@@ -21,6 +21,7 @@ export type Question = {
 declare module 'claude-code' {
   interface PluginState {
     /** `turnId`: the running main turn, null while idle; picks session.append vs prompt.submit for delivery. */
-    'ask-later': { questions: Question[]; turnId: string | null }
+    /** `isWalking`: a 답하기 walk is opening dialogs; the band hides its button meanwhile. */
+    'ask-later': { questions: Question[]; turnId: string | null; isWalking: boolean }
   }
 }

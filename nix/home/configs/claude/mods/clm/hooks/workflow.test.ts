@@ -92,6 +92,19 @@ test('an unknown classifier target writes no tracker events', OPTS, async ($, on
   expect(seen.logs.some(line => line.includes('unknown target id ghost-1'))).toBe(true)
 })
 
+// Regression caught: a co-worker land closed the issue the classifier targeted while it ran, and "unknown target id" discarded the whole prompt's focus and deferrals.
+test('a classifier target that closed during classification keeps focus and still files deferrals', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({ intent: 'continue', target: 's1-1', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에' }] })],
+  })
+  seedTracker(seen, [{ op: 'create', issue: 's1-1', title: 'landed work', status: 'done' }])
+  await $.prompt.submit(promptInput('좋아, B는 나중에'))
+  await until(() => snapshot(parseLog(seen.files[TRACKER] ?? '')).some(issue => issue.title === 'B 고쳐'))
+  expect(seen.logs.some(line => line.includes('focus classification failed'))).toBe(false)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-1')?.status).toBe('done')
+})
+
 // Regression caught: work explicitly bounded for later vanished instead of becoming a shared todo.
 test('a bounded deferral becomes one todo issue on the board', OPTS, async ($, on) => {
   const seen = bottoms(on, {

@@ -156,7 +156,11 @@ export function parseRequests(raw: string): RequestClassification {
   return { raised, resolved }
 }
 
-export function parseFocus(raw: string, knownIds: ReadonlySet<string>): FocusClassification {
+/**
+ * `closedIds` are issues that closed after the classifier saw them open (a co-worker
+ * land, a drop): a reply that targets one keeps the current focus as continue.
+ */
+export function parseFocus(raw: string, knownIds: ReadonlySet<string>, closedIds: ReadonlySet<string> = new Set()): FocusClassification {
   const value = parseObject(raw)
   if (!('intent' in value)) throw new Error('reply is not an object')
   if (!isIntent(value.intent)) throw new Error(`unknown intent ${String(value.intent)}`)
@@ -166,7 +170,10 @@ export function parseFocus(raw: string, knownIds: ReadonlySet<string>): FocusCla
   // The prompt no longer asks for rule; an older-shaped reply may still carry it.
   const rule = v.rule === null || v.rule === undefined ? null : typeof v.rule === 'string' ? v.rule : undefined
   if (target === undefined || title === undefined || rule === undefined) throw new Error('target, title, or rule has an invalid value')
-  if (target !== null && !knownIds.has(target)) throw new Error(`unknown target id ${target}`)
+  if (target !== null && !knownIds.has(target)) {
+    if (closedIds.has(target)) return { intent: value.intent === 'question' ? 'question' : 'continue', target: null, title: null, rule }
+    throw new Error(`unknown target id ${target}`)
+  }
   if (title !== null && ([...title].length > 60 || title.trim() !== title)) throw new Error('title must be a trimmed string of at most 60 characters')
   if (value.intent === 'question' && (target !== null || title !== null)) throw new Error('question must not name a target or title')
   if (value.intent !== 'question' && value.intent !== 'continue' && ((target === null) === (title === null)))
@@ -630,7 +637,8 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
       const shownOpen = currentIssues.filter(issue => isOpen(issue) && !focused.has(issue.id)).slice(0, 30)
       const isCurrentOpen = (id: string) => currentIssues.some(issue => issue.id === id && isOpen(issue))
       const knownIds = new Set([...currentState.stack.filter(isCurrentOpen), ...currentState.pending.filter(isCurrentOpen), ...shownOpen.map(issue => issue.id)])
-      const classification = parseFocus(response.text, knownIds)
+      const closedIds = new Set(currentIssues.filter(issue => !isOpen(issue)).map(issue => issue.id))
+      const classification = parseFocus(response.text, knownIds, closedIds)
       let nextSeq = currentEvents.filter(event => event.origin.session === origin.session).reduce((n, event) => Math.max(n, event.seq), 0)
       const newId = () => issueId(origin.session, ++nextSeq)
       const { payloads, next } = compose(currentState, classification, currentIssues, newId)

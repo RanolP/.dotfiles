@@ -19,7 +19,7 @@ const mountPane = ($: Engine, bodyColumns = 60) => $.ui.mount({
 })
 
 const emptyStatus: Awaited<ReturnType<Engine['clm']['status']>> = {
-  focus: null, stackDepth: 1, pending: [], agents: [], later: [],
+  focus: null, stackDepth: 1, pending: [], agents: [],
   resumeRequest: null, lastFoldAt: null, ledgerPath: '/tmp/l.md', openIssues: 0,
 }
 
@@ -145,7 +145,6 @@ test('one pane stacks Usage rows and the Work head line with no tabs and no head
     stackDepth: 3,
     pending: [{ id: 's1-3', title: 'Pending task with a long title that should be clipped at the pane width' }],
     agents: [{ agentId: 'worker-agent-123456', taskId: 's1-4', title: 'Agent task', status: 'doing' }],
-    later: [{ text: 'Later task' }],
     resumeRequest: { text: 'Resume task' },
     lastFoldAt: null,
     ledgerPath: '/tmp/clm-ledger.md',
@@ -163,7 +162,7 @@ test('one pane stacks Usage rows and the Work head line with no tabs and no head
   const ui = await mountPane($)
   for (const removed of [/^── /, /^Focus /, /^Agents /, /^No subagents yet/]) expect(await ui.find({ type: 'Text', text: removed })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: '5h 40% \u{F0450} in 2h13m' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: '▸ Focus · depth 3 · later 1 · issues 4' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ Focus · depth 3 · issues 4' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^  Pending  .+…/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '  Resume  Resume task' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '  · worker-a Agent task (doing)' })).toBeDefined()
@@ -179,7 +178,7 @@ test('neither a Usage nor a Work header row renders', async ($, on) => {
 
   const ui = await mountPane($)
   expect(await ui.find({ type: 'Text', text: /^── (Usage|Work)/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^▸ no focus · later 0 · issues 0$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^▸ no focus · issues 0$/ })).toBeDefined()
 })
 
 // Regression: a paired agent kept printing running/done instead of its clm task title, or an unpaired agent lost its status word.
@@ -197,21 +196,21 @@ test('a paired agent shows its clm title in place of its status; an unpaired age
   expect(await ui.find({ type: 'Text', text: /· agent-2/ })).toBeUndefined()
 })
 
-// Regression: the later/issues counters moved off the head line into a separate row again.
-test('the head line carries later and issues', async ($, on) => {
+// Regression: the issues counter moved off the head line into a separate row again.
+test('the head line carries the issues counter', async ($, on) => {
   const now = Date.parse('2026-10-15T03:00:00Z')
   mock.clock(on, { now })
   on('session.start', () => ({ cwd: '/work' }))
   withClm(on, async () => ({
     ...emptyStatus,
     focus: { id: 's1-1', title: 'dash 디자인', status: 'doing' },
-    later: [{ text: 'a' }, { text: 'b' }], openIssues: 1, lastFoldAt: now - 3 * 60_000,
+    openIssues: 1, lastFoldAt: now - 3 * 60_000,
   }))
   await start($)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 · later 2 · issues 1' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^(Later|Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 · issues 1' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^(Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
 })
 
 // Regression: while clm is loading the agents vanished along with the clm status.
@@ -267,7 +266,7 @@ test('compact Usage joins both rate limits on one row with no Ctx row, and Work 
       resume: () => { throw new Error('test clm.resume base') },
       status: async () => ({
         focus: { id: 's1-1', title: 'dash 디자인', status: 'active' },
-        stackDepth: 1, pending: [], agents: [], later: [{ text: 'a' }, { text: 'b' }],
+        stackDepth: 1, pending: [], agents: [],
         resumeRequest: null, lastFoldAt: now - 3 * 60_000, ledgerPath: '/tmp/l.md', openIssues: 1,
       }),
     },
@@ -283,7 +282,7 @@ test('compact Usage joins both rate limits on one row with no Ctx row, and Work 
   expect((await ui.find({ type: 'Text', text: /^weekly $/ }))?.props.color).toBe('gray')
   expect((await ui.find({ type: 'Text', text: /^31%$/ }))?.props.color).toBe('whiteBright')
   expect(await ui.find({ type: 'Text', text: /^Ctx/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (active) · later 2 · issues 1' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 (active) · issues 1' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^(Pending|Agents|Resume|Ledger)/ })).toBeUndefined()
 })
 
@@ -333,7 +332,7 @@ test('the head line has no fold segment', async ($, on) => {
   await start($)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: /^▸ no focus · later 0 · issues 0$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^▸ no focus · issues 0$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /fold/ })).toBeUndefined()
 })
 
@@ -346,12 +345,12 @@ test('the head line hides a doing focus status but shows any other', async ($, o
   await start($)
 
   const ui = await mountPane($)
-  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 · later 0 · issues 0' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ dash 디자인 · issues 0' })).toBeDefined()
   await ui.unmount()
   status = 'uncertain'
   await clock.advance(15_000)
   const again = await mountPane($)
-  expect(await again.find({ type: 'Text', text: '▸ dash 디자인 (uncertain) · later 0 · issues 0' })).toBeDefined()
+  expect(await again.find({ type: 'Text', text: '▸ dash 디자인 (uncertain) · issues 0' })).toBeDefined()
 })
 
 const BASELINE = '29096c9aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -392,7 +391,7 @@ test('the head line shows the start-time dotfiles HEAD and no behind part until 
 
   await clock.advance(15_000)
   const ui = await mountPane($, 80)
-  expect(await ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ no focus · issues 0 · @29096c9' })).toBeDefined()
   expect(await ui.find({ type: 'Button', key: 'refresh' })).toBeDefined()
   expect(git.runs).toEqual([['git', '-C', '/home/me/.dotfiles', 'rev-parse', 'HEAD']])
 })
@@ -407,19 +406,19 @@ test('pressing refresh counts commits since the baseline and shows behind N, inc
 
   const ui = await mountPane($, 80)
   await ui.press({ key: 'refresh' })
-  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind 3' }))).toBeDefined()
+  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · issues 0 · @29096c9 · behind 3' }))).toBeDefined()
   expect(git.runs.at(-1)).toEqual(['git', '-C', '/home/me/.dotfiles', 'rev-list', '--count', `${BASELINE}..HEAD`])
   await ui.unmount()
 
   // Regression: clipping the whole head line at the default width cut the version label first.
-  const narrow = await mountPane($)
+  const narrow = await mountPane($, 48)
   expect(await narrow.find({ type: 'Text', text: /^▸ no focus.*… · @29096c9 · behind 3$/ })).toBeDefined()
   await narrow.unmount()
   const again = await mountPane($, 80)
 
   git.setCount({ exitCode: 0, stdout: '0\n', stderr: '' })
   await again.press({ key: 'refresh' })
-  expect(await settle(() => again.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind 0' }))).toBeDefined()
+  expect(await settle(() => again.find({ type: 'Text', text: '▸ no focus · issues 0 · @29096c9 · behind 0' }))).toBeDefined()
 })
 
 // Regression: a failed count read as "not behind", or failed without a log naming the command, exit code and stderr.
@@ -432,7 +431,7 @@ test('a failed refresh shows behind ? and logs the command, exit code and stderr
 
   const ui = await mountPane($, 80)
   await ui.press({ key: 'refresh' })
-  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9 · behind ?' }))).toBeDefined()
+  expect(await settle(() => ui.find({ type: 'Text', text: '▸ no focus · issues 0 · @29096c9 · behind ?' }))).toBeDefined()
   expect(git.logs).toContain(`[dash] git -C /home/me/.dotfiles rev-list --count ${BASELINE}..HEAD: exit 128: fatal: bad revision`)
 })
 
@@ -447,5 +446,14 @@ test('a second session.start keeps the first baseline', async ($, on) => {
   git.setHead('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
   await start($)
   const ui = await mountPane($, 80)
-  expect(await ui.find({ type: 'Text', text: '▸ no focus · later 0 · issues 0 · @29096c9' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '▸ no focus · issues 0 · @29096c9' })).toBeDefined()
+})
+
+// Regression caught: clm dropped its later queue, and the head line threw on `status.later.length`.
+test('a status object with no later field renders without throwing', async ($, on) => {
+  on('session.start', () => ({ cwd: '/work' }))
+  withClm(on, async () => ({ ...emptyStatus }))
+  await start($)
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: '▸ no focus · issues 0' })).toBeDefined()
 })

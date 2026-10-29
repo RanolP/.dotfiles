@@ -282,7 +282,7 @@ function clmHead(state: DashDashboardState): { text: string, dim: boolean, statu
   const { status } = state.clm
   const focus = status.focus ? `${status.focus.title}${status.focus.status === 'doing' ? '' : ` (${status.focus.status})`}` : 'no focus'
   const depth = status.focus && status.stackDepth > 1 ? ` · depth ${status.stackDepth}` : ''
-  return { text: `▸ ${focus}${depth} · later ${status.later.length} · issues ${status.openIssues}`, dim: false, status }
+  return { text: `▸ ${focus}${depth} · issues ${status.openIssues}`, dim: false, status }
 }
 
 function headRow({ Box, Text, Button }: Elements, state: DashDashboardState, width: number, onRefresh: (baseline: string) => void) {

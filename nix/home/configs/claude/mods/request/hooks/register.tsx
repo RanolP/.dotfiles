@@ -87,18 +87,35 @@ const shownCommand = (r: ApprovalRequest) => (isEscaped(r.command)
 // like the review's prose still reads as part of the command.
 const INDENT = '    '
 
-// The dialog's question: where it runs and who asked, the command indented,
-// then the case for it, one labelled line each, and the question last.
-export const reviewQuestion = (r: ApprovalRequest): string => [
-  `In ${oneLine(r.cwd)}, ${r.agentId ? `subagent ${oneLine(r.agentId)}` : 'the main session'} asks to run:`,
-  ...(isEscaped(r.command) ? ['(it holds tabs, hidden or control characters; shown JSON-escaped)'] : []),
-  ...shownCommand(r).split('\n').map(line => `${INDENT}${line}`),
+const asker = (r: ApprovalRequest) => `In ${oneLine(r.cwd)}, ${r.agentId ? `subagent ${oneLine(r.agentId)}` : 'the main session'} asks to run`
+const escapedNote = (r: ApprovalRequest) => (isEscaped(r.command) ? ['(it holds tabs, hidden or control characters; shown JSON-escaped)'] : [])
+const theCase = (r: ApprovalRequest) => [
   '',
   `Why: ${oneLine(r.why_only_way)}`,
   ...r.alternatives.map(a => `Not: ${oneLine(a.approach)} — ${oneLine(a.rejected_because)}`),
   `Unblocks: ${oneLine(r.blocks)}`,
   'Run this command once?',
+]
+
+// The dialog's question: where it runs and who asked, the command indented,
+// then the case for it, one labelled line each, and the question last. The
+// command stays in it so the engine's own drawing (a refused tree) shows it.
+export const reviewQuestion = (r: ApprovalRequest): string => [
+  `${asker(r)}:`,
+  ...escapedNote(r),
+  ...shownCommand(r).split('\n').map(line => `${INDENT}${line}`),
+  ...theCase(r),
 ].join('\n')
+
+// The question drawn under the highlighted command, which it no longer repeats.
+export const questionBelowCode = (r: ApprovalRequest): string => [
+  `${asker(r)} the command above:`,
+  ...escapedNote(r),
+  ...theCase(r),
+].join('\n')
+
+// Code's source cap; a longer command is drawn plain, inside the question.
+const CODE_LIMIT = 10_000
 
 // The engine cuts a question longer than this many characters with "…".
 const QUESTION_LIMIT = 2000
@@ -490,15 +507,32 @@ export const register: Register = on => {
   // command included, is drawn uncut: under the engine's length cap and
   // within the surface's rows. A rewrite may change descriptions but not the
   // options, so otherwise Approve stays listed and its description says it
-  // will not run and why.
+  // will not run and why. When it fits, the command is drawn highlighted
+  // above the dialog and the question drops its copy; the rows needed are
+  // the taller of that layout and the plain one the engine falls back to.
   on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
     const open = ourDialog(e.props.questions)
     if (!open) return next(e)
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
+    const source = r ? shownCommand(r) : ''
+    const below = r && source.length <= CODE_LIMIT ? questionBelowCode(r) : undefined
     const tooLong = open.question.length > QUESTION_LIMIT
-    const needs = r && e.viewport ? dialogRows(open.question, e.viewport.columns) : undefined
+    const needs = r && e.viewport
+      ? Math.max(dialogRows(open.question, e.viewport.columns), below === undefined ? 0 : dialogRows(`${source}\n${below}`, e.viewport.columns))
+      : undefined
     const fits = !tooLong && needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
     open.isApprovable = fits
+    if (fits && below !== undefined) {
+      const { Box, Code } = $.ui.resolve(e)
+      const q = e.props.questions[0] as { question: string }
+      const dialog = await next({ ...e, props: { ...e.props, questions: [{ ...q, question: below }] } })
+      return (
+        <Box flexDirection="column">
+          <Code key="request-command" language="bash" source={source} wrap="wrap" />
+          {dialog}
+        </Box>
+      )
+    }
     if (fits) return next(e)
     const why = !r ? 'it is no longer pending'
       : tooLong ? `the review is ${open.question.length} characters and the dialog cuts it at ${QUESTION_LIMIT}; run it yourself or ask for a shorter command`

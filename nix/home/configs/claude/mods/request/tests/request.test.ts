@@ -22,7 +22,8 @@ const labels = (q: Question | undefined) => (q?.options ?? []).map(o => o.label)
 // Nothing stands beneath the plugins in a test: these answer for the engine.
 // `answer` answers every review dialog (a function sees which ask it is; undefined dismisses it, as Esc does).
 // Each dialog is drawn first at `viewport` (none: drawn unmeasured; `false`: never drawn), as the engine draws
-// it before the person can answer; `drawn` keeps the option labels each drawing showed, `shown` the options themselves.
+// it before the person can answer; `drawn` keeps the option labels each drawing showed, `shown` the options themselves,
+// `questions` the question text it was given and `codes` the props of the Code element the drawing holds, if any.
 // `afk` marks every answer as the dialog's idle auto-answer.
 // `send` answers session.send (its hook must be registered before the first $ call);
 // `hold` keeps every process.run from finishing until it resolves.
@@ -33,6 +34,8 @@ async function start($: Engine, on: On, answer: string | undefined | ((n: number
   const asked: Question[] = []
   const drawn: string[][] = []
   const shown: Option[][] = []
+  const questions: string[] = []
+  const codes: (Record<string, unknown> | undefined)[] = []
   const runs: { argv: readonly string[]; cwd?: string }[] = []
   const sends: { to: string; text: string }[] = []
   on('session.start', async (_$, e) => ({ cwd: e.cwd }))
@@ -59,6 +62,7 @@ async function start($: Engine, on: On, answer: string | undefined | ((n: number
     const q = e.props.questions[0] as Question
     drawn.push(labels(q))
     shown.push(q.options)
+    questions.push(q.question)
     return { type: 'engine', ref: 0 }
   })
   on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
@@ -69,6 +73,7 @@ async function start($: Engine, on: On, answer: string | undefined | ((n: number
       const props = { tool: 'AskUserQuestion', questions: e.questions as unknown[] }
       const ui = await $.ui.mount({ plugin: 'request', surface: 'terminal', component: 'AskUserQuestion', props, requestId: e.tool_use_id, ...(viewport ? { viewport } : {}) })
       await ui.drawn()
+      codes.push((await ui.find({ type: 'Code' }))?.props)
     }
     const text = typeof answer === 'function' ? await answer(n) : answer
     if (text === undefined) return { deny: 'dismissed' }
@@ -86,7 +91,7 @@ async function start($: Engine, on: On, answer: string | undefined | ((n: number
     on('prompt.submit', async (_$, e) => { submits.push(e.text); resolve(e.text); return { text: e.text } })
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  return { asked, drawn, shown, runs, sends, submits, delivered, nextStatus }
+  return { asked, drawn, shown, questions, codes, runs, sends, submits, delivered, nextStatus }
 }
 
 // Raises one request and resolves once the review it opened has ended.
@@ -215,6 +220,24 @@ test('a command the dialog would redraw is shown JSON-escaped, and prose stays o
   expect(question).toContain('\nWhy: two rm -rf /\n')
   expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
 })
+
+// Regression: the requested command drawn as plain text instead of highlighted as bash, drawn twice (highlighted
+// and again in the question), or a hidden character reaching the highlighter instead of its escaped spelling.
+for (const [name, command, source] of [
+  ['a plain command', COMMAND, COMMAND],
+  ['a command with a tab and a bidi mark', 'printf "a\tb" # \u202e', '"printf \\"a\\tb\\" # \\u202e"'],
+] as const) {
+  test(`${name} is drawn as highlighted bash above a question that no longer repeats it`, async ($, on) => {
+    const { asked, questions, codes, nextStatus } = await start($, on, APPROVE)
+    await raise($, nextStatus, { command })
+    expect(codes[0]).toMatchObject({ language: 'bash', source })
+    expect(questions[0]).toStartWith('In /tmp, the main session asks to run the command above:')
+    expect(questions[0]).not.toContain(source)
+    expect(questions[0]).toEndWith('Unblocks: the report\nRun this command once?')
+    // The asked question keeps the command, for the engine's own drawing should it refuse the tree.
+    expect(asked[0]?.question).toContain(`\n    ${source}\n`)
+  })
+}
 
 // Regression: this mod rewriting an AskUserQuestion dialog the model opened.
 test("another caller's AskUserQuestion dialog is drawn untouched", async ($, on) => {

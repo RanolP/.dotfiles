@@ -31,12 +31,6 @@ const seedRecord = (seen: ReturnType<typeof bottoms>, record: Omit<CoworkerRecor
   seen.files[`${ROOT}/coworkers/${record.session}.json`] = JSON.stringify({ role: 'coworker', ...record })
 }
 
-const seedMail = (seen: ReturnType<typeof bottoms>, to: string, from: string, text: string, n = 1) => {
-  seen.dirs.add(`${ROOT}/mail`)
-  seen.dirs.add(`${ROOT}/mail/${to}`)
-  seen.files[`${ROOT}/mail/${to}/${String(n).padStart(16, '0')}-mail.json`] = JSON.stringify({ from, to, text, now: n })
-}
-
 const setWorkflow = (on: On, read: () => ReturnType<typeof workflow>) => {
   on('state.get', async (_$: unknown, e: any, next: (e: any) => Promise<any>) => {
     const current = await next(e)
@@ -73,16 +67,39 @@ test('a second co-worker cannot claim an issue already claimed', async ($, on) =
   expect(issues(seen).find(issue => issue.id === 'one')?.claimedBy).toBeUndefined()
 })
 
-// Regression caught: a completed co-worker checkpoint stayed in doing and never notified its orchestrator.
-test('ready marks the issue ready-to-land and mails main', async ($, on) => {
+// Regression caught: a completed co-worker checkpoint stayed in doing and never told the co-worker whom to notify.
+test('ready marks the issue ready-to-land and tells the co-worker to SendMessage main', async ($, on) => {
   const seen = bottoms(on, coworkerState('worker-ready', 'main-ready'))
   seedBoard(seen, 'board-ready', [{ op: 'create', issue: 'ready-one', title: 'Ready one', status: 'todo' }, { op: 'plan', issue: 'ready-one', ready: true }])
+  seedRecord(seen, { session: 'main-ready', main: 'main-ready', role: 'main', repo: 'github.com/o/repo', state: 'idle', heartbeat: 1, peer: 'main-ready-e5' })
   await $.session.start(startInput)
   await tool($, { action: 'claim', issue: 'ready-one' })
   const output = await tool($, { action: 'ready', issue: 'ready-one' })
-  expect(resultText(output)).toContain(`${SHA_B}..${SHA_A}`)
+  expect(resultText(output)).toContain(`SendMessage main-ready-e5: "ready-one is ready to land (${SHA_B}..${SHA_A}).`)
   expect(issues(seen).find(issue => issue.id === 'ready-one')).toMatchObject({ status: 'ready-to-land', worktree: { baseSha: SHA_B, headSha: SHA_A } })
-  expect(Object.values(seen.files).some(value => value.includes('ready-one is ready to land'))).toBe(true)
+})
+
+// Regression caught: a co-worker whose main never registered got a made-up recipient instead of being told the name is unknown.
+test('ready without a registered main peer says the name is unknown', async ($, on) => {
+  const seen = bottoms(on, coworkerState('worker-unknown', 'main-unknown'))
+  seedBoard(seen, 'board-unknown', [{ op: 'create', issue: 'unknown-one', title: 'Unknown one', status: 'todo' }, { op: 'plan', issue: 'unknown-one', ready: true }])
+  await $.session.start(startInput)
+  await tool($, { action: 'claim', issue: 'unknown-one' })
+  const text = resultText(await tool($, { action: 'ready', issue: 'unknown-one' }))
+  expect(text).toContain('The main session has no registered peer name yet')
+  expect(text).not.toContain('SendMessage main-unknown:')
+})
+
+// Regression caught: a registered peer name was dropped by the next heartbeat, so main lost the co-worker's SendMessage address.
+test('register stores the peer name through heartbeats and names main as the recipient', async ($, on) => {
+  const seen = bottoms(on, coworkerState('worker-register', 'main-register'))
+  seedRecord(seen, { session: 'main-register', main: 'main-register', role: 'main', repo: 'github.com/o/repo', state: 'idle', heartbeat: 1, peer: 'main-register-fb' })
+  await $.session.start(startInput)
+  expect(denial(await tool($, { action: 'register' }))).toContain('register requires peer')
+  const text = resultText(await tool($, { action: 'register', peer: 'clm-coworker-1-a3' }))
+  expect(text).toContain('SendMessage main-register-fb: "Co-worker worker-register is up as clm-coworker-1-a3."')
+  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
+  expect(JSON.parse(seen.files[`${ROOT}/coworkers/worker-register.json`]!)).toMatchObject({ peer: 'clm-coworker-1-a3' })
 })
 
 const seedReadyToLand = (seen: ReturnType<typeof bottoms>, session: string, issue = 'land-one') => {
@@ -129,12 +146,12 @@ test('a conflicting land aborts the cherry-pick and returns the issue to the sam
     processRun: argv => argv.includes('cherry-pick') && argv.includes('--no-commit') ? { exitCode: 1, stdout: '', stderr: 'conflict' } : undefined,
   })
   seedReadyToLand(seen, 'board-conflict', 'conflict-one')
+  seedRecord(seen, { session: 'worker-land', main: 'main-conflict', repo: 'github.com/o/repo', state: 'idle', heartbeat: 1, peer: 'worker-land-7c' })
   await $.session.start(startInput)
   const output = await tool($, { action: 'land', issue: 'conflict-one' })
-  expect(resultText(output)).toContain('worker-land was asked to rebase')
+  expect(resultText(output)).toContain(`SendMessage worker-land-7c: "Landing conflict-one conflicted at main HEAD ${SHA_A}.`)
   expect(seen.runs.some(argv => argv.join(' ') === 'git -C /work/repo cherry-pick --abort')).toBe(true)
   expect(issues(seen).find(issue => issue.id === 'conflict-one')).toMatchObject({ status: 'doing', claimedBy: 'worker-land' })
-  expect(Object.values(seen.files).some(value => value.includes(`main HEAD ${SHA_A}`) && value.includes('worker-land'))).toBe(true)
 })
 
 // Regression caught: landing into a dirty main checkout mixed unrelated user changes with a co-worker hand-back.
@@ -147,7 +164,6 @@ test('land refuses a dirty checkout without returning the issue', async ($, on) 
   await $.session.start(startInput)
   expect(denial(await tool($, { action: 'land', issue: 'dirty-one' }))).toContain('dirty checkout')
   expect(issues(seen).find(issue => issue.id === 'dirty-one')).toMatchObject({ status: 'ready-to-land', claimedBy: 'worker-land' })
-  expect(Object.values(seen.files).some(value => value.includes('rebase the issue worktree'))).toBe(false)
 })
 
 // Regression caught: revocation updated the board but left the atomic claim directory blocking reassignment.
@@ -161,48 +177,8 @@ test('revoke frees the claim so another co-worker can take it', async ($, on) =>
   expect(issues(seen).find(issue => issue.id === 'revoke-one')?.claimedBy).toBeUndefined()
 })
 
-// Regression caught: mailbox polling delivered separate human-origin prompts and left files to replay.
-test('mail reaches an idle session as one non-human prompt and is deleted', async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [], sessionId: 'main-mail' })
-  setWorkflow(on, () => workflow())
-  await $.session.start(startInput)
-  seedMail(seen, 'main-mail', 'worker-a', 'first', 1)
-  seedMail(seen, 'main-mail', 'worker-b', 'second', 2)
-  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
-  expect(seen.submissions).toEqual([{ text: '[clm message from worker-a]\nfirst\n\n[clm message from worker-b]\nsecond' }])
-  expect(Object.keys(seen.files).filter(path => path.startsWith(`${ROOT}/mail/main-mail/`))).toEqual([])
-})
-
-// Regression caught: polling drained mail during an active turn, so the message was lost before it could be submitted.
-test('mail waits while a turn is active and is delivered after it ends', async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [], sessionId: 'main-busy-mail' })
-  let current = workflow({ activeTurnId: 'turn-1' })
-  setWorkflow(on, () => current)
-  await $.session.start(startInput)
-  seedMail(seen, 'main-busy-mail', 'worker-a', 'wait for idle')
-  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
-  expect(seen.submissions).toEqual([])
-  expect(Object.keys(seen.files).some(path => path.startsWith(`${ROOT}/mail/main-busy-mail/`))).toBe(true)
-  current = workflow()
-  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
-  expect(seen.submissions).toEqual([{ text: '[clm message from worker-a]\nwait for idle' }])
-})
-
-// Regression caught: a rejected prompt submission deleted the only durable copy of co-worker mail.
-test('a dropped prompt keeps the mail for the next tick', async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [], sessionId: 'main-drop-mail', promptDrops: ['busy'] })
-  setWorkflow(on, () => workflow())
-  await $.session.start(startInput)
-  seedMail(seen, 'main-drop-mail', 'worker-a', 'retry me')
-  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
-  expect(Object.keys(seen.files).some(path => path.startsWith(`${ROOT}/mail/main-drop-mail/`))).toBe(true)
-  await seen.clock.advance(5_000); await new Promise(resolve => setTimeout(resolve, 0))
-  expect(seen.submissions).toHaveLength(2)
-  expect(Object.keys(seen.files).some(path => path.startsWith(`${ROOT}/mail/main-drop-mail/`))).toBe(false)
-})
-
-// Regression caught: /clear cancelled polling under the old id and stranded mail addressed by co-workers to that main id.
-test('after /clear the main session still drains co-worker mail', async ($, on) => {
+// Regression caught: /clear cancelled polling under the old id and dropped main's registered peer name, so co-workers lost their recipient.
+test('after /clear the main session keeps polling and its peer name', async ($, on) => {
   const state: State = {
     rows: [], replies: [], sessionId: 'main-before-clear', nextSessionId: 'main-after-clear', env: { HERDR_ENV: '1' },
     processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-after-clear' } })) : undefined,
@@ -211,10 +187,10 @@ test('after /clear the main session still drains co-worker mail', async ($, on) 
   setWorkflow(on, () => workflow())
   seedBoard(seen, 'board-after-clear', [{ op: 'create', issue: 'after-clear-ready', title: 'After clear ready', status: 'todo' }, { op: 'plan', issue: 'after-clear-ready', ready: true }])
   await $.session.start(startInput)
+  await tool($, { action: 'register', peer: 'main-peer-42' })
   await $.session.end({ sessionId: 'main-before-clear', reason: 'clear' } as Parameters<typeof $.session.end>[0])
-  seedMail(seen, 'main-before-clear', 'worker-a', 'addressed to the stable main id')
   await seen.clock.advance(10_000); await new Promise(resolve => setTimeout(resolve, 0))
-  expect(seen.submissions).toEqual([{ text: '[clm message from worker-a]\naddressed to the stable main id' }])
+  expect(resultText(await tool($, { action: 'list' }))).toContain('Main main-before-clear: peer=main-peer-42')
   expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
   expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-after-clear.json`]!)).toMatchObject({ main: 'main-before-clear' })
 })
@@ -252,42 +228,47 @@ test('a tick during claim does not revert the co-worker to idle', async ($, on) 
   expect(JSON.parse(seen.files[`${ROOT}/coworkers/worker-tick-claim.json`]!)).toMatchObject({ state: 'busy', issue: 'tick-one' })
 })
 
-// Regression caught: deferred work reached the board without telling any available co-worker that the queue changed.
-test('a classified deferral mails every live co-worker of the main session', async ($, on) => {
+// Regression caught: deferred work reached the board without main being told to message each live co-worker.
+test('a classified deferral asks main to SendMessage every live co-worker', async ($, on) => {
   const s: State = { rows: [], replies: [], sessionId: 'main-deferral', intentReplies: [intentReply({ deferred: [{ text: 'Publish later', quote: 'Publish later' }] })] }
   const seen = bottoms(on, s)
+  on('prompt.compose', () => ({ sections: [] }))
   await $.session.start(startInput)
   const now = Date.parse('2026-10-06T00:00:00Z')
-  seedRecord(seen, { session: 'worker-deferral-a', main: 'main-deferral', repo: 'github.com/o/repo', state: 'idle', heartbeat: now })
+  seedRecord(seen, { session: 'worker-deferral-a', main: 'main-deferral', repo: 'github.com/o/repo', state: 'idle', heartbeat: now, peer: 'deferral-a-e5' })
   seedRecord(seen, { session: 'worker-deferral-b', main: 'main-deferral', repo: 'github.com/o/repo', state: 'busy', heartbeat: now })
   await $.prompt.submit(promptInput('Publish later'))
-  for (let i = 0; i < 30 && !Object.keys(seen.files).some(path => path.includes('/mail/worker-deferral-b/')); i++) await new Promise(resolve => setTimeout(resolve, 5))
-  expect(Object.keys(seen.files).some(path => path.includes('/mail/worker-deferral-a/'))).toBe(true)
-  expect(Object.keys(seen.files).some(path => path.includes('/mail/worker-deferral-b/'))).toBe(true)
+  const section = async () => (await $.prompt.compose({ model: 'claude-test', promptModel: 'claude-test', surfaces: [], tools: [], outputStyle: null, traits: [] })).sections.find(item => item.id === 'clm:coworker')?.text ?? ''
+  let text = ''
+  for (let i = 0; i < 30 && !text.includes('New deferred'); i++) { text = await section(); await new Promise(resolve => setTimeout(resolve, 5)) }
+  expect(text).toMatch(/SendMessage deferral-a-e5: "New deferred board issue: /)
+  expect(text).toContain('Co-worker worker-deferral-b has no registered peer name yet')
+  expect(await section()).not.toContain('New deferred')
 })
 
 // Regression caught: ready work remained unclaimed even though Herdr was available and capacity was below the cap.
 test('a ready issue with no idle co-worker launches one co-worker in the detected multiplexer', async ($, on) => {
   const seen = bottoms(on, {
-    rows: [], replies: [], sessionId: 'main-spawn', env: { HERDR_ENV: '1' },
+    rows: [], replies: [], sessionId: 'main-spawn', env: { HERDR_ENV: '1', CLAUDE_CONFIG_DIR: '/home/t/.claude-work' },
     processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-1' } })) : undefined,
   })
   seedBoard(seen, 'board-spawn', [{ op: 'create', issue: 'spawn-one', title: 'Spawn one', status: 'todo' }])
   await $.session.start(startInput)
   const output = await tool($, { action: 'plan', issue: 'spawn-one', priority: 5, ready: true })
   expect(denial(output)).toBe('')
-  expect(seen.runs.some(argv => argv[0] === 'herdr' && argv[1] === 'tab' && argv.includes('--no-focus'))).toBe(true)
+  expect(seen.runs.some(argv => argv[0] === 'herdr' && argv[1] === 'tab' && argv.includes('--no-focus') && argv.includes('CLAUDE_CONFIG_DIR=/home/t/.claude-work'))).toBe(true)
   expect(seen.runs.some(argv => argv[0] === 'herdr' && argv[1] === 'agent' && argv.includes('pane-1'))).toBe(true)
 })
 
 // Regression caught: auto-dispatch spawned a duplicate session while an existing co-worker was idle.
-test('an idle co-worker is mailed instead of a new spawn', async ($, on) => {
+test('an idle co-worker is messaged instead of a new spawn', async ($, on) => {
   const seen = bottoms(on, { rows: [], replies: [], sessionId: 'main-idle', env: { HERDR_ENV: '1' } })
   seedBoard(seen, 'board-idle', [{ op: 'create', issue: 'idle-one', title: 'Idle one', status: 'todo' }])
   await $.session.start(startInput)
-  seedRecord(seen, { session: 'worker-idle', main: 'main-idle', repo: 'github.com/o/repo', state: 'idle', heartbeat: Date.parse('2026-10-06T00:00:00Z') })
-  await tool($, { action: 'plan', issue: 'idle-one', ready: true })
-  expect(Object.values(seen.files).some(value => value.includes('Claim the next ready issue') && value.includes('idle-one'))).toBe(true)
+  seedRecord(seen, { session: 'worker-idle', main: 'main-idle', repo: 'github.com/o/repo', state: 'idle', heartbeat: Date.parse('2026-10-06T00:00:00Z'), peer: 'worker-idle-fb' })
+  const text = resultText(await tool($, { action: 'plan', issue: 'idle-one', ready: true }))
+  expect(text).toContain('SendMessage worker-idle-fb: "Claim the next ready issue with clm_coworker; idle-one')
+  expect(text).toContain('call clm_coworker with action register')
   expect(seen.runs.some(argv => argv[0] === 'herdr')).toBe(false)
 })
 

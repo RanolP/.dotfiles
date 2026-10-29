@@ -39,36 +39,35 @@ The earlier clm later queue (deferred requests held in session state, the Later 
 
 Roles: the main session is the orchestrator and plans, lands and reassigns issues; co-worker sessions claim ready issues and work them in their own worktrees. The co-worker count is scalable: main sets `maxCoworkers` through the `plan` action (default 2, positive integer).
 
-Deferred work: the prompt intent classifier returns `deferred` items (up to five) for work the user bounds as later ("나중에", "이건 다음에", "todo로"). An item whose `quote` is not an exact substring of the prompt is dropped. Each remaining item becomes a `todo` issue on the board, reusing the pending create when the titles match. Co-worker sessions skip this, and main mails the live co-workers the new issue ids.
+Deferred work: the prompt intent classifier returns `deferred` items (up to five) for work the user bounds as later ("나중에", "이건 다음에", "todo로"). An item whose `quote` is not an exact substring of the prompt is dropped. Each remaining item becomes a `todo` issue on the board, reusing the pending create when the titles match. Co-worker sessions skip this; in main the next prompt's context asks the model to SendMessage each live co-worker the new issue ids.
 
 Board issues carry `priority`, `ready` and a claimant, and the board shows them on each card. The `ready-to-land` status has its own board column; only the co-worker tool can set it, because fold ops cannot produce it.
 
-The `clm_coworker` tool takes an `action`, and each action is limited to one role except `list` and `message`:
+The `clm_coworker` tool takes an `action`, and each action is limited to one role except `list` and `register`:
 
 - `claim` (co-worker): takes the given or the next ready unclaimed issue of the repository (highest `priority`, then oldest), starts its worktree, and marks it `doing`.
-- `ready` (co-worker): checkpoint-commits the worktree, records its base and head SHAs, sets `ready-to-land`, returns the co-worker to idle, and mails main.
+- `ready` (co-worker): checkpoint-commits the worktree, records its base and head SHAs, sets `ready-to-land`, returns the co-worker to idle, and its result tells the co-worker to SendMessage main `<issue> is ready to land (<base>..<head>).`
 - `release` (co-worker): drops the claim and returns the issue to `todo`; the worktree stays attached to the issue.
 - `plan` (main): sets `priority`, `ready` or `maxCoworkers`; setting `ready` triggers dispatch.
-- `revoke` (main): clears the claim, returns the issue to `todo`, mails the old claimant to leave the worktree unchanged, and with `to` mails another session to claim it.
+- `revoke` (main): clears the claim, returns the issue to `todo`, and its result tells main to SendMessage the old claimant to leave the worktree unchanged and, with `to` (a co-worker session id), to SendMessage that co-worker to claim it.
 - `land` (main): see below.
 - `list` (either): co-workers with live or stale state, and the board with priority, ready and claimant.
-- `message` (either): mail to `main`, `all` (live co-workers of this main) or a session id.
+- `register` (either): stores `peer`, this session's own peer name read from the first line of `ListAgents` ("This session is <name> ..."), on its registry record.
 
-Environment: a co-worker session starts with `CLM_COWORKER=1` and `CLM_MAIN_SESSION=<main session id>`; without `CLM_COWORKER=1` a session is a main. Each session registers its role and repository on `session.start`.
+Environment: a co-worker session starts with `CLM_COWORKER=1` and `CLM_MAIN_SESSION=<main session id>`; without `CLM_COWORKER=1` a session is a main. Each session registers its role and repository on `session.start`. The launch also passes main's own `CLAUDE_CONFIG_DIR`, because `ListAgents` and `SendMessage` see only sessions that share it.
 
 On-disk state, all under `~/.claude-work/clm/` except the event log:
 
 - `claims/<issue>/owner.json`: an `mkdir` lock per issue. A claim whose owner has no live registry record is reclaimed.
-- `coworkers/<session>.json`: registry record (state `starting`, `idle` or `busy`, issue, heartbeat, mux; main also stores `maxCoworkers`). A heartbeat is written every 15 s and is live for 60 s.
-- `mail/<session>/<time>-<id>.json`: one file per message, read and removed on delivery.
+- `coworkers/<session>.json`: registry record (state `starting`, `idle` or `busy`, issue, heartbeat, mux, peer name; main also stores `maxCoworkers`). A heartbeat is written every 15 s and is live for 60 s.
 - `worktrees/`: one worktree per claimed issue.
 - `~/.claude-work/tracker/events/<session>.jsonl`: the event log that the board folds from every session.
 
-Mail delivery: every 5 s each session checks its mailbox and submits the messages as one prompt (`[clm message from <session>]`) only when no turn is active, so mail never interrupts a running turn.
+Messaging: sessions talk through Claude Code's own `ListAgents` and `SendMessage` tools. Hooks cannot call `SendMessage`, so the model sends every message: a `clm_coworker` result names the recipient's peer name and the text to send, and a hook-side event (a new deferred issue, an idle co-worker with ready work) adds the same instruction to main's next prompt context. A peer name is not predictable (herdr's `sm-probe` became `sm-probe-e5`), so each session registers its own. The co-worker brief tells it to run `ListAgents`, call `register`, and SendMessage main to announce itself. Main registers too: an unregistered main is told, in every `plan` and `revoke` result and in its prompt context once it has co-workers, to run `ListAgents` and call `register`, and co-workers read main's peer name from their `register` result, `list`, or their prompt context. When a recipient has no registered peer name, the text says so instead of naming one. An idle session that receives a `SendMessage` wakes and acts on it.
 
-Land: `land` runs in main for a `ready-to-land` issue with a claimant and worktree. It refuses a dirty main checkout. Otherwise it runs `git cherry-pick --no-commit <base>..<head>`, which stages the commits without committing; main commits them afterwards in the repository's own subject format. On success the worktree is removed, the issue becomes `done`, and the co-worker is mailed. On a conflict the cherry-pick is aborted, the issue returns to `doing`, and the claimant is mailed to rebase onto the current main HEAD and call `ready` again.
+Land: `land` runs in main for a `ready-to-land` issue with a claimant and worktree. It refuses a dirty main checkout. Otherwise it runs `git cherry-pick --no-commit <base>..<head>`, which stages the commits without committing; main commits them afterwards in the repository's own subject format. On success the worktree is removed, the issue becomes `done`, and the result tells main to SendMessage the co-worker. On a conflict the cherry-pick is aborted, the issue returns to `doing`, and the result tells main to SendMessage the claimant to rebase onto the current main HEAD and call `ready` again.
 
-Auto-spawn: main polls every 5 s and after `plan`, `revoke` and `land`. When a ready unclaimed issue exists it mails an idle live co-worker to claim it. A new co-worker is launched only when no live co-worker of this main is idle or starting, the live count is below `maxCoworkers`, and the one-minute load average is under 0.75 times the core count. The launch is a `clm-coworker-<n>` session started unfocused in the repository root with a brief to claim, work only in the returned worktree, and call `ready`.
+Auto-spawn: main polls every 5 s and after `plan`, `revoke` and `land`. When a ready unclaimed issue exists and a live co-worker is idle, main is told (in the tool result and in each prompt context while that holds) to SendMessage that co-worker to claim it. A new co-worker is launched only when no live co-worker of this main is idle or starting, the live count is below `maxCoworkers`, and the one-minute load average is under 0.75 times the core count. The launch is a `clm-coworker-<n>` session started unfocused in the repository root with a brief to register its peer name, announce itself to main, claim, work only in the returned worktree, and call `ready`.
 
 Multiplexer detection reads the environment: `HERDR_SOCKET_PATH` or `HERDR_ENV` selects herdr (`herdr tab create --no-focus`, then `herdr agent start`), `ZELLIJ` selects zellij (`zellij run --no-focus`), `TMUX` selects tmux (`tmux new-window -d`). With none, no co-worker starts and the debug log records a manual command. The tmux launch is unverified: tmux is not installed on this machine. Load reading uses `/proc/loadavg` and `nproc` when `/proc/loadavg` is readable (Linux), otherwise `sysctl -n vm.loadavg` and `sysctl -n hw.ncpu` (macOS).
 

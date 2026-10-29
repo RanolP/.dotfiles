@@ -2,19 +2,17 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { ClmCoworkerInput } from '../types'
 import { append as appendEvents, captureOrigin, readAll, type EventsIo } from './events'
 import {
-  DEFAULT_COWORKER_TTL_MS, claimIssue, drainMail, isLive, pickNext, readCoworkers, readSpawnBackoff, releaseClaim, revokeClaim,
-  sendMail, sendMailToMany, shouldSpawn, writeCoworker, writeSpawnBackoff, type CoworkerIo, type CoworkerRecord,
+  DEFAULT_COWORKER_TTL_MS, claimIssue, isLive, pickNext, readCoworkers, readSpawnBackoff, releaseClaim, revokeClaim,
+  shouldSpawn, writeCoworker, writeSpawnBackoff, type CoworkerIo, type CoworkerRecord,
 } from './coworker'
 import { coworkerBrief, detectMux, launchPlan, readLoad } from './spawn'
 import { snapshot, type Issue, type Origin, type Payload } from './tracker'
 import type { PromptIntentIo } from './intent'
 import { checkpointCommit, removeWorktree, startWorktree, type Worktree, type WorktreeIo } from './worktree'
-import { readWorkflow } from './workflow'
 
 export const COWORKER_TOOL = 'mcp__clm__clm_coworker'
 const POLL_MS = 5_000
 const DEFAULT_MAX_COWORKERS = 2
-const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 
 type RuntimeRole = { isCoworker: boolean; session: string; main: string; repo: string; repoRoot: string; placeholder?: string }
 
@@ -24,6 +22,19 @@ const intents = new Map<string, Pick<PromptIntentIo, 'isCoworker' | 'announce'>>
 const localRecords = new Map<string, CoworkerRecord>()
 const registryWrites = new Map<string, Promise<void>>()
 const ticksInFlight = new Set<string>()
+const pendingNotices = new Map<string, string[]>()
+
+// Hooks cannot call SendMessage, so every hand-off is an instruction for the model to send it.
+const sendInstruction = (peer: string | undefined, who: string, text: string) => peer
+  ? `SendMessage ${peer}: "${text}"`
+  : `${who} has no registered peer name yet; read it from clm_coworker list once it registers, then SendMessage it: "${text}"`
+const peerOf = (records: readonly CoworkerRecord[], session: string) => records.find(record => record.session === session)?.peer
+const mainPeer = (records: readonly CoworkerRecord[], main: string) => records
+  .filter(record => record.role === 'main' && record.main === main && record.peer)
+  .sort((left, right) => right.heartbeat - left.heartbeat)[0]?.peer
+const REGISTER_MAIN = 'Run ListAgents, read this session\'s name from its first line, and call clm_coworker with action register and peer set to that name, so co-workers can SendMessage this main session.'
+const registerMainHint = async ($: EngineInterface, role: RuntimeRole) =>
+  mainPeer(await readCoworkers(runtimeIo($)), role.main) ? '' : ` ${REGISTER_MAIN}`
 
 const optionalRead = async ($: EngineInterface, path: string) => {
   try { return (await $.fs.exists(path)) ? await $.fs.read(path) : undefined } catch { return undefined }
@@ -83,7 +94,7 @@ const updateRegistry = async ($: EngineInterface, role: RuntimeRole, update: Par
   const existing = localRecords.get(role.session)
   const record: CoworkerRecord = {
     session: role.session, main: role.main, role: role.isCoworker ? 'coworker' : 'main', repo: role.repo, state: existing?.state ?? 'idle', heartbeat: now,
-    ...(existing?.issue ? { issue: existing.issue } : {}), ...(existing?.mux ? { mux: existing.mux } : {}),
+    ...(existing?.issue ? { issue: existing.issue } : {}), ...(existing?.mux ? { mux: existing.mux } : {}), ...(existing?.peer ? { peer: existing.peer } : {}),
     ...(role.session === role.main && existing?.maxCoworkers !== undefined ? { maxCoworkers: existing.maxCoworkers } : {}), ...update,
   }
   if (update.issue === undefined && 'issue' in update) delete record.issue
@@ -100,7 +111,7 @@ const updateMainRegistry = async ($: EngineInterface, role: RuntimeRole, maxCowo
   await writeCoworker(runtimeIo($), {
     session: role.main, main: role.main, role: 'main', repo: role.repo,
     state: existing?.state ?? 'idle', heartbeat: existing?.heartbeat ?? await $.clock.now(),
-    maxCoworkers,
+    maxCoworkers, ...(existing?.peer ? { peer: existing.peer } : {}),
   })
 }
 
@@ -176,8 +187,8 @@ const ready = async ($: EngineInterface, role: RuntimeRole, issueId?: string) =>
   const worktree = { ...issue.worktree, baseSha, headSha }
   await append($, [worktreePayload(issue.id, worktree), { op: 'checkpoint', issue: issue.id, sha: headSha }, { op: 'status', issue: issue.id, status: 'ready-to-land' }])
   await updateRegistry($, role, { state: 'idle', issue: undefined })
-  await sendMail(runtimeIo($), { from: role.session, to: role.main, text: `${issue.id} is ready to land (${baseSha}..${headSha}).`, now: await $.clock.now() })
-  return `${issue.id} is ready to land at ${baseSha}..${headSha}; the main session was notified.`
+  const peer = mainPeer(await readCoworkers(runtimeIo($)), role.main)
+  return `${issue.id} is ready to land at ${baseSha}..${headSha}. ${sendInstruction(peer, 'The main session', `${issue.id} is ready to land (${baseSha}..${headSha}).`)}`
 }
 
 const release = async ($: EngineInterface, role: RuntimeRole, issueId?: string) => {
@@ -199,8 +210,8 @@ const plan = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInp
   if (input.priority !== undefined || input.ready !== undefined)
     await append($, [{ op: 'plan', issue: issue.id, ...(input.priority === undefined ? {} : { priority: input.priority }), ...(input.ready === undefined ? {} : { ready: input.ready }) }])
   if (input.maxCoworkers !== undefined) await updateMainRegistry($, role, input.maxCoworkers)
-  if (input.ready === true) await dispatchReadyWork($, role)
-  return `Planned ${issue.id}: priority=${input.priority ?? issue.priority ?? 'unset'}, ready=${input.ready ?? issue.ready ?? false}, maxCoworkers=${input.maxCoworkers ?? await readMaxCoworkers($, role)}.`
+  const dispatched = input.ready === true ? await dispatchReadyWork($, role) : undefined
+  return `Planned ${issue.id}: priority=${input.priority ?? issue.priority ?? 'unset'}, ready=${input.ready ?? issue.ready ?? false}, maxCoworkers=${input.maxCoworkers ?? await readMaxCoworkers($, role)}.${dispatched ? ` ${dispatched}` : ''}${await registerMainHint($, role)}`
 }
 
 const revoke = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInput) => {
@@ -209,11 +220,13 @@ const revoke = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerI
   const old = issue.claimedBy
   await revokeClaim(runtimeIo($), issue.id)
   await append($, [{ op: 'claim', issue: issue.id, by: null }, { op: 'status', issue: issue.id, status: 'todo' }])
-  const now = await $.clock.now()
-  if (old) await sendMail(runtimeIo($), { from: role.session, to: old, text: `Your claim on ${issue.id} was revoked. Keep its worktree unchanged until it is reassigned.`, now })
-  if (input.to) await sendMail(runtimeIo($), { from: role.session, to: input.to, text: `Claim ${issue.id}; its existing worktree remains attached to the issue.`, now })
-  await dispatchReadyWork($, role)
-  return `Revoked ${issue.id}${old ? ` from ${old}` : ''}${input.to ? ` and notified ${input.to}` : ''}.`
+  const records = await readCoworkers(runtimeIo($))
+  const notices = [
+    ...(old ? [sendInstruction(peerOf(records, old), `Co-worker ${old}`, `Your claim on ${issue.id} was revoked. Keep its worktree unchanged until it is reassigned.`)] : []),
+    ...(input.to ? [sendInstruction(peerOf(records, input.to), `Co-worker ${input.to}`, `Claim ${issue.id} with clm_coworker; its existing worktree remains attached to the issue.`)] : []),
+  ]
+  const dispatched = await dispatchReadyWork($, role)
+  return [`Revoked ${issue.id}${old ? ` from ${old}` : ''}.`, ...notices, ...(dispatched ? [dispatched] : [])].join(' ') + await registerMainHint($, role)
 }
 
 const abortCherryPick = async ($: EngineInterface, repoRoot: string) => {
@@ -233,12 +246,8 @@ const land = async ($: EngineInterface, role: RuntimeRole, issueId?: string) => 
     await abortCherryPick($, role.repoRoot)
     await append($, [{ op: 'status', issue: issue.id, status: 'doing' }])
     const mainHead = await checkedGit($, role.repoRoot, ['rev-parse', 'HEAD'])
-    await sendMail(runtimeIo($), {
-      from: role.session, to: issue.claimedBy,
-      text: `Landing ${issue.id} conflicted at main HEAD ${mainHead}. Rebase the issue worktree onto ${mainHead}, resolve it, and call ready again.`,
-      now: await $.clock.now(),
-    })
-    return `Landing ${issue.id} conflicted. The cherry-pick was aborted and ${issue.claimedBy} was asked to rebase onto ${mainHead}.`
+    const peer = peerOf(await readCoworkers(runtimeIo($)), issue.claimedBy)
+    return `Landing ${issue.id} conflicted and the cherry-pick was aborted; ask ${issue.claimedBy} to rebase onto ${mainHead}. ${sendInstruction(peer, `Co-worker ${issue.claimedBy}`, `Landing ${issue.id} conflicted at main HEAD ${mainHead}. Rebase the issue worktree onto ${mainHead}, resolve it, and call clm_coworker ready again.`)}`
   }
   await append($, [{ op: 'status', issue: issue.id, status: 'done' }, { op: 'claim', issue: issue.id, by: null }, { op: 'land', issue: issue.id }])
   await revokeClaim(runtimeIo($), issue.id)
@@ -246,29 +255,29 @@ const land = async ($: EngineInterface, role: RuntimeRole, issueId?: string) => 
     try { await removeWorktree(worktreeIo($), issue.worktree); return true }
     catch (error) { $.ui.log(`clm co-worker worktree cleanup failed for ${issue.id}: ${String(error).slice(0, 160)}`); return false }
   })()
-  await sendMail(runtimeIo($), { from: role.session, to: issue.claimedBy, text: `${issue.id} landed successfully; its worktree ${removed ? 'was removed' : 'still needs cleanup'}.`, now: await $.clock.now() })
-  await dispatchReadyWork($, role)
-  return `Landed ${issue.id}. Its changes are staged in ${role.repoRoot}; commit them with the repository's own subject format after final verification.`
+  const peer = peerOf(await readCoworkers(runtimeIo($)), issue.claimedBy)
+  const dispatched = await dispatchReadyWork($, role)
+  return `Landed ${issue.id}. Its changes are staged in ${role.repoRoot}; commit them with the repository's own subject format after final verification. ${sendInstruction(peer, `Co-worker ${issue.claimedBy}`, `${issue.id} landed successfully; its worktree ${removed ? 'was removed' : 'still needs cleanup'}.`)}${dispatched ? ` ${dispatched}` : ''}`
 }
 
-const message = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInput) => {
-  if (!input.to || !input.text?.trim()) throw new Error('message requires to and non-empty text')
-  const records = await readCoworkers(runtimeIo($))
-  const now = await $.clock.now()
-  const recipients = input.to === 'main' ? [role.main]
-    : input.to === 'all' ? records.filter(record => record.role === 'coworker' && record.main === role.main && record.session !== role.session && isLive(record, now, DEFAULT_COWORKER_TTL_MS)).map(record => record.session)
-      : [input.to]
-  await sendMailToMany(runtimeIo($), { from: role.session, to: [...new Set(recipients)], text: input.text.trim(), now })
-  return `Sent the message to ${[...new Set(recipients)].join(', ') || 'no live sessions'}.`
+const register = async ($: EngineInterface, role: RuntimeRole, peer?: string) => {
+  const name = peer?.trim()
+  if (!name) throw new Error('register requires peer: this session\'s name from the first line of ListAgents')
+  await updateRegistry($, role, { peer: name })
+  if (!role.isCoworker) return `Registered ${name} as the peer name of main session ${role.main}.`
+  const main = mainPeer(await readCoworkers(runtimeIo($)), role.main)
+  return `Registered ${name}. ${sendInstruction(main, 'The main session', `Co-worker ${role.session} is up as ${name}.`)}`
 }
 
 const list = async ($: EngineInterface, role: RuntimeRole) => {
   const now = await $.clock.now()
-  const coworkers = (await readCoworkers(runtimeIo($))).filter(record => record.role === 'coworker' && record.main === role.main)
+  const records = await readCoworkers(runtimeIo($))
+  const coworkers = records.filter(record => record.role === 'coworker' && record.main === role.main)
   const issues = await issuesForRepo($, role)
   return [
+    `Main ${role.main}: peer=${mainPeer(records, role.main) ?? 'unregistered'}`,
     'Co-workers:',
-    ...(coworkers.length ? coworkers.map(record => `- ${record.session}: ${isLive(record, now, DEFAULT_COWORKER_TTL_MS) ? 'live' : 'stale'}, ${record.state}${record.issue ? `, issue ${record.issue}` : ''}`) : ['- none']),
+    ...(coworkers.length ? coworkers.map(record => `- ${record.session}: peer=${record.peer ?? 'unregistered'}, ${isLive(record, now, DEFAULT_COWORKER_TTL_MS) ? 'live' : 'stale'}, ${record.state}${record.issue ? `, issue ${record.issue}` : ''}`) : ['- none']),
     'Board:',
     ...(issues.length ? issues.map(issue => `- ${issue.id}: ${issue.status}, priority=${issue.priority ?? 'unset'}, ready=${issue.ready ?? false}, claimant=${issue.claimedBy ?? 'none'} — ${issue.title}`) : ['- none']),
   ].join('\n')
@@ -300,7 +309,8 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
   while (used.has(`clm-coworker-${index}`)) index += 1
   const name = `clm-coworker-${index}`
   await writeCoworker(runtimeIo($), { session: name, main: role.main, role: 'coworker', repo: role.repo, state: 'starting', heartbeat: await $.clock.now(), mux })
-  const launch = launchPlan({ mux, cwd: role.repoRoot, name, env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: role.main, CLM_COWORKER_NAME: name }, brief: coworkerBrief({ main: role.main, repo: role.repoRoot }) })
+  const configDir = await $.env.get('CLAUDE_CONFIG_DIR')
+  const launch = launchPlan({ mux, cwd: role.repoRoot, name, env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: role.main, CLM_COWORKER_NAME: name, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) }, brief: coworkerBrief({ main: role.main, repo: role.repoRoot }) })
   if ('manual' in launch) {
     $.ui.log(`clm co-worker launch unavailable: mux=none command=${launch.manual} exitCode=unavailable stderr=${JSON.stringify('no supported multiplexer detected')}`, { to: 'debug' })
     await removeRegistry($, name)
@@ -321,7 +331,16 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
   }
 }
 
-async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise<void> {
+// null: no ready issue or no idle co-worker, so dispatch may spawn; a string: main must message the idle co-worker.
+function claimInstruction(records: readonly CoworkerRecord[], issues: readonly Issue[], role: RuntimeRole, now: number): string | null {
+  const next = pickNext(issues.map(selectableIssue), role.repo)
+  if (!next) return null
+  const idle = records.find(record => record.role === 'coworker' && record.main === role.main && record.state === 'idle' && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
+  if (!idle) return null
+  return sendInstruction(idle.peer, `Co-worker ${idle.session}`, `Claim the next ready issue with clm_coworker; ${next.id} currently has the highest priority.`)
+}
+
+async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise<string | undefined> {
   if (role.isCoworker) return
   const now = await $.clock.now()
   const issues = await issuesForRepo($, role)
@@ -333,13 +352,9 @@ async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise
       $.ui.log(`clm co-worker ${record.session} failed to register before its ${DEFAULT_COWORKER_TTL_MS} ms startup deadline`)
     } else records.push(record)
   }
-  const next = pickNext(issues.map(selectableIssue), role.repo)
-  if (!next) return
-  const idle = records.find(record => record.role === 'coworker' && record.main === role.main && record.state === 'idle' && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
-  if (idle) {
-    await sendMail(runtimeIo($), { from: role.session, to: idle.session, text: `Claim the next ready issue; ${next.id} currently has the highest priority.`, now })
-    return
-  }
+  if (!pickNext(issues.map(selectableIssue), role.repo)) return
+  const idleNotice = claimInstruction(records, issues, role, now)
+  if (idleNotice !== null) return idleNotice
   const load = await (async () => {
     try { return await readLoad({ run: (argv, options) => $.process.run([...argv], options), read: path => optionalRead($, path) }) }
     catch (error) { $.ui.log(`clm co-worker load reading failed: ${String(error).slice(0, 160)}`, { to: 'debug' }); return undefined }
@@ -357,27 +372,11 @@ async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise
     await launchCoworker($, role, records)
 }
 
-const deliverMail = async ($: EngineInterface, role: RuntimeRole) => {
-  const workflow = await readWorkflow({ get: async () => (await $.state.get(WORKFLOW)).value })
-  if (workflow.activeTurnId) return
-  const mailboxes = role.isCoworker || role.session === role.main ? [role.session] : [role.session, role.main]
-  const messages = (await Promise.all([...new Set(mailboxes)].map(session => drainMail(runtimeIo($), session)))).flat()
-  if (!messages.length) return
-  const text = messages.map(item => `[clm message from ${item.message.from}]\n${item.message.text}`).join('\n\n')
-  const result = await $.prompt.submit({ text })
-  if (result.drop !== undefined) {
-    $.ui.log(`clm co-worker mail delivery dropped: ${String(result.drop).slice(0, 160)}`, { to: 'debug' })
-    return
-  }
-  await Promise.all(messages.map(item => $.process.run(['rm', '-f', item.path], { timeoutMs: 1_000 })))
-}
-
 const tick = async ($: EngineInterface, role: RuntimeRole) => {
   if (ticksInFlight.has(role.session)) return
   ticksInFlight.add(role.session)
   try {
     await updateRegistry($, role)
-    await deliverMail($, role)
     await dispatchReadyWork($, role)
   } finally { ticksInFlight.delete(role.session) }
 }
@@ -392,8 +391,8 @@ const handleTool = async ($: EngineInterface, input: ClmCoworkerInput) => {
     case 'revoke': return revoke($, role, input)
     case 'land': return land($, role, input.issue)
     case 'list': return list($, role)
-    case 'message': return message($, role, input)
-    default: throw new Error('action must be claim, ready, release, plan, revoke, land, list, or message')
+    case 'register': return register($, role, input.peer)
+    default: throw new Error('action must be claim, ready, release, plan, revoke, land, list, or register')
   }
 }
 
@@ -403,8 +402,9 @@ const announceDeferred = async ($: EngineInterface, ids: string[]) => {
   const now = await $.clock.now()
   const recipients = (await readCoworkers(runtimeIo($)))
     .filter(record => record.role === 'coworker' && record.main === role.main && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
-    .map(record => record.session)
-  await sendMailToMany(runtimeIo($), { from: role.session, to: recipients, text: `New deferred board issue${ids.length === 1 ? '' : 's'}: ${ids.join(', ')}.`, now })
+  if (!recipients.length) return
+  const text = `New deferred board issue${ids.length === 1 ? '' : 's'}: ${ids.join(', ')}.`
+  pendingNotices.set(role.session, [...pendingNotices.get(role.session) ?? [], ...recipients.map(record => sendInstruction(record.peer, `Co-worker ${record.session}`, text))])
 }
 
 export const coworkerIntent = (session: string) => intents.get(session)
@@ -421,12 +421,12 @@ const startRuntime = async ($: EngineInterface, stableMain?: string) => {
   ])
   await $.tool.register({
     name: 'clm_coworker',
-    description: 'Coordinate clm board work between the main session and detached co-worker sessions: plan, claim, hand back, land, reassign, list, or message.',
+    description: 'Coordinate clm board work between the main session and detached co-worker sessions: plan, claim, hand back, land, reassign, list, or register this session\'s peer name for SendMessage.',
     inputSchema: {
       type: 'object', properties: {
-        action: { type: 'string', enum: ['claim', 'ready', 'release', 'plan', 'revoke', 'land', 'list', 'message'] },
+        action: { type: 'string', enum: ['claim', 'ready', 'release', 'plan', 'revoke', 'land', 'list', 'register'] },
         issue: { type: 'string' }, priority: { type: 'integer' }, ready: { type: 'boolean' }, maxCoworkers: { type: 'integer', minimum: 1 },
-        to: { type: 'string' }, text: { type: 'string' },
+        to: { type: 'string' }, peer: { type: 'string', description: 'register: this session\'s name from the first line of ListAgents' },
       }, required: ['action'], additionalProperties: false,
     },
   })
@@ -438,24 +438,37 @@ const stopRuntime = (session: string) => {
   localRecords.delete(session)
   registryWrites.delete(session)
   ticksInFlight.delete(session)
+  pendingNotices.delete(session)
   for (const timer of timers.get(session) ?? []) timer.cancel()
   timers.delete(session)
 }
 
 const promptContext = async ($: EngineInterface, role: RuntimeRole): Promise<string | undefined> => {
   const issues = await issuesForRepo($, role)
+  const records = await readCoworkers(runtimeIo($))
   if (role.isCoworker) {
-    const record = (await readCoworkers(runtimeIo($))).find(item => item.session === role.session)
+    const record = records.find(item => item.session === role.session)
     const issue = record?.issue ? issues.find(item => item.id === record.issue) : undefined
-    return `Role: clm co-worker for main session ${role.main}.${issue ? ` Claimed issue: ${issue.id} (${issue.title}). Worktree: ${issue.worktree?.dir ?? 'not recorded'}.` : ' Claim ready work with clm_coworker before editing.'}`
+    const main = mainPeer(records, role.main)
+    return [
+      `Role: clm co-worker for main session ${role.main}${main ? `, reachable with SendMessage ${main}` : ''}.${issue ? ` Claimed issue: ${issue.id} (${issue.title}). Worktree: ${issue.worktree?.dir ?? 'not recorded'}.` : ' Claim ready work with clm_coworker before editing.'}`,
+      ...(record?.peer ? [] : ['Run ListAgents, read this session\'s name from its first line, and call clm_coworker with action register and peer set to that name.']),
+    ].join('\n')
   }
   const unplanned = issues.filter(issue => issue.status === 'todo' && issue.priority === undefined && issue.ready === undefined)
   const waiting = issues.filter(issue => issue.status === 'ready-to-land')
-  if (!unplanned.length && !waiting.length) return undefined
-  return [
+  const hasCoworkers = records.some(record => record.role === 'coworker' && record.main === role.main)
+  const claimNotice = claimInstruction(records, issues, role, await $.clock.now())
+  const notices = pendingNotices.get(role.session) ?? []
+  pendingNotices.delete(role.session)
+  const lines = [
     ...(unplanned.length ? [`Unplanned deferred issues: ${unplanned.map(issue => `${issue.id} (${issue.title})`).join('; ')}.`] : []),
     ...(waiting.length ? [`Ready-to-land issues: ${waiting.map(issue => `${issue.id} (${issue.title})`).join('; ')}.`] : []),
-  ].join('\n')
+    ...(hasCoworkers && !mainPeer(records, role.main) ? [REGISTER_MAIN] : []),
+    ...(claimNotice ? [claimNotice] : []),
+    ...notices,
+  ]
+  return lines.length ? lines.join('\n') : undefined
 }
 
 export const registerCoworkers: Register = (on) => {

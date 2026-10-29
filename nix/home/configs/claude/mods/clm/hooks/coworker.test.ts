@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { claimIssue, drainMail, pickNext, releaseClaim, revokeClaim, sendMail, shouldSpawn, writeCoworker, type CoworkerIo } from './coworker'
+import { claimIssue, pickNext, releaseClaim, revokeClaim, shouldSpawn, writeCoworker, type CoworkerIo } from './coworker'
 
 type Filesystem = { files: Map<string, string>; dirs: Set<string> }
 let tempSequence = 0
@@ -107,16 +107,6 @@ test('shouldSpawn is false while a live co-worker is idle and false above the lo
   expect(shouldSpawn({ ...base, load1: 1, coworkers: [{ session: 'w1', main: 'main', role: 'coworker', repo: '/repo', state: 'idle', heartbeat: 100 }] })).toBe(false)
   expect(shouldSpawn({ ...base, load1: 6, coworkers: [] })).toBe(false)
   expect(shouldSpawn({ ...base, load1: 5.99, coworkers: [] })).toBe(true)
-})
-
-// Regression caught: lexicographic file reads could reorder mail or deliver it repeatedly.
-test('mailbox reads messages in send order without deleting them', async () => {
-  const root = tempDir()
-  const io = filesystemIo(root)
-  await sendMail(io, { from: 'main', to: 'worker', text: 'first', now: 10 })
-  await sendMail(io, { from: 'peer', to: 'worker', text: 'second', now: 20 })
-  expect((await drainMail(io, 'worker')).map(item => item.message.text)).toEqual(['first', 'second'])
-  expect((await drainMail(io, 'worker')).map(item => item.message.text)).toEqual(['first', 'second'])
 })
 
 // Regression caught: stale claims could block ready work, while a non-owner could release a live claim.

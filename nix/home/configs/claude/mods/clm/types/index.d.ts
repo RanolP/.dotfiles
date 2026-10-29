@@ -70,13 +70,13 @@ export type ClmResourceInput = {
 }
 
 export type ClmCoworkerInput = {
-  action: 'claim' | 'ready' | 'release' | 'plan' | 'revoke' | 'land' | 'list' | 'message'
+  action: 'claim' | 'ready' | 'release' | 'plan' | 'revoke' | 'land' | 'list' | 'register'
   issue?: string
   priority?: number
   ready?: boolean
   maxCoworkers?: number
   to?: string
-  text?: string
+  peer?: string
 }
 
 export type ClmStableAttachmentType = StableAttachmentType

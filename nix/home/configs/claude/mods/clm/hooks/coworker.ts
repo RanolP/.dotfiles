@@ -10,6 +10,7 @@ export type CoworkerRecord = {
   heartbeat: number
   mux?: string
   maxCoworkers?: number
+  peer?: string
 }
 
 export type SpawnBackoff = { failures: number; lastFailedAt?: number }
@@ -24,8 +25,6 @@ export type CoworkerIssue = {
   createdAt: number | string
 }
 
-export type CoworkerMail = { from: string; to: string; text: string; now: number }
-export type CoworkerMailItem = { path: string; message: CoworkerMail }
 export type CoworkerIo = {
   root?: string
   ttlMs?: number
@@ -62,6 +61,7 @@ const isCoworkerRecord = (value: unknown): value is CoworkerRecord => isRecord(v
   && (value.issue === undefined || typeof value.issue === 'string')
   && (value.mux === undefined || typeof value.mux === 'string')
   && (value.maxCoworkers === undefined || typeof value.maxCoworkers === 'number')
+  && (value.peer === undefined || typeof value.peer === 'string')
 const claimOwner = (value: unknown): string | undefined => isRecord(value) && typeof value.session === 'string' ? value.session : undefined
 const isSpawnBackoff = (value: unknown): value is SpawnBackoff => isRecord(value)
   && Number.isInteger(value.failures) && typeof value.failures === 'number' && value.failures >= 0
@@ -177,43 +177,6 @@ export async function releaseClaim(io: CoworkerIo, issueId: string, session: str
 
 export async function revokeClaim(io: CoworkerIo, issueId: string): Promise<boolean> {
   return removeClaim(io, issueId)
-}
-
-export async function sendMail(io: CoworkerIo, message: CoworkerMail): Promise<void> {
-  const root = await rootFor(io)
-  const to = safeSegment(message.to, 'mail recipient')
-  const dir = `${root}/mail/${to}`
-  await run(io, ['mkdir', '-p', dir])
-  const id = nonce(io)
-  const name = `${String(message.now).padStart(16, '0')}-${id}.json`
-  const temporary = `${dir}/.${name}.tmp`
-  await io.write(temporary, JSON.stringify(message))
-  const moved = await run(io, ['mv', temporary, `${dir}/${name}`])
-  if (moved.exitCode !== 0) {
-    await run(io, ['rm', '-f', temporary])
-    throw new Error(`could not send mail to ${to}: ${moved.stderr}`)
-  }
-}
-
-export async function sendMailToMany(io: CoworkerIo, input: { from: string; to: readonly string[]; text: string; now: number }): Promise<void> {
-  await Promise.all(input.to.map(to => sendMail(io, { from: input.from, to, text: input.text, now: input.now })))
-}
-
-const coworkerMail = (value: unknown): CoworkerMail | undefined => isRecord(value)
-  && typeof value.from === 'string' && typeof value.to === 'string' && typeof value.text === 'string' && typeof value.now === 'number'
-  ? { from: value.from, to: value.to, text: value.text, now: value.now } : undefined
-
-export async function drainMail(io: CoworkerIo, session: string): Promise<CoworkerMailItem[]> {
-  const root = await rootFor(io)
-  const dir = `${root}/mail/${safeSegment(session, 'session')}`
-  const messages: CoworkerMailItem[] = []
-  const entries = (await io.list(dir)).filter(entry => entry.kind === 'file' && entry.name.endsWith('.json')).sort((a, b) => a.name.localeCompare(b.name))
-  for (const entry of entries) {
-    const path = `${dir}/${entry.name}`
-    const message = coworkerMail(parse(await io.read(path)))
-    if (message) messages.push({ path, message })
-  }
-  return messages
 }
 
 const createdTime = (value: number | string) => typeof value === 'number' ? value : Date.parse(value)

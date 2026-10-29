@@ -1,7 +1,8 @@
 import { isRecord } from './tracker'
 
 export type Mux = 'herdr' | 'zellij' | 'tmux' | 'none'
-export type CoworkerEnvironment = { CLM_COWORKER: '1'; CLM_MAIN_SESSION: string; CLM_COWORKER_NAME: string }
+// CLAUDE_CONFIG_DIR must match main's, or ListAgents and SendMessage cannot see the peers.
+export type CoworkerEnvironment = { CLM_COWORKER: '1'; CLM_MAIN_SESSION: string; CLM_COWORKER_NAME: string; CLAUDE_CONFIG_DIR?: string }
 export type ProcessResult = { exitCode: number; stdout: string; stderr: string }
 export type SpawnIo = {
   run: (argv: readonly string[], options?: { cwd?: string; timeoutMs?: number }) => Promise<ProcessResult>
@@ -20,7 +21,7 @@ export function detectMux(env: Record<string, string | undefined>): Mux {
   return 'none'
 }
 
-const environmentArgs = (env: CoworkerEnvironment) => Object.entries(env).map(([key, value]) => `${key}=${value}`)
+const environmentArgs = (env: CoworkerEnvironment) => Object.entries(env).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}=${value}`)
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`
 
 export function parseHerdrPaneId(stdout: string): string {
@@ -83,5 +84,5 @@ export async function readLoad(io: SpawnIo): Promise<{ load1: number; cores: num
 }
 
 export function coworkerBrief(input: { main: string; repo: string }): string {
-  return `You are a clm co-worker for main session ${input.main} in ${input.repo}. Call the clm_coworker tool with action claim, work only inside the returned worktree, checkpoint your completed work, then call clm_coworker with action ready. Use action message to discuss the work with the main session or other co-workers.`
+  return `You are a clm co-worker for main session ${input.main} in ${input.repo}. First run ListAgents, read this session's name from its first line, and call the clm_coworker tool with action register and peer set to that name; then SendMessage the main peer it names to announce yourself. Call clm_coworker with action claim, work only inside the returned worktree, checkpoint your completed work, then call clm_coworker with action ready and send the SendMessage its result gives. Use SendMessage to discuss the work with the main session.`
 }

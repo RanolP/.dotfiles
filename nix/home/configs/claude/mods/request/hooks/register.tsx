@@ -66,8 +66,9 @@ const isAlternatives = (v: unknown): v is Alternative[] => Array.isArray(v) && v
 // Control characters (other than tab and newline), C1, line and paragraph
 // separators, bidi controls and default-ignorables (zero-width, soft hyphen,
 // variation selectors, tags, Hangul fillers) can make a terminal show
-// something other than the bytes that run.
-const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u
+// something other than the bytes that run, as can a space lookalike, which
+// draws as a space while bash keeps it inside the word.
+const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u2800\u3000\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/u
 
 // Prose the model wrote (why, alternatives, blocks) is drawn as text with any
 // hidden character spelled out, so nothing it holds can restyle the row.
@@ -308,21 +309,24 @@ export const bandPreview = (first: ApprovalRequest, room: number): string =>
 // line) with slack for the surface's chrome. A guess at the engine's layout,
 // made tall: the engine wraps the question (bold Text, no truncation).
 const DIALOG_CHROME_ROWS = 10
-// Rows a text takes when wrapped by word, as Text wraps: a word that does
-// not fit the row moves to the next, and a word wider than the row breaks
-// across rows. Wide characters and tabs count as cells counts them, so it
-// errs tall.
+// Rows a text takes as Text wraps it (word wrap keeping every space, a word
+// wider than the row broken across rows): a space that falls on a full row
+// starts the next one. Wide characters and tabs count as cells counts them,
+// so it errs tall.
 const wrappedRows = (line: string, width: number) => {
   let rows = 1
   let col = 0
-  for (const word of line.split(' ')) {
+  line.split(' ').forEach((word, i) => {
+    if (i > 0) {
+      if (col >= width) { rows += 1; col = 0 }
+      col += 1
+    }
     let w = cells(word)
-    const end = col === 0 ? w : col + 1 + w
-    if (end <= width) { col = end; continue }
+    if (col + w <= width) { col += w; return }
     if (col > 0) rows += 1
     for (; w > width; w -= width) rows += 1
     col = w
-  }
+  })
   return rows
 }
 const rowsAt = (text: string, width: number) =>
@@ -351,12 +355,6 @@ const layoutOf = (r: ApprovalRequest): Layout | undefined => {
   return undefined
 }
 
-// Rows a layout needs on the surface: the header, note, command and case
-// rows wrapped at the dialog's inner width, though the tree above it is
-// wider, and the dialog under them with the layout's question.
-const layoutRows = (r: ApprovalRequest, layout: Layout, columns: number): number =>
-  rowsAt([asker(r), ...escapedNote(r), shownCommand(r), ...(layout.hasCase ? caseRows(r).map(c => `${c.label}: ${c.value}`) : [])].join('\n'), columns - 6)
-  + dialogRows(layout.question, columns)
 
 // The review dialogs open now, by request id (the dialog's chip). The hooks
 // below know one by its chip, question and labels: the tool.call hook adds
@@ -561,8 +559,7 @@ export const register: Register = on => {
   // will not run and why. When it fits, the review is drawn above the dialog
   // (the command highlighted, the case as labelled rows) and the dialog asks
   // only the one-line question (see layoutOf for a review over the engine's
-  // rows around the dialog); the rows needed are the taller of that layout
-  // and the plain one the engine falls back to on a refused tree.
+  // rows around the dialog).
   on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
     const ours = ourDialog(e.props.questions)
     if (!ours) return next(e)
@@ -570,9 +567,9 @@ export const register: Register = on => {
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
     const layout = r ? layoutOf(r) : undefined
     const tooLong = open.question.length > QUESTION_LIMIT
-    const needs = r && e.viewport
-      ? Math.max(dialogRows(open.question, e.viewport.columns), layout ? layoutRows(r, layout, e.viewport.columns) : 0)
-      : undefined
+    // The plain question is always the tallest layout: every tree draws a
+    // subset of its lines, unindented, over a shorter question.
+    const needs = r && e.viewport ? dialogRows(open.question, e.viewport.columns) : undefined
     const fits = !tooLong && needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
     open.isApprovable = fits
     if (fits && r && layout) {

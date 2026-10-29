@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, RenderViewport } from 'claude-code'
+import { dialogRows } from '../hooks/register'
 
 const RAISE = 'mcp__request__raise_approval_request'
 // Quotes, a variable, a pipe, Markdown emphasis and a trailing space: anything a re-quoting, trimming or rendering step would change.
@@ -255,16 +256,24 @@ for (const [name, command, source] of [
 }
 
 // Regression: a default-ignorable or bidi character (soft hyphen, word joiner, a tag, Arabic letter mark, line
-// separator) drawn raw, so the dialog showed other bytes than the ones that ran.
+// separator) drawn raw, or a space lookalike (no-break space) drawn as a space while bash keeps it in the word,
+// so the dialog showed other bytes than the ones that ran.
 test('a command with invisible characters is shown escaped, exact to the bytes', async ($, on) => {
   const { asked, trees, runs, nextStatus } = await start($, on, APPROVE)
-  const command = 'git push origin ma\u00adin\u2060 # \u{e0041}\u061c\u2028x'
+  const command = 'git push origin ma\u00adin\u2060 # \u{e0041}\u061c\u2028x\u00a0y'
   await raise($, nextStatus, { command })
-  const source = '"git push origin ma\\u00adin\\u2060 # \\udb40\\udc41\\u061c\\u2028x"'
+  const source = '"git push origin ma\\u00adin\\u2060 # \\udb40\\udc41\\u061c\\u2028x\\u00a0y"'
   expect(JSON.parse(source)).toBe(command)
   expect(trees[0]?.find(x => x.type === 'Code')?.text).toBe(source)
   expect(asked[0]?.question).toContain(`\n    ${source}\n`)
   expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
+})
+
+// Regression: the row count missing the row a kept space starts when a word fills its row exactly (Text wraps
+// keeping spaces), so Approve counted while lines of the command were off-screen.
+test('a space after a full row counts as the start of the next row', async () => {
+  // 16 columns leave 10 for the question: "aaaaaaaaaa", " ", "bbbbbbbbbb" are 3 rows, plus the dialog's 10.
+  expect(dialogRows('aaaaaaaaaa bbbbbbbbbb', 16)).toBeGreaterThanOrEqual(13)
 })
 
 // Regression: a review over the engine's 12 rows around the dialog sent as a tree the engine refuses (dropping the

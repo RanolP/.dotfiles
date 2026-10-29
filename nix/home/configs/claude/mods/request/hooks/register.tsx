@@ -67,39 +67,41 @@ const isAlternatives = (v: unknown): v is Alternative[] => Array.isArray(v) && v
 // marks can make a terminal show something other than the bytes that run.
 const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/
 
-// A fence longer than any backtick run inside keeps the text literal in the
-// preview's Markdown.
-const fenced = (text: string, info = '') => {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(run => run.length))
-  const fence = '`'.repeat(Math.max(3, longest + 1))
-  return `${fence}${info}\n${text}\n${fence}`
-}
-const inlineCode = (text: string) => {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(run => run.length))
-  const tick = '`'.repeat(longest + 1)
-  return `${tick} ${text} ${tick}`
-}
-
 // Prose the model wrote (why, alternatives, blocks) is drawn as text with any
 // hidden character spelled out, so nothing it holds can restyle the row.
 const HIDDEN_ALL = new RegExp(HIDDEN.source, 'gu')
 const visible = (text: string) => text.replace(HIDDEN_ALL, c => `\\u{${c.codePointAt(0)?.toString(16)}}`)
+// Model prose on one labelled line, so it cannot pass for a line of the command.
+const oneLine = (text: string) => visible(text).replace(/\s+/g, ' ').trim()
 
-// The command as the dialog shows it: a hidden character escaped (a terminal
-// would draw a bidi mark as the reordering it is); the escape is exact.
-const shownCommand = (r: ApprovalRequest) => (HIDDEN.test(r.command) ? JSON.stringify(r.command) : r.command)
+// The engine draws the question as plain text (no Markdown), with a tab drawn
+// as a space and hidden characters dropped or replaced, so such a command is
+// shown as a JSON string with those characters as \uXXXX: exact, since JSON
+// doubles every literal backslash.
+const isEscaped = (command: string) => HIDDEN.test(command) || command.includes('\t')
+const shownCommand = (r: ApprovalRequest) => (isEscaped(r.command)
+  ? JSON.stringify(r.command).replace(HIDDEN_ALL, c => `\\u${(c.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`)
+  : r.command)
 
-// The review the dialog draws beside its options, as Markdown in a monospace
-// box: the command first in a bash fence, so a box cut short loses prose only.
-export const reviewPreview = (r: ApprovalRequest): string => [
-  fenced(shownCommand(r), 'bash'),
-  ...(HIDDEN.test(r.command) ? ['**Holds hidden or control characters; shown JSON-escaped.**'] : []),
-  `in ${inlineCode(r.cwd)} · asked by ${r.agentId ? `subagent ${inlineCode(visible(r.agentId))}` : 'the main session'}`,
+// Each command line indented by this, so a line the command holds that looks
+// like the review's prose still reads as part of the command.
+const INDENT = '    '
+
+// The dialog's question: where it runs and who asked, the command indented,
+// then the case for it, one labelled line each, and the question last.
+export const reviewQuestion = (r: ApprovalRequest): string => [
+  `In ${oneLine(r.cwd)}, ${r.agentId ? `subagent ${oneLine(r.agentId)}` : 'the main session'} asks to run:`,
+  ...(isEscaped(r.command) ? ['(it holds tabs, hidden or control characters; shown JSON-escaped)'] : []),
+  ...shownCommand(r).split('\n').map(line => `${INDENT}${line}`),
   '',
-  `**Why** ${visible(r.why_only_way)}`,
-  ...r.alternatives.map((a, i) => `**${i === 0 ? 'Not' : '   '}** ${visible(a.approach)} — ${visible(a.rejected_because)}`),
-  `**Unblocks** ${visible(r.blocks)}`,
+  `Why: ${oneLine(r.why_only_way)}`,
+  ...r.alternatives.map(a => `Not: ${oneLine(a.approach)} — ${oneLine(a.rejected_because)}`),
+  `Unblocks: ${oneLine(r.blocks)}`,
+  'Run this command once?',
 ].join('\n')
+
+// The engine cuts a question longer than this many characters with "…".
+const QUESTION_LIMIT = 2000
 
 const cap = (text: string): string => {
   if (text.length <= OUTPUT_CAP) return text
@@ -255,7 +257,6 @@ const reject = async ($: Ctx, id: string, reason: string | undefined, delivered 
 const LATER = 'Not now'
 const DENY = 'Deny'
 const APPROVE = 'Approve and run'
-const QUESTION = 'Run this command?'
 
 // Terminal cells a string takes: wide (CJK, emoji) counts 2 and a tab 8, so
 // the estimate errs tall, which only ever withholds Approve.
@@ -280,44 +281,44 @@ const clip = (text: string, room: number) => {
 export const bandPreview = (first: ApprovalRequest, room: number): string =>
   clip(`${first.id} ${visible(first.command.replace(/\s*\n\s*/g, ' ⏎ '))}`, room)
 
-// Rows the dialog needs for the whole command: the fenced block wrapped in
-// the preview box, assumed to get half the width less its border and padding
-// (the options list takes the other side), plus the dialog's own rows
-// (chip, question, box border, the hints line) with slack for the fence's
-// lines and the surface's chrome. A guess at the engine's layout, made tall.
+// Rows the dialog needs to show the whole question: each line wrapped at the
+// width less the dialog's padding and the multi-line gutter, plus the
+// dialog's own rows (border, chip, the three options and Other, the hints
+// line) with slack for the surface's chrome. A guess at the engine's layout,
+// made tall: the engine wraps the question (bold Text, no truncation).
 const DIALOG_CHROME_ROWS = 10
-export const dialogRows = (r: ApprovalRequest, columns: number): number => {
-  const inner = Math.max(1, Math.floor(columns / 2) - 4)
-  const code = shownCommand(r).split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / inner)), 0)
-  return code + (HIDDEN.test(r.command) ? 1 : 0) + DIALOG_CHROME_ROWS
+export const dialogRows = (question: string, columns: number): number => {
+  const inner = Math.max(1, columns - 6)
+  return question.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / inner)), 0) + DIALOG_CHROME_ROWS
 }
 
 // The review dialogs open now, by request id (the dialog's chip). The hooks
 // below know one by its chip, question and labels: the tool.call hook adds
-// the review as each option's preview on the way to the engine, the render
-// hook records whether the last drawing could show the whole command; an
-// Approve answer counts only when both happened. A module value: a reload
-// forgets it, and an answer to a forgotten dialog leaves the request pending.
-type OpenDialog = { id: string; position: string; isApprovable: boolean; hasPreview?: true; idleMs?: number }
+// the descriptions and watches for an idle auto-answer, the render hook
+// records whether the last drawing could show the whole question; an Approve
+// answer counts only when both happened. A module value: a reload forgets
+// it, and an answer to a forgotten dialog leaves the request pending.
+type OpenDialog = { id: string; question: string; position: string; isApprovable: boolean; isWatched?: true; idleMs?: number }
 const openDialogs = new Map<string, OpenDialog>()
 
 type Decision = { kind: 'approve' } | { kind: 'deny'; reason?: string } | { kind: 'none'; why: string }
 
 // One review dialog: the engine's AskUserQuestion through $.ui.ask (a plugin's
 // own $.tool.call of it is refused by the host). $.ui.ask takes labels only;
-// the tool.call hook below fills in descriptions and the preview. The caller's
-// hook awaits it: a $.ui.ask made after that hook returned skips this mod's
-// own hooks (seen in the plugin test kit), and with them the preview.
+// the tool.call hook below fills in descriptions. The caller's hook awaits
+// it: a $.ui.ask made after that hook returned skips this mod's own hooks
+// (seen in the plugin test kit), and with them the idle watch.
 const askOne = async ($: Ctx, r: ApprovalRequest, position: string): Promise<Decision> => {
-  const open: OpenDialog = { id: r.id, position, isApprovable: false }
+  const question = reviewQuestion(r)
+  const open: OpenDialog = { id: r.id, question, position, isApprovable: false }
   openDialogs.set(r.id, open)
   try {
-    const answer = await $.ui.ask(QUESTION, { options: [LATER, DENY, APPROVE], header: r.id })
+    const answer = await $.ui.ask(question, { options: [LATER, DENY, APPROVE], header: r.id })
       .catch((err: unknown) => { throw new Error(`dismissed: ${errText(err)}`) })
     if (open.idleMs !== undefined) return { kind: 'none', why: `auto-answered after ${open.idleMs} ms idle` }
     if (answer.trim() === '' || answer === LATER) return { kind: 'none', why: 'kept for later' }
     if (answer === APPROVE) {
-      if (!open.hasPreview) return { kind: 'none', why: 'Approve was answered on a dialog asked without the review' }
+      if (!open.isWatched) return { kind: 'none', why: 'Approve was answered on a dialog this mod did not see asked' }
       if (!open.isApprovable) return { kind: 'none', why: 'Approve was answered but the last drawing could not show the whole command' }
       return { kind: 'approve' }
     }
@@ -328,16 +329,19 @@ const askOne = async ($: Ctx, r: ApprovalRequest, position: string): Promise<Dec
 }
 
 // The open review an AskUserQuestion carries, if it is one of ours: one
-// single-select question with our question, a request's chip, and our labels.
+// single-select question with an open request's chip, the question asked
+// for it, and our labels.
 const ourDialog = (questions: readonly unknown[]): OpenDialog | undefined => {
   if (questions.length !== 1) return undefined
   const q = questions[0]
   if (typeof q !== 'object' || q === null) return undefined
   const { header, question, options } = q as { header?: unknown; question?: unknown; options?: unknown }
-  if (typeof header !== 'string' || question !== QUESTION || !Array.isArray(options)) return undefined
+  if (typeof header !== 'string' || !Array.isArray(options)) return undefined
+  const open = openDialogs.get(header)
+  if (!open || question !== open.question) return undefined
   const labels = options.map((o: unknown) => (typeof o === 'object' && o !== null && 'label' in o ? o.label : undefined))
   if (!labels.every(l => l === LATER || l === DENY || l === APPROVE) || !labels.includes(LATER)) return undefined
-  return openDialogs.get(header)
+  return open
 }
 
 // The review of `ids`, one dialog per request in order, from the calling hook,
@@ -459,26 +463,23 @@ export const register: Register = on => {
   })
 
   // Our review dialog on its way to the engine: $.ui.ask passes labels only,
-  // so the options get their descriptions and the review as each option's
-  // preview here, in the asked input (a ui.render rewrite may not add previews
-  // or drop options). Every other AskUserQuestion passes untouched. On the way
-  // back, an idle auto-answer (afkTimeoutMs) is marked so it decides nothing.
+  // so the options get their descriptions here, in the asked input. Every
+  // other AskUserQuestion passes untouched. On the way back, an idle
+  // auto-answer (afkTimeoutMs) is marked so it decides nothing.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     const open = ourDialog(e.questions)
     if (!open) return next(e)
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
     if (!r) return next(e)
-    const preview = reviewPreview(r)
     const described: Record<string, string> = {
       [LATER]: `Keep it pending in the band above the prompt${open.position}`,
       [DENY]: 'Tell the model no; type under Other to give the reason',
-      [APPROVE]: `Run it once, exactly as shown, with bash -c in ${r.cwd}`,
+      [APPROVE]: 'Run it once, exactly as shown above (without the indent), with bash -c',
     }
-    // Every option carries the review, so whichever is focused shows the command.
     const q = e.questions[0]
     if (!q) return next(e)
-    const options = q.options.map(o => ({ ...o, description: described[o.label] ?? '', preview }))
-    open.hasPreview = true
+    const options = q.options.map(o => ({ ...o, description: described[o.label] ?? '' }))
+    open.isWatched = true
     const out = await next({ ...e, questions: [{ ...q, options }] })
     if ('result' in out && out.result && typeof out.result === 'object') {
       const idle = (out.result as { afkTimeoutMs?: unknown }).afkTimeoutMs
@@ -487,21 +488,24 @@ export const register: Register = on => {
     return out
   })
 
-  // Our review dialog as drawn: Approve counts only while the whole command
-  // fits the surface. A rewrite may change descriptions but not the options,
-  // so when it does not fit Approve stays listed and its description says it
+  // Our review dialog as drawn: Approve counts only while the whole question,
+  // command included, is drawn uncut: under the engine's length cap and
+  // within the surface's rows. A rewrite may change descriptions but not the
+  // options, so otherwise Approve stays listed and its description says it
   // will not run and why.
   on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
     const open = ourDialog(e.props.questions)
     if (!open) return next(e)
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
-    const needs = r && e.viewport ? dialogRows(r, e.viewport.columns) : undefined
-    const fits = needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
+    const tooLong = open.question.length > QUESTION_LIMIT
+    const needs = r && e.viewport ? dialogRows(open.question, e.viewport.columns) : undefined
+    const fits = !tooLong && needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
     open.isApprovable = fits
     if (fits) return next(e)
     const why = !r ? 'it is no longer pending'
-      : !e.viewport || needs === undefined ? 'this surface did not report its size'
-        : `it needs ${needs} rows and the window has ${e.viewport.rows}; enlarge it, then Review from the band`
+      : tooLong ? `the review is ${open.question.length} characters and the dialog cuts it at ${QUESTION_LIMIT}; run it yourself or ask for a shorter command`
+        : !e.viewport || needs === undefined ? 'this surface did not report its size'
+          : `it needs ${needs} rows and the window has ${e.viewport.rows}; enlarge it, then Review from the band`
     const q = e.props.questions[0] as { options: { label: string; description?: string }[] }
     const options = q.options.map(o => (o.label === APPROVE ? { ...o, description: `Unavailable, runs nothing: ${why}` } : o))
     return next({ ...e, props: { ...e.props, questions: [{ ...q, options }] } })

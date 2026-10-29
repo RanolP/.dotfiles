@@ -108,7 +108,12 @@ test('raising opens the review at once and runs the shown string byte for byte',
   // The harmless option first, so the focused default never runs anything.
   expect(labels(asked[0])).toEqual(['Not now', 'Deny', APPROVE])
   expect(drawn).toEqual([['Not now', 'Deny', APPROVE]])
-  for (const o of asked[0]?.options ?? []) expect(o.preview?.startsWith(`\`\`\`bash\n${COMMAND}\n\`\`\`\n`)).toBe(true)
+  // The command sits in the question, each line indented, with no side panel.
+  expect(asked[0]?.question).toBe([
+    'In /tmp, the main session asks to run:', `    ${COMMAND}`, '',
+    'Why: only this reads it', 'Not: Read tool — not a file', 'Unblocks: the report', 'Run this command once?',
+  ].join('\n'))
+  expect(asked[0]?.options.some(o => o.preview !== undefined)).toBe(false)
   expect(runs).toEqual([{ argv: ['bash', '-c', COMMAND], cwd: '/tmp' }])
   expect(text).toContain('Exit code: 3')
   expect(text).toContain('stdout:\nout')
@@ -148,7 +153,7 @@ for (const [name, answer, afk] of [['Esc', undefined, false], ['Not now', 'Not n
     await walked
     expect(asked).toHaveLength(2)
     // Reopened from the band, the dialog still carries the review.
-    expect(asked[1]?.options[2]?.preview).toContain(COMMAND)
+    expect(asked[1]?.question).toContain(`\n    ${COMMAND}\n`)
     expect(runs).toEqual([])
     expect(await band.find({ key: 'review' })).toBeDefined()
   })
@@ -167,7 +172,7 @@ test('a request raised while a review is open gets its own dialog and decision',
   const second = await $.tool.call({ tool: RAISE, ...INPUT, command: 'echo second' })
   expect(String(second.text)).toContain('REJECTED')
   expect(asked.map(q => q.header)).toEqual(['R1', 'R2'])
-  expect(asked[1]?.options[0]?.preview).toContain('echo second')
+  expect(asked[1]?.question).toContain('\n    echo second\n')
   release()
   expect(String((await first).text)).toContain('R1 is waiting')
   expect(runs).toEqual([])
@@ -189,6 +194,27 @@ for (const [name, viewport] of [['too short a window', { columns: 120, rows: 20 
     expect(String((await $.command.run(APPROVALS)).text)).toContain('1 pending approval request')
   })
 }
+
+// Regression: Approve counted for a review the engine cuts at its question length cap, however tall the window.
+test('Approve is not counted for a review longer than the dialog draws', async ($, on) => {
+  const { shown, runs, nextStatus } = await start($, on, APPROVE, { viewport: { columns: 400, rows: 400, isFullscreen: false } })
+  await raise($, nextStatus, { command: `echo ${'x'.repeat(2_100)}` })
+  expect(shown[0]?.[2]?.description).toStartWith('Unavailable, runs nothing:')
+  expect(runs).toEqual([])
+})
+
+// Regression: a tab drawn as a space, or a bidi mark reordering what is shown, so the dialog differs from what runs;
+// or prose the model wrote passing for a line of the command.
+test('a command the dialog would redraw is shown JSON-escaped, and prose stays on labelled lines', async ($, on) => {
+  const { asked, runs, nextStatus } = await start($, on, APPROVE)
+  const command = 'printf "a\tb" # \u202e\\u202e'
+  await raise($, nextStatus, { command, why_only_way: 'two\n    rm -rf /' })
+  const question = asked[0]?.question ?? ''
+  expect(question).toContain('\n    "printf \\"a\\tb\\" # \\u202e\\\\u202e"\n')
+  expect(question).not.toMatch(/[\t\u202e]/)
+  expect(question).toContain('\nWhy: two rm -rf /\n')
+  expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
+})
 
 // Regression: this mod rewriting an AskUserQuestion dialog the model opened.
 test("another caller's AskUserQuestion dialog is drawn untouched", async ($, on) => {

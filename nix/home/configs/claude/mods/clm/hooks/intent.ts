@@ -21,7 +21,7 @@ export type Classified = {
 }
 
 export type FocusClassification = Pick<Classified, 'intent' | 'target' | 'title' | 'rule'>
-export type DeferredItem = { text: string; quote: string }
+export type DeferredItem = { text: string; quote: string; when: 'now' | 'later' }
 export type RequestResolution = { id: string; how: 'answered' | 'declined' | 'skipped'; quote?: string }
 export type RaisedRequest = { text: string; quote: string }
 export type RequestClassification = { raised: RaisedRequest[]; resolved: RequestResolution[] }
@@ -65,6 +65,7 @@ const isIntent = (value: unknown): value is Intent => typeof value === 'string' 
 const isDeferredItem = (value: unknown): value is DeferredItem => isRecord(value)
   && typeof value.text === 'string' && value.text.trim() === value.text && value.text.length > 0 && [...value.text].length <= 500
   && typeof value.quote === 'string' && value.quote.trim() === value.quote && value.quote.length > 0 && [...value.quote].length <= 500
+  && (value.when === 'now' || value.when === 'later')
 
 // clm-prompt
 export const INTENT_SYSTEM = `You classify one message the user just typed to a coding agent. Read the focus stack, the pending set, the open issues, and the agent's last reply, then decide which task the message is about and how it moves the agent's attention.
@@ -78,7 +79,7 @@ Pick exactly one intent:
 
 For handoff, interleave and pending, fill exactly one of target and title and set the other to null: target with the matching issue's id when the task is already in the input, otherwise title for a new task.
 Set target to an id copied exactly from the input. Write title as a short imperative in the user's language, at most 60 characters.
-Set deferred independently of intent to an array of up to five standalone instructions for work the user clearly bounds as must be done later (for example, "나중에", "이건 다음에", or "todo로"). Rewrite each instruction without the deferral phrase while preserving the user's wording and language, and set quote to an exact substring of user_prompt. For example, "A 고쳐, B는 나중에" gives deferred [{"text":"B 고쳐","quote":"B는 나중에"}]. A whole-message deferral is intent pending and also appears once in deferred. Use an empty array when the user bounds no work for later.
+Set deferred independently of intent to an array of up to ten standalone instructions, one for each piece of work user_prompt asks for, and tag each with when. Set when to "later" only for work the user explicitly postpones with a deferral phrase that covers it (for example, "나중에", "이건 다음에", "todo로", "later", or "지금은 하지 마"). Set when to "now" for every instruction meant for this turn, including a follow-up such as "끝나면 ... 보여줘", "then show ...", or "after that ..." that the agent carries out in its reply to this message. Rewrite each instruction without the deferral phrase while preserving the user's wording and language, and set quote to an exact substring of user_prompt. For example, "A 고쳐, B는 나중에" gives deferred [{"text":"A 고쳐","quote":"A 고쳐","when":"now"},{"text":"B 고쳐","quote":"B는 나중에","when":"later"}], and "나중에 README에 한 줄 추가해줘. 지금은 하지 마. 끝나면 목록을 보여줘." gives deferred [{"text":"README에 한 줄 추가해줘","quote":"나중에 README에 한 줄 추가해줘","when":"later"},{"text":"목록을 보여줘","quote":"끝나면 목록을 보여줘","when":"now"}]. A whole-message deferral is intent pending and also appears once in deferred with when "later". Use an empty array when the message asks for no work.
 Track direct work requests independently from focus. Add each new request to raised, including requests phrased as statements without a question mark. Write each request as a standalone instruction in the user's language and quote an exact substring from user_prompt. Resolve an open request only when the last assistant reply or user_prompt provides evidence that it was answered, declined, or skipped. Use the request's exact id and one of answered, declined, skipped; include quote copied exactly from that evidence when available. A skipped request is closed.
 Set stepped to true when the message asks for a big piece of work that needs a plan before the first edit: several ordered phases, changes across several files or components, or a feature built end to end. Set it to false for a single fix, a question, an approval, a correction, or a follow-up inside a task already under way.
 Set clauses to the standing instructions the message gives: how the agent must work, what to use, target or avoid, from now on or for the current task. Write each as one clause in restricted Prolog: a fact such as "forbid(push).", a negated fact such as "\\+ forbid(push).", or a rule whose head variables each appear in a positive body goal such as "upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint']).". Use lowercase atoms, quote an atom that holds a hyphen or a capital, and end with a period. Give each clause text, one plain Korean sentence saying what it asks, and quote, an exact substring of user_prompt that states it.
@@ -141,8 +142,8 @@ export const parseStepped = (raw: string): boolean => {
 
 export function parseDeferred(raw: string): DeferredItem[] {
   const deferred = parseObject(raw).deferred
-  if (!Array.isArray(deferred) || deferred.length > 5 || !deferred.every(isDeferredItem))
-    throw new Error('deferred must be up to five standalone instructions with trimmed text and quotes')
+  if (!Array.isArray(deferred) || deferred.length > 10 || !deferred.every(isDeferredItem))
+    throw new Error('deferred must be up to ten standalone instructions with trimmed text, quotes and when')
   return deferred
 }
 
@@ -633,6 +634,8 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
   let deferred: DeferredItem[] = []
   try {
     deferred = parseDeferred(response.text).filter(item => {
+      // Only work the user postponed becomes a board issue; a same-turn instruction stays with the agent's reply.
+      if (item.when !== 'later') return false
       if (quoteSupported(item.quote, userPrompt)) return true
       io.log(`clm: deferred item dropped (not supported by prompt): ${item.text}`, { to: 'debug' })
       return false

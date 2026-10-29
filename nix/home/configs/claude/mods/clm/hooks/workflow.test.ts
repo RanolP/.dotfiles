@@ -96,7 +96,7 @@ test('an unknown classifier target writes no tracker events', OPTS, async ($, on
 test('a classifier target that closed during classification keeps focus and still files deferrals', OPTS, async ($, on) => {
   const seen = bottoms(on, {
     rows: ROWS, replies: [],
-    intentReplies: [intentReply({ intent: 'continue', target: 's1-1', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에' }] })],
+    intentReplies: [intentReply({ intent: 'continue', target: 's1-1', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에', when: 'later' }] })],
   })
   seedTracker(seen, [{ op: 'create', issue: 's1-1', title: 'landed work', status: 'done' }])
   await $.prompt.submit(promptInput('좋아, B는 나중에'))
@@ -109,7 +109,7 @@ test('a classifier target that closed during classification keeps focus and stil
 test('a handoff that sets both target and title switches to the known target and still files deferrals', OPTS, async ($, on) => {
   const seen = bottoms(on, {
     rows: ROWS, replies: [],
-    intentReplies: [intentReply({ intent: 'handoff', target: 's1-1', title: 'README 줄 추가', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에' }] })],
+    intentReplies: [intentReply({ intent: 'handoff', target: 's1-1', title: 'README 줄 추가', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에', when: 'later' }] })],
   })
   seedTracker(seen, [{ op: 'create', issue: 's1-1', title: 'readme line', status: 'todo' }])
   await $.prompt.submit(promptInput('s1-1 진행해, B는 나중에'))
@@ -126,7 +126,7 @@ test('a bounded deferral becomes one todo issue on the board', OPTS, async ($, o
     rows: ROWS, replies: [],
     intentReplies: [intentReply({
       intent: 'handoff', title: 'A 고쳐',
-      deferred: [{ text: 'B 고쳐', quote: 'B는 나중에' }],
+      deferred: [{ text: 'B 고쳐', quote: 'B는 나중에', when: 'later' }],
     })],
   })
   await $.prompt.submit(promptInput('A 고쳐, B는 나중에'))
@@ -141,7 +141,7 @@ test('a deferred item the prompt does not support creates no issue', OPTS, async
   const seen = bottoms(on, {
     rows: ROWS, replies: [],
     intentReplies: [intentReply({
-      deferred: [{ text: 'Publish the release', quote: 'Publish the release later' }],
+      deferred: [{ text: 'Publish the release', quote: 'Publish the release later', when: 'later' }],
     })],
   })
   await $.prompt.submit(promptInput('Continue the current task'))
@@ -155,7 +155,7 @@ test('a whole-message deferral creates exactly one issue', OPTS, async ($, on) =
     rows: ROWS, replies: [],
     intentReplies: [intentReply({
       intent: 'pending', title: 'B 고쳐',
-      deferred: [{ text: 'B 수정해', quote: 'B는 나중에 해줘' }],
+      deferred: [{ text: 'B 수정해', quote: 'B는 나중에 해줘', when: 'later' }],
     })],
   })
   await $.prompt.submit(promptInput('B는 나중에 해줘'))
@@ -164,6 +164,24 @@ test('a whole-message deferral creates exactly one issue', OPTS, async ($, on) =
   expect(issues).toHaveLength(1)
   expect(issues[0]?.title).toBe('B 고쳐')
   expect(issues[0]?.status).toBe('todo')
+})
+
+// Regression caught (e2e 2026-10-29): "끝나면 clm_coworker list 출력을 그대로 보여줘", an instruction for the same turn, was filed as a second deferred board issue.
+test('a same-turn instruction beside a deferral files no board issue', OPTS, async ($, on) => {
+  const prompt = "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘. 지금은 하지 마. 끝나면 clm_coworker list 출력을 그대로 보여줘."
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({
+      intent: 'pending', title: "README.md 끝에 'hello from co-worker' 한 줄 추가",
+      deferred: [
+        { text: "README.md 끝에 'hello from co-worker' 한 줄 추가", quote: "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘", when: 'later' },
+        { text: 'clm_coworker list 출력을 그대로 보여줘', quote: '끝나면 clm_coworker list 출력을 그대로 보여줘', when: 'now' },
+      ],
+    })],
+  })
+  await $.prompt.submit(promptInput(prompt))
+  await waitForLog(seen, "clm: deferred issue s1-1: README.md 끝에 'hello from co-worker' 한 줄 추가")
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).map(issue => issue.title)).toEqual(["README.md 끝에 'hello from co-worker' 한 줄 추가"])
 })
 
 // Regression caught: a slow earlier classifier overwrote the focus chosen by a newer prompt.
@@ -610,7 +628,7 @@ test('a clm_task create of work the classifier just deferred reuses the filed is
     rows: [M('user', "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘. 지금은 하지 말고")], replies: [],
     intentReplies: [intentReply({
       intent: 'pending', title: "README.md 끝에 'hello from co-worker' 추가",
-      deferred: [{ text: "README.md 끝에 'hello from co-worker' 추가", quote: "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘" }],
+      deferred: [{ text: "README.md 끝에 'hello from co-worker' 추가", quote: "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘", when: 'later' }],
     })],
     intentBlocks: [async () => { started(); await gate }],
   })

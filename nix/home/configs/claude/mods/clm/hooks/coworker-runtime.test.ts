@@ -241,7 +241,7 @@ test('a heartbeat during claim does not revert the co-worker to idle', async ($,
 
 // Regression caught: deferred work reached the board without any live co-worker hearing about it.
 test('a classified deferral messages every live co-worker', async ($, on) => {
-  const s: State = { rows: [], replies: [], sessionId: 'main-deferral', intentReplies: [intentReply({ deferred: [{ text: 'Publish later', quote: 'Publish later' }] })] }
+  const s: State = { rows: [], replies: [], sessionId: 'main-deferral', intentReplies: [intentReply({ deferred: [{ text: 'Publish later', quote: 'Publish later', when: 'later' }] })] }
   const seen = bottoms(on, s)
   await $.session.start(startInput)
   seedRecord(seen, { session: 'worker-deferral-a', main: 'main-deferral', repo: 'github.com/o/repo', state: 'idle', heartbeat: NOW })

@@ -14,8 +14,10 @@ const APPROVALS = { command: 'approvals', args: '', origin: { kind: 'composer' }
 type Send = { isDelivered: true } | { isDelivered: false; reason: string }
 
 // Nothing stands beneath the plugins in a test: these answer for the engine.
-// `send` answers session.send; its hook must be registered before the first $ call.
-async function start($: Engine, on: On, answer: string | undefined, send?: Send) {
+// `send` answers session.send (its hook must be registered before the first $ call);
+// `hold` keeps every process.run from finishing until it resolves.
+async function start($: Engine, on: On, answer: string | undefined, opts: { send?: Send; hold?: Promise<void> } = {}) {
+  const { send, hold } = opts
   const asked: string[] = []
   const runs: { argv: readonly string[]; cwd?: string }[] = []
   const sends: { to: string; text: string }[] = []
@@ -40,14 +42,16 @@ async function start($: Engine, on: On, answer: string | undefined, send?: Send)
   })
   on('process.run', async (_$, e) => {
     runs.push({ argv: e.argv, cwd: e.init?.cwd })
+    if (hold) await hold
     return { value: { exitCode: 3, stdout: 'out', stderr: 'err', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   if (send) on('session.send', async (_$, e) => { sends.push({ to: e.to, text: e.text }); return send })
+  const submits: string[] = []
   const delivered = new Promise<string>(resolve => {
-    on('prompt.submit', async (_$, e) => { resolve(e.text); return { text: e.text } })
+    on('prompt.submit', async (_$, e) => { submits.push(e.text); resolve(e.text); return { text: e.text } })
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  return { asked, runs, sends, delivered, nextStatus }
+  return { asked, runs, sends, submits, delivered, nextStatus }
 }
 
 // Regression: the command that runs differing from the one the user approved (re-quoted, trimmed, rebuilt, rendered).
@@ -124,7 +128,7 @@ test('a relative cwd is refused and nothing runs', async ($, on) => {
 
 // Regression: a subagent's outcome landing in main's conversation while the subagent that raised it waits forever.
 test("a subagent's outcome is sent to that subagent", async ($, on) => {
-  const { sends, nextStatus } = await start($, on, 'Approve and run', { isDelivered: true })
+  const { sends, nextStatus } = await start($, on, 'Approve and run', { send: { isDelivered: true } })
   await $.tool.call({ tool: RAISE, ...INPUT, agentId: 'agent-7' })
   const walked = nextStatus()
   await $.command.run(APPROVALS)
@@ -136,7 +140,7 @@ test("a subagent's outcome is sent to that subagent", async ($, on) => {
 
 // Regression: an outcome for an unreachable subagent being dropped instead of handed to main to relay.
 test('an undeliverable subagent outcome falls back to main with a relay note', async ($, on) => {
-  const { delivered, nextStatus } = await start($, on, 'Approve and run', { isDelivered: false, reason: 'no such agent' })
+  const { delivered, nextStatus } = await start($, on, 'Approve and run', { send: { isDelivered: false, reason: 'no such agent' } })
   await $.tool.call({ tool: RAISE, ...INPUT, agentId: 'agent-7' })
   const walked = nextStatus()
   await $.command.run(APPROVALS)
@@ -144,4 +148,27 @@ test('an undeliverable subagent outcome falls back to main with a relay note', a
   await walked
   expect(text).toContain('Exit code: 3')
   expect(text).toContain('Relay this message to it')
+})
+
+// Regression: a run cut off by a reload, exit or /clear being re-run, left `running` forever, or reported twice.
+// The kit cannot reload a module or write its state, so a second session.start lands while the run is held.
+test('an interrupted run is reported once and never re-run', async ($, on) => {
+  let release = () => {}
+  const hold = new Promise<void>(resolve => { release = resolve })
+  const { runs, submits, delivered } = await start($, on, 'Approve and run', { hold })
+  await $.tool.call({ tool: RAISE, ...INPUT })
+  void $.command.run(APPROVALS)
+  for (let i = 0; i < 10_000 && !runs.length; i++) await Promise.resolve()
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const text = await delivered
+  expect(text).toContain('interrupted')
+  release()
+  // The held walk ends on its own schedule; /approvals answers "already open" until it has.
+  let again = ''
+  for (let i = 0; i < 200 && !again.includes('no pending'); i++) {
+    again = String((await $.command.run(APPROVALS)).text)
+  }
+  expect(again).toContain('no pending approval requests')
+  expect(runs).toHaveLength(1)
+  expect(submits).toHaveLength(1)
 })

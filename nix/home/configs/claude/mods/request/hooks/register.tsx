@@ -95,7 +95,7 @@ export const reviewText = (r: ApprovalRequest): string => [
   fenced(r.cwd),
   'command:',
   fenced(r.command),
-  ...(HIDDEN.test(r.command) ? [`WARNING: the command contains hidden or control characters. Escaped: ${JSON.stringify(r.command)}`] : []),
+  ...(HIDDEN.test(r.command) ? ['WARNING: the command contains hidden or control characters. Escaped:', fenced(JSON.stringify(r.command))] : []),
   `Requested by: ${r.agentId ? `subagent ${r.agentId}` : 'main session'}`,
   `Why only way: ${r.why_only_way}`,
   'Rejected alternatives:',
@@ -180,11 +180,20 @@ const deliverOne = async ($: Ctx, r: Outcome): Promise<boolean> => {
   return toMain($, `${text}\n\nThis outcome is for subagent ${r.agentId}, which raised ${r.id}; the request mod could not reach it. Relay this message to it with SendMessage.`, r.id)
 }
 
-const deliverUndelivered = async ($: Ctx) => {
+const deliveryPass = async ($: Ctx) => {
   for (const r of (await requests($)).filter(isUndelivered)) {
     if (!(await deliverOne($, r))) continue
     await update($, REQUESTS, rs => (rs ?? []).map(x => (x.id === r.id && isUndelivered(x) ? { ...x, delivered: true } : x)))
   }
+}
+
+// Passes run one at a time: two overlapping passes (a walk and a session
+// start's settling) would both read an outcome as undelivered and send it twice.
+let deliveries: Promise<void> = Promise.resolve()
+const deliverUndelivered = ($: Ctx): Promise<void> => {
+  const pass = deliveries.then(() => deliveryPass($))
+  deliveries = pass.catch(() => undefined)
+  return pass
 }
 
 const INTERRUPTED = 'interrupted (session ended or mod reloaded) while running; it may or may not have completed'
@@ -226,11 +235,8 @@ export const register: Register = on => {
     } catch (err) {
       log($, `command.register(approvals) failed: ${errText(err)}`)
     }
-    try {
-      await settleInterrupted($)
-    } catch (err) {
-      log($, `settling interrupted runs failed: ${errText(err)}`)
-    }
+    // Delivery may submit a prompt, so the session's start never waits on it.
+    void settleInterrupted($).then(() => showStatus($)).catch((err: unknown) => log($, `settling interrupted runs failed: ${errText(err)}`))
     await showStatus($)
     return started
   })
@@ -292,19 +298,23 @@ export const register: Register = on => {
           if (!q || q.status !== 'pending') continue
           const text = reviewText(q)
           $.ui.log(text)
-          let answer: string
-          try {
-            answer = await $.ui.ask(text, { options: [APPROVE, REJECT], header: q.id })
-          } catch (err) {
+          const answer = await $.ui.ask(text, { options: [APPROVE, REJECT], header: q.id }).catch((err: unknown) => {
             log($, `${q.id} skipped: ${errText(err)}`)
-            continue
-          }
+            return undefined
+          })
+          if (answer === undefined) continue
           if (answer === APPROVE) {
             const run = await claim($, q.id)
             if (!run) continue
             $.ui.toast(`${run.id} running: ${run.command}`)
             const result = await execute($, run)
-            await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === run.id ? { ...x, status: 'executed', result, delivered: false } : x)))
+            // A session.start mid-run (a /clear) settles it as interrupted; that report stands, sent once.
+            const runId = run.status === 'running' ? run.runId : ''
+            const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === run.id && x.status === 'running' && x.runId === runId
+              ? { ...x, status: 'executed', result, delivered: false } : x)))
+            if (!written.some(x => x.id === run.id && x.status === 'executed' && x.result === result)) {
+              log($, `${run.id} finished after it was settled as interrupted (exit ${result.exitCode ?? result.failure}); its result was not delivered`)
+            }
           } else {
             const reason = answer === REJECT ? undefined : answer
             await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === q.id && x.status === 'pending'

@@ -48,13 +48,13 @@ test('detectMux prefers herdr, then zellij, then tmux', () => {
   expect(detectMux({})).toBe('none')
 })
 
-// Regression caught: the initial session prompt could omit peer registration or the claim-to-ready handoff protocol.
-test('coworker brief names the main session, repo, peer registration, worktree boundary, and handoff actions', () => {
+// Regression caught: the initial session prompt could omit the claim-to-ready handoff protocol.
+test('coworker brief names the main session, repo, worktree boundary, and handoff actions', () => {
   const brief = coworkerBrief({ main: 'main-1', repo: '/repo' })
-  for (const text of ['main-1', '/repo', 'ListAgents', 'register', 'SendMessage', 'clm_coworker', 'claim', 'returned worktree', 'checkpoint', 'ready']) expect(brief).toContain(text)
+  for (const text of ['main-1', '/repo', 'SendMessage', 'clm_coworker', 'claim', 'returned worktree', 'checkpoint', 'ready']) expect(brief).toContain(text)
 })
 
-// Regression caught: a co-worker started under another CLAUDE_CONFIG_DIR is invisible to ListAgents and SendMessage.
+// Regression caught: a co-worker started under another CLAUDE_CONFIG_DIR cannot exchange messages with main.
 test('launch env carries CLAUDE_CONFIG_DIR when set and omits it when unset', () => {
   const plan = launchPlan({ mux: 'tmux', cwd: '/repo', name: 'clm-worker', env: { ...env, CLAUDE_CONFIG_DIR: '/home/u/.claude-work' }, brief: 'b' })
   if (!('steps' in plan)) throw new Error('expected argv steps')

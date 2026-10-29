@@ -10,7 +10,6 @@ export type CoworkerRecord = {
   heartbeat: number
   mux?: string
   maxCoworkers?: number
-  peer?: string
 }
 
 export type SpawnBackoff = { failures: number; lastFailedAt?: number }
@@ -61,7 +60,6 @@ const isCoworkerRecord = (value: unknown): value is CoworkerRecord => isRecord(v
   && (value.issue === undefined || typeof value.issue === 'string')
   && (value.mux === undefined || typeof value.mux === 'string')
   && (value.maxCoworkers === undefined || typeof value.maxCoworkers === 'number')
-  && (value.peer === undefined || typeof value.peer === 'string')
 const claimOwner = (value: unknown): string | undefined => isRecord(value) && typeof value.session === 'string' ? value.session : undefined
 const isSpawnBackoff = (value: unknown): value is SpawnBackoff => isRecord(value)
   && Number.isInteger(value.failures) && typeof value.failures === 'number' && value.failures >= 0

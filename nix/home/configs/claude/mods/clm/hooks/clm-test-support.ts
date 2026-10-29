@@ -76,7 +76,7 @@ export const metaIn = (seen: { store: Record<string, unknown> }): Meta => {
   return value
 }
 
-export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; backfillReplies?: (string | Error)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; nextSessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined; fsWriteBlock?: (path: string, text: string) => Promise<void>; promptDrops?: string[] }
+export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; backfillReplies?: (string | Error)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; nextSessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined; fsWriteBlock?: (path: string, text: string) => Promise<void>; promptDrops?: string[]; sendResult?: (to: unknown) => { isDelivered: true } | { isDelivered: false; reason: string } }
 export function modDetectionHarness(realpaths: { exitCode: number; stdout: string; stderr: string }[], env: Record<string, string | undefined>) {
   const hooks: Record<string, unknown> = {}
   const capture: Parameters<typeof register>[0] = (event, matcherOrHook, hook) => { hooks[event] = hook ?? matcherOrHook }
@@ -160,7 +160,7 @@ export function bottoms(on: any, s: State) {
       return true
     },
   })
-  const seen = { clock, store, engineStore, files, dirs: new Set<string>(), prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], backfillPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[], runs: [] as string[][] }
+  const seen = { clock, store, engineStore, files, dirs: new Set<string>(), prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], backfillPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[], runs: [] as string[][], sends: [] as { to: unknown; text: string }[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.engineStore[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.engineStore[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.engineStore[e.key]; return { value: undefined } })
@@ -289,6 +289,10 @@ export function bottoms(on: any, s: State) {
   on('ui.log', (_$: any, e: any) => {
     seen.logs.push(e.text)
     return { value: undefined }
+  })
+  on('session.send', (_$: any, e: any) => {
+    seen.sends.push({ to: e.to, text: e.text })
+    return s.sendResult?.(e.to) ?? { isDelivered: true }
   })
   on('command.register', (_$: any, e: any) => ({ value: { command: e.name } }))
   on('tool.register', (_$: any, e: any) => ({ value: { tool: e.name } }))

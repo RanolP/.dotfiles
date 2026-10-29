@@ -105,9 +105,9 @@ test('raising opens the review at once and runs the shown string byte for byte',
   const text = await delivered
   expect(asked).toHaveLength(1)
   expect(asked[0]?.header).toBe('R1')
-  // The harmless option first, so the focused default never runs anything.
-  expect(labels(asked[0])).toEqual(['Not now', 'Deny', APPROVE])
-  expect(drawn).toEqual([['Not now', 'Deny', APPROVE]])
+  // Approve first as the primary choice; Esc, not an option, keeps it pending.
+  expect(labels(asked[0])).toEqual([APPROVE, 'Deny'])
+  expect(drawn).toEqual([[APPROVE, 'Deny']])
   // The command sits in the question, each line indented, with no side panel.
   expect(asked[0]?.question).toBe([
     'In /tmp, the main session asks to run:', `    ${COMMAND}`, '',
@@ -140,9 +140,9 @@ test('text under Other denies with that reason and runs nothing', async ($, on) 
   expect(submits).toEqual([])
 })
 
-// Regression: Esc, Not now or the dialog's idle auto-answer counting as a decision instead of leaving the request
+// Regression: Esc or the dialog's idle auto-answer counting as a decision instead of leaving the request
 // pending in the band, from where Review opens it again.
-for (const [name, answer, afk] of [['Esc', undefined, false], ['Not now', 'Not now', false], ['an idle Approve', APPROVE, true], ['an idle Deny', 'Deny', true]] as const) {
+for (const [name, answer, afk] of [['Esc', undefined, false], ['a blank answer', '', false], ['an idle Approve', APPROVE, true], ['an idle Deny', 'Deny', true]] as const) {
   test(`${name} keeps the request pending, and Review reopens it`, async ($, on) => {
     const { asked, runs, nextStatus } = await start($, on, answer, { afk })
     await raise($, nextStatus)
@@ -165,7 +165,7 @@ test('a request raised while a review is open gets its own dialog and decision',
   const gate = new Promise<void>(resolve => { release = resolve })
   const { asked, runs } = await start($, on, async n => {
     if (n === 1) await gate
-    return n === 1 ? 'Not now' : 'Deny'
+    return n === 1 ? undefined : 'Deny'
   })
   const first = $.tool.call({ tool: RAISE, ...INPUT })
   for (let i = 0; i < 1_000 && !asked.length; i++) await Promise.resolve()
@@ -187,8 +187,8 @@ for (const [name, viewport] of [['too short a window', { columns: 120, rows: 20 
     const { drawn, shown, runs, nextStatus } = await start($, on, APPROVE, { viewport })
     await raise($, nextStatus, { command: TALL })
     if (viewport !== false) {
-      expect(drawn).toEqual([['Not now', 'Deny', APPROVE]])
-      expect(shown[0]?.[2]?.description).toStartWith('Unavailable, runs nothing:')
+      expect(drawn).toEqual([[APPROVE, 'Deny']])
+      expect(shown[0]?.[0]?.description).toStartWith('Unavailable, runs nothing:')
     }
     expect(runs).toEqual([])
     expect(String((await $.command.run(APPROVALS)).text)).toContain('1 pending approval request')
@@ -199,7 +199,7 @@ for (const [name, viewport] of [['too short a window', { columns: 120, rows: 20 
 test('Approve is not counted for a review longer than the dialog draws', async ($, on) => {
   const { shown, runs, nextStatus } = await start($, on, APPROVE, { viewport: { columns: 400, rows: 400, isFullscreen: false } })
   await raise($, nextStatus, { command: `echo ${'x'.repeat(2_100)}` })
-  expect(shown[0]?.[2]?.description).toStartWith('Unavailable, runs nothing:')
+  expect(shown[0]?.[0]?.description).toStartWith('Unavailable, runs nothing:')
   expect(runs).toEqual([])
 })
 

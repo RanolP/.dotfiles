@@ -251,10 +251,9 @@ const reject = async ($: Ctx, id: string, reason: string | undefined, delivered 
   return written.find((x): x is Outcome => x.id === id && x.status === 'rejected')
 }
 
-// The dialog's options, the harmless one first: the dialog focuses its first
-// option, so a stray Enter keeps the request pending. Text typed under the
-// dialog's Other denies with that text as the reason.
-const LATER = 'Not now'
+// The dialog's options, Approve first as the primary choice (the user's call);
+// Esc is the way to keep a request pending. Text typed under the dialog's
+// Other denies with that text as the reason.
 const DENY = 'Deny'
 const APPROVE = 'Approve and run'
 
@@ -313,10 +312,10 @@ const askOne = async ($: Ctx, r: ApprovalRequest, position: string): Promise<Dec
   const open: OpenDialog = { id: r.id, question, position, isApprovable: false }
   openDialogs.set(r.id, open)
   try {
-    const answer = await $.ui.ask(question, { options: [LATER, DENY, APPROVE], header: r.id })
+    const answer = await $.ui.ask(question, { options: [APPROVE, DENY], header: r.id })
       .catch((err: unknown) => { throw new Error(`dismissed: ${errText(err)}`) })
     if (open.idleMs !== undefined) return { kind: 'none', why: `auto-answered after ${open.idleMs} ms idle` }
-    if (answer.trim() === '' || answer === LATER) return { kind: 'none', why: 'kept for later' }
+    if (answer.trim() === '') return { kind: 'none', why: 'kept for later' }
     if (answer === APPROVE) {
       if (!open.isWatched) return { kind: 'none', why: 'Approve was answered on a dialog this mod did not see asked' }
       if (!open.isApprovable) return { kind: 'none', why: 'Approve was answered but the last drawing could not show the whole command' }
@@ -340,12 +339,12 @@ const ourDialog = (questions: readonly unknown[]): OpenDialog | undefined => {
   const open = openDialogs.get(header)
   if (!open || question !== open.question) return undefined
   const labels = options.map((o: unknown) => (typeof o === 'object' && o !== null && 'label' in o ? o.label : undefined))
-  if (!labels.every(l => l === LATER || l === DENY || l === APPROVE) || !labels.includes(LATER)) return undefined
+  if (labels.length !== 2 || labels[0] !== APPROVE || labels[1] !== DENY) return undefined
   return open
 }
 
 // The review of `ids`, one dialog per request in order, from the calling hook,
-// which awaits it. A dialog left undecided (Esc, Not now, idle) ends the walk
+// which awaits it. A dialog left undecided (Esc, idle) ends the walk
 // and what is left waits in the band. An approved command runs on after the
 // walk and its outcome arrives as a message, as does a rejection, except the
 // one for `inBand`, which the walk returns for the raise to answer with: a
@@ -459,7 +458,7 @@ export const register: Register = on => {
       return { text: 'no pending approval requests.' }
     }
     await walkDialogs($, pending.map(r => r.id))
-    return { text: `reviewed ${plural(pending.length, 'pending approval request')}; Esc or Not now left the rest in the band.` }
+    return { text: `reviewed ${plural(pending.length, 'pending approval request')}; Esc left the rest in the band.` }
   })
 
   // Our review dialog on its way to the engine: $.ui.ask passes labels only,
@@ -472,9 +471,8 @@ export const register: Register = on => {
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
     if (!r) return next(e)
     const described: Record<string, string> = {
-      [LATER]: `Keep it pending in the band above the prompt${open.position}`,
-      [DENY]: 'Tell the model no; type under Other to give the reason',
       [APPROVE]: 'Run it once, exactly as shown above (without the indent), with bash -c',
+      [DENY]: `Tell the model no; type under Other to give the reason. Esc keeps it pending in the band${open.position}`,
     }
     const q = e.questions[0]
     if (!q) return next(e)

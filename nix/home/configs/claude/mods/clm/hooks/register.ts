@@ -1073,7 +1073,7 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_task',
-        description: 'Update a task you are working on: mark it todo to record a planned step, doing when you start (declare the method you will use), done when you finish it (add evidence with the row and a verbatim quote when one shows the result), or dropped when the user abandons it, citing that user message. Create a child task for a sub-step you will do yourself.',
+        description: 'Update a task you are working on: mark it todo to record a planned step, doing when you start (declare the method you will use), done when you finish it (add evidence with the row and a verbatim quote when one shows the result), or dropped when the user abandons it, citing that user message. To close any other open board issue, such as a deferred todo, pass its id with done or dropped directly; your focus stays where it is. Create a child task for a sub-step you will do yourself.',
         inputSchema: {
           type: 'object',
           properties: {

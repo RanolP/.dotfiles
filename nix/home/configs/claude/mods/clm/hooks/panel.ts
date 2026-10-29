@@ -378,6 +378,31 @@ async function focusMainTask(
   return { result: `clm_task: ${taskId} doing; now the main agent's focus.` }
 }
 
+// The main agent closes an open board issue outside its focus (a deferral, a
+// pending task) by id, leaving the focus stack as it was; returns undefined
+// for an issue the focused or a subagent's path handles.
+async function closeUnownedIssue(
+  io: PanelIo, origin: Origin, input: ClmTaskInput, status: 'done' | 'dropped', focus: FocusState,
+  roots: Readonly<Record<string, string>>, byId: ReadonlyMap<string, Issue>,
+): Promise<{ result: string } | { deny: string } | undefined> {
+  const target = input.id === undefined ? undefined : byId.get(input.id)
+  if (!target || !isOpen(target) || taskOwner(target.id, focus.stack, roots, byId) !== undefined) return undefined
+  if (status === 'done' && outermostSteppedRootOf(target.id, byId))
+    return { result: `clm_task: stepped issue ${target.id} stays open until the Stop hook passes its rubric and checkpoints it.` }
+  if (status === 'dropped') {
+    const problem = await taskEvidenceProblem(io, undefined, input.evidence, ['user'], false, `drop or re-open requires a quote from a user message. ${EVIDENCE_FORMAT}`)
+    if (problem) return { deny: `clm_task: ${problem}` }
+  }
+  const audit = status === 'done' && input.evidence ? `cited ${input.evidence.ref}: ${input.evidence.quote}` : undefined
+  const note = [input.note?.trim(), audit].filter((line): line is string => Boolean(line)).join('\n')
+  await io.append([
+    { op: 'status', issue: target.id, status },
+    ...(note ? [{ op: 'note' as const, issue: target.id, text: note }] : []),
+    ...(focus.pending.includes(target.id) ? [{ op: 'focus' as const, stack: focus.stack, pending: focus.pending.filter(id => id !== target.id), intent: 'continue' as const }] : []),
+  ], origin)
+  return { result: `clm_task: ${target.id} ${status}; focus unchanged.` }
+}
+
 export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: string): Promise<{ result: string } | { deny: string }> {
   const origin = await io.captureOrigin()
   // The classifier files the user's deferrals in the background; a main-agent todo for the same work reuses that issue.
@@ -394,6 +419,10 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   const byId = new Map(issues.map(issue => [issue.id, issue]))
   const focus = focusOf(events, origin.session)
   const roots = await assignedTaskRoots(io, origin.session)
+  if (!agentId && input.id !== undefined && (input.status === 'done' || input.status === 'dropped')) {
+    const closed = await closeUnownedIssue(io, origin, input, input.status, focus, roots, byId)
+    if (closed) return closed
+  }
   const ownRoot = agentId ? roots[agentId] : focus.stack.at(-1)
   if (!ownRoot && !agentId) return focusMainTask(io, origin, input, focus, roots, byId)
   if (!ownRoot) return { result: `clm_task: subagent ${agentId} has no task assigned by the harness.` }

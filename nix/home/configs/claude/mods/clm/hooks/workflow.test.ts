@@ -612,6 +612,36 @@ test('clm_task finds the user row by quote when the ref is not a row ref, and na
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-child')?.status).toBe('dropped')
 })
 
+// Regression caught (e2e 2026-10-29): dropping a deferred issue outside main's focus was refused for lack of focus, so the model set it doing (stealing focus) and then dropped it.
+test('clm_task drops an unfocused board issue by id and leaves focus where it was', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', '그 README 작업은 이제 하지 않아도 돼, 빼버려')], replies: [] })
+  const quote = { ref: 'user', quote: '그 README 작업은 이제 하지 않아도 돼' }
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
+    { op: 'create', issue: 's1-later', title: 'README 줄 추가', status: 'todo' },
+    { op: 'create', issue: 's1-loose', title: 'loose todo', status: 'todo' },
+    { op: 'focus', stack: ['s1-root'], pending: ['s1-later'], intent: 'handoff' },
+  ])
+  const withoutQuote = await $.tool.call({ tool: TASK_TOOL, id: 's1-later', status: 'dropped' } satisfies ToolCallInput)
+  expect('deny' in withoutQuote).toBe(true)
+  const dropped = await $.tool.call({ tool: TASK_TOOL, id: 's1-later', status: 'dropped', evidence: quote } satisfies ToolCallInput)
+  if ('deny' in dropped) throw new Error(dropped.deny)
+  let events = parseLog(seen.files[TRACKER] ?? '')
+  expect(snapshot(events).find(issue => issue.id === 's1-later')?.status).toBe('dropped')
+  expect(focusOf(events, 's1')).toEqual({ stack: ['s1-root'], pending: [] })
+  // With no focus at all, the drop also lands and creates no focus.
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
+    { op: 'create', issue: 's1-loose', title: 'loose todo', status: 'todo' },
+  ])
+  const unfocused = await $.tool.call({ tool: TASK_TOOL, id: 's1-loose', status: 'dropped', evidence: quote } satisfies ToolCallInput)
+  if ('deny' in unfocused) throw new Error(unfocused.deny)
+  events = parseLog(seen.files[TRACKER] ?? '')
+  expect(snapshot(events).find(issue => issue.id === 's1-loose')?.status).toBe('dropped')
+  expect(snapshot(events).find(issue => issue.id === 's1-root')?.status).toBe('doing')
+  expect(focusOf(events, 's1').stack).toEqual([])
+})
+
 // Regression caught: with no focus, a todo clm_task was refused with a hint to use "doing", so work the user deferred became the agent's doing focus.
 test('a todo clm_task with no focus records the task for later without focusing it', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [M('user', 'README는 나중에 고쳐')], replies: [] })

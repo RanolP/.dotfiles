@@ -30,16 +30,17 @@ export function parseHerdrPaneId(stdout: string): string {
     catch { throw new Error('Herdr tab creation did not return JSON') }
   })()
   if (!isRecord(value)) throw new Error('Herdr tab creation returned an invalid response')
-  const rootPane = value.root_pane
+  const result = isRecord(value.result) ? value.result : value
+  const rootPane = result.root_pane
   const paneId = isRecord(rootPane) ? rootPane.pane_id : undefined
   if (typeof paneId !== 'string' || !paneId) throw new Error('Herdr tab creation response has no root_pane.pane_id')
   return paneId
 }
 
-export function launchPlan(input: { mux: Mux; cwd: string; name: string; env: CoworkerEnvironment; brief: string }): LaunchPlan {
+export function launchPlan(input: { mux: Mux; cwd: string; name: string; env: CoworkerEnvironment; brief: string; herdrWorkspaceId?: string }): LaunchPlan {
   const envArgs = environmentArgs(input.env)
   if (input.mux === 'herdr') return { steps: [
-    { argv: ['herdr', 'tab', 'create', '--cwd', input.cwd, '--label', input.name, ...envArgs.flatMap(value => ['--env', value]), '--no-focus'] },
+    { argv: ['herdr', 'tab', 'create', ...(input.herdrWorkspaceId ? ['--workspace', input.herdrWorkspaceId] : []), '--cwd', input.cwd, '--label', input.name, ...envArgs.flatMap(value => ['--env', value]), '--no-focus'] },
     { argvFromPrevious: stdout => ['herdr', 'agent', 'start', input.name, '--kind', 'claude', '--pane', parseHerdrPaneId(stdout), '--', input.brief] },
   ] }
   if (input.mux === 'zellij') return { steps: [

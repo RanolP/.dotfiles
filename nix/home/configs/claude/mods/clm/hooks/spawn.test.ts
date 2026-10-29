@@ -5,12 +5,18 @@ const env = { CLM_COWORKER: '1', CLM_MAIN_SESSION: 'main-1', CLM_COWORKER_NAME: 
 
 // Regression caught: Herdr could focus the new tab or start Claude outside the tab's root pane.
 test('herdr launch creates an unfocused tab and starts claude in its root pane', () => {
+  const plan = launchPlan({ mux: 'herdr', cwd: '/repo/worktree', name: 'clm-worker', env, brief: 'Do the work', herdrWorkspaceId: 'w4K' })
+  if (!('steps' in plan)) throw new Error('expected argv steps')
+  expect(plan.steps[0]).toEqual({ argv: ['herdr', 'tab', 'create', '--workspace', 'w4K', '--cwd', '/repo/worktree', '--label', 'clm-worker', '--env', 'CLM_COWORKER=1', '--env', 'CLM_MAIN_SESSION=main-1', '--env', 'CLM_COWORKER_NAME=clm-worker', '--no-focus'] })
+  const stdout = JSON.stringify({ id: 'cli:tab:create', result: { root_pane: { agent_status: 'unknown', cwd: '/repo/worktree', focused: false, pane_id: 'w4K:p1', tab_id: 'w4K:t1', workspace_id: 'w4K' }, tab: {}, type: 'tab_created' } })
+  expect(parseHerdrPaneId(stdout)).toBe('w4K:p1')
+  expect(plan.steps[1]!.argvFromPrevious?.(stdout)).toEqual(['herdr', 'agent', 'start', 'clm-worker', '--kind', 'claude', '--pane', 'w4K:p1', '--', 'Do the work'])
+})
+
+test('herdr launch omits the workspace flag when no workspace id is available', () => {
   const plan = launchPlan({ mux: 'herdr', cwd: '/repo/worktree', name: 'clm-worker', env, brief: 'Do the work' })
   if (!('steps' in plan)) throw new Error('expected argv steps')
-  expect(plan.steps[0]).toEqual({ argv: ['herdr', 'tab', 'create', '--cwd', '/repo/worktree', '--label', 'clm-worker', '--env', 'CLM_COWORKER=1', '--env', 'CLM_MAIN_SESSION=main-1', '--env', 'CLM_COWORKER_NAME=clm-worker', '--no-focus'] })
-  const stdout = JSON.stringify({ type: 'tab_created', tab: {}, root_pane: { pane_id: 'terminal_42' } })
-  expect(parseHerdrPaneId(stdout)).toBe('terminal_42')
-  expect(plan.steps[1]!.argvFromPrevious?.(stdout)).toEqual(['herdr', 'agent', 'start', 'clm-worker', '--kind', 'claude', '--pane', 'terminal_42', '--', 'Do the work'])
+  expect(plan.steps[0]!.argv).not.toContain('--workspace')
 })
 
 // Regression caught: alternate mux launchers could omit orchestration identity or steal the active pane.

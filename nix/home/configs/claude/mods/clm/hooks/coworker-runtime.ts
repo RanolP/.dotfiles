@@ -303,6 +303,7 @@ const recordSpawnFailure = async ($: EngineInterface, role: RuntimeRole, now: nu
 const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: readonly CoworkerRecord[]) => {
   const env = {
     HERDR_SOCKET_PATH: await $.env.get('HERDR_SOCKET_PATH'), HERDR_ENV: await $.env.get('HERDR_ENV'),
+    HERDR_WORKSPACE_ID: await $.env.get('HERDR_WORKSPACE_ID'),
     ZELLIJ: await $.env.get('ZELLIJ'), TMUX: await $.env.get('TMUX'),
   }
   const mux = detectMux(env)
@@ -312,7 +313,7 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
   const name = `clm-coworker-${index}`
   await writeCoworker(runtimeIo($), { session: name, main: role.main, role: 'coworker', repo: role.repo, state: 'starting', heartbeat: await $.clock.now(), mux })
   const configDir = await $.env.get('CLAUDE_CONFIG_DIR')
-  const launch = launchPlan({ mux, cwd: role.repoRoot, name, env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: role.main, CLM_COWORKER_NAME: name, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) }, brief: coworkerBrief({ main: role.main, repo: role.repoRoot }) })
+  const launch = launchPlan({ mux, cwd: role.repoRoot, name, env: { CLM_COWORKER: '1', CLM_MAIN_SESSION: role.main, CLM_COWORKER_NAME: name, ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) }, brief: coworkerBrief({ main: role.main, repo: role.repoRoot }), herdrWorkspaceId: env.HERDR_WORKSPACE_ID })
   if ('manual' in launch) {
     $.ui.log(`clm co-worker launch unavailable: mux=none command=${launch.manual} exitCode=unavailable stderr=${JSON.stringify('no supported multiplexer detected')}`, { to: 'debug' })
     await removeRegistry($, name)

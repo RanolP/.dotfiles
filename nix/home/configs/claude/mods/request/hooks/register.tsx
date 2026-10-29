@@ -1,13 +1,9 @@
 import { update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement, ToolSpec } from 'claude-code'
+import type { EngineInterface, Register, ToolSpec } from 'claude-code'
 import type { Alternative, ApprovalRequest, ExecResult } from '../types'
 
 const REQUESTS = { plugin: 'request', key: 'requests' } as const
 const TURN = { plugin: 'request', key: 'turnId' } as const
-// The pending request the expanded band shows; null or a decided id falls back to the first pending.
-const VIEWING = { plugin: 'request', key: 'viewing' } as const
-// Whether the band is expanded into the review, or the one collapsed row.
-const EXPANDED = { plugin: 'request', key: 'expanded' } as const
 
 export const RAISE_TOOL = 'mcp__request__raise_approval_request'
 // $.process.run's ceiling; an escalated command is often the long one.
@@ -20,8 +16,7 @@ const TOOLS = [
     name: 'raise_approval_request',
     description: [
       'Escalate one shell command that was denied, when that command is the only correct way to do the work: for Claude, a Bash call the auto-mode permission classifier denied; for a codex worker, a command its sandbox blocked.',
-      'Returns at once with a request id (R<n>); keep working on what does not depend on it.',
-      'The user reviews it from the approval band above their prompt (or /approvals). On approval this tool\'s mod runs the exact command once on the host, outside any sandbox, in cwd (bash -c), and the stdout, stderr and exit code arrive as a message; on rejection the rejection and its reason arrive. Re-issuing the denied command would be denied again, so wait for that message.',
+      'A review dialog opens for the user at once, as AskUserQuestion does, and the call returns with a request id (R<n>) once they answer or dismiss it; dismissed, the request waits in the approval band above their prompt (or /approvals), so keep working on what does not depend on it. On approval this tool\'s mod runs the exact command once on the host, outside any sandbox, in cwd (bash -c), and the stdout, stderr and exit code arrive as a message; on rejection the rejection and its reason arrive. Re-issuing the denied command would be denied again, so wait for that message.',
       'Use it only for a classifier or sandbox denial: a denial, rejection or "stop"/"cancel" from the user still halts that line of work.',
       'Each approval runs the command once; running it again needs a new request.',
     ].join(' '),
@@ -72,12 +67,17 @@ const isAlternatives = (v: unknown): v is Alternative[] => Array.isArray(v) && v
 // marks can make a terminal show something other than the bytes that run.
 const HIDDEN = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/
 
-// A fence longer than any backtick run inside keeps the text literal whether
-// the dialog renders Markdown or plain text.
-const fenced = (text: string) => {
+// A fence longer than any backtick run inside keeps the text literal in the
+// preview's Markdown.
+const fenced = (text: string, info = '') => {
   const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(run => run.length))
   const fence = '`'.repeat(Math.max(3, longest + 1))
-  return `${fence}\n${text}\n${fence}`
+  return `${fence}${info}\n${text}\n${fence}`
+}
+const inlineCode = (text: string) => {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map(run => run.length))
+  const tick = '`'.repeat(longest + 1)
+  return `${tick} ${text} ${tick}`
 }
 
 // Prose the model wrote (why, alternatives, blocks) is drawn as text with any
@@ -85,23 +85,20 @@ const fenced = (text: string) => {
 const HIDDEN_ALL = new RegExp(HIDDEN.source, 'gu')
 const visible = (text: string) => text.replace(HIDDEN_ALL, c => `\\u{${c.codePointAt(0)?.toString(16)}}`)
 
-// What a Code element may hold (CodeProps.source caps it at 10000).
-const CODE_MAX = 10_000
+// The command as the dialog shows it: a hidden character escaped (a terminal
+// would draw a bidi mark as the reordering it is); the escape is exact.
+const shownCommand = (r: ApprovalRequest) => (HIDDEN.test(r.command) ? JSON.stringify(r.command) : r.command)
 
-// The text the user approves. It carries `command` itself, unaltered, so what
-// is shown is what runs; a command with hidden characters also gets an escaped copy.
-export const reviewText = (r: ApprovalRequest): string => [
-  `${r.id}: run this Bash command?`,
-  'cwd:',
-  fenced(r.cwd),
-  'command:',
-  fenced(r.command),
-  ...(HIDDEN.test(r.command) ? ['WARNING: the command contains hidden or control characters. Escaped:', fenced(JSON.stringify(r.command))] : []),
-  `Requested by: ${r.agentId ? `subagent ${r.agentId}` : 'main session'}`,
-  `Why only way: ${r.why_only_way}`,
-  'Rejected alternatives:',
-  ...r.alternatives.map(a => `  - ${a.approach}: ${a.rejected_because}`),
-  `Blocks: ${r.blocks}`,
+// The review the dialog draws beside its options, as Markdown in a monospace
+// box: the command first in a bash fence, so a box cut short loses prose only.
+export const reviewPreview = (r: ApprovalRequest): string => [
+  fenced(shownCommand(r), 'bash'),
+  ...(HIDDEN.test(r.command) ? ['**Holds hidden or control characters; shown JSON-escaped.**'] : []),
+  `in ${inlineCode(r.cwd)} · asked by ${r.agentId ? `subagent ${inlineCode(visible(r.agentId))}` : 'the main session'}`,
+  '',
+  `**Why** ${visible(r.why_only_way)}`,
+  ...r.alternatives.map((a, i) => `**${i === 0 ? 'Not' : '   '}** ${visible(a.approach)} — ${visible(a.rejected_because)}`),
+  `**Unblocks** ${visible(r.blocks)}`,
 ].join('\n')
 
 const cap = (text: string): string => {
@@ -226,7 +223,7 @@ const claim = async ($: Ctx, id: string): Promise<ApprovalRequest | undefined> =
 }
 
 // Runs an approved request once: the claim makes it single-use, so a second
-// approval of the same id (the pane and /approvals both open) runs nothing.
+// approval of the same id (two dialogs on it) runs nothing.
 const approveAndRun = async ($: Ctx, id: string) => {
   const run = await claim($, id)
   if (!run) return
@@ -245,28 +242,20 @@ const approveAndRun = async ($: Ctx, id: string) => {
   }
 }
 
-const reject = async ($: Ctx, id: string, reason: string | undefined) => {
-  await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === id && x.status === 'pending'
-    ? { ...x, status: 'rejected', delivered: false, ...(reason ? { reason } : {}) } : x)))
+// `delivered`: the caller hands the rejection over itself (the raise's own result).
+const reject = async ($: Ctx, id: string, reason: string | undefined, delivered = false) => {
+  const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === id && x.status === 'pending'
+    ? { ...x, status: 'rejected', delivered, ...(reason ? { reason } : {}) } : x)))
+  return written.find((x): x is Outcome => x.id === id && x.status === 'rejected')
 }
 
+// The dialog's options, the harmless one first: the dialog focuses its first
+// option, so a stray Enter keeps the request pending. Text typed under the
+// dialog's Other denies with that text as the reason.
+const LATER = 'Not now'
+const DENY = 'Deny'
 const APPROVE = 'Approve and run'
-const REJECT = 'Reject'
-
-// A band decision: move the band on to the next pending request (collapsing
-// it after the last) before the possibly long run, then deliver the outcome.
-const decide = async ($: Ctx, id: string, decision: { approve: true } | { approve: false; reason?: string }) => {
-  try {
-    const rest = (await requests($)).filter(r => r.status === 'pending' && r.id !== id)
-    await $.state.set(VIEWING, rest[0]?.id ?? null)
-    if (!rest.length) await $.state.set(EXPANDED, false)
-    if (decision.approve) await approveAndRun($, id)
-    else await reject($, id, decision.reason?.trim() || undefined)
-    await deliverUndelivered($)
-  } catch (err) {
-    log($, `${id} band decision failed: ${errText(err)}`)
-  }
-}
+const QUESTION = 'Run this command?'
 
 // Terminal cells a string takes: wide (CJK, emoji) counts 2 and a tab 8, so
 // the estimate errs tall, which only ever withholds Approve.
@@ -291,51 +280,105 @@ const clip = (text: string, room: number) => {
 export const bandPreview = (first: ApprovalRequest, room: number): string =>
   clip(`${first.id} ${visible(first.command.replace(/\s*\n\s*/g, ' ⏎ '))}`, room)
 
-// Rows the bordered Code block takes at `columns` across: each source line
-// wrapped to the room inside the border and padding, plus the two border rows.
-export const codeRows = (source: string, columns: number): number => {
-  const inner = Math.max(1, columns - 4)
-  return source.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / inner)), 0) + 2
+// Rows the dialog needs for the whole command: the fenced block wrapped in
+// the preview box, assumed to get half the width less its border and padding
+// (the options list takes the other side), plus the dialog's own rows
+// (chip, question, box border, the hints line) with slack for the fence's
+// lines and the surface's chrome. A guess at the engine's layout, made tall.
+const DIALOG_CHROME_ROWS = 10
+export const dialogRows = (r: ApprovalRequest, columns: number): number => {
+  const inner = Math.max(1, Math.floor(columns / 2) - 4)
+  const code = shownCommand(r).split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / inner)), 0)
+  return code + (HIDDEN.test(r.command) ? 1 : 0) + DIALOG_CHROME_ROWS
 }
 
-// The expanded band's rows around the Code block: header, subtitle, the action
-// row, and one spared for another mod's row drawn above ours.
-const ROWS_AROUND_CODE = 4
+// The review dialogs open now, by request id (the dialog's chip). The hooks
+// below know one by its chip, question and labels: the tool.call hook adds
+// the review as each option's preview on the way to the engine, the render
+// hook records whether the last drawing could show the whole command; an
+// Approve answer counts only when both happened. A module value: a reload
+// forgets it, and an answer to a forgotten dialog leaves the request pending.
+type OpenDialog = { id: string; position: string; isApprovable: boolean; hasPreview?: true; idleMs?: number }
+const openDialogs = new Map<string, OpenDialog>()
 
-// The step-by-step dialog: the review where no band is drawn (mobile, VS
-// Code), and for a command too tall for the band to show whole. `dialog` is
-// the register's own flag, so a second /approvals does not stack a walk.
-type Dialog = { walking: boolean }
-const walkDialog = ($: Ctx, ids: readonly string[], dialog: Dialog) => {
-  dialog.walking = true
-  void (async () => {
-    try {
-      for (const id of ids) {
-        const q = (await requests($)).find(x => x.id === id)
-        if (!q || q.status !== 'pending') continue
-        const text = reviewText(q)
-        $.ui.log(text)
-        const answer = await $.ui.ask(text, { options: [APPROVE, REJECT], header: q.id }).catch((err: unknown) => {
-          log($, `${q.id} skipped: ${errText(err)}`)
-          return undefined
-        })
-        if (answer === undefined) continue
-        if (answer === APPROVE) await approveAndRun($, q.id)
-        else await reject($, q.id, answer === REJECT ? undefined : answer)
-        await deliverUndelivered($)
-      }
-    } catch (err) {
-      log($, `/approvals walk failed: ${errText(err)}`)
-    } finally {
-      dialog.walking = false
-      log($, '/approvals walk ended')
+type Decision = { kind: 'approve' } | { kind: 'deny'; reason?: string } | { kind: 'none'; why: string }
+
+// One review dialog: the engine's AskUserQuestion through $.ui.ask (a plugin's
+// own $.tool.call of it is refused by the host). $.ui.ask takes labels only;
+// the tool.call hook below fills in descriptions and the preview. The caller's
+// hook awaits it: a $.ui.ask made after that hook returned skips this mod's
+// own hooks (seen in the plugin test kit), and with them the preview.
+const askOne = async ($: Ctx, r: ApprovalRequest, position: string): Promise<Decision> => {
+  const open: OpenDialog = { id: r.id, position, isApprovable: false }
+  openDialogs.set(r.id, open)
+  try {
+    const answer = await $.ui.ask(QUESTION, { options: [LATER, DENY, APPROVE], header: r.id })
+      .catch((err: unknown) => { throw new Error(`dismissed: ${errText(err)}`) })
+    if (open.idleMs !== undefined) return { kind: 'none', why: `auto-answered after ${open.idleMs} ms idle` }
+    if (answer.trim() === '' || answer === LATER) return { kind: 'none', why: 'kept for later' }
+    if (answer === APPROVE) {
+      if (!open.hasPreview) return { kind: 'none', why: 'Approve was answered on a dialog asked without the review' }
+      if (!open.isApprovable) return { kind: 'none', why: 'Approve was answered but the last drawing could not show the whole command' }
+      return { kind: 'approve' }
     }
-  })()
+    return { kind: 'deny', ...(answer === DENY ? {} : { reason: answer.trim() }) }
+  } finally {
+    if (openDialogs.get(r.id) === open) openDialogs.delete(r.id)
+  }
+}
+
+// The open review an AskUserQuestion carries, if it is one of ours: one
+// single-select question with our question, a request's chip, and our labels.
+const ourDialog = (questions: readonly unknown[]): OpenDialog | undefined => {
+  if (questions.length !== 1) return undefined
+  const q = questions[0]
+  if (typeof q !== 'object' || q === null) return undefined
+  const { header, question, options } = q as { header?: unknown; question?: unknown; options?: unknown }
+  if (typeof header !== 'string' || question !== QUESTION || !Array.isArray(options)) return undefined
+  const labels = options.map((o: unknown) => (typeof o === 'object' && o !== null && 'label' in o ? o.label : undefined))
+  if (!labels.every(l => l === LATER || l === DENY || l === APPROVE) || !labels.includes(LATER)) return undefined
+  return openDialogs.get(header)
+}
+
+// The review of `ids`, one dialog per request in order, from the calling hook,
+// which awaits it. A dialog left undecided (Esc, Not now, idle) ends the walk
+// and what is left waits in the band. An approved command runs on after the
+// walk and its outcome arrives as a message, as does a rejection, except the
+// one for `inBand`, which the walk returns for the raise to answer with: a
+// message submitted from inside that tool call would wait for the turn.
+type InBand = { kind: 'approved' } | { kind: 'rejected'; outcome: Outcome } | undefined
+const walkDialogs = async ($: Ctx, ids: readonly string[], inBand?: string): Promise<InBand> => {
+  let answered: InBand
+  try {
+    for (const id of ids) {
+      const all = await requests($)
+      const q = all.find(x => x.id === id)
+      if (!q || q.status !== 'pending' || openDialogs.has(id)) continue
+      const rest = all.filter(x => x.status === 'pending' && x.id !== id).length
+      const decision = await askOne($, q, rest ? ` with ${plural(rest, 'other')}` : '').catch((err: unknown): Decision => ({ kind: 'none', why: errText(err) }))
+      if (decision.kind === 'none') {
+        log($, `${q.id} left pending: ${decision.why}`)
+        break
+      }
+      if (decision.kind === 'approve') {
+        if (q.id === inBand) answered = { kind: 'approved' }
+        void approveAndRun($, q.id).then(() => deliverUndelivered($))
+          .catch((err: unknown) => log($, `${q.id} run failed: ${errText(err)}`))
+      } else {
+        const rejected = await reject($, q.id, decision.reason, q.id === inBand)
+        if (q.id === inBand && rejected) answered = { kind: 'rejected', outcome: rejected }
+        else void deliverUndelivered($).catch((err: unknown) => log($, `delivery failed: ${errText(err)}`))
+      }
+    }
+  } catch (err) {
+    log($, `review failed: ${errText(err)}`)
+  } finally {
+    log($, 'review ended')
+  }
+  return answered
 }
 
 export const register: Register = on => {
-  const dialog: Dialog = { walking: false }
-
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     for (const t of TOOLS) {
@@ -346,7 +389,7 @@ export const register: Register = on => {
       }
     }
     try {
-      await $.command.register({ name: 'approvals', description: 'Review the Bash commands the model escalated in the band above the prompt (a step-by-step dialog where no band is drawn)' })
+      await $.command.register({ name: 'approvals', description: 'Review the Bash commands the model escalated, one dialog each' })
     } catch (err) {
       log($, `command.register(approvals) failed: ${errText(err)}`)
     }
@@ -394,34 +437,88 @@ export const register: Register = on => {
     }
     // The change appends last, so the written list ends with this request.
     const id = written.at(-1)?.id ?? '(unknown)'
-    $.ui.toast(`${id} approval requested: ${command}`)
-    return ok(`${id} queued for the user's review (the approval band, or /approvals). The outcome arrives as a message; until then continue with work that does not depend on it (${blocks}).`)
+    // The review opens now and this call waits on it, as AskUserQuestion does.
+    const answered = await walkDialogs($, [id], id)
+    if (answered?.kind === 'rejected') return ok(outcomeText(answered.outcome))
+    if (!answered) {
+      return ok(`${id} is waiting for the user's review: they closed the dialog, and it stays in the approval band (or /approvals). The outcome arrives as a message; until then continue with work that does not depend on it (${blocks}).`)
+    }
+    return ok(`${id} was approved by the user and runs once now. Its stdout, stderr and exit code arrive as a message; wait for it before work that depends on it (${blocks}).`)
   })
 
   on('command.run', { command: 'approvals' }, async $ => {
     // The engine prefixes the plugin's name to this text, so it carries none of its own.
-    if (dialog.walking) return { text: '/approvals is already open.' }
+    if (openDialogs.size) return { text: 'the review dialog is already open.' }
     const pending = (await requests($)).filter(r => r.status === 'pending')
     if (!pending.length) {
       void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))
       return { text: 'no pending approval requests.' }
     }
-    // AbovePrompt is drawn on the terminal and desktop only; elsewhere the dialog reviews.
-    const surfaces = await $.session.surfaces().catch((err: unknown) => {
-      log($, `session.surfaces failed: ${errText(err)}; walking the dialog instead`)
-      return []
-    })
-    if (surfaces.some(x => x === 'terminal' || x === 'desktop')) {
-      await $.state.set(EXPANDED, true)
-      return { text: `${plural(pending.length, 'pending approval request')} in the band above the prompt.` }
-    }
-    walkDialog($, pending.map(r => r.id), dialog)
-    return { text: `${plural(pending.length, 'pending approval request')}; Esc skips one, text under Other rejects with that reason.` }
+    await walkDialogs($, pending.map(r => r.id))
+    return { text: `reviewed ${plural(pending.length, 'pending approval request')}; Esc or Not now left the rest in the band.` }
   })
 
-  // The band: one row while anything waits on the user, expanded in place into
-  // the review on Review, and composed above what the plugins beneath draw
-  // (ask-later's row) rather than hiding it.
+  // Our review dialog on its way to the engine: $.ui.ask passes labels only,
+  // so the options get their descriptions and the review as each option's
+  // preview here, in the asked input (a ui.render rewrite may not add previews
+  // or drop options). Every other AskUserQuestion passes untouched. On the way
+  // back, an idle auto-answer (afkTimeoutMs) is marked so it decides nothing.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const open = ourDialog(e.questions)
+    if (!open) return next(e)
+    const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
+    if (!r) return next(e)
+    const preview = reviewPreview(r)
+    const described: Record<string, string> = {
+      [LATER]: `Keep it pending in the band above the prompt${open.position}`,
+      [DENY]: 'Tell the model no; type under Other to give the reason',
+      [APPROVE]: `Run it once, exactly as shown, with bash -c in ${r.cwd}`,
+    }
+    // Every option carries the review, so whichever is focused shows the command.
+    const q = e.questions[0]
+    if (!q) return next(e)
+    const options = q.options.map(o => ({ ...o, description: described[o.label] ?? '', preview }))
+    open.hasPreview = true
+    const out = await next({ ...e, questions: [{ ...q, options }] })
+    if ('result' in out && out.result && typeof out.result === 'object') {
+      const idle = (out.result as { afkTimeoutMs?: unknown }).afkTimeoutMs
+      if (typeof idle === 'number') open.idleMs = idle
+    }
+    return out
+  })
+
+  // Our review dialog as drawn: Approve counts only while the whole command
+  // fits the surface. A rewrite may change descriptions but not the options,
+  // so when it does not fit Approve stays listed and its description says it
+  // will not run and why.
+  on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
+    const open = ourDialog(e.props.questions)
+    if (!open) return next(e)
+    const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
+    const needs = r && e.viewport ? dialogRows(r, e.viewport.columns) : undefined
+    const fits = needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
+    open.isApprovable = fits
+    if (fits) return next(e)
+    const why = !r ? 'it is no longer pending'
+      : !e.viewport || needs === undefined ? 'this surface did not report its size'
+        : `it needs ${needs} rows and the window has ${e.viewport.rows}; enlarge it, then Review from the band`
+    const q = e.props.questions[0] as { options: { label: string; description?: string }[] }
+    const options = q.options.map(o => (o.label === APPROVE ? { ...o, description: `Unavailable, runs nothing: ${why}` } : o))
+    return next({ ...e, props: { ...e.props, questions: [{ ...q, options }] } })
+  })
+
+  // Review opens the dialogs from this press hook, which awaits them, rather
+  // than from the Button's closure, whose $ outlives its drawing's hook (see
+  // askOne).
+  on('ui.press', { plugin: 'request', element: 'review' }, async ($, e, next) => {
+    const pending = (await requests($)).filter(r => r.status === 'pending')
+    if (!openDialogs.size) await walkDialogs($, pending.map(r => r.id))
+    return next(e)
+  })
+
+  // The band: one row while anything waits on the user, composed above what
+  // the plugins beneath draw (ask-later's row) rather than hiding it. Review
+  // reopens the dialogs.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const all = await requests($)
@@ -429,92 +526,33 @@ export const register: Register = on => {
     const undelivered = all.filter(isUndelivered).length
     if (!pending.length && !undelivered) return next(e)
     const below = await next(e)
-    const elements = $.ui.resolve(e)
-    const { Box, Text, Button, Code } = elements
-    // The band draws on the terminal and desktop, both of which have Input; the table's type spans every surface.
-    const Input = 'Input' in elements ? elements.Input : undefined
-    const columns = e.props.bodyColumns
-    const isExpanded = (await $.state.get(EXPANDED)).value ?? false
-    const viewing = (await $.state.get(VIEWING)).value ?? null
-    const at = Math.max(0, pending.findIndex(r => r.id === viewing))
-    const r = pending[at]
-    const stack = (row: RenderElement) => (
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const first = pending[0]
+    const row = first
+      ? (() => {
+        const head = `● ${plural(pending.length, 'approval request')}  `
+        // "[ Review ]" plus the gaps around the preview.
+        const room = e.props.bodyColumns - cells(head) - ('Review'.length + 4) - 2
+        return (
+          <Box key="request-band" flexDirection="row">
+            <Text color="yellow" bold>{head}</Text>
+            <Text dimColor wrap="truncate-end">{bandPreview(first, room)}</Text>
+            <Text>  </Text>
+            <Button key="review" label="Review" hotkey="r" variant="primary" onPress={() => {}} />
+          </Box>
+        )
+      })()
+      : (
+        <Box key="request-band" flexDirection="row">
+          <Text color="yellow" bold>{`● ${plural(undelivered, 'result')} undelivered  `}</Text>
+          <Button key="redeliver" label="Redeliver" onPress={() => void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))} />
+        </Box>
+      )
+    return (
       <Box flexDirection="column">
         {row}
         {below}
       </Box>
-    )
-
-    if (!r) {
-      return stack(
-        <Box key="request-band" flexDirection="row">
-          <Text color="yellow" bold>{`● ${plural(undelivered, 'result')} undelivered  `}</Text>
-          <Button key="redeliver" label="Redeliver" onPress={() => void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))} />
-        </Box>,
-      )
-    }
-
-    const head = `● ${plural(pending.length, 'approval request')}  `
-    if (!isExpanded) {
-      // "[ Review ]" plus the gaps around the preview.
-      const room = columns - cells(head) - ('Review'.length + 4) - 2
-      return stack(
-        <Box key="request-band" flexDirection="row">
-          <Text color="yellow" bold>{head}</Text>
-          <Text dimColor wrap="truncate-end">{bandPreview(r, room)}</Text>
-          <Text>  </Text>
-          <Button key="review" label="Review" hotkey="r" variant="primary" onPress={() => void $.state.set(EXPANDED, true)} />
-        </Box>,
-      )
-    }
-
-    const go = (i: number) => () => void $.state.set(VIEWING, pending[(i + pending.length) % pending.length]?.id ?? null)
-    const hidden = HIDDEN.test(r.command)
-    // A hidden character is shown escaped (Code refuses control characters and
-    // would draw a bidi mark as the reordering it is); the escape is exact.
-    const source = hidden ? JSON.stringify(r.command) : r.command
-    const needs = ROWS_AROUND_CODE + codeRows(source, columns) + (hidden ? 1 : 0)
-    // Approve only while the whole command and the Approve button share the
-    // band's first window, so nothing of what runs is scrolled out of sight.
-    const isWhole = source.length <= CODE_MAX && needs <= e.props.scroll.bodyRows
-    const line = (lead: string, text: string, key: string) => (
-      <Text key={key} wrap="truncate-end"><Text bold>{lead}</Text>{` ${clip(visible(text), columns - cells(lead) - 1)}`}</Text>
-    )
-    const subtitle = `in ${r.cwd} · asked by ${r.agentId ? `subagent ${visible(r.agentId)}` : 'the main session'}`
-    const tooTall = `${source.length > CODE_MAX ? `${source.length} characters` : `${needs} rows, the band has ${e.props.scroll.bodyRows}`}: too tall to approve here`
-    return stack(
-      <Box key="request-band" flexDirection="column">
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text><Text bold color="yellow">{`● ${r.id}`}</Text><Text bold>  Run this command?</Text>{pending.length > 1 && <Text dimColor>{`  ${at + 1} of ${pending.length}`}</Text>}</Text>
-          <Box flexDirection="row" gap={1}>
-            {pending.length > 1 && <Button key="prev" label="‹ Prev" hotkey="p" dimColor onPress={go(at - 1)} />}
-            {pending.length > 1 && <Button key="next" label="Next ›" hotkey="n" dimColor onPress={go(at + 1)} />}
-            <Button key="collapse" label="Collapse" hotkey="c" role="dismiss" dimColor onPress={() => void $.state.set(EXPANDED, false)} />
-          </Box>
-        </Box>
-        <Text dimColor wrap="truncate-end">{clip(subtitle, columns)}</Text>
-        {isWhole
-          ? (
-            <Box flexDirection="column" borderStyle="round" borderColor={hidden ? 'red' : 'yellow'} paddingX={1}>
-              {hidden && <Text color="red" bold>Holds hidden or control characters; shown JSON-escaped.</Text>}
-              <Code source={source} language="bash" />
-            </Box>
-          )
-          : (
-            <Box flexDirection="row" borderStyle="round" borderColor="red" paddingX={1} gap={2}>
-              <Text color="red" wrap="truncate-end">{clip(tooTall, columns - 26)}</Text>
-              <Button key="dialog" label="Review in dialog" onPress={() => { if (!dialog.walking) walkDialog($, [r.id], dialog) }} />
-            </Box>
-          )}
-        <Box flexDirection="row" gap={2}>
-          {isWhole && <Button key="approve" label={APPROVE} variant="primary" onPress={() => void decide($, r.id, { approve: true })} />}
-          <Button key="deny" label="Deny" hotkey="d" onPress={() => void decide($, r.id, { approve: false })} />
-          {Input && <Input key="reason" label="or deny with reason:" placeholder="why not" submitLabel="deny" onSubmit={value => void decide($, r.id, { approve: false, reason: value })} />}
-        </Box>
-        {line('Why', r.why_only_way, 'why')}
-        {r.alternatives.map((a, i) => line(i === 0 ? 'Not' : '   ', `${a.approach} — ${a.rejected_because}`, `alt-${i}`))}
-        {line('Unblocks', r.blocks, 'blocks')}
-      </Box>,
     )
   })
 }

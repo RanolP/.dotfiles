@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionStartInput, ToolCallInput } from 'claude-code'
 import type { CoworkerRecord } from './coworker'
-import { COWORKER_TOOL } from './coworker-runtime'
+import { COWORKER_TOOL, DISPATCH_NUDGE } from './coworker-runtime'
 import { bottoms, intentReply, promptInput, workflow, type On, type State } from './clm-test-support'
 import { parseLog, snapshot, toEvents, type Payload } from './tracker'
 
@@ -29,6 +29,11 @@ const NOW = Date.parse('2026-10-06T00:00:00Z')
 const recipient = (to: unknown) => typeof to === 'string' ? to : (to as { sessionId?: string }).sessionId
 const sentTo = (seen: ReturnType<typeof bottoms>, session: string) => seen.sends.filter(sent => recipient(sent.to) === session).map(sent => sent.text)
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+// A co-worker's message as main receives it, in the frame the engine wraps a peer delivery in.
+const peerMessage = ($: any, text: string) => $.session.receive({
+  origin: { kind: 'peer', plugin: 'clm' }, text: `<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="worker" from-mode="prompting">\n${text}\n</cross-session-message>`,
+}) as Promise<any>
+const receiveBottom = (on: On) => on('session.receive', (_$: unknown, e: any) => ({ text: e.text }))
 
 const seedRecord = (seen: ReturnType<typeof bottoms>, record: Omit<CoworkerRecord, 'role'> & { role?: CoworkerRecord['role'] }) => {
   seen.dirs.add(`${ROOT}/coworkers`)
@@ -80,7 +85,7 @@ test('ready marks the issue ready-to-land and messages the live main session', a
   await tool($, { action: 'claim', issue: 'ready-one' })
   const output = await tool($, { action: 'ready', issue: 'ready-one' })
   expect(resultText(output)).toContain('main-ready was notified.')
-  expect(sentTo(seen, 'main-ready')).toEqual([`ready-one is ready to land (${SHA_B}..${SHA_A}).`])
+  expect(sentTo(seen, 'main-ready')).toEqual([DISPATCH_NUDGE, `ready-one is ready to land (${SHA_B}..${SHA_A}).`])
   expect(issues(seen).find(issue => issue.id === 'ready-one')).toMatchObject({ status: 'ready-to-land', worktree: { baseSha: SHA_B, headSha: SHA_A } })
 })
 
@@ -93,7 +98,7 @@ test('ready messages the newest live main record, not the stable main id', async
   await $.session.start(startInput)
   await tool($, { action: 'claim', issue: 'cleared-one' })
   await tool($, { action: 'ready', issue: 'cleared-one' })
-  expect(sentTo(seen, 'main-new')).toHaveLength(1)
+  expect(sentTo(seen, 'main-new')).toEqual([DISPATCH_NUDGE, expect.stringMatching(/^cleared-one is ready to land/)])
   expect(sentTo(seen, 'main-old')).toHaveLength(0)
 })
 
@@ -183,8 +188,8 @@ test('revoke frees the claim so another co-worker can take it', async ($, on) =>
   expect(issues(seen).find(issue => issue.id === 'revoke-one')?.claimedBy).toBeUndefined()
 })
 
-// Regression caught: /clear cancelled polling under the old id, so the new main session never heartbeat or dispatched.
-test('after /clear the main session keeps polling under its new id', async ($, on) => {
+// Regression caught: /clear stopped the runtime under the old id, so the new main session never registered or dispatched.
+test('after /clear the main session registers and dispatches under its new id', async ($, on) => {
   const state: State = {
     rows: [], replies: [], sessionId: 'main-before-clear', nextSessionId: 'main-after-clear', env: { HERDR_ENV: '1' },
     processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-after-clear' } })) : undefined,
@@ -211,8 +216,8 @@ test('maxCoworkers set by plan survives /clear', async ($, on) => {
   expect(resultText(await tool($, { action: 'plan', issue: 'cap-clear', priority: 1 }))).toContain('maxCoworkers=4')
 })
 
-// Regression caught: a poll heartbeat could publish an older idle snapshot after claim had moved the worker to busy.
-test('a tick during claim does not revert the co-worker to idle', async ($, on) => {
+// Regression caught: a heartbeat could publish an older idle snapshot after claim had moved the worker to busy.
+test('a heartbeat during claim does not revert the co-worker to idle', async ($, on) => {
   let entered!: () => void
   let release!: () => void
   const writingBusy = new Promise<void>(resolve => { entered = resolve })
@@ -227,7 +232,8 @@ test('a tick during claim does not revert the co-worker to idle', async ($, on) 
   await $.session.start(startInput)
   const claiming = tool($, { action: 'claim', issue: 'tick-one' })
   await writingBusy
-  const ticking = seen.clock.advance(5_000)
+  // The test host has no Claude Code pid, so the record keeps the heartbeat fallback every 30 s.
+  const ticking = seen.clock.advance(30_000)
   release()
   await claiming; await ticking; await new Promise(resolve => setTimeout(resolve, 0))
   expect(JSON.parse(seen.files[`${ROOT}/coworkers/worker-tick-claim.json`]!)).toMatchObject({ state: 'busy', issue: 'tick-one' })
@@ -273,15 +279,14 @@ test('an idle co-worker is messaged instead of a new spawn', async ($, on) => {
   expect(seen.runs.some(argv => argv[0] === 'herdr')).toBe(false)
 })
 
-// Regression caught: a released issue went back to ready while main sat idle, and the poller found the idle co-worker but told nobody.
-test('the poller asks an idle co-worker to claim once, not every tick', async ($, on) => {
+// Regression caught: a released issue went back to ready while main sat idle, and dispatch found the idle co-worker but told nobody.
+test('repeated co-worker nudges ask an idle co-worker to claim once', async ($, on) => {
   const seen = bottoms(on, { rows: [], replies: [], sessionId: 'main-poll', env: { HERDR_ENV: '1' } })
+  receiveBottom(on)
   seedBoard(seen, 'board-poll', [{ op: 'create', issue: 'poll-one', title: 'Poll one', status: 'todo' }, { op: 'plan', issue: 'poll-one', ready: true }])
+  seedRecord(seen, { session: 'worker-poll', main: 'main-poll', repo: 'github.com/o/repo', state: 'idle', heartbeat: NOW })
   await $.session.start(startInput)
-  seedRecord(seen, { session: 'worker-poll', main: 'main-poll', repo: 'github.com/o/repo', state: 'idle', heartbeat: NOW + 15_000 })
-  await seen.clock.advance(5_000); await settle()
-  await seen.clock.advance(5_000); await settle()
-  await seen.clock.advance(5_000); await settle()
+  for (let i = 0; i < 3; i++) { await peerMessage($, DISPATCH_NUDGE); await settle() }
   expect(sentTo(seen, 'worker-poll')).toEqual(['Claim the next ready issue with clm_coworker; poll-one currently has the highest priority.'])
   expect(seen.runs.some(argv => argv[0] === 'herdr')).toBe(false)
 })
@@ -326,6 +331,69 @@ test('a failing launch command backs off instead of retrying every tick', async 
   await seen.clock.advance(15_000); await new Promise(resolve => setTimeout(resolve, 0))
   expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
   expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-launch-failure.spawn-backoff.json`]!)).toMatchObject({ failures: 1 })
+})
+
+// Regression caught: with no poller, a launch held back by spawn backoff never retried once the backoff expired.
+test('a dispatch blocked by spawn backoff launches when the backoff expires', async ($, on) => {
+  let failLaunch = true
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-backoff-wake', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab'
+      ? failLaunch ? { exitCode: 1, stdout: '', stderr: 'mux failed' } : ok(JSON.stringify({ root_pane: { pane_id: 'pane-wake' } }))
+      : undefined,
+  })
+  seedBoard(seen, 'board-backoff-wake', [{ op: 'create', issue: 'backoff-wake', title: 'Backoff wake', status: 'todo' }])
+  await $.session.start(startInput)
+  await tool($, { action: 'plan', issue: 'backoff-wake', ready: true })
+  failLaunch = false
+  await seen.clock.advance(119_000); await settle()
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
+  await seen.clock.advance(1_000); await settle()
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(2)
+})
+
+// Regression caught: two triggers landing together each saw no co-worker and each launched one.
+test('concurrent dispatch triggers launch one co-worker', async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-concurrent', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-concurrent' } })) : undefined,
+  })
+  receiveBottom(on)
+  await $.session.start(startInput)
+  seedBoard(seen, 'board-concurrent', [{ op: 'create', issue: 'concurrent-one', title: 'Concurrent one', status: 'todo' }, { op: 'plan', issue: 'concurrent-one', ready: true }])
+  await Promise.all([peerMessage($, DISPATCH_NUDGE), peerMessage($, DISPATCH_NUDGE), peerMessage($, 'concurrent-one is ready to land.')])
+  for (let i = 0; i < 5; i++) await settle()
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
+})
+
+// Regression caught: a co-worker that exited kept a fresh heartbeat for a minute, so main asked a dead session to claim instead of launching.
+test('a co-worker record whose pid is gone is not asked to claim', async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-dead-pid', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'ps' && argv.includes('pid=,lstart=') ? { exitCode: 1, stdout: '', stderr: '' }
+      : argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-dead-pid' } })) : undefined,
+  })
+  seedBoard(seen, 'board-dead-pid', [{ op: 'create', issue: 'dead-pid-one', title: 'Dead pid one', status: 'todo' }])
+  seedRecord(seen, { session: 'worker-dead-pid', main: 'main-dead-pid', repo: 'github.com/o/repo', state: 'idle', heartbeat: NOW, pid: 4242, processStart: 'Thu Oct 29 14:26:05 2026' })
+  await $.session.start(startInput)
+  await tool($, { action: 'plan', issue: 'dead-pid-one', ready: true })
+  expect(sentTo(seen, 'worker-dead-pid')).toHaveLength(0)
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
+})
+
+// Regression caught: the dispatch nudge reached main's model as a chat message instead of being taken by the hook.
+test('a dispatch nudge is consumed and dispatches ready work', async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-nudge', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' ? ok(JSON.stringify({ root_pane: { pane_id: 'pane-nudge' } })) : undefined,
+  })
+  receiveBottom(on)
+  await $.session.start(startInput)
+  seedBoard(seen, 'board-nudge', [{ op: 'create', issue: 'nudge-one', title: 'Nudge one', status: 'todo' }, { op: 'plan', issue: 'nudge-one', ready: true }])
+  expect(await peerMessage($, DISPATCH_NUDGE)).toEqual({ consumed: 'clm co-worker dispatch nudge' })
+  expect(await peerMessage($, 'nudge-one is ready to land.')).toMatchObject({ text: expect.stringContaining('nudge-one is ready to land.') })
+  for (let i = 0; i < 5; i++) await settle()
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toHaveLength(1)
 })
 
 // Regression caught: a recovered co-worker left the prior launch failures active, extending later retry delays indefinitely.

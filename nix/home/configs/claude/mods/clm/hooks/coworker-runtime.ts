@@ -1,9 +1,9 @@
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 import type { ClmCoworkerInput } from '../types'
 import { append as appendEvents, captureOrigin, readAll, type EventsIo } from './events'
 import {
-  DEFAULT_COWORKER_TTL_MS, claimIssue, isLive, pickNext, readCoworkers, readSpawnBackoff, releaseClaim, revokeClaim,
-  shouldSpawn, writeCoworker, writeSpawnBackoff, type CoworkerIo, type CoworkerRecord,
+  DEFAULT_COWORKER_TTL_MS, claimIssue, isLive, ownProcess, pickNext, readCoworkers, readSpawnBackoff, releaseClaim, revokeClaim,
+  shouldSpawn, spawnBackoffUntil, writeCoworker, writeSpawnBackoff, type CoworkerIo, type CoworkerRecord,
 } from './coworker'
 import { coworkerBrief, detectMux, launchPlan, readLoad } from './spawn'
 import { snapshot, type Issue, type Origin, type Payload } from './tracker'
@@ -11,21 +11,32 @@ import type { PromptIntentIo } from './intent'
 import { checkpointCommit, removeWorktree, startWorktree, type Worktree, type WorktreeIo } from './worktree'
 
 export const COWORKER_TOOL = 'mcp__clm__clm_coworker'
-const POLL_MS = 5_000
 const DEFAULT_MAX_COWORKERS = 2
 // A new Herdr pane measured available within 0.5 s of `tab create`; 20 tries 250 ms apart allow 5 s.
 const LAUNCH_RETRIES = 20
 const LAUNCH_RETRY_MS = 250
+// How long a spawn held back by host load waits before reading the load again.
+const LOAD_RECHECK_MS = 30_000
+// A co-worker's claim or release changes what main can dispatch; this text asks main's hook to dispatch and is taken before the model sees it.
+export const DISPATCH_NUDGE ='clm co-worker board changed; dispatch ready work.'
 
-type RuntimeRole = { isCoworker: boolean; session: string; main: string; repo: string; repoRoot: string; placeholder?: string }
+type RuntimeRole = {
+  isCoworker: boolean; session: string; main: string; repo: string; repoRoot: string; placeholder?: string
+  process?: { pid: number; processStart: string }
+}
 
 const roles = new Map<string, RuntimeRole>()
-const timers = new Map<string, { cancel: () => void }[]>()
-const intents = new Map<string, Pick<PromptIntentIo, 'isCoworker' | 'announce'>>()
+// `dispatch` lets register.ts's clm_task hook trigger a dispatch without handing `$` across the import.
+const intents = new Map<string, Pick<PromptIntentIo, 'isCoworker' | 'announce'> & { dispatch: () => Promise<void> }>()
 const localRecords = new Map<string, CoworkerRecord>()
 const registryWrites = new Map<string, Promise<void>>()
-const ticksInFlight = new Set<string>()
-// Per main session: the `<co-worker>:<issue>` claim request last sent, so the 5 s poll does not repeat it every tick.
+// Per stable main id: the dispatch running now and at most one queued behind it, so concurrent triggers never spawn twice.
+const dispatches = new Map<string, { running: Promise<string | undefined>; queued?: Promise<string | undefined> }>()
+// Per stable main id: the one timer armed for the earliest moment a blocked dispatch could succeed.
+const wakes = new Map<string, Timer>()
+// Per session: the heartbeat kept only when the session's own pid was not found.
+const heartbeats = new Map<string, Timer>()
+// Per main session: the `<co-worker>:<issue>` claim request last sent, so repeated dispatches do not repeat it.
 const claimRequests = new Map<string, string>()
 
 const optionalRead = async ($: EngineInterface, path: string) => {
@@ -56,6 +67,18 @@ const notifyMain = async ($: EngineInterface, role: RuntimeRole, text: string) =
   $.ui.log(`clm co-worker message to main ${role.main} not delivered: no live main session`)
   return `Main ${role.main} has no live session to notify.`
 }
+
+// Never throws: the board change it follows has already happened, and a lost nudge only delays main's next dispatch.
+const nudgeMain = async ($: EngineInterface, role: RuntimeRole) => {
+  try {
+    const session = liveMainSession(await readCoworkers(runtimeIo($)), role.main, await $.clock.now())
+    if (session) await notify($, session, DISPATCH_NUDGE)
+    else $.ui.log(`clm co-worker dispatch nudge to main ${role.main} not sent: no live main session`, { to: 'debug' })
+  } catch (error) { $.ui.log(`clm co-worker dispatch nudge failed: ${String(error).slice(0, 160)}`, { to: 'debug' }) }
+}
+
+// A delivery's body without the `<cross-session-message ...>` frame the engine wraps a peer's message in.
+const receivedBody = (text: string) => text.replace(/^\s*<cross-session-message\b[^>]*>/, '').replace(/<\/cross-session-message>\s*$/, '').trim()
 
 const runtimeIo = ($: EngineInterface): CoworkerIo => ({
   home: () => $.env.get('HOME'),
@@ -101,7 +124,9 @@ const currentRole = async ($: EngineInterface, stableMain?: string): Promise<Run
   const root = await $.process.run(['git', '-C', origin.cwd, 'rev-parse', '--show-toplevel'], { timeoutMs: 5_000 })
   if (root.exitCode !== 0 || !root.stdout.trim()) throw new Error(`could not resolve repository root: ${root.stderr.trim()}`)
   const placeholder = isCoworker ? (await $.env.get('CLM_COWORKER_NAME'))?.trim() : undefined
-  const role = { isCoworker, session, main, repo: origin.repo, repoRoot: root.stdout.trim(), ...(placeholder ? { placeholder } : {}) }
+  const own = await ownProcess(runtimeIo($)).catch(() => undefined)
+  if (!own) $.ui.log('clm co-worker: own Claude Code pid not found; this session\'s registry record ages out by heartbeat', { to: 'debug' })
+  const role = { isCoworker, session, main, repo: origin.repo, repoRoot: root.stdout.trim(), ...(placeholder ? { placeholder } : {}), ...(own ? { process: own } : {}) }
   roles.set(session, role)
   return role
 }
@@ -112,7 +137,8 @@ const updateRegistry = async ($: EngineInterface, role: RuntimeRole, update: Par
   const record: CoworkerRecord = {
     session: role.session, main: role.main, role: role.isCoworker ? 'coworker' : 'main', repo: role.repo, state: existing?.state ?? 'idle', heartbeat: now,
     ...(existing?.issue ? { issue: existing.issue } : {}), ...(existing?.mux ? { mux: existing.mux } : {}),
-    ...(role.session === role.main && existing?.maxCoworkers !== undefined ? { maxCoworkers: existing.maxCoworkers } : {}), ...update,
+    ...(role.session === role.main && existing?.maxCoworkers !== undefined ? { maxCoworkers: existing.maxCoworkers } : {}),
+    ...(role.process ?? {}), ...update,
   }
   if (update.issue === undefined && 'issue' in update) delete record.issue
   localRecords.set(role.session, record)
@@ -128,6 +154,7 @@ const updateMainRegistry = async ($: EngineInterface, role: RuntimeRole, maxCowo
   await writeCoworker(runtimeIo($), {
     session: role.main, main: role.main, role: 'main', repo: role.repo,
     state: existing?.state ?? 'idle', heartbeat: existing?.heartbeat ?? await $.clock.now(),
+    ...(existing?.pid !== undefined ? { pid: existing.pid, ...(existing.processStart ? { processStart: existing.processStart } : {}) } : {}),
     maxCoworkers,
   })
 }
@@ -188,6 +215,7 @@ const claim = async ($: EngineInterface, role: RuntimeRole, requested?: string) 
       ...(issue.worktree ? [] : [worktreePayload(issue.id, worktree)]),
     ], origin)
     await updateRegistry($, role, { state: 'busy', issue: issue.id })
+    await nudgeMain($, role)
     return `Claimed ${issue.id} (${issue.title}). Work only in ${worktree.dir}.`
   } catch (error) {
     await releaseClaim(runtimeIo($), issue.id, role.session)
@@ -213,6 +241,7 @@ const release = async ($: EngineInterface, role: RuntimeRole, issueId?: string) 
   if (!await releaseClaim(runtimeIo($), issue.id, role.session)) throw new Error(`issue ${issue.id} is not claimed by ${role.session}`)
   await append($, [{ op: 'claim', issue: issue.id, by: null }, { op: 'status', issue: issue.id, status: 'todo' }])
   await updateRegistry($, role, { state: 'idle', issue: undefined })
+  await nudgeMain($, role)
   return `Released ${issue.id}; its worktree remains attached to the issue.`
 }
 
@@ -226,7 +255,7 @@ const plan = async ($: EngineInterface, role: RuntimeRole, input: ClmCoworkerInp
   if (input.priority !== undefined || input.ready !== undefined)
     await append($, [{ op: 'plan', issue: issue.id, ...(input.priority === undefined ? {} : { priority: input.priority }), ...(input.ready === undefined ? {} : { ready: input.ready }) }])
   if (input.maxCoworkers !== undefined) await updateMainRegistry($, role, input.maxCoworkers)
-  const dispatched = input.ready === true ? await dispatchReadyWork($, role) : undefined
+  const dispatched = await dispatchReadyWork($, role)
   return `Planned ${issue.id}: priority=${input.priority ?? issue.priority ?? 'unset'}, ready=${input.ready ?? issue.ready ?? false}, maxCoworkers=${input.maxCoworkers ?? await readMaxCoworkers($, role)}.${dispatched ? ` ${dispatched}` : ''}`
 }
 
@@ -303,7 +332,8 @@ const recordSpawnFailure = async ($: EngineInterface, role: RuntimeRole, now: nu
   await writeSpawnBackoff(runtimeIo($), role.main, { failures: current.failures + 1, lastFailedAt: now })
 }
 
-const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: readonly CoworkerRecord[]) => {
+// 'launched' leaves a starting placeholder, 'failed' a spawn backoff, 'manual' nothing a later moment would change.
+const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: readonly CoworkerRecord[]): Promise<'launched' | 'failed' | 'manual'> => {
   const env = {
     HERDR_SOCKET_PATH: await $.env.get('HERDR_SOCKET_PATH'), HERDR_ENV: await $.env.get('HERDR_ENV'),
     HERDR_WORKSPACE_ID: await $.env.get('HERDR_WORKSPACE_ID'),
@@ -320,7 +350,7 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
   if ('manual' in launch) {
     $.ui.log(`clm co-worker launch unavailable: mux=none command=${launch.manual} exitCode=unavailable stderr=${JSON.stringify('no supported multiplexer detected')}`, { to: 'debug' })
     await removeRegistry($, name)
-    return
+    return 'manual'
   }
   // A step that created something (a Herdr tab) registers its undo, so a later failure leaves no orphan behind for the next spawn to duplicate.
   const undo: (() => readonly string[])[] = []
@@ -337,6 +367,7 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
     }
     await removeRegistry($, name)
     await recordSpawnFailure($, role, await $.clock.now())
+    return 'failed' as const
   }
   let stdout = ''
   for (const step of launch.steps) {
@@ -360,6 +391,7 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
       return await fail(`command=${JSON.stringify(argv ?? null)} error=${JSON.stringify(String(error).slice(0, 400))}`)
     }
   }
+  return 'launched'
 }
 
 // undefined: no live idle co-worker, so dispatch may spawn; a string: an idle co-worker has been asked to claim `next`, once per (co-worker, issue).
@@ -374,8 +406,13 @@ async function requestClaim($: EngineInterface, records: readonly CoworkerRecord
     : `${idle.session} could not be asked to claim ${next}.`
 }
 
-async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise<string | undefined> {
-  if (role.isCoworker) return
+// What one dispatch pass found: the notice for the caller, and when a pass held back by a waiting condition could next succeed.
+type DispatchPass = { notice?: string; wake?: { at: number; reason: string } }
+
+const earliest = (...wakes: (DispatchPass['wake'] | undefined)[]) =>
+  wakes.reduce<DispatchPass['wake']>((best, wake) => wake && (!best || wake.at < best.at) ? wake : best, undefined)
+
+async function dispatchPass($: EngineInterface, role: RuntimeRole): Promise<DispatchPass> {
   const now = await $.clock.now()
   const issues = await issuesForRepo($, role)
   const records: CoworkerRecord[] = []
@@ -386,34 +423,81 @@ async function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise
       $.ui.log(`clm co-worker ${record.session} failed to register before its ${DEFAULT_COWORKER_TTL_MS} ms startup deadline`)
     } else records.push(record)
   }
+  // A launch placeholder still inside its startup deadline is judged once that deadline passes.
+  const startup = earliest(...records
+    .filter(record => record.role === 'coworker' && record.main === role.main && record.state === 'starting' && record.pid === undefined)
+    .map(record => ({ at: record.heartbeat + DEFAULT_COWORKER_TTL_MS + 1, reason: `${record.session} startup deadline` })))
   const next = pickNext(issues.map(selectableIssue), role.repo)
-  if (!next) { claimRequests.delete(role.session); return }
+  if (!next) { claimRequests.delete(role.session); return { wake: startup } }
   const claimNotice = await requestClaim($, records, next.id, role, now)
-  if (claimNotice !== undefined) return claimNotice
+  if (claimNotice !== undefined) return { notice: claimNotice, wake: startup }
+  const loadRecheck = { at: now + LOAD_RECHECK_MS, reason: 'host load recheck' }
   const load = await (async () => {
     try { return await readLoad({ run: (argv, options) => $.process.run([...argv], options), read: path => optionalRead($, path) }) }
     catch (error) { $.ui.log(`clm co-worker load reading failed: ${String(error).slice(0, 160)}`, { to: 'debug' }); return undefined }
   })()
-  if (!load) return
+  if (!load) return { wake: earliest(startup, loadRecheck) }
   const cap = 0.75 * load.cores
   if (load.load1 >= cap) {
     $.ui.log(`clm co-worker spawn skipped: load1=${load.load1} cap=${cap} cores=${load.cores}`, { to: 'debug' })
-    return
+    return { wake: earliest(startup, loadRecheck) }
   }
-  if (shouldSpawn({
+  const backoff = await readSpawnBackoff(runtimeIo($), role.main)
+  const backoffUntil = spawnBackoffUntil(backoff)
+  if (backoffUntil !== undefined && now < backoffUntil) return { wake: earliest(startup, { at: backoffUntil, reason: 'spawn backoff expiry' }) }
+  if (!shouldSpawn({
     issues: issues.map(selectableIssue), coworkers: records.filter(record => record.role === 'coworker'), repo: role.repo, main: role.main,
-    ...load, maxCoworkers: await readMaxCoworkers($, role), backoff: await readSpawnBackoff(runtimeIo($), role.main), now, ttlMs: DEFAULT_COWORKER_TTL_MS,
-  }))
-    await launchCoworker($, role, records)
+    ...load, maxCoworkers: await readMaxCoworkers($, role), backoff, now, ttlMs: DEFAULT_COWORKER_TTL_MS,
+  })) return { wake: startup }
+  const launched = await launchCoworker($, role, records)
+  if (launched === 'launched') return { wake: earliest(startup, { at: await $.clock.now() + DEFAULT_COWORKER_TTL_MS + 1, reason: 'new co-worker startup deadline' }) }
+  if (launched === 'failed') {
+    const retryAt = spawnBackoffUntil(await readSpawnBackoff(runtimeIo($), role.main))
+    return { wake: earliest(startup, retryAt === undefined ? undefined : { at: retryAt, reason: 'spawn backoff expiry' }) }
+  }
+  return { wake: startup }
 }
 
-const tick = async ($: EngineInterface, role: RuntimeRole) => {
-  if (ticksInFlight.has(role.session)) return
-  ticksInFlight.add(role.session)
+// Replaces the main's one wake timer with the pass's earliest waiting condition, or clears it when nothing waits.
+const armWake = async ($: EngineInterface, role: RuntimeRole, wake: DispatchPass['wake']) => {
+  wakes.get(role.main)?.cancel()
+  wakes.delete(role.main)
+  if (!wake) return
+  const delay = Math.max(0, wake.at - await $.clock.now())
+  $.ui.log(`clm co-worker dispatch waits ${delay} ms for ${wake.reason}`, { to: 'debug' })
+  const timer = $.clock.after(delay, () => {
+    if (wakes.get(role.main) === timer) wakes.delete(role.main)
+    void dispatchReadyWork($, role).catch(error => $.ui.log(`clm co-worker dispatch failed: ${String(error).slice(0, 160)}`, { to: 'debug' }))
+  })
+  wakes.set(role.main, timer)
+}
+
+// Single flight per stable main id: a trigger during a running pass queues one more pass behind it (shared by every later
+// trigger until it starts), so each caller's board change is seen by a pass that starts after it, and no two passes overlap.
+function dispatchReadyWork($: EngineInterface, role: RuntimeRole): Promise<string | undefined> {
+  if (role.isCoworker) return Promise.resolve(undefined)
+  const key = role.main
+  const slot = dispatches.get(key)
+  if (slot?.queued) return slot.queued
+  const start = (): Promise<string | undefined> => {
+    const entry: { running: Promise<string | undefined>; queued?: Promise<string | undefined> } = {
+      running: dispatchPass($, role).then(async pass => { await armWake($, role, pass.wake); return pass.notice }),
+    }
+    dispatches.set(key, entry)
+    void entry.running.catch(() => undefined).then(() => { if (dispatches.get(key) === entry && !entry.queued) dispatches.delete(key) })
+    return entry.running
+  }
+  if (!slot) return start()
+  slot.queued = slot.running.catch(() => undefined).then(start)
+  return slot.queued
+}
+
+// For a trigger whose caller does not wait on the outcome: a received peer message, a classifier deferral, a clm_task change.
+export const requestDispatch = async ($: EngineInterface) => {
   try {
-    await updateRegistry($, role)
-    await dispatchReadyWork($, role)
-  } finally { ticksInFlight.delete(role.session) }
+    const role = await currentRole($)
+    if (!role.isCoworker) await dispatchReadyWork($, role)
+  } catch (error) { $.ui.log(`clm co-worker dispatch failed: ${String(error).slice(0, 160)}`, { to: 'debug' }) }
 }
 
 const handleTool = async ($: EngineInterface, input: ClmCoworkerInput) => {
@@ -436,6 +520,7 @@ const announceDeferred = async ($: EngineInterface, ids: string[]) => {
   const now = await $.clock.now()
   const recipients = (await readCoworkers(runtimeIo($)))
     .filter(record => record.role === 'coworker' && record.main === role.main && isLive(record, now, DEFAULT_COWORKER_TTL_MS))
+  void requestDispatch($)
   if (!recipients.length) return
   const text = `New deferred board issue${ids.length === 1 ? '' : 's'}: ${ids.join(', ')}.`
   for (const record of recipients) await notify($, record.session, text)
@@ -445,14 +530,17 @@ export const coworkerIntent = (session: string) => intents.get(session)
 
 const startRuntime = async ($: EngineInterface, stableMain?: string) => {
   const role = await currentRole($, stableMain)
-  intents.set(role.session, { isCoworker: role.isCoworker, announce: ids => announceDeferred($, ids) })
+  intents.set(role.session, { isCoworker: role.isCoworker, announce: ids => announceDeferred($, ids), dispatch: () => requestDispatch($) })
   await updateRegistry($, role, { state: 'idle' })
   if (role.placeholder && role.placeholder !== role.session) await removeRegistry($, role.placeholder)
   if (role.isCoworker) await writeSpawnBackoff(runtimeIo($), role.main, { failures: 0 })
-  for (const timer of timers.get(role.session) ?? []) timer.cancel()
-  timers.set(role.session, [
-    $.clock.every(POLL_MS, () => { void tick($, role).catch(error => $.ui.log(`clm co-worker poll failed: ${String(error).slice(0, 160)}`, { to: 'debug' })) }),
-  ])
+  heartbeats.get(role.session)?.cancel()
+  heartbeats.delete(role.session)
+  // A record with a pid is judged by a process check; only a session whose pid was not found keeps its record fresh by heartbeat.
+  if (!role.process) heartbeats.set(role.session, $.clock.every(DEFAULT_COWORKER_TTL_MS / 2, () => {
+    void updateRegistry($, role).catch(error => $.ui.log(`clm co-worker heartbeat failed: ${String(error).slice(0, 160)}`, { to: 'debug' }))
+  }))
+  if (!role.isCoworker) void requestDispatch($)
   await $.tool.register({
     name: 'clm_coworker',
     description: 'Coordinate clm board work between the main session and detached co-worker sessions: plan, claim, hand back, land, reassign, or list. clm messages the other side of each hand-off itself.',
@@ -467,14 +555,24 @@ const startRuntime = async ($: EngineInterface, stableMain?: string) => {
 }
 
 const stopRuntime = (session: string) => {
+  const role = roles.get(session)
+  if (role && !role.isCoworker) { wakes.get(role.main)?.cancel(); wakes.delete(role.main) }
   intents.delete(session)
   roles.delete(session)
   localRecords.delete(session)
   registryWrites.delete(session)
-  ticksInFlight.delete(session)
   claimRequests.delete(session)
-  for (const timer of timers.get(session) ?? []) timer.cancel()
-  timers.delete(session)
+  heartbeats.get(session)?.cancel()
+  heartbeats.delete(session)
+}
+
+// After /clear the same process keeps running under a new session id, so the old record drops its pid and ages out by heartbeat.
+const retireRecord = async ($: EngineInterface, session: string) => {
+  const record = localRecords.get(session)
+  if (!record || record.pid === undefined) return
+  const { pid: _pid, processStart: _start, ...rest } = record
+  await (registryWrites.get(session) ?? Promise.resolve()).catch(() => undefined)
+  await writeCoworker(runtimeIo($), { ...rest, heartbeat: await $.clock.now() })
 }
 
 const promptContext = async ($: EngineInterface, role: RuntimeRole): Promise<string | undefined> => {
@@ -501,6 +599,13 @@ export const registerCoworkers: Register = (on) => {
     return next(e)
   })
 
+  // A co-worker's claim or release, or any other peer message, may change what main can dispatch.
+  on('session.receive', { origin: { kind: 'peer' } }, async ($, e, next) => {
+    if (e.origin.kind !== 'peer' || e.agentId !== undefined) return next(e)
+    void requestDispatch($)
+    return receivedBody(e.text) === DISPATCH_NUDGE ? { consumed: 'clm co-worker dispatch nudge' } : next(e)
+  })
+
   on('tool.call', { tool: COWORKER_TOOL }, async ($, e) => {
     try { return { result: await handleTool($, e) } }
     catch (error) { return { deny: `clm_coworker failed: ${String(error).slice(0, 240)}` } }
@@ -521,6 +626,10 @@ export const registerCoworkers: Register = (on) => {
 
   on('session.end', { sessionId: /.*/ }, async ($, e, next) => {
     const stableMain = roles.get(e.sessionId)?.main
+    if (e.reason === 'clear') {
+      try { await retireRecord($, e.sessionId) }
+      catch (error) { $.ui.log(`clm co-worker clear retire failed: ${String(error).slice(0, 160)}`, { to: 'debug' }) }
+    }
     stopRuntime(e.sessionId)
     const result = await next(e)
     if (e.reason === 'clear') {

@@ -10,6 +10,11 @@ export type CoworkerRecord = {
   heartbeat: number
   mux?: string
   maxCoworkers?: number
+  // The session's Claude Code process and its start time, so a reader tells a live session from an exited one or a reused pid.
+  pid?: number
+  processStart?: string
+  // Set by readCoworkers from a process check of `pid`; never stored.
+  isAlive?: boolean
 }
 
 export type SpawnBackoff = { failures: number; lastFailedAt?: number }
@@ -60,13 +65,44 @@ const isCoworkerRecord = (value: unknown): value is CoworkerRecord => isRecord(v
   && (value.issue === undefined || typeof value.issue === 'string')
   && (value.mux === undefined || typeof value.mux === 'string')
   && (value.maxCoworkers === undefined || typeof value.maxCoworkers === 'number')
+  && (value.pid === undefined || Number.isSafeInteger(value.pid))
+  && (value.processStart === undefined || typeof value.processStart === 'string')
 const claimOwner = (value: unknown): string | undefined => isRecord(value) && typeof value.session === 'string' ? value.session : undefined
 const isSpawnBackoff = (value: unknown): value is SpawnBackoff => isRecord(value)
   && Number.isInteger(value.failures) && typeof value.failures === 'number' && value.failures >= 0
   && (value.lastFailedAt === undefined || typeof value.lastFailedAt === 'number')
 
+// A record with a pid is live while that process runs; one without (a launch placeholder, a record from before pids) ages out by its heartbeat.
 export function isLive(record: CoworkerRecord, now: number, ttlMs: number): boolean {
-  return now - record.heartbeat <= ttlMs
+  return record.pid !== undefined ? record.isAlive === true : now - record.heartbeat <= ttlMs
+}
+
+const startKey = (value: string) => value.replace(/\s+/g, ' ').trim()
+
+// The hook's `sh` is a direct child of the Claude Code process, so its parent pid names this session's process.
+export async function ownProcess(io: CoworkerIo): Promise<{ pid: number; processStart: string } | undefined> {
+  const parent = await run(io, ['sh', '-c', 'echo $PPID'])
+  const pid = parent.exitCode === 0 ? Number(parent.stdout.trim()) : NaN
+  if (!Number.isSafeInteger(pid) || pid <= 0) return undefined
+  const ps = await run(io, ['ps', '-p', String(pid), '-o', 'lstart=,command='])
+  const match = ps.exitCode === 0 ? /^(\w{3} +\w{3} +\d+ +[\d:]+ +\d{4}) +(.*)$/.exec(ps.stdout.trim()) : null
+  if (!match || !/(?:^|[/\s])claude(?:-code)?(?:\s|$)/i.test(match[2]!)) return undefined
+  return { pid, processStart: startKey(match[1]!) }
+}
+
+// One `ps` for every pid: listed with the recorded start time means alive. ps exits 1 when it lists none; any other failure
+// counts every record as alive, so a broken check never reads as every session gone.
+async function withLiveness(io: CoworkerIo, records: CoworkerRecord[]): Promise<CoworkerRecord[]> {
+  const pids = [...new Set(records.flatMap(record => record.pid === undefined ? [] : [record.pid]))]
+  if (!pids.length) return records
+  const ps = await run(io, ['ps', '-p', pids.join(','), '-o', 'pid=,lstart=']).catch(() => undefined)
+  if (!ps || ps.exitCode > 1) return records.map(record => record.pid === undefined ? record : { ...record, isAlive: true })
+  const running = new Map(ps.stdout.split('\n').flatMap(line => {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line)
+    return match ? [[Number(match[1]), startKey(match[2]!)] as const] : []
+  }))
+  return records.map(record => record.pid === undefined ? record
+    : { ...record, isAlive: running.has(record.pid) && (record.processStart === undefined || running.get(record.pid) === record.processStart) })
 }
 
 export async function writeCoworker(io: CoworkerIo, record: CoworkerRecord): Promise<void> {
@@ -76,7 +112,8 @@ export async function writeCoworker(io: CoworkerIo, record: CoworkerRecord): Pro
   await run(io, ['mkdir', '-p', dir])
   const target = `${dir}/${session}.json`
   const temporary = `${dir}/.${session}-${record.heartbeat.toString(36)}-${nonce(io)}.tmp`
-  await io.write(temporary, JSON.stringify(record))
+  const { isAlive: _, ...stored } = record
+  await io.write(temporary, JSON.stringify(stored))
   const moved = await run(io, ['mv', temporary, target])
   if (moved.exitCode !== 0) {
     await run(io, ['rm', '-f', temporary])
@@ -92,7 +129,7 @@ export async function readCoworkers(io: CoworkerIo): Promise<CoworkerRecord[]> {
     const record = parse(await io.read(`${dir}/${entry.name}`))
     if (isCoworkerRecord(record)) records.push(record)
   }
-  return records
+  return withLiveness(io, records)
 }
 
 export async function readSpawnBackoff(io: CoworkerIo, main: string): Promise<SpawnBackoff> {
@@ -119,7 +156,7 @@ export async function writeSpawnBackoff(io: CoworkerIo, main: string, backoff: S
 async function coworkerFor(io: CoworkerIo, session: string): Promise<CoworkerRecord | undefined> {
   const root = await rootFor(io)
   const record = parse(await io.read(`${root}/coworkers/${safeSegment(session, 'session')}.json`))
-  return isCoworkerRecord(record) ? record : undefined
+  return isCoworkerRecord(record) ? (await withLiveness(io, [record]))[0] : undefined
 }
 
 export async function claimIssue(io: CoworkerIo, input: { issueId: string; session: string; now: number; ttlMs?: number }): Promise<{ claimed: true } | { claimed: false; owner: string }> {
@@ -198,8 +235,13 @@ export function shouldSpawn(input: {
   ttlMs: number
 }): boolean {
   if (!pickNext(input.issues, input.repo) || input.load1 >= 0.75 * input.cores) return false
-  if (input.backoff?.failures && input.backoff.lastFailedAt !== undefined
-    && input.now - input.backoff.lastFailedAt < Math.min(2 ** Math.min(input.backoff.failures, 6), 60) * 60_000) return false
+  if (input.now < (spawnBackoffUntil(input.backoff) ?? 0)) return false
   const live = input.coworkers.filter(record => record.role === 'coworker' && record.main === input.main && isLive(record, input.now, input.ttlMs))
   return live.length < (input.maxCoworkers ?? 2) && !live.some(record => record.state === 'idle' || record.state === 'starting')
+}
+
+// When the next spawn may be tried after recorded launch failures: 2, 4, ... up to 60 minutes after the last one.
+export function spawnBackoffUntil(backoff: SpawnBackoff | undefined): number | undefined {
+  if (!backoff?.failures || backoff.lastFailedAt === undefined) return undefined
+  return backoff.lastFailedAt + Math.min(2 ** Math.min(backoff.failures, 6), 60) * 60_000
 }

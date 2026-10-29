@@ -1213,7 +1213,10 @@ export const register: Register = (on, options) => {
   })
   on('tool.call', { tool: TASK_TOOL }, async ($, e) => {
     if (!isClmTaskInput(e)) return { deny: 'clm_task requires status and either an issue id or a new task title.' }
-    return runPanelTask(panelIo($), e, e.agentId)
+    const result = await runPanelTask(panelIo($), e, e.agentId)
+    // A drop or done changes which board issues are ready for a co-worker.
+    void coworkerIntent(await sid($))?.dispatch()
+    return result
   })
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
   on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))

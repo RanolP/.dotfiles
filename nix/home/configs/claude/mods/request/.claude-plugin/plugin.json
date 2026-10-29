@@ -1,0 +1,7 @@
+{
+  "name": "request",
+  "version": "0.1.0",
+  "description": "Escalate a Bash call the auto-mode classifier denied: the model raises an approval request, /approvals walks them, and on approval the mod runs the exact command and delivers the result.",
+  "author": { "name": "RanolP" },
+  "types": "./types/index.d.ts"
+}

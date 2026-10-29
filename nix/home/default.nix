@@ -505,6 +505,9 @@ in
       # ask-later: a non-blocking AskUserQuestion; the model queues questions
       # and keeps working, and /answers walks them when the user chooses.
       ".claude/mods/ask-later".source = ./configs/claude/mods/ask-later;
+      # request: escalate a Bash call the auto-mode classifier denied; on the
+      # user's /approvals approval the mod itself runs the exact command once.
+      ".claude/mods/request".source = ./configs/claude/mods/request;
       # On "command not found", point at mise/project shims before installs.
       ".claude/hooks/missing-tool-hint.py" = {
         source = ./configs/claude/hooks/missing-tool-hint.py;

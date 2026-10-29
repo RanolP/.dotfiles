@@ -13,6 +13,9 @@ import { checkpointCommit, removeWorktree, startWorktree, type Worktree, type Wo
 export const COWORKER_TOOL = 'mcp__clm__clm_coworker'
 const POLL_MS = 5_000
 const DEFAULT_MAX_COWORKERS = 2
+// A new Herdr pane measured available within 0.5 s of `tab create`; 20 tries 250 ms apart allow 5 s.
+const LAUNCH_RETRIES = 20
+const LAUNCH_RETRY_MS = 250
 
 type RuntimeRole = { isCoworker: boolean; session: string; main: string; repo: string; repoRoot: string; placeholder?: string }
 
@@ -319,18 +322,43 @@ const launchCoworker = async ($: EngineInterface, role: RuntimeRole, records: re
     await removeRegistry($, name)
     return
   }
+  // A step that created something (a Herdr tab) registers its undo, so a later failure leaves no orphan behind for the next spawn to duplicate.
+  const undo: (() => readonly string[])[] = []
+  const fail = async (detail: string) => {
+    $.ui.log(`clm co-worker launch failed: ${detail}`, { to: 'debug' })
+    for (const undoArgv of undo.reverse()) {
+      let argv: readonly string[]
+      try { argv = undoArgv() } catch (error) {
+        $.ui.log(`clm co-worker launch cleanup impossible: ${JSON.stringify(String(error).slice(0, 400))}`, { to: 'debug' })
+        continue
+      }
+      const closed = await $.process.run([...argv], { cwd: role.repoRoot, timeoutMs: 10_000 }).catch(error => ({ exitCode: -1, stdout: '', stderr: String(error) }))
+      if (closed.exitCode !== 0) $.ui.log(`clm co-worker launch cleanup failed: command=${JSON.stringify(argv)} exitCode=${closed.exitCode} stdout=${JSON.stringify(closed.stdout.slice(0, 400))} stderr=${JSON.stringify(closed.stderr.slice(0, 400))}`, { to: 'debug' })
+    }
+    await removeRegistry($, name)
+    await recordSpawnFailure($, role, await $.clock.now())
+  }
   let stdout = ''
   for (const step of launch.steps) {
-    const argv = step.argv ?? step.argvFromPrevious?.(stdout)
-    if (!argv) continue
-    const result = await $.process.run([...argv], { cwd: role.repoRoot, timeoutMs: 30_000 })
-    if (result.exitCode !== 0) {
-      $.ui.log(`clm co-worker launch failed: command=${JSON.stringify(argv)} exitCode=${result.exitCode} stderr=${JSON.stringify(result.stderr)}`, { to: 'debug' })
-      await removeRegistry($, name)
-      await recordSpawnFailure($, role, await $.clock.now())
-      return
+    let argv: readonly string[] | undefined
+    try {
+      argv = step.argv ?? step.argvFromPrevious?.(stdout)
+      if (!argv) continue
+      // Above Herdr's own 30 s readiness wait, so its verdict arrives before this process timeout kills it.
+      const run = () => $.process.run([...argv!], { cwd: role.repoRoot, timeoutMs: 35_000 })
+      let result = await run()
+      for (let attempt = 1; result.exitCode !== 0 && step.retryWhile?.(result) && attempt < LAUNCH_RETRIES; attempt += 1) {
+        await new Promise<void>(resolve => { $.clock.after(LAUNCH_RETRY_MS, () => resolve()) })
+        result = await run()
+      }
+      // Herdr reports its error envelope on stdout, so both streams go into the log.
+      if (result.exitCode !== 0) return await fail(`command=${JSON.stringify(argv)} exitCode=${result.exitCode} stdout=${JSON.stringify(result.stdout.slice(0, 400))} stderr=${JSON.stringify(result.stderr.slice(0, 400))}`)
+      const { undo: undoStep } = step, created = result.stdout
+      if (undoStep) undo.push(() => undoStep(created))
+      stdout = result.stdout
+    } catch (error) {
+      return await fail(`command=${JSON.stringify(argv ?? null)} error=${JSON.stringify(String(error).slice(0, 400))}`)
     }
-    stdout = result.stdout
   }
 }
 

@@ -11,6 +11,10 @@ export type SpawnIo = {
 export type LaunchStep = {
   argv?: readonly string[]
   argvFromPrevious?: (stdout: string) => readonly string[]
+  // A failed result this predicate accepts is a transient state worth re-running the same command for.
+  retryWhile?: (result: ProcessResult) => boolean
+  // The command that removes what this step created, run when a later step fails.
+  undo?: (stdout: string) => readonly string[]
 }
 export type LaunchPlan = { steps: readonly LaunchStep[] } | { manual: string }
 
@@ -37,11 +41,24 @@ export function parseHerdrPaneId(stdout: string): string {
   return paneId
 }
 
+// A fresh Herdr pane needs a moment before its shell prompt counts as available; `agent start` answers this code until then.
+const herdrPaneBusy = (result: ProcessResult) => result.stdout.includes('"agent_pane_busy"')
+
+export function parseHerdrTabId(stdout: string): string {
+  const value: unknown = JSON.parse(stdout)
+  const result = isRecord(value) && isRecord(value.result) ? value.result : value
+  const tab = isRecord(result) && isRecord(result.tab) ? result.tab.tab_id : undefined
+  const rootPane = isRecord(result) && isRecord(result.root_pane) ? result.root_pane.tab_id : undefined
+  const tabId = typeof tab === 'string' && tab ? tab : rootPane
+  if (typeof tabId !== 'string' || !tabId) throw new Error('Herdr tab creation response has no tab.tab_id')
+  return tabId
+}
+
 export function launchPlan(input: { mux: Mux; cwd: string; name: string; env: CoworkerEnvironment; brief: string; herdrWorkspaceId?: string }): LaunchPlan {
   const envArgs = environmentArgs(input.env)
   if (input.mux === 'herdr') return { steps: [
-    { argv: ['herdr', 'tab', 'create', ...(input.herdrWorkspaceId ? ['--workspace', input.herdrWorkspaceId] : []), '--cwd', input.cwd, '--label', input.name, ...envArgs.flatMap(value => ['--env', value]), '--no-focus'] },
-    { argvFromPrevious: stdout => ['herdr', 'agent', 'start', input.name, '--kind', 'claude', '--pane', parseHerdrPaneId(stdout), '--', input.brief] },
+    { argv: ['herdr', 'tab', 'create', ...(input.herdrWorkspaceId ? ['--workspace', input.herdrWorkspaceId] : []), '--cwd', input.cwd, '--label', input.name, ...envArgs.flatMap(value => ['--env', value]), '--no-focus'], undo: stdout => ['herdr', 'tab', 'close', parseHerdrTabId(stdout)] },
+    { argvFromPrevious: stdout => ['herdr', 'agent', 'start', input.name, '--kind', 'claude', '--pane', parseHerdrPaneId(stdout), '--', input.brief], retryWhile: herdrPaneBusy },
   ] }
   if (input.mux === 'zellij') return { steps: [
     { argv: ['zellij', 'run', '--name', input.name, '--cwd', input.cwd, '--no-focus', '--', 'env', ...envArgs, 'claude', input.brief] },

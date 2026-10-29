@@ -339,3 +339,40 @@ test('a successful co-worker start resets the spawn backoff', async ($, on) => {
   await $.session.start(startInput)
   expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-reset-backoff.spawn-backoff.json`]!)).toEqual({ failures: 0 })
 })
+
+const herdrTab = (n: number) => ok(JSON.stringify({ id: 'cli:tab:create', result: { root_pane: { pane_id: `w9:p${n}`, tab_id: `w9:t${n}` }, tab: { tab_id: `w9:t${n}` }, type: 'tab_created' } }))
+const paneBusy = { exitCode: 1, stdout: JSON.stringify({ error: { code: 'agent_pane_busy', message: 'agent target pane w9:p2 is not an available shell' } }), stderr: '' }
+
+// Regression caught (e2e 2026-10-29): `agent start` ran before the new pane's shell prompt was ready, failed with agent_pane_busy, and the tab stayed behind as an orphan.
+test('a pane still starting its shell is retried until the agent starts, in the same tab', async ($, on) => {
+  let starts = 0
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-pane-busy', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' && argv[2] === 'create' ? herdrTab(2)
+      : argv[0] === 'herdr' && argv[1] === 'agent' ? (++starts < 3 ? paneBusy : ok()) : undefined,
+  })
+  seedBoard(seen, 'board-pane-busy', [{ op: 'create', issue: 'pane-busy', title: 'Pane busy', status: 'todo' }])
+  await $.session.start(startInput)
+  const planned = tool($, { action: 'plan', issue: 'pane-busy', ready: true })
+  for (let i = 0; i < 20 && starts < 3; i++) { await settle(); await seen.clock.advance(250) }
+  await planned
+  expect(starts).toBe(3)
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'tab')).toEqual([expect.arrayContaining(['herdr', 'tab', 'create'])])
+  expect(seen.files[`${ROOT}/coworkers/main-pane-busy.spawn-backoff.json`]).toBeUndefined()
+})
+
+// Regression caught (e2e 2026-10-29): a launch that failed after `tab create` left the tab open, so the backed-off retry opened a second one.
+test('a launch that fails after creating the tab closes that tab and logs the herdr error envelope', async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [], replies: [], sessionId: 'main-orphan-tab', env: { HERDR_ENV: '1' },
+    processRun: argv => argv[0] === 'herdr' && argv[1] === 'tab' && argv[2] === 'create' ? herdrTab(4)
+      : argv[0] === 'herdr' && argv[1] === 'agent' ? { exitCode: 1, stdout: '{"error":{"code":"agent_start_failed"}}', stderr: '' } : undefined,
+  })
+  seedBoard(seen, 'board-orphan-tab', [{ op: 'create', issue: 'orphan-tab', title: 'Orphan tab', status: 'todo' }])
+  await $.session.start(startInput)
+  await tool($, { action: 'plan', issue: 'orphan-tab', ready: true })
+  expect(seen.runs.filter(argv => argv[0] === 'herdr' && argv[1] === 'agent')).toHaveLength(1)
+  expect(seen.runs).toContainEqual(['herdr', 'tab', 'close', 'w9:t4'])
+  expect(seen.logs.some(line => line.includes('launch failed') && line.includes('agent_start_failed'))).toBe(true)
+  expect(JSON.parse(seen.files[`${ROOT}/coworkers/main-orphan-tab.spawn-backoff.json`]!)).toMatchObject({ failures: 1 })
+})

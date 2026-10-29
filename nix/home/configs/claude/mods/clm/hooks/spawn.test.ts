@@ -7,10 +7,11 @@ const env = { CLM_COWORKER: '1', CLM_MAIN_SESSION: 'main-1', CLM_COWORKER_NAME: 
 test('herdr launch creates an unfocused tab and starts claude in its root pane', () => {
   const plan = launchPlan({ mux: 'herdr', cwd: '/repo/worktree', name: 'clm-worker', env, brief: 'Do the work', herdrWorkspaceId: 'w4K' })
   if (!('steps' in plan)) throw new Error('expected argv steps')
-  expect(plan.steps[0]).toEqual({ argv: ['herdr', 'tab', 'create', '--workspace', 'w4K', '--cwd', '/repo/worktree', '--label', 'clm-worker', '--env', 'CLM_COWORKER=1', '--env', 'CLM_MAIN_SESSION=main-1', '--env', 'CLM_COWORKER_NAME=clm-worker', '--no-focus'] })
+  expect(plan.steps[0]!.argv).toEqual(['herdr', 'tab', 'create', '--workspace', 'w4K', '--cwd', '/repo/worktree', '--label', 'clm-worker', '--env', 'CLM_COWORKER=1', '--env', 'CLM_MAIN_SESSION=main-1', '--env', 'CLM_COWORKER_NAME=clm-worker', '--no-focus'])
   const stdout = JSON.stringify({ id: 'cli:tab:create', result: { root_pane: { agent_status: 'unknown', cwd: '/repo/worktree', focused: false, pane_id: 'w4K:p1', tab_id: 'w4K:t1', workspace_id: 'w4K' }, tab: {}, type: 'tab_created' } })
   expect(parseHerdrPaneId(stdout)).toBe('w4K:p1')
   expect(plan.steps[1]!.argvFromPrevious?.(stdout)).toEqual(['herdr', 'agent', 'start', 'clm-worker', '--kind', 'claude', '--pane', 'w4K:p1', '--', 'Do the work'])
+  expect(plan.steps[0]!.undo?.(stdout)).toEqual(['herdr', 'tab', 'close', 'w4K:t1'])
 })
 
 test('herdr launch omits the workspace flag when no workspace id is available', () => {

@@ -39,7 +39,10 @@ export type ApprovalRequest = RequestBase & (
 declare module 'claude-code' {
   interface PluginState {
     /** `turnId`: the running main turn, null while idle; picks session.append vs prompt.submit for delivery. */
-    /** `viewing`: the pending request the review pane shows; null (or a decided id) shows the first pending. */
-    request: { requests: ApprovalRequest[]; turnId: string | null; viewing: string | null }
+    /**
+     * `viewing`: the pending request the expanded band shows; null (or a decided id) shows the first pending.
+     * `expanded`: the band is the review rather than its one collapsed row.
+     */
+    request: { requests: ApprovalRequest[]; turnId: string | null; viewing: string | null; expanded: boolean }
   }
 }

@@ -1,13 +1,13 @@
 import { update } from 'claude-code'
-import type { EngineInterface, Register, ToolSpec } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, ToolSpec } from 'claude-code'
 import type { Alternative, ApprovalRequest, ExecResult } from '../types'
 
 const REQUESTS = { plugin: 'request', key: 'requests' } as const
 const TURN = { plugin: 'request', key: 'turnId' } as const
-// The pending request the review pane shows; null or a decided id falls back to the first pending.
+// The pending request the expanded band shows; null or a decided id falls back to the first pending.
 const VIEWING = { plugin: 'request', key: 'viewing' } as const
-
-export const PANE = 'approvals'
+// Whether the band is expanded into the review, or the one collapsed row.
+const EXPANDED = { plugin: 'request', key: 'expanded' } as const
 
 export const RAISE_TOOL = 'mcp__request__raise_approval_request'
 // $.process.run's ceiling; an escalated command is often the long one.
@@ -253,39 +253,88 @@ const reject = async ($: Ctx, id: string, reason: string | undefined) => {
 const APPROVE = 'Approve and run'
 const REJECT = 'Reject'
 
-const PANE_OPEN = { id: PANE, title: 'Approvals', focus: true, closeOnEscape: true } as const
-
-const openPane = async ($: Ctx) => {
-  const opened = await $.ui.open(PANE_OPEN)
-  if (!opened.isPlaced) $.ui.toast(`Approvals pane waits: ${opened.reason}`)
-}
-
-// A pane decision: move the pane on to the next pending request (closing it
-// after the last) before the possibly long run, then deliver the outcome.
+// A band decision: move the band on to the next pending request (collapsing
+// it after the last) before the possibly long run, then deliver the outcome.
 const decide = async ($: Ctx, id: string, decision: { approve: true } | { approve: false; reason?: string }) => {
   try {
     const rest = (await requests($)).filter(r => r.status === 'pending' && r.id !== id)
     await $.state.set(VIEWING, rest[0]?.id ?? null)
-    if (!rest.length) await $.ui.close({ id: PANE })
+    if (!rest.length) await $.state.set(EXPANDED, false)
     if (decision.approve) await approveAndRun($, id)
     else await reject($, id, decision.reason?.trim() || undefined)
     await deliverUndelivered($)
   } catch (err) {
-    log($, `${id} pane decision failed: ${errText(err)}`)
+    log($, `${id} band decision failed: ${errText(err)}`)
   }
+}
+
+// Terminal cells a string takes: wide (CJK, emoji) counts 2 and a tab 8, so
+// the estimate errs tall, which only ever withholds Approve.
+const cells = (text: string) => {
+  let n = 0
+  for (const ch of text) n += ch === '\t' ? 8 : (ch.codePointAt(0) ?? 0) >= 0x1100 ? 2 : 1
+  return n
+}
+const clip = (text: string, room: number) => {
+  if (room <= 1) return ''
+  if (cells(text) <= room) return text
+  let out = ''
+  for (const ch of text) {
+    if (cells(out + ch) > room - 1) break
+    out += ch
+  }
+  return `${out}…`
 }
 
 // One band row: "● 2 approval requests  R3 git push …  [ Review ]", the
 // preview cut to what is left of bodyColumns after the fixed parts.
-export const bandPreview = (first: ApprovalRequest, room: number): string => {
-  const flat = visible(first.command.replace(/\s*\n\s*/g, ' ⏎ '))
-  const text = `${first.id} ${flat}`
-  if (room <= 1) return ''
-  return text.length <= room ? text : `${text.slice(0, room - 1)}…`
+export const bandPreview = (first: ApprovalRequest, room: number): string =>
+  clip(`${first.id} ${visible(first.command.replace(/\s*\n\s*/g, ' ⏎ '))}`, room)
+
+// Rows the bordered Code block takes at `columns` across: each source line
+// wrapped to the room inside the border and padding, plus the two border rows.
+export const codeRows = (source: string, columns: number): number => {
+  const inner = Math.max(1, columns - 4)
+  return source.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(cells(line) / inner)), 0) + 2
+}
+
+// The expanded band's rows around the Code block: header, subtitle, the action
+// row, and one spared for another mod's row drawn above ours.
+const ROWS_AROUND_CODE = 4
+
+// The step-by-step dialog: the review where no band is drawn (mobile, VS
+// Code), and for a command too tall for the band to show whole. `dialog` is
+// the register's own flag, so a second /approvals does not stack a walk.
+type Dialog = { walking: boolean }
+const walkDialog = ($: Ctx, ids: readonly string[], dialog: Dialog) => {
+  dialog.walking = true
+  void (async () => {
+    try {
+      for (const id of ids) {
+        const q = (await requests($)).find(x => x.id === id)
+        if (!q || q.status !== 'pending') continue
+        const text = reviewText(q)
+        $.ui.log(text)
+        const answer = await $.ui.ask(text, { options: [APPROVE, REJECT], header: q.id }).catch((err: unknown) => {
+          log($, `${q.id} skipped: ${errText(err)}`)
+          return undefined
+        })
+        if (answer === undefined) continue
+        if (answer === APPROVE) await approveAndRun($, q.id)
+        else await reject($, q.id, answer === REJECT ? undefined : answer)
+        await deliverUndelivered($)
+      }
+    } catch (err) {
+      log($, `/approvals walk failed: ${errText(err)}`)
+    } finally {
+      dialog.walking = false
+      log($, '/approvals walk ended')
+    }
+  })()
 }
 
 export const register: Register = on => {
-  let walking = false
+  const dialog: Dialog = { walking: false }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -297,7 +346,7 @@ export const register: Register = on => {
       }
     }
     try {
-      await $.command.register({ name: 'approvals', description: 'Review the Bash commands the model escalated in the approvals pane (a step-by-step dialog where no pane can be placed)' })
+      await $.command.register({ name: 'approvals', description: 'Review the Bash commands the model escalated in the band above the prompt (a step-by-step dialog where no band is drawn)' })
     } catch (err) {
       log($, `command.register(approvals) failed: ${errText(err)}`)
     }
@@ -351,48 +400,28 @@ export const register: Register = on => {
 
   on('command.run', { command: 'approvals' }, async $ => {
     // The engine prefixes the plugin's name to this text, so it carries none of its own.
-    if (walking) return { text: '/approvals is already open.' }
+    if (dialog.walking) return { text: '/approvals is already open.' }
     const pending = (await requests($)).filter(r => r.status === 'pending')
     if (!pending.length) {
       void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))
       return { text: 'no pending approval requests.' }
     }
-    // The pane is the review; the dialog walk stays for a surface that places no pane.
-    const opened = await $.ui.open(PANE_OPEN).catch((err: unknown) => {
-      log($, `ui.open(${PANE}) failed: ${errText(err)}; walking the dialog instead`)
-      return undefined
+    // AbovePrompt is drawn on the terminal and desktop only; elsewhere the dialog reviews.
+    const surfaces = await $.session.surfaces().catch((err: unknown) => {
+      log($, `session.surfaces failed: ${errText(err)}; walking the dialog instead`)
+      return []
     })
-    if (opened?.isPlaced) return { text: `${plural(pending.length, 'pending approval request')} in the approvals pane.` }
-    if (opened) log($, `${PANE} pane not placed (${opened.reason}); walking the dialog instead`)
-    walking = true
-    void (async () => {
-      try {
-        for (const queued of pending) {
-          const q = (await requests($)).find(x => x.id === queued.id)
-          if (!q || q.status !== 'pending') continue
-          const text = reviewText(q)
-          $.ui.log(text)
-          const answer = await $.ui.ask(text, { options: [APPROVE, REJECT], header: q.id }).catch((err: unknown) => {
-            log($, `${q.id} skipped: ${errText(err)}`)
-            return undefined
-          })
-          if (answer === undefined) continue
-          if (answer === APPROVE) await approveAndRun($, q.id)
-          else await reject($, q.id, answer === REJECT ? undefined : answer)
-          await deliverUndelivered($)
-        }
-      } catch (err) {
-        log($, `/approvals walk failed: ${errText(err)}`)
-      } finally {
-        walking = false
-        log($, '/approvals walk ended')
-      }
-    })()
+    if (surfaces.some(x => x === 'terminal' || x === 'desktop')) {
+      await $.state.set(EXPANDED, true)
+      return { text: `${plural(pending.length, 'pending approval request')} in the band above the prompt.` }
+    }
+    walkDialog($, pending.map(r => r.id), dialog)
     return { text: `${plural(pending.length, 'pending approval request')}; Esc skips one, text under Other rejects with that reason.` }
   })
 
-  // The band: one row while anything waits on the user, composed above what
-  // the plugins beneath draw (another mod's band) rather than hiding it.
+  // The band: one row while anything waits on the user, expanded in place into
+  // the review on Review, and composed above what the plugins beneath draw
+  // (ask-later's row) rather than hiding it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const all = await requests($)
@@ -400,91 +429,92 @@ export const register: Register = on => {
     const undelivered = all.filter(isUndelivered).length
     if (!pending.length && !undelivered) return next(e)
     const below = await next(e)
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const first = pending[0]
-    const head = first ? `● ${plural(pending.length, 'approval request')}  ` : `● ${plural(undelivered, 'result')} undelivered  `
-    const button = first ? 'Review' : 'Redeliver'
-    // "[ Review ]" plus the gap before it.
-    const room = e.props.bodyColumns - head.length - (button.length + 4) - 2
-    const row = (
-      <Box key="request-band" flexDirection="row">
-        <Text color="yellow" bold>{head}</Text>
-        {first ? <Text dimColor wrap="truncate-end">{bandPreview(first, room)}</Text> : <Text> </Text>}
-        <Text>  </Text>
-        {first
-          ? <Button key="review" label={button} hotkey="r" variant="primary" onPress={() => void openPane($)} />
-          : <Button key="redeliver" label={button} onPress={() => void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))} />}
-      </Box>
-    )
-    return (
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button, Code } = elements
+    // The band draws on the terminal and desktop, both of which have Input; the table's type spans every surface.
+    const Input = 'Input' in elements ? elements.Input : undefined
+    const columns = e.props.bodyColumns
+    const isExpanded = (await $.state.get(EXPANDED)).value ?? false
+    const viewing = (await $.state.get(VIEWING)).value ?? null
+    const at = Math.max(0, pending.findIndex(r => r.id === viewing))
+    const r = pending[at]
+    const stack = (row: RenderElement) => (
       <Box flexDirection="column">
         {row}
         {below}
       </Box>
     )
-  })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const elements = $.ui.resolve(e)
-    const { Box, Text, Button, Code } = elements
-    // Every surface but mobile has Input; there a Deny takes no reason.
-    const Input = 'Input' in elements ? elements.Input : undefined
-    const pending = (await requests($)).filter(r => r.status === 'pending')
-    const viewing = (await $.state.get(VIEWING)).value ?? null
-    const at = Math.max(0, pending.findIndex(r => r.id === viewing))
-    const r = pending[at]
     if (!r) {
-      return (
-        <Box flexDirection="column">
-          <Text dimColor>No approval requests are waiting.</Text>
-          <Box><Button key="close" label="Close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} /></Box>
-        </Box>
+      return stack(
+        <Box key="request-band" flexDirection="row">
+          <Text color="yellow" bold>{`● ${plural(undelivered, 'result')} undelivered  `}</Text>
+          <Button key="redeliver" label="Redeliver" onPress={() => void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))} />
+        </Box>,
       )
     }
+
+    const head = `● ${plural(pending.length, 'approval request')}  `
+    if (!isExpanded) {
+      // "[ Review ]" plus the gaps around the preview.
+      const room = columns - cells(head) - ('Review'.length + 4) - 2
+      return stack(
+        <Box key="request-band" flexDirection="row">
+          <Text color="yellow" bold>{head}</Text>
+          <Text dimColor wrap="truncate-end">{bandPreview(r, room)}</Text>
+          <Text>  </Text>
+          <Button key="review" label="Review" hotkey="r" variant="primary" onPress={() => void $.state.set(EXPANDED, true)} />
+        </Box>,
+      )
+    }
+
     const go = (i: number) => () => void $.state.set(VIEWING, pending[(i + pending.length) % pending.length]?.id ?? null)
     const hidden = HIDDEN.test(r.command)
     // A hidden character is shown escaped (Code refuses control characters and
     // would draw a bidi mark as the reordering it is); the escape is exact.
     const source = hidden ? JSON.stringify(r.command) : r.command
-    const isWhole = source.length <= CODE_MAX
-    const heading = (text: string) => <Text bold>{text}</Text>
-    return (
-      <Box flexDirection="column">
+    const needs = ROWS_AROUND_CODE + codeRows(source, columns) + (hidden ? 1 : 0)
+    // Approve only while the whole command and the Approve button share the
+    // band's first window, so nothing of what runs is scrolled out of sight.
+    const isWhole = source.length <= CODE_MAX && needs <= e.props.scroll.bodyRows
+    const line = (lead: string, text: string, key: string) => (
+      <Text key={key} wrap="truncate-end"><Text bold>{lead}</Text>{` ${clip(visible(text), columns - cells(lead) - 1)}`}</Text>
+    )
+    const subtitle = `in ${r.cwd} · asked by ${r.agentId ? `subagent ${visible(r.agentId)}` : 'the main session'}`
+    const tooTall = `${source.length > CODE_MAX ? `${source.length} characters` : `${needs} rows, the band has ${e.props.scroll.bodyRows}`}: too tall to approve here`
+    return stack(
+      <Box key="request-band" flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
-          <Text><Text bold color="yellow">{r.id}</Text><Text bold>  Run this command?</Text>{pending.length > 1 && <Text dimColor>  {at + 1} of {pending.length}</Text>}</Text>
-          {pending.length > 1 && (
-            <Box flexDirection="row" gap={1}>
-              <Button key="prev" label="‹ Prev" hotkey="p" dimColor onPress={go(at - 1)} />
-              <Button key="next" label="Next ›" hotkey="n" dimColor onPress={go(at + 1)} />
+          <Text><Text bold color="yellow">{`● ${r.id}`}</Text><Text bold>  Run this command?</Text>{pending.length > 1 && <Text dimColor>{`  ${at + 1} of ${pending.length}`}</Text>}</Text>
+          <Box flexDirection="row" gap={1}>
+            {pending.length > 1 && <Button key="prev" label="‹ Prev" hotkey="p" dimColor onPress={go(at - 1)} />}
+            {pending.length > 1 && <Button key="next" label="Next ›" hotkey="n" dimColor onPress={go(at + 1)} />}
+            <Button key="collapse" label="Collapse" hotkey="c" role="dismiss" dimColor onPress={() => void $.state.set(EXPANDED, false)} />
+          </Box>
+        </Box>
+        <Text dimColor wrap="truncate-end">{clip(subtitle, columns)}</Text>
+        {isWhole
+          ? (
+            <Box flexDirection="column" borderStyle="round" borderColor={hidden ? 'red' : 'yellow'} paddingX={1}>
+              {hidden && <Text color="red" bold>Holds hidden or control characters; shown JSON-escaped.</Text>}
+              <Code source={source} language="bash" />
+            </Box>
+          )
+          : (
+            <Box flexDirection="row" borderStyle="round" borderColor="red" paddingX={1} gap={2}>
+              <Text color="red" wrap="truncate-end">{clip(tooTall, columns - 26)}</Text>
+              <Button key="dialog" label="Review in dialog" onPress={() => { if (!dialog.walking) walkDialog($, [r.id], dialog) }} />
             </Box>
           )}
-        </Box>
-        <Text dimColor>in {r.cwd} · asked by {r.agentId ? `subagent ${visible(r.agentId)}` : 'the main session'}</Text>
-        <Box flexDirection="column" borderStyle="round" borderColor={hidden || !isWhole ? 'red' : 'yellow'} paddingX={1} marginY={1}>
-          {hidden && <Text color="red" bold>Holds hidden or control characters; shown JSON-escaped.</Text>}
-          {isWhole
-            ? <Code source={source} language="bash" />
-            : <Text color="red" bold>{source.length} characters, too long to show whole, so it cannot be approved here; deny it and ask for a script file instead.</Text>}
-        </Box>
-        {heading('Why this is the only way')}
-        <Box paddingLeft={2} marginBottom={1}><Text>{visible(r.why_only_way)}</Text></Box>
-        {heading('Considered and rejected')}
-        <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
-          {r.alternatives.map((a, i) => (
-            <Box key={`alt-${i}`} flexDirection="column">
-              <Text>• {visible(a.approach)}</Text>
-              <Box paddingLeft={2}><Text dimColor>{visible(a.rejected_because)}</Text></Box>
-            </Box>
-          ))}
-        </Box>
-        {heading('Waiting on it')}
-        <Box paddingLeft={2} marginBottom={1}><Text>{visible(r.blocks)}</Text></Box>
         <Box flexDirection="row" gap={2}>
           {isWhole && <Button key="approve" label={APPROVE} variant="primary" onPress={() => void decide($, r.id, { approve: true })} />}
           <Button key="deny" label="Deny" hotkey="d" onPress={() => void decide($, r.id, { approve: false })} />
+          {Input && <Input key="reason" label="or deny with reason:" placeholder="why not" submitLabel="deny" onSubmit={value => void decide($, r.id, { approve: false, reason: value })} />}
         </Box>
-        {Input && <Input key="reason" label="Deny with reason: " placeholder="why not" submitLabel="deny" onSubmit={value => void decide($, r.id, { approve: false, reason: value })} />}
-      </Box>
+        {line('Why', r.why_only_way, 'why')}
+        {r.alternatives.map((a, i) => line(i === 0 ? 'Not' : '   ', `${a.approach} — ${a.rejected_because}`, `alt-${i}`))}
+        {line('Unblocks', r.blocks, 'blocks')}
+      </Box>,
     )
   })
 }

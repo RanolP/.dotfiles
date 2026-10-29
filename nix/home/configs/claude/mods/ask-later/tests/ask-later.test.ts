@@ -15,8 +15,8 @@ async function start($: Engine, on: On) {
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   on('ui.log', async (_$, e) => { logs.push(e.text); return { value: undefined } })
   on('ui.toast', async () => ({ value: undefined }))
-  // The engine's own band: an empty box beneath ask-later's.
-  on('ui.render', { component: 'AbovePrompt' }, async ($$, e) => $$.ui.resolve(e).Box({}))
+  // The band beneath ask-later's: another mod's row (request's approval band) stands for it.
+  on('ui.render', { component: 'AbovePrompt' }, async ($$, e) => $$.ui.resolve(e).Box({ key: 'other-band' }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   return { logs }
 }
@@ -161,4 +161,16 @@ test('the band counts pending questions, hides 답하기 during a walk, and disa
   expect(await delivered).toContain('Q2: Two?')
   expect(await ui.find({ type: 'Text', text: /질문/ })).toBeUndefined()
   expect(await ui.find({ key: 'answer' })).toBeUndefined()
+})
+
+// Regression: ask-later's row hiding another mod's band row (request's) drawn beneath it.
+test('the band keeps the row beneath it', async ($, on) => {
+  await start($, on)
+  await $.tool.call({ tool: ASK, question: 'One?', options: OPTIONS })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await band($, surface)
+    expect(await ui.find({ key: 'answer' })).toBeDefined()
+    expect(await ui.find({ key: 'other-band' })).toBeDefined()
+    await ui.unmount()
+  }
 })

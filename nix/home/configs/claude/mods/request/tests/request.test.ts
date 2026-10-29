@@ -16,9 +16,10 @@ type Send = { isDelivered: true } | { isDelivered: false; reason: string }
 // Nothing stands beneath the plugins in a test: these answer for the engine.
 // `send` answers session.send (its hook must be registered before the first $ call);
 // `hold` keeps every process.run from finishing until it resolves.
-// `placed` says whether a surface seats the approvals pane; unplaced, /approvals walks the dialog.
-async function start($: Engine, on: On, answer: string | undefined, opts: { send?: Send; hold?: Promise<void>; placed?: boolean } = {}) {
-  const { send, hold, placed = false } = opts
+// `band` says the session draws on the terminal, where /approvals expands the band;
+// without it the session is VS Code's, which draws no band, so /approvals walks the dialog.
+async function start($: Engine, on: On, answer: string | undefined, opts: { send?: Send; hold?: Promise<void>; band?: boolean } = {}) {
+  const { send, hold, band = false } = opts
   const asked: string[] = []
   const runs: { argv: readonly string[]; cwd?: string }[] = []
   const sends: { to: string; text: string }[] = []
@@ -36,15 +37,12 @@ async function start($: Engine, on: On, answer: string | undefined, opts: { send
     }
     return { value: undefined }
   })
-  const opened: string[] = []
-  const closed: string[] = []
-  on('ui.open', async (_$, e) => {
-    opened.push(e.id)
-    return { value: placed ? { isPlaced: true as const } : { isPlaced: false as const, reason: 'no surface places panes in this test' } }
+  on('session.surfaces', async () => ({ value: band ? ['terminal' as const] : ['vscode' as const] }))
+  // The band beneath this mod's: another mod's row (ask-later's) when `band`, else the engine's empty box.
+  on('ui.render', { component: 'AbovePrompt' }, async ($$, e) => {
+    const { Box, Text } = $$.ui.resolve(e)
+    return band ? Box({ key: 'other-band', children: Text({ children: 'Q1 pending' }) }) : Box({})
   })
-  on('ui.close', async (_$, e) => { closed.push(e.id); return { value: undefined } })
-  // The engine draws nothing of its own in the band: an empty Box stands for that.
-  on('ui.render', { component: 'AbovePrompt' }, async ($$, e) => $$.ui.resolve(e).Box({}))
   on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
     const question = e.questions[0]?.question ?? ''
     asked.push(question)
@@ -63,7 +61,7 @@ async function start($: Engine, on: On, answer: string | undefined, opts: { send
     on('prompt.submit', async (_$, e) => { submits.push(e.text); resolve(e.text); return { text: e.text } })
   })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  return { asked, runs, sends, submits, delivered, nextStatus, opened, closed }
+  return { asked, runs, sends, submits, delivered, nextStatus }
 }
 
 // Regression: the command that runs differing from the one the user approved (re-quoted, trimmed, rebuilt, rendered).
@@ -189,16 +187,17 @@ test('a session.start mid-run keeps the live run and reports its real outcome on
   expect(submits).toHaveLength(1)
 })
 
-const bandProps = (hasSurvey = false) => ({
-  hasSurvey, isWorking: false, maxRows: 10, bodyColumns: 80, scroll: { offset: 0, bodyRows: 10 }, view: {},
+const bandProps = (hasSurvey = false, bodyRows = 19) => ({
+  hasSurvey, isWorking: false, maxRows: bodyRows + 1, bodyColumns: 80, scroll: { offset: 0, bodyRows }, view: {},
 })
-const PANE_PROPS = { title: 'Approvals', isFocused: true, bodyColumns: 100, placement: 'inline' as const, scroll: { offset: 0, bodyRows: 40 }, view: {} }
+const mountBand = ($: Engine, surface: 'terminal' | 'desktop' = 'terminal', hasSurvey = false, bodyRows = 19) =>
+  $.ui.mount({ plugin: 'request', surface, component: 'AbovePrompt', props: bandProps(hasSurvey, bodyRows) })
 
 // Regression: the band showing with nothing to review (a stale nag), or missing while a request waits.
 test('the band shows only while a request is pending', async ($, on) => {
   const { delivered } = await start($, on, 'too risky')
   const reviewOn = async (surface: 'terminal' | 'desktop', hasSurvey = false) => {
-    const band = await $.ui.mount({ plugin: 'request', surface, component: 'AbovePrompt', props: bandProps(hasSurvey) })
+    const band = await mountBand($, surface, hasSurvey)
     const found = await band.find({ key: 'review' })
     const preview = await band.find({ type: 'Text', text: /^R1 printf/ })
     await band.unmount()
@@ -215,49 +214,87 @@ test('the band shows only while a request is pending', async ($, on) => {
   for (const surface of ['terminal', 'desktop'] as const) expect(await reviewOn(surface)).toBe(false)
 })
 
-// Regression: the pane approving a command other than the one it shows, or approving it twice.
-test('Review opens the pane, which runs the shown command once and closes', async ($, on) => {
-  const { runs, delivered, opened, closed } = await start($, on, undefined, { placed: true })
+// Regression: the expanded band approving a command other than the one it shows, approving it twice, or staying open.
+test('Review expands the band, which runs the shown command once and collapses', async ($, on) => {
+  const { runs, delivered } = await start($, on, undefined, { band: true })
   await $.tool.call({ tool: RAISE, ...INPUT })
-  const band = await $.ui.mount({ plugin: 'request', surface: 'terminal', component: 'AbovePrompt', props: bandProps() })
+  const band = await mountBand($)
+  expect(await band.find({ type: 'Code' })).toBeUndefined()
   await band.press({ key: 'review' })
-  expect(opened).toEqual(['approvals'])
-  const pane = await $.ui.mount({ plugin: 'request', surface: 'terminal', component: 'Pane', requestId: 'approvals', props: PANE_PROPS })
-  expect((await pane.find({ type: 'Code' }))?.props.source).toBe(COMMAND)
-  await pane.press({ key: 'approve' })
+  expect((await band.find({ type: 'Code' }))?.props.source).toBe(COMMAND)
+  await band.press({ key: 'approve' })
   const text = await delivered
   expect(runs).toEqual([{ argv: ['bash', '-c', COMMAND], cwd: '/tmp' }])
   expect(text).toContain('Exit code: 3')
-  expect(closed).toEqual(['approvals'])
-  expect(await pane.find({ key: 'approve' })).toBeUndefined()
+  expect(await band.find({ key: 'approve' })).toBeUndefined()
+  expect(await band.find({ key: 'review' })).toBeUndefined()
   expect(String((await $.command.run(APPROVALS)).text)).toContain('no pending approval requests')
   expect(runs).toHaveLength(1)
 })
 
-// Regression: Next showing the same request, or Deny in the pane running anything or losing the reason.
-test('the pane steps between requests and denies with a reason', async ($, on) => {
-  const { runs, delivered } = await start($, on, undefined, { placed: true })
+// Regression: Next showing the same request, Collapse not collapsing, or Deny running anything or losing the reason.
+test('the expanded band steps between requests, collapses, and denies with a reason', async ($, on) => {
+  const { runs, delivered } = await start($, on, undefined, { band: true })
   await $.tool.call({ tool: RAISE, ...INPUT })
   await $.tool.call({ tool: RAISE, ...INPUT, command: 'echo second' })
-  const pane = await $.ui.mount({ plugin: 'request', surface: 'terminal', component: 'Pane', requestId: 'approvals', props: PANE_PROPS })
-  expect((await pane.find({ type: 'Code' }))?.props.source).toBe(COMMAND)
-  await pane.press({ key: 'next' })
-  expect((await pane.find({ type: 'Code' }))?.props.source).toBe('echo second')
-  await pane.input({ key: 'reason', text: 'not now' })
+  const band = await mountBand($)
+  await band.press({ key: 'review' })
+  expect((await band.find({ type: 'Code' }))?.props.source).toBe(COMMAND)
+  await band.press({ key: 'next' })
+  expect((await band.find({ type: 'Code' }))?.props.source).toBe('echo second')
+  await band.press({ key: 'collapse' })
+  expect(await band.find({ type: 'Code' })).toBeUndefined()
+  expect(await band.find({ key: 'review' })).toBeDefined()
+  await band.press({ key: 'review' })
+  await band.input({ key: 'reason', text: 'not now' })
   const text = await delivered
   expect(text).toContain('echo second')
   expect(text).toContain('REJECTED it: not now')
   expect(runs).toEqual([])
-  expect((await pane.find({ type: 'Code' }))?.props.source).toBe(COMMAND)
+  expect((await band.find({ type: 'Code' }))?.props.source).toBe(COMMAND)
 })
 
-// Regression: /approvals falling back to the plain dialog while the pane could be shown.
-test('/approvals opens the pane where one is placed, asking nothing', async ($, on) => {
-  const { asked, runs, opened } = await start($, on, 'Approve and run', { placed: true })
+// Regression: Approve offered for a command whose top or bottom is scrolled out of the band's window.
+test('a command taller than the band offers no Approve, only the dialog', async ($, on) => {
+  const { runs } = await start($, on, undefined, { band: true })
+  const tall = Array.from({ length: 12 }, (_, i) => `echo line ${i}`).join('\n')
+  await $.tool.call({ tool: RAISE, ...INPUT, command: tall })
+  const band = await mountBand($, 'terminal', false, 10)
+  await band.press({ key: 'review' })
+  expect(await band.find({ key: 'approve' })).toBeUndefined()
+  expect(await band.find({ type: 'Code' })).toBeUndefined()
+  expect(await band.find({ key: 'dialog' })).toBeDefined()
+  expect(await band.find({ key: 'deny' })).toBeDefined()
+  const roomy = await mountBand($, 'terminal', false, 19)
+  expect((await roomy.find({ type: 'Code' }))?.props.source).toBe(tall)
+  expect(await roomy.find({ key: 'approve' })).toBeDefined()
+  expect(runs).toEqual([])
+})
+
+// Regression: this band hiding the row of a mod drawn beneath it (ask-later's), collapsed or expanded.
+test("the band keeps the row beneath it, collapsed and expanded", async ($, on) => {
+  await start($, on, undefined, { band: true })
+  await $.tool.call({ tool: RAISE, ...INPUT })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const band = await mountBand($, surface)
+    expect(await band.find({ key: 'review' })).toBeDefined()
+    expect(await band.find({ key: 'other-band' })).toBeDefined()
+    await band.press({ key: 'review' })
+    expect(await band.find({ key: 'approve' })).toBeDefined()
+    expect(await band.find({ key: 'other-band' })).toBeDefined()
+    await band.press({ key: 'collapse' })
+    await band.unmount()
+  }
+})
+
+// Regression: /approvals opening the plain dialog on a surface where the band can show the review.
+test('/approvals expands the band where one is drawn, asking nothing', async ($, on) => {
+  const { asked, runs } = await start($, on, 'Approve and run', { band: true })
   await $.tool.call({ tool: RAISE, ...INPUT })
   const r = await $.command.run(APPROVALS)
-  expect(String(r.text)).toBe('1 pending approval request in the approvals pane.')
-  expect(opened).toEqual(['approvals'])
+  expect(String(r.text)).toBe('1 pending approval request in the band above the prompt.')
+  const band = await mountBand($)
+  expect((await band.find({ type: 'Code' }))?.props.source).toBe(COMMAND)
   expect(asked).toEqual([])
   expect(runs).toEqual([])
 })

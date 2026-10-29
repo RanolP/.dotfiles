@@ -60,7 +60,7 @@ async function questions($: Ctx): Promise<Question[]> {
 
 async function showStatus($: Ctx) {
   const n = (await questions($)).filter(q => q.status === 'pending').length
-  $.ui.status(n ? `${n} question${n === 1 ? '' : 's'} pending · /answers` : undefined)
+  $.ui.status(n ? `질문 ${n}개 대기 · /answers` : undefined)
 }
 
 function isOptions(v: unknown): v is Option[] {
@@ -182,7 +182,7 @@ export const register: Register = on => {
       log($, `ask: state write failed for "${a.question}": ${errText(err)}`)
       return toolError(`ask failed to queue the question: ${errText(err)}`)
     }
-    $.ui.toast(`${id} queued: ${a.question}`)
+    $.ui.toast(`${id} 대기: ${a.question}`)
     await showStatus($)
     const how = a.assumption
       ? `Proceed under the assumption "${a.assumption}" and note which work depends on it.`
@@ -233,22 +233,24 @@ export const register: Register = on => {
     const q = w?.current
     if (!w || !q || asked !== q.question) return drawn
     const { Box, Button } = $.ui.resolve(e)
+    // The Button goes above the dialog: the engine refuses a tree that draws
+    // below AskUserQuestion ("draws below the dialog") and draws its own.
     return (
       <Box flexDirection="column">
-        {drawn}
         <Button key="chat" label="Chat with this question" hotkey="c" onPress={() => {
           w.chat = q
           if (w.dismiss) w.dismiss()
           else log($, `chat on ${q.id}: no dismiss armed for this dialog`)
         }} />
+        {drawn}
       </Box>
     )
   })
 
   on('command.run', { command: 'answers' }, async $ => {
-    if (walk) return { text: 'ask-later: /answers is already open.' }
+    if (walk) return { text: '/answers가 이미 열려 있다.' }
     const pending = (await questions($)).filter(q => q.status === 'pending')
-    if (!pending.length) return { text: 'ask-later: no pending questions.' }
+    if (!pending.length) return { text: '대기 질문이 없다.' }
     const w: Walk = {}
     walk = w
     void (async () => {
@@ -292,7 +294,7 @@ export const register: Register = on => {
         log($, `/answers delivery of ${answered.map(q => q.id).join(',') || 'nothing'} failed: ${errText(err)}`)
       }
     })()
-    return { text: `ask-later: ${pending.length} pending question${pending.length === 1 ? '' : 's'}; Esc skips one.` }
+    return { text: `대기 질문 ${pending.length}개, Esc로 건너뛴다.` }
   })
 
   on('prompt.submit', async ($, e, next) => {

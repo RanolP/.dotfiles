@@ -4,6 +4,10 @@ import type { Alternative, ApprovalRequest, ExecResult } from '../types'
 
 const REQUESTS = { plugin: 'request', key: 'requests' } as const
 const TURN = { plugin: 'request', key: 'turnId' } as const
+// The pending request the review pane shows; null or a decided id falls back to the first pending.
+const VIEWING = { plugin: 'request', key: 'viewing' } as const
+
+export const PANE = 'approvals'
 
 export const RAISE_TOOL = 'mcp__request__raise_approval_request'
 // $.process.run's ceiling; an escalated command is often the long one.
@@ -17,7 +21,7 @@ const TOOLS = [
     description: [
       'Escalate one shell command that was denied, when that command is the only correct way to do the work: for Claude, a Bash call the auto-mode permission classifier denied; for a codex worker, a command its sandbox blocked.',
       'Returns at once with a request id (R<n>); keep working on what does not depend on it.',
-      'The user reviews it with /approvals. On approval this tool\'s mod runs the exact command once on the host, outside any sandbox, in cwd (bash -c), and the stdout, stderr and exit code arrive as a message; on rejection the rejection and its reason arrive. Re-issuing the denied command would be denied again, so wait for that message.',
+      'The user reviews it from the approval band above their prompt (or /approvals). On approval this tool\'s mod runs the exact command once on the host, outside any sandbox, in cwd (bash -c), and the stdout, stderr and exit code arrive as a message; on rejection the rejection and its reason arrive. Re-issuing the denied command would be denied again, so wait for that message.',
       'Use it only for a classifier or sandbox denial: a denial, rejection or "stop"/"cancel" from the user still halts that line of work.',
       'Each approval runs the command once; running it again needs a new request.',
     ].join(' '),
@@ -58,17 +62,6 @@ const isUndelivered = (r: ApprovalRequest): r is Outcome =>
 
 const requests = async ($: Ctx): Promise<ApprovalRequest[]> => (await $.state.get(REQUESTS)).value ?? []
 
-const showStatus = async ($: Ctx) => {
-  const all = await requests($)
-  const pending = all.filter(r => r.status === 'pending').length
-  const undelivered = all.filter(isUndelivered).length
-  const parts = [
-    ...(pending ? [`${plural(pending, 'approval request')} pending`] : []),
-    ...(undelivered ? [`${plural(undelivered, 'result')} undelivered`] : []),
-  ]
-  $.ui.status(parts.length ? `${parts.join(' · ')} · /approvals` : undefined)
-}
-
 const isAlternative = (a: unknown): a is Alternative =>
   typeof a === 'object' && a !== null && 'approach' in a && 'rejected_because' in a
   && nonEmpty(a.approach) && nonEmpty(a.rejected_because)
@@ -86,6 +79,14 @@ const fenced = (text: string) => {
   const fence = '`'.repeat(Math.max(3, longest + 1))
   return `${fence}\n${text}\n${fence}`
 }
+
+// Prose the model wrote (why, alternatives, blocks) is drawn as text with any
+// hidden character spelled out, so nothing it holds can restyle the row.
+const HIDDEN_ALL = new RegExp(HIDDEN.source, 'gu')
+const visible = (text: string) => text.replace(HIDDEN_ALL, c => `\\u{${c.codePointAt(0)?.toString(16)}}`)
+
+// What a Code element may hold (CodeProps.source caps it at 10000).
+const CODE_MAX = 10_000
 
 // The text the user approves. It carries `command` itself, unaltered, so what
 // is shown is what runs; a command with hidden characters also gets an escaped copy.
@@ -224,8 +225,64 @@ const claim = async ($: Ctx, id: string): Promise<ApprovalRequest | undefined> =
   return claimed
 }
 
+// Runs an approved request once: the claim makes it single-use, so a second
+// approval of the same id (the pane and /approvals both open) runs nothing.
+const approveAndRun = async ($: Ctx, id: string) => {
+  const run = await claim($, id)
+  if (!run) return
+  const runId = run.status === 'running' ? run.runId : ''
+  try {
+    $.ui.toast(`${run.id} running: ${run.command}`)
+    const result = await execute($, run)
+    // Only the run that claimed it completes it; a settled entry keeps its report, sent once.
+    const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === run.id && x.status === 'running' && x.runId === runId
+      ? { ...x, status: 'executed', result, delivered: false } : x)))
+    if (!written.some(x => x.id === run.id && x.status === 'executed' && x.runId === runId)) {
+      log($, `${run.id} finished after it was settled as interrupted (exit ${result.exitCode ?? result.failure}); its result was not delivered`)
+    }
+  } finally {
+    liveRuns.delete(runId)
+  }
+}
+
+const reject = async ($: Ctx, id: string, reason: string | undefined) => {
+  await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === id && x.status === 'pending'
+    ? { ...x, status: 'rejected', delivered: false, ...(reason ? { reason } : {}) } : x)))
+}
+
 const APPROVE = 'Approve and run'
 const REJECT = 'Reject'
+
+const PANE_OPEN = { id: PANE, title: 'Approvals', focus: true, closeOnEscape: true } as const
+
+const openPane = async ($: Ctx) => {
+  const opened = await $.ui.open(PANE_OPEN)
+  if (!opened.isPlaced) $.ui.toast(`Approvals pane waits: ${opened.reason}`)
+}
+
+// A pane decision: move the pane on to the next pending request (closing it
+// after the last) before the possibly long run, then deliver the outcome.
+const decide = async ($: Ctx, id: string, decision: { approve: true } | { approve: false; reason?: string }) => {
+  try {
+    const rest = (await requests($)).filter(r => r.status === 'pending' && r.id !== id)
+    await $.state.set(VIEWING, rest[0]?.id ?? null)
+    if (!rest.length) await $.ui.close({ id: PANE })
+    if (decision.approve) await approveAndRun($, id)
+    else await reject($, id, decision.reason?.trim() || undefined)
+    await deliverUndelivered($)
+  } catch (err) {
+    log($, `${id} pane decision failed: ${errText(err)}`)
+  }
+}
+
+// One band row: "● 2 approval requests  R3 git push …  [ Review ]", the
+// preview cut to what is left of bodyColumns after the fixed parts.
+export const bandPreview = (first: ApprovalRequest, room: number): string => {
+  const flat = visible(first.command.replace(/\s*\n\s*/g, ' ⏎ '))
+  const text = `${first.id} ${flat}`
+  if (room <= 1) return ''
+  return text.length <= room ? text : `${text.slice(0, room - 1)}…`
+}
 
 export const register: Register = on => {
   let walking = false
@@ -240,13 +297,14 @@ export const register: Register = on => {
       }
     }
     try {
-      await $.command.register({ name: 'approvals', description: 'Review the Bash commands the model escalated (Esc skips one; type under Other to reject with a reason)' })
+      await $.command.register({ name: 'approvals', description: 'Review the Bash commands the model escalated in the approvals pane (a step-by-step dialog where no pane can be placed)' })
     } catch (err) {
       log($, `command.register(approvals) failed: ${errText(err)}`)
     }
     // Delivery may submit a prompt, so the session's start never waits on it.
-    void settleInterrupted($).then(() => showStatus($)).catch((err: unknown) => log($, `settling interrupted runs failed: ${errText(err)}`))
-    await showStatus($)
+    void settleInterrupted($).catch((err: unknown) => log($, `settling interrupted runs failed: ${errText(err)}`))
+    // The band replaced the status line entry; clear one an older version left.
+    $.ui.status(undefined)
     return started
   })
 
@@ -288,17 +346,24 @@ export const register: Register = on => {
     // The change appends last, so the written list ends with this request.
     const id = written.at(-1)?.id ?? '(unknown)'
     $.ui.toast(`${id} approval requested: ${command}`)
-    await showStatus($)
-    return ok(`${id} queued for the user's review (/approvals). The outcome arrives as a message; until then continue with work that does not depend on it (${blocks}).`)
+    return ok(`${id} queued for the user's review (the approval band, or /approvals). The outcome arrives as a message; until then continue with work that does not depend on it (${blocks}).`)
   })
 
   on('command.run', { command: 'approvals' }, async $ => {
-    if (walking) return { text: 'request: /approvals is already open.' }
+    // The engine prefixes the plugin's name to this text, so it carries none of its own.
+    if (walking) return { text: '/approvals is already open.' }
     const pending = (await requests($)).filter(r => r.status === 'pending')
     if (!pending.length) {
-      void deliverUndelivered($).then(() => showStatus($), err => log($, `redelivery failed: ${errText(err)}`))
-      return { text: 'request: no pending approval requests.' }
+      void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))
+      return { text: 'no pending approval requests.' }
     }
+    // The pane is the review; the dialog walk stays for a surface that places no pane.
+    const opened = await $.ui.open(PANE_OPEN).catch((err: unknown) => {
+      log($, `ui.open(${PANE}) failed: ${errText(err)}; walking the dialog instead`)
+      return undefined
+    })
+    if (opened?.isPlaced) return { text: `${plural(pending.length, 'pending approval request')} in the approvals pane.` }
+    if (opened) log($, `${PANE} pane not placed (${opened.reason}); walking the dialog instead`)
     walking = true
     void (async () => {
       try {
@@ -312,36 +377,114 @@ export const register: Register = on => {
             return undefined
           })
           if (answer === undefined) continue
-          if (answer === APPROVE) {
-            const run = await claim($, q.id)
-            if (!run) continue
-            const runId = run.status === 'running' ? run.runId : ''
-            try {
-              $.ui.toast(`${run.id} running: ${run.command}`)
-              const result = await execute($, run)
-              // Only the run that claimed it completes it; a settled entry keeps its report, sent once.
-              const written = await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === run.id && x.status === 'running' && x.runId === runId
-                ? { ...x, status: 'executed', result, delivered: false } : x)))
-              if (!written.some(x => x.id === run.id && x.status === 'executed' && x.runId === runId)) {
-                log($, `${run.id} finished after it was settled as interrupted (exit ${result.exitCode ?? result.failure}); its result was not delivered`)
-              }
-            } finally {
-              liveRuns.delete(runId)
-            }
-          } else {
-            const reason = answer === REJECT ? undefined : answer
-            await update($, REQUESTS, rs => (rs ?? []).map((x): ApprovalRequest => (x.id === q.id && x.status === 'pending'
-              ? { ...x, status: 'rejected', delivered: false, ...(reason ? { reason } : {}) } : x)))
-          }
+          if (answer === APPROVE) await approveAndRun($, q.id)
+          else await reject($, q.id, answer === REJECT ? undefined : answer)
           await deliverUndelivered($)
         }
       } catch (err) {
         log($, `/approvals walk failed: ${errText(err)}`)
       } finally {
         walking = false
-        await showStatus($)
+        log($, '/approvals walk ended')
       }
     })()
-    return { text: `request: ${plural(pending.length, 'pending approval request')}; Esc skips one, text under Other rejects with that reason.` }
+    return { text: `${plural(pending.length, 'pending approval request')}; Esc skips one, text under Other rejects with that reason.` }
+  })
+
+  // The band: one row while anything waits on the user, composed above what
+  // the plugins beneath draw (another mod's band) rather than hiding it.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const all = await requests($)
+    const pending = all.filter(r => r.status === 'pending')
+    const undelivered = all.filter(isUndelivered).length
+    if (!pending.length && !undelivered) return next(e)
+    const below = await next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const first = pending[0]
+    const head = first ? `● ${plural(pending.length, 'approval request')}  ` : `● ${plural(undelivered, 'result')} undelivered  `
+    const button = first ? 'Review' : 'Redeliver'
+    // "[ Review ]" plus the gap before it.
+    const room = e.props.bodyColumns - head.length - (button.length + 4) - 2
+    const row = (
+      <Box key="request-band" flexDirection="row">
+        <Text color="yellow" bold>{head}</Text>
+        {first ? <Text dimColor wrap="truncate-end">{bandPreview(first, room)}</Text> : <Text> </Text>}
+        <Text>  </Text>
+        {first
+          ? <Button key="review" label={button} hotkey="r" variant="primary" onPress={() => void openPane($)} />
+          : <Button key="redeliver" label={button} onPress={() => void deliverUndelivered($).catch((err: unknown) => log($, `redelivery failed: ${errText(err)}`))} />}
+      </Box>
+    )
+    return (
+      <Box flexDirection="column">
+        {row}
+        {below}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const elements = $.ui.resolve(e)
+    const { Box, Text, Button, Code } = elements
+    // Every surface but mobile has Input; there a Deny takes no reason.
+    const Input = 'Input' in elements ? elements.Input : undefined
+    const pending = (await requests($)).filter(r => r.status === 'pending')
+    const viewing = (await $.state.get(VIEWING)).value ?? null
+    const at = Math.max(0, pending.findIndex(r => r.id === viewing))
+    const r = pending[at]
+    if (!r) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>No approval requests are waiting.</Text>
+          <Box><Button key="close" label="Close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} /></Box>
+        </Box>
+      )
+    }
+    const go = (i: number) => () => void $.state.set(VIEWING, pending[(i + pending.length) % pending.length]?.id ?? null)
+    const hidden = HIDDEN.test(r.command)
+    // A hidden character is shown escaped (Code refuses control characters and
+    // would draw a bidi mark as the reordering it is); the escape is exact.
+    const source = hidden ? JSON.stringify(r.command) : r.command
+    const isWhole = source.length <= CODE_MAX
+    const heading = (text: string) => <Text bold>{text}</Text>
+    return (
+      <Box flexDirection="column">
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text><Text bold color="yellow">{r.id}</Text><Text bold>  Run this command?</Text>{pending.length > 1 && <Text dimColor>  {at + 1} of {pending.length}</Text>}</Text>
+          {pending.length > 1 && (
+            <Box flexDirection="row" gap={1}>
+              <Button key="prev" label="‹ Prev" hotkey="p" dimColor onPress={go(at - 1)} />
+              <Button key="next" label="Next ›" hotkey="n" dimColor onPress={go(at + 1)} />
+            </Box>
+          )}
+        </Box>
+        <Text dimColor>in {r.cwd} · asked by {r.agentId ? `subagent ${visible(r.agentId)}` : 'the main session'}</Text>
+        <Box flexDirection="column" borderStyle="round" borderColor={hidden || !isWhole ? 'red' : 'yellow'} paddingX={1} marginY={1}>
+          {hidden && <Text color="red" bold>Holds hidden or control characters; shown JSON-escaped.</Text>}
+          {isWhole
+            ? <Code source={source} language="bash" />
+            : <Text color="red" bold>{source.length} characters, too long to show whole, so it cannot be approved here; deny it and ask for a script file instead.</Text>}
+        </Box>
+        {heading('Why this is the only way')}
+        <Box paddingLeft={2} marginBottom={1}><Text>{visible(r.why_only_way)}</Text></Box>
+        {heading('Considered and rejected')}
+        <Box flexDirection="column" paddingLeft={2} marginBottom={1}>
+          {r.alternatives.map((a, i) => (
+            <Box key={`alt-${i}`} flexDirection="column">
+              <Text>• {visible(a.approach)}</Text>
+              <Box paddingLeft={2}><Text dimColor>{visible(a.rejected_because)}</Text></Box>
+            </Box>
+          ))}
+        </Box>
+        {heading('Waiting on it')}
+        <Box paddingLeft={2} marginBottom={1}><Text>{visible(r.blocks)}</Text></Box>
+        <Box flexDirection="row" gap={2}>
+          {isWhole && <Button key="approve" label={APPROVE} variant="primary" onPress={() => void decide($, r.id, { approve: true })} />}
+          <Button key="deny" label="Deny" hotkey="d" onPress={() => void decide($, r.id, { approve: false })} />
+        </Box>
+        {Input && <Input key="reason" label="Deny with reason: " placeholder="why not" submitLabel="deny" onSubmit={value => void decide($, r.id, { approve: false, reason: value })} />}
+      </Box>
+    )
   })
 }

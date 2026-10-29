@@ -114,10 +114,9 @@ export const questionBelowCode = (r: ApprovalRequest): string => [
   ...theCase(r),
 ].join('\n')
 
-// Code's source cap; a longer command is drawn plain, inside the question.
-const CODE_LIMIT = 10_000
-
 // The engine cuts a question longer than this many characters with "…".
+// Approve needs the asked question under it, which also keeps the command
+// drawn as Code under Code's 10000-character source cap.
 const QUESTION_LIMIT = 2000
 
 const cap = (text: string): string => {
@@ -346,8 +345,9 @@ const askOne = async ($: Ctx, r: ApprovalRequest, position: string): Promise<Dec
 
 // The open review an AskUserQuestion carries, if it is one of ours: one
 // single-select question with an open request's chip, the question asked
-// for it, and our labels.
-const ourDialog = (questions: readonly unknown[]): OpenDialog | undefined => {
+// for it, and our labels. It hands back that question, typed as checked here.
+type DialogQuestion = { header: string; question: string; options: { label: string; description?: string }[] }
+const ourDialog = (questions: readonly unknown[]): { open: OpenDialog; q: DialogQuestion } | undefined => {
   if (questions.length !== 1) return undefined
   const q = questions[0]
   if (typeof q !== 'object' || q === null) return undefined
@@ -357,7 +357,7 @@ const ourDialog = (questions: readonly unknown[]): OpenDialog | undefined => {
   if (!open || question !== open.question) return undefined
   const labels = options.map((o: unknown) => (typeof o === 'object' && o !== null && 'label' in o ? o.label : undefined))
   if (labels.length !== 2 || labels[0] !== APPROVE || labels[1] !== DENY) return undefined
-  return open
+  return { open, q: q as DialogQuestion }
 }
 
 // The review of `ids`, one dialog per request in order, from the calling hook,
@@ -483,12 +483,12 @@ export const register: Register = on => {
   // other AskUserQuestion passes untouched. On the way back, an idle
   // auto-answer (afkTimeoutMs) is marked so it decides nothing.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
-    const open = ourDialog(e.questions)
+    const open = ourDialog(e.questions)?.open
     if (!open) return next(e)
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
     if (!r) return next(e)
     const described: Record<string, string> = {
-      [APPROVE]: 'Run it once, exactly as shown above (without the indent), with bash -c',
+      [APPROVE]: 'Run the command shown once with bash -c, byte for byte (an indent before its lines is the dialog\'s, not the command\'s)',
       [DENY]: `Tell the model no; type under Other to give the reason. Esc keeps it pending in the band${open.position}`,
     }
     const q = e.questions[0]
@@ -511,34 +511,30 @@ export const register: Register = on => {
   // above the dialog and the question drops its copy; the rows needed are
   // the taller of that layout and the plain one the engine falls back to.
   on('ui.render', { component: 'AskUserQuestion' }, async ($, e, next) => {
-    const open = ourDialog(e.props.questions)
-    if (!open) return next(e)
+    const ours = ourDialog(e.props.questions)
+    if (!ours) return next(e)
+    const { open, q } = ours
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
-    const source = r ? shownCommand(r) : ''
-    const below = r && source.length <= CODE_LIMIT ? questionBelowCode(r) : undefined
     const tooLong = open.question.length > QUESTION_LIMIT
     const needs = r && e.viewport
-      ? Math.max(dialogRows(open.question, e.viewport.columns), below === undefined ? 0 : dialogRows(`${source}\n${below}`, e.viewport.columns))
+      ? Math.max(dialogRows(open.question, e.viewport.columns), dialogRows(`${shownCommand(r)}\n${questionBelowCode(r)}`, e.viewport.columns))
       : undefined
     const fits = !tooLong && needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
     open.isApprovable = fits
-    if (fits && below !== undefined) {
+    if (fits && r) {
       const { Box, Code } = $.ui.resolve(e)
-      const q = e.props.questions[0] as { question: string }
-      const dialog = await next({ ...e, props: { ...e.props, questions: [{ ...q, question: below }] } })
+      const dialog = await next({ ...e, props: { ...e.props, questions: [{ ...q, question: questionBelowCode(r) }] } })
       return (
         <Box flexDirection="column">
-          <Code key="request-command" language="bash" source={source} wrap="wrap" />
+          <Code key="request-command" language="bash" source={shownCommand(r)} wrap="wrap" />
           {dialog}
         </Box>
       )
     }
-    if (fits) return next(e)
     const why = !r ? 'it is no longer pending'
       : tooLong ? `the review is ${open.question.length} characters and the dialog cuts it at ${QUESTION_LIMIT}; run it yourself or ask for a shorter command`
         : !e.viewport || needs === undefined ? 'this surface did not report its size'
           : `it needs ${needs} rows and the window has ${e.viewport.rows}; enlarge it, then Review from the band`
-    const q = e.props.questions[0] as { options: { label: string; description?: string }[] }
     const options = q.options.map(o => (o.label === APPROVE ? { ...o, description: `Unavailable, runs nothing: ${why}` } : o))
     return next({ ...e, props: { ...e.props, questions: [{ ...q, options }] } })
   })

@@ -71,11 +71,12 @@ export const INTENT_SYSTEM = `You classify one message the user just typed to a 
 
 Pick exactly one intent:
 - continue: the message is about the task on top of the focus stack, or about a task lower on the stack (the user returns to it). Corrections, additions, approvals such as "ok" or "ㅇㅇ", and answers to the agent's question are continue. Set target to that task's id; set it to null when the stack is empty and the message starts no task.
-- handoff: the message moves the agent's main attention to a different task, which replaces the top of the stack. Set target to an existing issue id when one matches, otherwise set title.
-- interleave: the message asks for a short side task to be done now, after which the agent returns to the current one ("btw", "잠깐", a quick check). Set target or title.
-- pending: the message adds a task to be done later, without switching to it now ("나중에", "일단 ~해둘 것", "todo로"). Set target or title.
+- handoff: the message moves the agent's main attention to a different task, which replaces the top of the stack.
+- interleave: the message asks for a short side task to be done now, after which the agent returns to the current one ("btw", "잠깐", a quick check).
+- pending: the message adds a task to be done later, without switching to it now ("나중에", "일단 ~해둘 것", "todo로").
 - question: the message asks for an explanation only and requests no work. Set both target and title to null.
 
+For handoff, interleave and pending, fill exactly one of target and title and set the other to null: target with the matching issue's id when the task is already in the input, otherwise title for a new task.
 Set target to an id copied exactly from the input. Write title as a short imperative in the user's language, at most 60 characters.
 Set deferred independently of intent to an array of up to five standalone instructions for work the user clearly bounds as must be done later (for example, "나중에", "이건 다음에", or "todo로"). Rewrite each instruction without the deferral phrase while preserving the user's wording and language, and set quote to an exact substring of user_prompt. For example, "A 고쳐, B는 나중에" gives deferred [{"text":"B 고쳐","quote":"B는 나중에"}]. A whole-message deferral is intent pending and also appears once in deferred. Use an empty array when the user bounds no work for later.
 Track direct work requests independently from focus. Add each new request to raised, including requests phrased as statements without a question mark. Write each request as a standalone instruction in the user's language and quote an exact substring from user_prompt. Resolve an open request only when the last assistant reply or user_prompt provides evidence that it was answered, declined, or skipped. Use the request's exact id and one of answered, declined, skipped; include quote copied exactly from that evidence when available. A skipped request is closed.
@@ -165,20 +166,24 @@ export function parseFocus(raw: string, knownIds: ReadonlySet<string>, closedIds
   if (!('intent' in value)) throw new Error('reply is not an object')
   if (!isIntent(value.intent)) throw new Error(`unknown intent ${String(value.intent)}`)
   const v = value
-  const target = v.target === null ? null : typeof v.target === 'string' && v.target.trim() ? v.target : undefined
-  const title = v.title === null ? null : typeof v.title === 'string' && v.title.trim() ? v.title : undefined
+  let target = v.target === null ? null : typeof v.target === 'string' && v.target.trim() ? v.target : undefined
+  let title = v.title === null ? null : typeof v.title === 'string' && v.title.trim() ? v.title : undefined
   // The prompt no longer asks for rule; an older-shaped reply may still carry it.
   const rule = v.rule === null || v.rule === undefined ? null : typeof v.rule === 'string' ? v.rule : undefined
   if (target === undefined || title === undefined || rule === undefined) throw new Error('target, title, or rule has an invalid value')
+  const movesFocus = value.intent === 'handoff' || value.intent === 'interleave' || value.intent === 'pending'
   if (target !== null && !knownIds.has(target)) {
     if (closedIds.has(target)) return { intent: value.intent === 'question' ? 'question' : 'continue', target: null, title: null, rule }
-    throw new Error(`unknown target id ${target}`)
+    // An invented id beside a title still names the task through the title.
+    if (!movesFocus || title === null) throw new Error(`unknown target id ${target}`)
+    target = null
   }
-  if (title !== null && ([...title].length > 60 || title.trim() !== title)) throw new Error('title must be a trimmed string of at most 60 characters')
   if (value.intent === 'question' && (target !== null || title !== null)) throw new Error('question must not name a target or title')
-  if (value.intent !== 'question' && value.intent !== 'continue' && ((target === null) === (title === null)))
-    throw new Error(`${value.intent} must set exactly one of target or title`)
-  if (value.intent === 'continue' && target !== null && title !== null) throw new Error('continue cannot set both target and title')
+  // The classifier sometimes fills both fields or neither (e2e 2026-10-29). A known target wins over a title,
+  // and a reply naming no task keeps the current focus, so the rest of the classification still lands.
+  if (target !== null) title = null
+  if (title !== null && ([...title].length > 60 || title.trim() !== title)) throw new Error('title must be a trimmed string of at most 60 characters')
+  if (movesFocus && target === null && title === null) return { intent: 'continue', target: null, title: null, rule }
   if (value.intent === 'continue' && title !== null) throw new Error('continue must name an existing target or null')
   return { intent: value.intent, target, title, rule }
 }

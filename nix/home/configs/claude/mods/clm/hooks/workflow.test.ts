@@ -105,6 +105,21 @@ test('a classifier target that closed during classification keeps focus and stil
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-1')?.status).toBe('done')
 })
 
+// Regression caught (e2e 2026-10-29): a handoff naming both a known target and a title threw "must set exactly one of target or title" and discarded the prompt's focus and deferrals.
+test('a handoff that sets both target and title switches to the known target and still files deferrals', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: ROWS, replies: [],
+    intentReplies: [intentReply({ intent: 'handoff', target: 's1-1', title: 'README 줄 추가', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에' }] })],
+  })
+  seedTracker(seen, [{ op: 'create', issue: 's1-1', title: 'readme line', status: 'todo' }])
+  await $.prompt.submit(promptInput('s1-1 진행해, B는 나중에'))
+  await until(() => snapshot(parseLog(seen.files[TRACKER] ?? '')).some(issue => issue.title === 'B 고쳐'))
+  const board = snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  expect(seen.logs.some(line => line.includes('focus classification failed'))).toBe(false)
+  expect(board.find(issue => issue.id === 's1-1')?.status).toBe('doing')
+  expect(board.some(issue => issue.title === 'README 줄 추가')).toBe(false)
+})
+
 // Regression caught: work explicitly bounded for later vanished instead of becoming a shared todo.
 test('a bounded deferral becomes one todo issue on the board', OPTS, async ($, on) => {
   const seen = bottoms(on, {

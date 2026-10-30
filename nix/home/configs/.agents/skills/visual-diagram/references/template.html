@@ -1,0 +1,84 @@
+<title>Diagram name</title>
+<style>
+  /* Light palette on bare :root, dark redefines the same tokens (Artifact theme contract). */
+  :root {
+    --vd-bg: #fbfbfa;
+    --vd-surface: #ffffff;
+    --vd-ink: #1b1b1a;      /* text, 16:1 on bg */
+    --vd-muted: #55544e;    /* edge labels and captions, 7:1 on bg */
+    --vd-line: #6b6a63;     /* node outlines, edges, arrowheads, 5:1 on bg */
+    --vd-accent: #1d5fd1;   /* the ONE accent: the path or node the figure is about */
+    --vd-accent-tint: #e8effb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --vd-bg: #171716; --vd-surface: #201f1e; --vd-ink: #eeeeea; --vd-muted: #b5b4ac;
+      --vd-line: #8f8e86; --vd-accent: #7aa9ff; --vd-accent-tint: #1d2a40;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --vd-bg: #171716; --vd-surface: #201f1e; --vd-ink: #eeeeea; --vd-muted: #b5b4ac;
+    --vd-line: #8f8e86; --vd-accent: #7aa9ff; --vd-accent-tint: #1d2a40;
+  }
+  body { background: var(--vd-bg); color: var(--vd-ink); padding-inline: 16px; padding-block: 24px; }
+  figure, svg.vd { font-family: ui-sans-serif, -apple-system, "Segoe UI", "Noto Sans", sans-serif; }
+  figure { margin: 0 auto; max-width: 960px; }
+  figcaption { color: var(--vd-muted); font-size: 14px; line-height: 1.5; margin-top: 12px; }
+  figcaption b { color: var(--vd-ink); }
+  figcaption ol { margin: 6px 0 0; padding-left: 1.4em; }
+  /* A wide drawing scrolls inside its own box; the page never scrolls sideways. */
+  .vd-scroll { overflow-x: auto; }
+  /* min-width = viewBox width x 11/13, so a 13-unit label never renders under 11 px. */
+  svg.vd { display: block; width: 100%; height: auto; min-width: 640px; }
+  svg.vd text { fill: var(--vd-ink); font-size: 14px; dominant-baseline: middle; }
+  svg.vd .node rect { fill: var(--vd-surface); stroke: var(--vd-line); stroke-width: 1.5; }
+  svg.vd .node.key rect { fill: var(--vd-accent-tint); stroke: var(--vd-accent); stroke-width: 2.5; }
+  svg.vd .node.optional rect { stroke-dasharray: 6 4; }
+  svg.vd .node text { text-anchor: middle; font-weight: 600; }
+  svg.vd .edge { fill: none; stroke: var(--vd-line); stroke-width: 1.5; }
+  svg.vd .edge.async { stroke-dasharray: 6 4; }
+  svg.vd .edge.key { stroke: var(--vd-accent); stroke-width: 2.5; }
+  svg.vd .edge-label { fill: var(--vd-muted); font-size: 13px; }
+  svg.vd .boundary { fill: none; stroke: var(--vd-line); stroke-dasharray: 4 4; }
+  svg.vd .boundary-label { fill: var(--vd-muted); font-size: 13px; }
+  svg.vd .callout circle { fill: var(--vd-ink); }
+  svg.vd .callout text { fill: var(--vd-bg); font-size: 13px; font-weight: 700; text-anchor: middle; }
+  svg.vd .leader { fill: none; stroke: var(--vd-ink); stroke-width: 1; }
+  svg.vd marker path { fill: var(--vd-line); }
+  svg.vd marker.key path { fill: var(--vd-accent); }
+</style>
+
+<!--
+  Grid (write it first, then read every coordinate off it):
+    columns c0=140 c1=420   pitch 280 = node width 160 + gap 120
+    rows    rA=80           node height 56, so a node spans rA-28 .. rA+28
+  Text is vertically centred (dominant-baseline: middle), so y is the label's centre.
+  An edge label centre sits 18 above a horizontal run, or its near edge 10 beside a
+  vertical run, at the middle of the longest straight segment: its box clears every stroke by >= 8.
+-->
+<figure>
+  <div class="vd-scroll">
+    <svg class="vd" viewBox="0 0 560 140" role="img" aria-label="Client calls the API, which reads the cache">
+      <defs>
+        <marker id="vd-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+        <marker id="vd-arrow-key" class="key" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z"/></marker>
+      </defs>
+
+      <!-- edges first, nodes on top -->
+      <path class="edge key" d="M220 80H340" marker-end="url(#vd-arrow-key)"/>
+      <text class="edge-label" x="280" y="62" text-anchor="middle">GET /user</text>
+
+      <g class="node"><rect x="60" y="52" width="160" height="56" rx="6"/><text x="140" y="80">Client</text></g>
+      <g class="node key"><rect x="340" y="52" width="160" height="56" rx="6"/><text x="420" y="80">API</text></g>
+
+      <!-- numbered callout: leader ends exactly on the point it names -->
+      <path class="leader" d="M500 52V36H520"/>
+      <g class="callout" transform="translate(532 36)"><circle r="12"/><text y="1">1</text></g>
+    </svg>
+  </div>
+  <figcaption><b>The claim in one sentence.</b>
+    <ol><li>What callout 1 points at, in one line.</li></ol>
+  </figcaption>
+</figure>

@@ -86,10 +86,25 @@ path = [
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
     "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
     "nix/home/configs/.agents/skills/want-exit/SKILL.md",
+    "nix/home/configs/.agents/skills/visual-diagram/references/template.html",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
+
+# Adapted (not verbatim) from github.com/nicobailon/visual-explainer v0.14.0 (MIT) and the
+# Sui documentation Technical Diagram Standards, docs.sui.io/references/contribute/diagram-standards
+# (Apache-2.0); NOTICE.md carries both attributions and the visual-explainer MIT notice verbatim.
+[[annotations]]
+path = [
+    "nix/home/configs/.agents/skills/visual-diagram/SKILL.md",
+    "nix/home/configs/.agents/skills/visual-diagram/NOTICE.md",
+    "nix/home/configs/.agents/skills/visual-diagram/references/rules.md",
+    "nix/home/configs/.agents/skills/visual-diagram/scripts/audit.js",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 RanolP", "2025 Nico Bailon", "Mysten Labs, Inc."]
+SPDX-License-Identifier = "MIT AND Apache-2.0"
 
 # Original prose; the failure taxonomy is credited to Justin Le,
 # blog.jle.im/entry/llms-and-haskell-1-constraint-evading-behavior.html

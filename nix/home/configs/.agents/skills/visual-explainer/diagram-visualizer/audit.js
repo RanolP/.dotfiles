@@ -1,8 +1,8 @@
-// Measures references/rules.md on the page as the browser rendered it, so an
+// Measures rules.md on the page as the browser rendered it, so an
 // overlap or overflow that the source hides shows up as a number.
 // Run on the open page: agent-browser --session vd eval --stdin < audit.js
 // Prints {fail:[...], info:{...}}; an empty fail list means every rule held.
-// Markup it reads (references/template.html): <svg class="vd" viewBox>,
+// Markup it reads (template.html): <svg class="vd" viewBox>,
 // g.node > rect|polygon + text, g.callout > circle + text, path.edge (data-flow="backward" for a
 // return edge), rect.boundary. Distances are reported in viewBox units.
 (() => {

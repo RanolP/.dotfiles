@@ -292,7 +292,7 @@ let
     remove-dead-code = localSkill "remove-dead-code";
     audit-env-variables = localSkill "audit-env-variables";
     website-explainer = localSkill "website-explainer";
-    visual-diagram = localSkill "visual-diagram";
+    visual-explainer = localSkill "visual-explainer";
     constraint-evasion = localSkill "constraint-evasion";
     claude-hook-management = localSkill "claude-hook-management";
     memory-review = localSkill "memory-review";

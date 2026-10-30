@@ -86,7 +86,7 @@ path = [
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
     "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
     "nix/home/configs/.agents/skills/want-exit/SKILL.md",
-    "nix/home/configs/.agents/skills/visual-diagram/references/template.html",
+    "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/template.html",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
@@ -97,10 +97,11 @@ SPDX-License-Identifier = "MIT"
 # (Apache-2.0); NOTICE.md carries both attributions and the visual-explainer MIT notice verbatim.
 [[annotations]]
 path = [
-    "nix/home/configs/.agents/skills/visual-diagram/SKILL.md",
-    "nix/home/configs/.agents/skills/visual-diagram/NOTICE.md",
-    "nix/home/configs/.agents/skills/visual-diagram/references/rules.md",
-    "nix/home/configs/.agents/skills/visual-diagram/scripts/audit.js",
+    "nix/home/configs/.agents/skills/visual-explainer/SKILL.md",
+    "nix/home/configs/.agents/skills/visual-explainer/NOTICE.md",
+    "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/README.md",
+    "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/rules.md",
+    "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/audit.js",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 RanolP", "2025 Nico Bailon", "Mysten Labs, Inc."]

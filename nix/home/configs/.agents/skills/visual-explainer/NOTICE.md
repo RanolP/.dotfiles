@@ -35,6 +35,6 @@ SOFTWARE.
 ## Sui documentation, Technical Diagram Standards
 
 - Source: https://docs.sui.io/references/contribute/diagram-standards (published from the MystenLabs/sui repository), read 2026-10-30.
-- Adapted: node height 56, node width formula and 16 padding, 40 white space, 15-node split, at most one turn per forward connector and three per backward connector, 8 label clearance, 16 label stacking offset, 3:1 / 4.5:1 contrast, 400 and 1200 width checks, the four audits its package runs (re-implemented in `scripts/audit.js`).
+- Adapted: node height 56, node width formula and 16 padding, 40 white space, 15-node split, at most one turn per forward connector and three per backward connector, 8 label clearance, 16 label stacking offset, 3:1 / 4.5:1 contrast, 400 and 1200 width checks, the four audits its package runs (re-implemented in `diagram-visualizer/audit.js`).
 - Changes: brand palette, typeface and casing rules dropped; label offset changed from 6 to a centre 18 above the line so the 8 clearance holds; thresholds re-expressed as an in-browser audit.
 - License: Apache License 2.0, Copyright Mysten Labs, Inc. Full text in this repository at `LICENSES/Apache-2.0.txt` and at https://www.apache.org/licenses/LICENSE-2.0.

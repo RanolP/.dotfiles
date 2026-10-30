@@ -1,6 +1,6 @@
 # Measured rules
 
-Every number here is a threshold `scripts/audit.js` checks on the rendered page; the rule id (R1...) is the prefix of its failure line. Units are viewBox units, which equal CSS px when the SVG renders at 1:1.
+Every number here is a threshold `audit.js` checks on the rendered page; the rule id (R1...) is the prefix of its failure line. Units are viewBox units, which equal CSS px when the SVG renders at 1:1.
 
 | Id | Rule | Value | Source |
 |---|---|---|---|

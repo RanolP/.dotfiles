@@ -48,6 +48,30 @@ let
     rev = "42cc164e8f8f0f8485184c0db5d8d6723ad1fac1"; # v0.0.9
     hash = "sha256-n+UjPRToN7OHWB1gXXu/+p8AuC41PkKAOTo9s5H9EA8=";
   };
+  # The CLI is the mise-pinned `npm:modern-web-guidance`; upstream SKILL.md runs
+  # it through `npx ... @latest`, so rewrite those calls to the pinned binary.
+  # The greps fail the build if an upstream rewording slips past the sed.
+  modernWebGuidance = pkgs.fetchFromGitHub {
+    owner = "GoogleChrome";
+    repo = "modern-web-guidance";
+    rev = "v0.0.196";
+    hash = "sha256-9m+BsqvNv0InwgxdaJVQxMYb2JnUN3Q/8VsH+QPk8tg=";
+  };
+  modernWebGuidanceSkill = pkgs.runCommand "modern-web-guidance-skill" { } ''
+    cp -r ${modernWebGuidance}/skills/modern-web-guidance $out
+    chmod -R u+w $out
+    sed -i \
+      -e 's|npx -y modern-web-guidance@latest |modern-web-guidance |g' \
+      -e 's| directly with `npx` using| using|' \
+      -e '/^## Using npx/,/^- If the command hangs/c\
+    ## Using the CLI\
+    \
+    - `modern-web-guidance` is a pinned binary on PATH (mise); run it directly by that name.' \
+      $out/SKILL.md
+    if grep -nE 'npx|pnpx|@latest' $out/SKILL.md; then echo "modern-web-guidance: unpatched launcher left in SKILL.md" >&2; exit 1; fi
+    grep -q '^modern-web-guidance search ' $out/SKILL.md
+    grep -q '^modern-web-guidance retrieve ' $out/SKILL.md
+  '';
   supermemorySearchSkill = pkgs.runCommand "supermemory-search-skill" { } ''
     mkdir -p $out
     sed 's|''${CLAUDE_PLUGIN_ROOT}|${supermemoryPlugin}/plugin|g' \
@@ -290,6 +314,7 @@ let
     notion-cli = "${notionSkills}/skills/notion-cli";
     typesafe-ai = "${typesafeSkills}/skills/typesafe-ai";
     supermemory-search = supermemorySearchSkill;
+    modern-web-guidance = modernWebGuidanceSkill;
   };
 
   # Link every skill into both tools' trees: Claude reads ~/.claude/skills,

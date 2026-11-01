@@ -53,7 +53,6 @@ packages = [
 # Not on winget: the installer prints each as a reminder (name -> url).
 [manual]
 # The installer download sits behind a voisona.com account login.
-VoiSona = "https://voisona.com/"
 "VoiSona Talk" = "https://voisona.com/talk/"
 
 # Per-machine additions (profile = hostname). Seeded from what this machine

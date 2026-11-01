@@ -50,6 +50,11 @@ packages = [
   "voidtools.Everything",
 ]
 
+# Not on winget: the installer prints each as a reminder (name -> url).
+[manual]
+# The installer download sits behind a voisona.com account login.
+VoiSona = "https://voisona.com/"
+
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under
 # their own [profiles.<hostname>] as needed (e.g. Corsair.iCUE.4,

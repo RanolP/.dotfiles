@@ -25,6 +25,7 @@ packages = [
   "FTB.App",
   "Git.Git",
   "GitHub.cli",
+  "Google.GoogleDrive",
   "Google.QuickShare",
   "jdx.mise",
   "JetBrains.Toolbox",

@@ -41,6 +41,7 @@ packages = [
   "OBSProject.OBSStudio",
   "Obsidian.Obsidian",
   "PrismLauncher.PrismLauncher",
+  "Rclone.Rclone",
   "ShareX.ShareX",
   "Smilegate.Stove",
   "Tailscale.Tailscale",

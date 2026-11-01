@@ -50,10 +50,13 @@ packages = [
   "voidtools.Everything",
 ]
 
-# Not on winget: the installer prints each as a reminder (name -> url).
-[manual]
-# The installer download sits behind a voisona.com account login.
-"VoiSona Talk" = "https://voisona.com/talk/"
+# Not on winget, but the vendor serves a stable latest-installer URL. The key is
+# the installed DisplayName (`winget list` Name column) used to skip it when
+# present; `args` are the installer's silent flags.
+[direct."VoiSona Talk"]
+# 302 -> cdn.voisona.com/editor/<ver>/VoiSona_Talk_Installer_<ver>.exe (Inno Setup).
+url = "https://voisona.com/talk/download/windows/"
+args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
 
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under

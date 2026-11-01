@@ -7,7 +7,7 @@
 # winget-source packages installed but not declared -- it never uninstalls (no
 # zap). The install progress bar is left on for real installs.
 
-# Parse `winget list` into {id, source} records. Column-offset based: piped
+# Parse `winget list` into {name, id, source} records. Column-offset based: piped
 # output is not truncated, and the header row fixes each column's start.
 def installed-packages [] {
     let raw = (^winget list --disable-interactivity | complete | get stdout | lines)
@@ -20,9 +20,10 @@ def installed-packages [] {
     let src_start = ($header | str index-of "Source")
     $raw | skip ($hidx + 2) | each {|line|
         if ($line | str length) > $id_start {
+            let name = ($line | str substring 0..<$id_start | str trim)
             let id = ($line | str substring $id_start..<$ver_start | str trim)
             let src = (if $src_start > 0 and ($line | str length) > $src_start { $line | str substring $src_start.. | str trim } else { "" })
-            {id: $id, source: $src}
+            {name: $name, id: $id, source: $src}
         }
     } | where ($it.id | is-not-empty)
 }
@@ -35,6 +36,20 @@ def install-winget [id: string, skip_deps: bool] {
     if $r.exit_code != 0 {
         print $"     (ansi red)!!(ansi reset) ($id) (ansi red)exit ($r.exit_code)(ansi reset)"
         for l in ($"($r.stdout)($r.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+    }
+}
+
+def install-direct [name: string, url: string, args: list<string>] {
+    print $"     (ansi green)++(ansi reset) ($name) (ansi dark_gray)\(($url)\)(ansi reset)"
+    let exe = ($nu.temp-path | path join $"xpkg-($name | str replace -a ' ' '-').exe")
+    try { http get --raw $url | save -f $exe } catch {|e|
+        print $"     (ansi red)!!(ansi reset) ($name) (ansi red)download failed(ansi reset): ($e.msg)"
+        return
+    }
+    let r = (^$exe ...$args | complete)
+    rm -f $exe
+    if $r.exit_code != 0 {
+        print $"     (ansi red)!!(ansi reset) ($name) (ansi red)exit ($r.exit_code)(ansi reset)"
     }
 }
 
@@ -62,6 +77,16 @@ export def main [] {
             print $"     (ansi dark_gray)==(ansi reset) ($id)"
         } else {
             install-winget $id ($id in $skip)
+        }
+    }
+
+    # Direct (not on winget, vendor URL): skip when the DisplayName is installed.
+    let installed_names = ($pkgs | get name)
+    for entry in ($def.direct? | default {} | transpose name spec) {
+        if ($entry.name in $installed_names) {
+            print $"     (ansi dark_gray)==(ansi reset) ($entry.name)"
+        } else {
+            install-direct $entry.name $entry.spec.url ($entry.spec.args? | default [])
         }
     }
 

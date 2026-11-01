@@ -54,6 +54,7 @@ packages = [
 [manual]
 # The installer download sits behind a voisona.com account login.
 VoiSona = "https://voisona.com/"
+"VoiSona Talk" = "https://voisona.com/talk/"
 
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under

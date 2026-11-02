@@ -7,7 +7,7 @@ import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import {
   composeLedger, EMPTY_LEDGER, factLines, instructionValues, mergeableNotes, notesOf, parseChanges, parseMerge,
   fallbackLedger, oversizeLines, carryLegacyInstructions, preservedLines, rememberOversize, rememberPreserved, renderTurns,
-  LESSON_SYSTEM, SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
+  lessonRejectionReason, LESSON_SYSTEM, SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
 } from './ledger'
 import { focusOf, injected, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held } from './held'
@@ -192,6 +192,7 @@ function splitPrompt(previous: string, turns: readonly QueueTurn[], retryRule: s
 
 const LESSON_KINDS = new Set(['correction', 'failed-approach', 'fact'])
 const LESSON_SENTINEL = 'LESSON-CONFIDENTIAL / 교훈: 외부 채널 반출 금지'
+const normalizedLesson = (text: string) => text.normalize('NFKC').toLowerCase().replace(/[\p{P}]+/gu, ' ').replace(/\s+/g, ' ').trim()
 
 // Fire-and-forget: a lesson never delays or fails the fold that dropped its turns.
 function extractLessons(io: FoldJobIo, dropped: readonly SessionMessage[], seq: number): void {
@@ -200,6 +201,7 @@ function extractLessons(io: FoldJobIo, dropped: readonly SessionMessage[], seq: 
     const known = ((await io.readFile(path)) ?? '').split('\n').filter(Boolean).slice(-30).flatMap(line => {
       try { const lesson: unknown = JSON.parse(line).lesson; return typeof lesson === 'string' ? [lesson] : [] } catch { return [] }
     })
+    const knownLessons = new Set(known.map(normalizedLesson))
     const rendered = renderTurns(dropped, 120_000, await io.sentAt())
     const prompt = `<known_lessons>\n${known.map(line => `- ${line}`).join('\n')}\n</known_lessons>\n<dropped_turns>\n${rendered}\n</dropped_turns>`
     const response = await io.complete({ model: 'haiku', system: LESSON_SYSTEM, prompt, maxTokens: 2048, timeoutMs: 60_000 })
@@ -209,10 +211,19 @@ function extractLessons(io: FoldJobIo, dropped: readonly SessionMessage[], seq: 
     const valid = lessons.flatMap(item => {
       if (typeof item !== 'object' || item === null) return []
       const { kind, lesson, evidence } = item as Record<string, unknown>
-      return typeof kind === 'string' && LESSON_KINDS.has(kind) && typeof lesson === 'string' && lesson.trim() && !known.includes(lesson)
-        && typeof evidence === 'string' && evidence.trim() && rendered.includes(evidence) ? [{ kind, lesson, evidence }] : []
+      const rejection = typeof lesson === 'string' ? lessonRejectionReason(lesson) : undefined
+      if (rejection !== undefined) {
+        io.log(`clm: lesson rejected: ${rejection}`, { to: 'debug' })
+        return []
+      }
+      if (!(typeof kind === 'string' && LESSON_KINDS.has(kind) && typeof lesson === 'string' && lesson.trim()
+        && typeof evidence === 'string' && evidence.trim() && rendered.includes(evidence))) return []
+      const key = normalizedLesson(lesson)
+      if (knownLessons.has(key)) return []
+      knownLessons.add(key)
+      return [{ kind, lesson, evidence }]
     })
-    if (lessons.length > valid.length) io.log(`clm: lesson extraction dropped ${lessons.length - valid.length} of ${lessons.length} lesson(s) without verbatim evidence or a known kind`, { to: 'debug' })
+    if (lessons.length > valid.length) io.log(`clm: lesson extraction dropped ${lessons.length - valid.length} of ${lessons.length} lesson(s) after validation, duplicate, or safety checks`, { to: 'debug' })
     if (valid.length === 0) return
     const { session, cwd } = await io.captureOrigin()
     const at = kst()

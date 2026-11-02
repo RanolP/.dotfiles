@@ -10,7 +10,7 @@ import type { ClmWorkflow } from '../types'
 import { migrateLegacyLedger, residentLedger } from './resident'
 import { emptyClauseStore, parseClause } from './clauses'
 
-import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, issueList, MERGE_SYSTEM, parseMerge, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, issueList, MERGE_SYSTEM, parseMerge, rememberFacts, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
 import { askedItems, CONFIRM_ITEMS, CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import { describe, focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
@@ -24,6 +24,17 @@ test('a merge prompt never asks for a clause kind the validator rejects', () => 
     const named = [...prompt.matchAll(/\bkind ([a-z-]+)/g)].map(match => match[1])
     expect(named.every(kind => accepted.has(kind!))).toBe(true)
   }
+})
+
+// Regression caught: a stale PR number survives a fold beside its newer keyed value.
+test('a keyed fact keeps only its newest value', () => {
+  const notes = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- pull_request=41 — quote: "PR 41"\n- ledger.ts:10 does one thing — quote: "line 10"\n- ledger.ts:20 does another thing — quote: "line 20"\n- unkeyed fact — quote: "keep me"'
+  const updated = rememberFacts(notes, [{ text: 'pull_request=42', evidence: [{ ref: 'tu_new', quote: 'PR 42' }] }])
+  expect(updated).not.toContain('pull_request=41')
+  expect(updated).toContain('pull_request=42 — quote: "PR 42"')
+  expect(updated).toContain('ledger.ts:10 does one thing')
+  expect(updated).toContain('ledger.ts:20 does another thing')
+  expect(updated).toContain('unkeyed fact — quote: "keep me"')
 })
 
 // Regression caught: the clause-only merge contract accidentally required a prose instruction section.

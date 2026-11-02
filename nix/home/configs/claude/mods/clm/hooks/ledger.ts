@@ -136,17 +136,31 @@ export const constraintFactLines = (notes: string) => factLines(notes).filter(li
 export const learnedFactLines = (notes: string) => factLines(notes).filter(line => !line.startsWith(CONSTRAINT_FACT))
 /** One fact line: the claim, then the quote that carries it. */
 export const factLine = (f: Fact) => `${f.kind === 'constraint' ? CONSTRAINT_FACT : ''}${f.text} — quote: ${JSON.stringify(clip(f.evidence[0]?.quote.replace(/\s+/g, ' ').trim() ?? '', 120))}`
+const factAssignmentKey = (line: string): string | undefined =>
+  /^(?:\[constraint\] )?([A-Za-z][A-Za-z0-9_.-]{0,31})=/.exec(line)?.[1]
 /**
  * Owns 핵심 사실·경로: the facts already there minus `retracted` (matched by
- * instructionKey), then `added`, newest FACT_KEEP; the harness's marked lines
- * stay after them for rememberOversize and rememberPreserved.
+ * instructionKey), then `added`; a leading key assignment keeps only its newest
+ * value. The newest FACT_KEEP learned facts survive, and the harness's marked
+ * lines stay after them for rememberOversize and rememberPreserved.
  */
 export function rememberFacts(notes: string, added: readonly Fact[], retracted: readonly string[] = []): string {
   const gone = new Set(retracted.map(r => instructionKey(factBody(r))))
   const marked = (sectionOf(notes, FACTS) ?? '').split('\n').slice(1).filter(isMarked)
   const prior = factLines(notes).filter(line => !gone.has(instructionKey(line)))
-  const constraints = [...prior.filter(line => line.startsWith(CONSTRAINT_FACT)), ...added.filter(fact => fact.kind === 'constraint').map(factLine)]
-  const learned = [...prior.filter(line => !line.startsWith(CONSTRAINT_FACT)), ...added.filter(fact => fact.kind !== 'constraint').map(factLine)].slice(-FACT_KEEP)
+  const candidates = [...prior, ...added.map(factLine)]
+  const seenKeys = new Set<string>()
+  const current: string[] = []
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const line = candidates[i]!
+    const key = factAssignmentKey(line)
+    if (key !== undefined && seenKeys.has(key)) continue
+    if (key !== undefined) seenKeys.add(key)
+    current.push(line)
+  }
+  current.reverse()
+  const constraints = current.filter(line => line.startsWith(CONSTRAINT_FACT))
+  const learned = current.filter(line => !line.startsWith(CONSTRAINT_FACT)).slice(-FACT_KEEP)
   const facts = [...new Set([...constraints, ...learned])]
   const lines = [...facts.map(f => `- ${f}`), ...marked]
   return withSection(notes, FACTS, lines.length ? lines.join('\n') : '- (none yet)')
@@ -274,6 +288,7 @@ export const MERGE_SYSTEM = [
   'Every done (a create with status done, or a status op to done) and every fact carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
   'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
   'A fact stands when the cited row states it. Every fact clause has kind fact. State a stable constraint or preference discovered in tool output in the clause and text; likewise state a lesson from a failure or user correction in the clause and text.',
+  'Write a changeable fact value at the start of text as a short identifier key followed by `=`, for example `pull_request=42`, so its next value replaces it.',
   'A constraint carries a quote from a tool result. A lesson carries the failed result or the user correction verbatim as its quote.',
   'Every id, number and date in one claim comes from the same row and names the same object as that row; a `(=...)` date beside a relative expression comes from that row\'s header time plus the expression.',
   'Instruction clauses are outside your authority. Use only fact and goal clauses.',
@@ -307,9 +322,19 @@ export const LESSON_SYSTEM = [
   '- fact: a verified, non-obvious fact about a tool, repository, or environment, confirmed by a tool result.',
   'Write each lesson as one self-contained English sentence that reads correctly without the turns.',
   'Set evidence to a verbatim substring copied character for character from one line of <dropped_turns>: the user\'s sentence for a correction, the tool result or user sentence that proves a failed-approach or fact. Copy the text after the line\'s header, and keep it short enough to stay inside that one line.',
+  'Classify network errors, rate limits, timeouts, and flaky service failures as transient operational noise and omit them.',
+  'Compare each candidate with <known_lessons> by meaning, and reply with an empty lessons array when it only rephrases a known lesson.',
+  'Require evidence beyond a few successes before stating a universal rule.',
   'Record only lessons that are new relative to <known_lessons>. Most turns teach nothing durable; reply with an empty lessons array for them.',
   'Reply with only JSON: {"lessons":[{"kind":"correction","lesson":"...","evidence":"..."}]}.',
 ].join('\n')
+
+export function lessonRejectionReason(text: string): string | undefined {
+  if (/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u.test(text)) return 'invisible control character'
+  if (/\bignore\s+(?:(?:all|previous|prior)\s+){1,2}instructions?\b|\byou\s+are\s+now\b|\b(?:reveal|print|show)\b[^\n]{0,40}\b(?:the\s+)?system\s+prompt\b|\bdisregard\s+(?:(?:all|any|previous|prior)\s+|the\s+above\s+)(?:\w+\s+){0,3}instructions?\b|<\/?(?:system|instructions?)\b[^>]*>/iu.test(text)) return 'prompt-injection phrasing'
+  if (/\b(?:curl|wget)\b[^\n|]{0,200}\|\s*(?:ba)?sh\b|\b(?:send|post|upload|exfiltrate)\b[^\n]{0,80}\b(?:secrets?|tokens?|credentials?|api[-_ ]?keys?)\b[^\n]{0,80}https?:\/\//iu.test(text)) return 'exfiltration hint'
+  return undefined
+}
 
 export function renderTurns(rows: readonly SessionMessage[], cap = 120_000, sentAt?: SentAt): string {
   const out = rows.map(m => {

@@ -1,0 +1,200 @@
+<title>Signup review</title>
+<style>
+  /* Shared tokens: identical to chart-visualizer/template.html. */
+  :root {
+    --cv-bg: #f4f4f4; --cv-surface: #ffffff; --cv-ink: #161616; --cv-muted: #525252;
+    --cv-grid: #e0e0e0; --cv-axis: #8d8d8d;
+    --cv-s1: #8a3ffc; --cv-s2: #009d9a; --cv-s3: #0f62fe; --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --cv-bg: #0b0b0b; --cv-surface: #161616; --cv-ink: #f4f4f4; --cv-muted: #c6c6c6;
+      --cv-grid: #393939; --cv-axis: #6f6f6f;
+      --cv-s1: #a56eff; --cv-s2: #009d9a; --cv-s3: #4589ff; --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --cv-bg: #0b0b0b; --cv-surface: #161616; --cv-ink: #f4f4f4; --cv-muted: #c6c6c6;
+    --cv-grid: #393939; --cv-axis: #6f6f6f;
+    --cv-s1: #a56eff; --cv-s2: #009d9a; --cv-s3: #4589ff; --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+  }
+
+  body { background: var(--cv-bg); color: var(--cv-ink); }
+  .sv-page { padding-inline: 16px; padding-block: 16px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  /* The deck box keeps 16:9 and fits both the width and the viewport height (controls below it). */
+  .sv-deck {
+    position: relative; overflow: hidden; margin: 0 auto;
+    width: min(100%, calc((100dvh - 120px) * 16 / 9));
+    aspect-ratio: 16 / 9;
+    background: var(--cv-surface); border: 1px solid var(--cv-grid); border-radius: 8px;
+    touch-action: pan-y;           /* vertical page scroll stays native; horizontal swipes turn slides */
+    outline-offset: 4px;
+  }
+  .sv-deck:focus-visible { outline: 2px solid var(--cv-s3); }
+
+  /* Every slide is authored on one 1920 x 1080 stage, scaled as a whole by script. */
+  .sv-stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: 0 0; }
+  .sv-slide {
+    position: absolute; inset: 0; box-sizing: border-box; padding: 112px 120px;
+    display: flex; flex-direction: column; gap: 48px;
+    visibility: hidden; opacity: 0; transition: opacity .2s ease;
+    font-size: 60px; line-height: 1.3;        /* 60 px on the stage is 11.5 px at 400 px wide */
+  }
+  .sv-slide.is-active { visibility: visible; opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .sv-slide { transition: none; } }
+
+  .sv-slide h1, .sv-slide h2 { margin: 0; line-height: 1.12; letter-spacing: -0.01em; }
+  .sv-slide h1 { font-size: 120px; max-width: 1560px; }
+  .sv-slide h2 { font-size: 84px; }
+  .sv-kicker { margin: 0; color: var(--cv-muted); }
+  .sv-rule { width: 160px; height: 12px; background: var(--cv-s1); border-radius: 6px; }
+  .sv-title { justify-content: center; }
+  .sv-title .sv-by { margin: 0; color: var(--cv-muted); }
+  .sv-chart { width: 1680px; height: 760px; }
+  .sv-slide ul { margin: 0; padding-left: 72px; display: grid; gap: 24px; }
+  .sv-slide .sv-foot { margin-top: auto; color: var(--cv-muted); }
+
+  /* Controls sit outside the stage, at normal page size. */
+  .sv-controls { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 12px; }
+  .sv-controls button {
+    min-width: 44px; min-height: 44px; padding: 0 16px; border-radius: 8px; font: inherit; font-size: 15px;
+    background: var(--cv-surface); color: var(--cv-ink); border: 1px solid var(--cv-axis); cursor: pointer;
+  }
+  .sv-controls button:disabled { color: var(--cv-axis); border-color: var(--cv-grid); cursor: default; }
+  .sv-count { min-width: 4em; text-align: center; font-variant-numeric: tabular-nums; color: var(--cv-muted); }
+</style>
+
+<main class="sv-page">
+  <div class="sv-deck" id="deck" tabindex="0" role="region" aria-roledescription="slide deck" aria-label="Signup review. Use the arrow keys, swipe, or the buttons below.">
+    <div class="sv-stage" id="stage">
+
+      <section class="sv-slide sv-title is-active" role="group" aria-roledescription="slide" aria-label="1 of 3">
+        <div class="sv-rule"></div>
+        <p class="sv-kicker">Signup review, Q3 2026</p>
+        <h1>Signups grew 45% in a year, and the app drove it</h1>
+        <p class="sv-by">Growth team · November 2026</p>
+      </section>
+
+      <section class="sv-slide" role="group" aria-roledescription="slide" aria-label="2 of 3">
+        <h2>App signups passed web in Q4 2025</h2>
+        <div class="sv-chart" id="chart" role="img"
+             aria-label="Quarterly signups in thousands, Q1 2025 to Q3 2026. App rose from 18 to 44; web from 26 to 30. App passed web in Q4 2025."></div>
+      </section>
+
+      <section class="sv-slide" role="group" aria-roledescription="slide" aria-label="3 of 3">
+        <h2>Next: move checkout into the app</h2>
+        <ul>
+          <li>App users convert at twice the web rate</li>
+          <li>Checkout is the last flow that sends them to web</li>
+          <li>Decision needed by 1 December</li>
+        </ul>
+        <p class="sv-foot">Questions to the growth team</p>
+      </section>
+
+    </div>
+  </div>
+  <nav class="sv-controls" aria-label="Slide controls">
+    <button type="button" id="prev" aria-label="Previous slide">‹ Prev</button>
+    <span class="sv-count" id="count" aria-live="polite">1 / 3</span>
+    <button type="button" id="next" aria-label="Next slide">Next ›</button>
+  </nav>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/6.1.0/echarts.min.js"></script>
+<script>
+  // ---- Deck: scale, navigation ----
+  const deck = document.getElementById('deck');
+  const stage = document.getElementById('stage');
+  const slides = [...stage.querySelectorAll('.sv-slide')];
+  const prevBtn = document.getElementById('prev');
+  const nextBtn = document.getElementById('next');
+  const count = document.getElementById('count');
+  let current = 0;
+
+  // One transform for the whole stage, so nothing on a slide reflows at any width.
+  new ResizeObserver(() => { stage.style.transform = `scale(${deck.clientWidth / 1920})`; }).observe(deck);
+
+  function show(i) {
+    current = Math.max(0, Math.min(i, slides.length - 1));
+    slides.forEach((s, n) => s.classList.toggle('is-active', n === current));
+    count.textContent = `${current + 1} / ${slides.length}`;
+    prevBtn.disabled = current === 0;
+    nextBtn.disabled = current === slides.length - 1;
+  }
+  prevBtn.addEventListener('click', () => show(current - 1));
+  nextBtn.addEventListener('click', () => show(current + 1));
+
+  // Keys work once the page has focus; a click on the deck gives it focus.
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest('input, textarea, select, [contenteditable]') || e.altKey || e.ctrlKey || e.metaKey) return;
+    const step = { ArrowRight: 1, ArrowDown: 1, PageDown: 1, ' ': 1, ArrowLeft: -1, ArrowUp: -1, PageUp: -1 }[e.key];
+    if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (step) show(current + step);
+    else return;
+    e.preventDefault();
+  });
+  deck.addEventListener('pointerdown', () => deck.focus({ preventScroll: true }));
+
+  // Swipe: a mostly horizontal drag of 40 px or more turns the slide.
+  let x0 = null, y0 = 0;
+  deck.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') { x0 = e.clientX; y0 = e.clientY; } });
+  deck.addEventListener('pointerup', (e) => {
+    if (x0 === null) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) >= 40 && Math.abs(dx) > Math.abs(dy)) show(current + (dx < 0 ? 1 : -1));
+  });
+  deck.addEventListener('pointercancel', () => { x0 = null; });
+  show(0);
+
+  // ---- Chart: chart-visualizer theming, sized in stage pixels ----
+  const quarters = ['Q1 ’25', 'Q2 ’25', 'Q3 ’25', 'Q4 ’25', 'Q1 ’26', 'Q2 ’26', 'Q3 ’26'];
+  const series = [
+    { name: 'App', data: [18, 21, 24, 29, 33, 38, 44] },
+    { name: 'Web', data: [26, 27, 27, 28, 29, 30, 30] },
+  ];
+  const chart = echarts.init(document.getElementById('chart'), null, { renderer: 'svg' });
+
+  function tokens() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (n) => cs.getPropertyValue(n).trim();
+    return { ink: v('--cv-ink'), muted: v('--cv-muted'), grid: v('--cv-grid'), axis: v('--cv-axis'),
+             surface: v('--cv-surface'), s: [1, 2, 3, 4, 5, 6].map((i) => v(`--cv-s${i}`)) };
+  }
+
+  function paint() {
+    const t = tokens();
+    const text = { color: t.muted, fontSize: 60, fontFamily: 'system-ui, sans-serif' };  // stage px
+    chart.setOption({
+      animation: false,
+      aria: { enabled: true },
+      textStyle: text,
+      grid: { left: 0, right: 220, top: 40, bottom: 0, containLabel: true },
+      tooltip: {
+        trigger: 'axis', appendTo: 'body',           // outside the scaled stage, so it reads at page size
+        backgroundColor: t.surface, borderColor: t.grid, textStyle: { color: t.ink, fontSize: 14 },
+        axisPointer: { type: 'line', lineStyle: { color: t.axis } },
+        valueFormatter: (v) => `${v}K`,
+      },
+      xAxis: { type: 'category', data: quarters, boundaryGap: false,
+               axisLine: { lineStyle: { color: t.axis } }, axisTick: { show: false },
+               axisLabel: { ...text, margin: 28, hideOverlap: true } },
+      yAxis: { type: 'value', min: 0, splitNumber: 3,
+               axisLabel: { ...text, formatter: '{value}K' }, splitLine: { lineStyle: { color: t.grid } } },
+      series: series.map((s, i) => ({
+        name: s.name, type: 'line', data: s.data, showSymbol: false,
+        lineStyle: { width: 6, color: t.s[i] }, itemStyle: { color: t.s[i] },
+        endLabel: { show: true, formatter: '{a}', color: t.ink, fontSize: 60, fontWeight: 600, distance: 24 },
+      })),
+    }, { notMerge: true });
+  }
+
+  chart.on('finished', () => document.body.setAttribute('data-deck-ready', ''));  // before the first paint
+  paint();
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);
+  new MutationObserver(paint).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+</script>

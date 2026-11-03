@@ -98,7 +98,8 @@ SPDX-License-Identifier = "MIT"
 # (Apache-2.0), the FT Visual Vocabulary in github.com/Financial-Times/chart-doctor (MIT) and the
 # IBM Carbon data-viz palettes, @carbon/charts 1.27.25 (Apache-2.0), and the dashboard rules of
 # github.com/raghuramsirigiri/claude-chart-dashboard and github.com/abdiraimov-otabek/dashboard-design-skill
-# (both MIT); NOTICE.md carries every attribution with its source revision.
+# (both MIT), and the slide stage of github.com/zarazhangrui/frontend-slides (MIT); NOTICE.md
+# carries every attribution with its source revision.
 [[annotations]]
 path = [
     "nix/home/configs/.agents/skills/visual-explainer/SKILL.md",
@@ -110,9 +111,11 @@ path = [
     "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/template.html",
     "nix/home/configs/.agents/skills/visual-explainer/dashboard-visualizer/README.md",
     "nix/home/configs/.agents/skills/visual-explainer/dashboard-visualizer/template.html",
+    "nix/home/configs/.agents/skills/visual-explainer/slide-visualizer/README.md",
+    "nix/home/configs/.agents/skills/visual-explainer/slide-visualizer/template.html",
 ]
 precedence = "aggregate"
-SPDX-FileCopyrightText = ["2026 RanolP", "2025 Nico Bailon", "Mysten Labs, Inc.", "2016 FT Interactive News", "IBM Corp.", "2026 Raghuram Sirigiri", "2026 Otabek Abdiraimov"]
+SPDX-FileCopyrightText = ["2026 RanolP", "2025 Nico Bailon", "Mysten Labs, Inc.", "2016 FT Interactive News", "IBM Corp.", "2026 Raghuram Sirigiri", "2026 Otabek Abdiraimov", "2025 Zara Zhang"]
 SPDX-License-Identifier = "MIT AND Apache-2.0"
 
 # Original markup plus two vendored stylesheets copied verbatim (comments removed):

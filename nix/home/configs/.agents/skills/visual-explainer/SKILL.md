@@ -14,6 +14,7 @@ Every visual is markup you place by hand and then look at as rendered pixels. Th
 - **Anything with an axis or a quantity** (charts): load the built-in `dataviz` skill, then read `chart-visualizer/README.md` and draw from `chart-visualizer/template.html` (Apache ECharts themed from Carbon-based tokens).
 - **Dashboards** (KPI cards plus several charts answering one question): read `dashboard-visualizer/README.md` and draw from `dashboard-visualizer/template.html`; each chart inside follows chart-visualizer.
 - **Timelines** (roadmaps and dated events on one axis, or task schedules with dependencies): read `timeline-visualizer/README.md` and draw from `timeline-visualizer/template.html` (vis-timeline for roadmaps, frappe-gantt for schedules).
+- **Slide decks** (a sequence of claims stepped through one per 16:9 slide): read `slide-visualizer/README.md` and draw from `slide-visualizer/template.html`; a chart or diagram on a slide follows chart-visualizer or diagram-visualizer.
 
 Credits and licenses for the adapted methods and numbers are in `NOTICE.md`.
 

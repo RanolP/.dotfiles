@@ -104,3 +104,10 @@ SOFTWARE.
 - Script: `https://cdnjs.cloudflare.com/ajax/libs/frappe-gantt/1.2.2/frappe-gantt.umd.min.js`, loaded at runtime.
 - Vendored: `dist/frappe-gantt.css` from the npm package `frappe-gantt@1.2.2`, copied verbatim with its comments removed into the second `<style>` block of `timeline-visualizer/template.html`; the template maps its `--g-*` variables onto the shared tokens.
 - License: MIT (package.json `"license": "MIT"`, author Faris Ansari; source https://github.com/frappe/gantt). The npm package ships no license file. MIT text in this repository at `LICENSES/MIT.txt`.
+
+## frontend-slides (slide-visualizer)
+
+- Source: https://github.com/zarazhangrui/frontend-slides, `SKILL.md`, `html-template.md`, `viewport-base.css`, commit 9906a34d640d2111f724544cbc50f7f130569ae1 (2026-06-23).
+- Adapted: the fixed 1920 x 1080 stage scaled as a whole with one transform and no reflow inside it, slide switching by `visibility` / `opacity` classes, one idea per slide with at most three bullets for a presented deck, splitting into more slides instead of shrinking type, keyboard and touch navigation, and reduced-motion support; restated in `slide-visualizer/README.md` and re-implemented in `slide-visualizer/template.html`.
+- Changes: the deck sits in the page rather than filling the window, the type floor is derived from the 400 px width, print rules and inline editing dropped, colours and type taken from the shared tokens.
+- License: MIT, Copyright (c) 2025 Zara Zhang. MIT text in this repository at `LICENSES/MIT.txt`.

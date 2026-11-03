@@ -1,7 +1,7 @@
 ---
 name: visual-explainer
 description: Draw any explanatory visual and hold it to one render gate - render to PNG headless, look at it, fix every overlap, overflow and contrast fault, repeat - in light and dark themes and at 400 px. Covers node-and-edge diagrams (state machine, flow, architecture, sequence) as hand-placed SVG; charts for anything with an axis or a quantity; dashboards of KPI cards plus charts answering one question; timelines for roadmaps and dated events, and gantt charts for task schedules with dependencies; and slide decks that step through one claim per 16:9 slide. Use for any visual in an Artifact HTML page, a Claude Docs SVG widget, or an explanation.
-when_to_use: When a diagram, flowchart, state diagram, sequence diagram, architecture or data-flow picture, chart or graph of a quantity, dashboard, timeline, roadmap or gantt chart, slide deck, or another explanatory visual is about to be drawn, or the user asks for one ("그림으로", "다이어그램", "도식화", "차트", "그래프", "대시보드", "타임라인", "로드맵", "간트", "슬라이드", "발표자료").
+when_to_use: When a diagram, flowchart, state diagram, sequence diagram, architecture or data-flow picture, chart or graph of a quantity, function graph, dashboard, timeline, roadmap or gantt chart, slide deck, or another explanatory visual is about to be drawn, or the user asks for one ("그림으로", "다이어그램", "도식화", "차트", "그래프", "함수 그래프", "대시보드", "타임라인", "로드맵", "간트", "슬라이드", "발표자료").
 ---
 
 # Visual explainer
@@ -12,6 +12,7 @@ Every visual is markup you place by hand and then look at as rendered pixels. Th
 
 - **Node and edge diagrams** (state machine, flow, architecture, data flow, sequence): read `diagram-visualizer/README.md` and draw from `diagram-visualizer/template.html`.
 - **Anything with an axis or a quantity** (charts): load the built-in `dataviz` skill, then read `chart-visualizer/README.md` and draw from `chart-visualizer/template.html` (Apache ECharts themed from Carbon-based tokens).
+- **Function graphs** (a plotted formula, y = f(x), with labelled axes): read section 8 of `chart-visualizer/README.md` and pre-render with `chart-visualizer/function-graph.sh`, which writes a static fragment with no script and no CDN load (function-plot, Nord palette).
 - **Dashboards** (KPI cards plus several charts answering one question): read `dashboard-visualizer/README.md` and draw from `dashboard-visualizer/template.html`; each chart inside follows chart-visualizer.
 - **Timelines** (roadmaps and dated events on one axis, or task schedules with dependencies): read `timeline-visualizer/README.md` and draw from `timeline-visualizer/template.html` (vis-timeline for roadmaps, frappe-gantt for schedules).
 - **Slide decks** (a sequence of claims stepped through one per 16:9 slide): read `slide-visualizer/README.md` and draw from `slide-visualizer/template.html`; a chart or diagram on a slide follows chart-visualizer or diagram-visualizer.

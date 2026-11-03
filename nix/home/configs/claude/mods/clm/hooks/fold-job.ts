@@ -537,24 +537,24 @@ async function applyFoldPlan(
   const tail = workingRows.slice(use.keepFrom)
   const planned = plannedStepSpans(tail, liveIssues)
   const untracked = planned.spans.length ? [] : use.steps ?? []
-  let replacementPlan = stepReplacements(
+  const proposed = stepReplacements(
     tail,
     [...planned.spans, ...untracked.map(step => ({ id: step.id, startToolUseId: step.startToolUseId, endToolUseId: step.endToolUseId, status: 'done' as const }))],
     [...planned.records, ...untracked],
   )
-  const base = replacementPlan.collapsed.length ? await io.basePath() : ''
-  const preservedCollapsed: typeof replacementPlan.collapsed = []
-  for (const step of replacementPlan.collapsed) {
+  const base = proposed.collapsed.length ? await io.basePath() : ''
+  const preservedCollapsed: typeof proposed.collapsed = []
+  for (const step of proposed.collapsed) {
     const path = `${base}.step-${step.id.replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`
     try {
       await io.writeFile(path, renderStepSidecar(step.rows))
       preservedCollapsed.push(step)
     } catch (error) {
       await logPersistenceFailure(io, error)
-      for (const id of step.rows.flatMap(row => row.toolResults ?? []).map(result => result.tool_use_id)) delete replacementPlan.replace[id]
+      for (const id of step.rows.flatMap(row => row.toolResults ?? []).map(result => result.tool_use_id)) delete proposed.replace[id]
     }
   }
-  replacementPlan = finalizeStepReplacements(tail, replacementPlan.replace, preservedCollapsed)
+  const replacementPlan = finalizeStepReplacements(tail, proposed.replace, preservedCollapsed)
   const messages = buildCleared({ head: headRows(workingRows, first), tail, cuts: use.cuts, replace: replacementPlan.replace }, ledgerRow, attachments, headKept)
   const declined = notShrunk(workingRows, messages)
   if (declined) return declined

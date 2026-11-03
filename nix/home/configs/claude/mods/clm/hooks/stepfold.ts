@@ -74,16 +74,15 @@ export function validateFoldSteps(rows: readonly SessionMessage[], proposed: rea
   let previousEnd = -1
   for (const candidate of proposed.slice(0, 8)) {
     if (!isRecord(candidate)) continue
-    const value = candidate
-    const fromId = value.from
-    const toId = value.to
-    const intent = value.intent
-    const finding = value.finding
-    const decision = value.decision
+    const fromId = candidate.from
+    const toId = candidate.to
+    const intent = candidate.intent
+    const finding = candidate.finding
+    const decision = candidate.decision
     if (typeof fromId !== 'string' || typeof toId !== 'string') continue
     const from = positions.get(fromId)
     const to = positions.get(toId)
-    const files = value.files === undefined ? [] : value.files
+    const files = candidate.files === undefined ? [] : candidate.files
     if (from === undefined || to === undefined || from > to || from <= previousEnd
       || (finalIndex !== undefined && from <= finalIndex && finalIndex <= to)
       || !validClause(intent) || !validClause(finding) || !validClause(decision)

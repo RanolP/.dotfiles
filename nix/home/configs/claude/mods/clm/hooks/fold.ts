@@ -130,6 +130,8 @@ export type ClearPlan = {
   keptTurns: number
   /** tool_use_id -> token share its result is cut to */
   cuts: Record<string, number>
+  /** tool_use_id -> complete replacement text for a folded step result */
+  replace?: Record<string, string>
 }
 
 const sumAfterCuts = (rows: readonly SessionMessage[], cuts: Record<string, number>): number => rows.reduce((n, m) =>
@@ -196,10 +198,12 @@ export function cutText(text: string, share: number): string {
   }
   return render(low)
 }
-const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMessage =>
-  !m.toolResults?.some(r => cuts[r.tool_use_id] !== undefined)
+const applyCuts = (m: SessionMessage, cuts: Record<string, number>, replace: Record<string, string>): SessionMessage =>
+  !m.toolResults?.some(r => replace[r.tool_use_id] !== undefined || cuts[r.tool_use_id] !== undefined)
     ? m
-    : { ...m, toolResults: m.toolResults.map(r => (cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) })) }
+    : { ...m, toolResults: m.toolResults.map(r => replace[r.tool_use_id] !== undefined
+      ? { ...r, text: replace[r.tool_use_id]! }
+      : cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) }) }
 
 // A request row kept with its handle and unchanged text brings back its
 // transcript group, the session-start attachments that follow it, so they stay
@@ -209,9 +213,9 @@ const applyCuts = (m: SessionMessage, cuts: Record<string, number>): SessionMess
 export const keepsHeadGroup = (msgs: readonly SessionMessage[], first: number): boolean =>
   first === 0 && msgs[0] !== undefined && isPrompt(msgs[0]) && msgs[0].handle !== undefined
 
-export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
+export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts' | 'replace'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
   const kept = keepHead ? plan.head.find(isPrompt) : undefined
-  return [...plan.head.filter(m => !isCompactSummary(m) && !isLedgerRow(m) && !isCarriedAttachment(m)), ...attachments, ledgerRow, ...plan.tail.filter(m => !isCarriedAttachment(m))].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts))))
+  return [...plan.head.filter(m => !isCompactSummary(m) && !isLedgerRow(m) && !isCarriedAttachment(m)), ...attachments, ledgerRow, ...plan.tail.filter(m => !isCarriedAttachment(m))].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts, plan.replace ?? {}))))
 }
 
 // clm-prompt

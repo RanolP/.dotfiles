@@ -176,6 +176,7 @@ path = [
     "nix/home/configs/claude/mods/clm/hooks/hooks.json",
     "nix/home/configs/claude/mods/clm/hooks/register.ts",
     "nix/home/configs/claude/mods/clm/hooks/fold.ts",
+    "nix/home/configs/claude/mods/clm/hooks/stepfold.ts",
     "nix/home/configs/claude/mods/clm/hooks/ledger.ts",
     "nix/home/configs/claude/mods/clm/hooks/clm.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/tracker.ts",

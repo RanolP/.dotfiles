@@ -870,7 +870,10 @@ const fold = ($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], m
 const trackerView = ($: EngineInterface, origin: Origin, ops: readonly Payload[] = []) =>
   trackerViewDomain({ readAll: () => readAll($) }, origin, ops)
 
-const addressIo = ($: EngineInterface): AddressIo => ({ get: key => sessionStoreGet($, key), set: (key, value) => sessionStoreSet($, key, value) })
+const addressIo = ($: EngineInterface): AddressIo => ({
+  get: key => sessionStoreGet($, key), set: (key, value) => sessionStoreSet($, key, value),
+  basePath: () => basePath($), readFile: async path => readText($, path),
+})
 const sentAt = async ($: EngineInterface): Promise<SentAt> => sentAtOf(addressIo($), transcriptKey(await sid($)))
 const nowIso = async ($: EngineInterface) => new Date(await $.clock.now()).toISOString()
 
@@ -1029,6 +1032,7 @@ const GUIDE = [
   'That row carries the goal, live user instructions as plaintext clauses with C-ids, what was done, what is left, open questions and key facts. An engine summary is followed by a "[clm clauses]" row with the same live instructions. The turns they replaced are gone.',
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
+  'A result shown as `[clm step … done: …]` was folded. Call clm_recall with its @step address to read the raw output instead of re-running the command or re-reading the file.',
 ].join('\n')
 
 export const register: Register = (on, options) => {
@@ -1075,7 +1079,7 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_recall',
-        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last; read one stored instruction with #C12 or all stored instructions with clauses. Includes folded and rewound history.',
+        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last, a folded step\'s raw tool results with @step:<id>, one stored instruction with #C12, or all stored instructions with clauses. Includes folded and rewound history.',
         inputSchema: { type: 'object', properties: { address: { type: 'string' } }, required: ['address'], additionalProperties: false },
       })
     } catch (err) {

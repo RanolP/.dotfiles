@@ -306,11 +306,13 @@ export const MERGE_SYSTEM = [
 // clm-prompt
 export const SPLIT_MERGE_SYSTEM = [
   MERGE_SYSTEM,
-  'You also receive numbered complete turns with estimated token counts. Return one JSON object with split and ops fields.',
+  'You also receive numbered complete turns with estimated token counts. Return one JSON object with split, ops and steps fields.',
   'Inside <queue_turns>, cite a user row by its bare mN key (`m4`) and a tool result by its bare id (`toolu_01AbC`) in the ops evidence, the same ref format as in <removed_turns>.',
   'Set split to the 1-based first turn of B. Turns before split form A, and A contains at least one whole turn about a finished topic. Choose a boundary where the turns from split onward form the topic still in progress.',
   'Summarize only A into ops. The caller keeps B from its numbered turn boundary verbatim.',
-  'Reply with only JSON: {"split":2,"ops":[]}.',
+  'Also list the finished steps inside the kept turns B as steps: [{from, to, intent, finding, decision, files}]. from and to are the first and last tool_use ids of one step, and a step is a run of tool calls that served one purpose and reached a result.',
+  'Leave the step still in progress out of steps. Write intent, finding and decision as one short Korean clause each, keeping paths and identifiers verbatim. Write steps: [] when B holds one step.',
+  'Reply with only JSON: {"split":2,"ops":[],"steps":[]}.',
 ].join('\n')
 
 // clm-prompt

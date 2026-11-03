@@ -18,11 +18,13 @@ import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
 import { fnv1a, type SentAt } from './address'
 import { applyFoldClauseOps, clauseStoreKey, emptyClauseStore, livePredicates, readClauseStore, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
+import { plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps, type FoldStep } from './stepfold'
 
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; asks?: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: TopicState[]
   clauseOps?: FoldClauseOp[]
+  steps?: FoldStep[]
   rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]; coveredRows?: string[]
 }
 type PendingJob =
@@ -36,6 +38,11 @@ type CompactEntryState = 'none' | FoldJob['state']
 type SaveMeta = (meta: Meta) => Promise<void>
 type QueueTurn = { number: number; start: number; rows: readonly SessionMessage[] }
 const TURN_CHANGE_SYSTEM = 'Summarize only concrete non-task context changes from the finished coding turn. Reply with <changes>, at most three short Korean lines, or <changes></changes> when nothing changed.'
+const STEP_FOLD_SYSTEM = [
+  'List the finished steps inside the supplied kept turn as steps: [{from, to, intent, finding, decision, files}]. from and to are the first and last tool_use ids of one step, and a step is a run of tool calls that served one purpose and reached a result.',
+  'Leave the step still in progress out of steps. Write intent, finding and decision as one short Korean clause each, keeping paths and identifiers verbatim. Write steps: [] when the turn holds one step.',
+  'Reply with only JSON: {"steps":[]}.',
+].join('\n')
 
 export type FoldJobIo = {
   loadedFrom?: string
@@ -292,6 +299,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
     await saveMeta(meta)
     extractLessons(io, folded.plan.dropped, folded.seq)
     const summaryMs = Math.max(0, (await io.now()) - startedAt)
+    const steps = validateFoldSteps(folded.plan.tail, answer.steps, folded.seq)
     return {
       notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, asks: folded.asks, seq: folded.seq,
       ...(folded.plan.tail[0] ? { keepFp: fingerprint(folded.plan.tail[0]) } : {}),
@@ -299,6 +307,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
       cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauseOps: folded.clauseOps,
       promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
+      ...(steps.length ? { steps } : {}),
     }
   }
   await logFoldOutcome(io, `background fold gave up for ${session}`)
@@ -306,7 +315,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
   return undefined
 }
 
-function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryMs: number): Pending {
+function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryMs: number, steps: FoldStep[] = []): Pending {
   const keepFrom = rows.length - folded.plan.tail.length
   const keptRow = rows[keepFrom]
   return {
@@ -315,6 +324,7 @@ function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryM
     dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
     cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauseOps: folded.clauseOps,
     promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
+    ...(steps.length ? { steps } : {}),
   }
 }
 
@@ -330,7 +340,24 @@ async function prepareSingleFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
   }
   await saveMeta(meta)
   extractLessons(io, folded.plan.dropped, folded.seq)
-  return pendingFromFold(folded, rows, Math.max(0, (await io.now()) - startedAt))
+  let steps: FoldStep[] = []
+  const view = await io.trackerView(await io.captureOrigin())
+  const hasPlan = view.issues.some(issue => issue.planMode)
+  if (shouldRequestSingleTurnSteps(folded.plan.tail, hasPlan)) {
+    const response = await io.complete({
+      model: opts.model, system: STEP_FOLD_SYSTEM,
+      prompt: `<kept_turn>\n${xmlText(renderRange(folded.plan.tail, 120_000, 0, await io.sentAt()).text)}\n</kept_turn>`,
+      maxTokens: 2048, timeoutMs: 120_000,
+    })
+    if (response.isAnswered) {
+      try {
+        const answer: unknown = JSON.parse(response.text)
+        const proposed = typeof answer === 'object' && answer !== null && 'steps' in answer && Array.isArray(answer.steps) ? answer.steps : []
+        steps = validateFoldSteps(folded.plan.tail, proposed, folded.seq)
+      } catch (err) { io.log(`clm: single-turn step summary ignored (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+    }
+  }
+  return pendingFromFold(folded, rows, Math.max(0, (await io.now()) - startedAt), steps)
 }
 
 async function prepareEngineFold(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string, saveMeta: SaveMeta): Promise<Pending | undefined> {
@@ -498,7 +525,27 @@ async function applyFoldPlan(
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
   const headGroup = keepsHeadGroup(workingRows, first)
   const { rows: attachments, headKept } = await persistStep(io, { rows: [], headKept: headGroup }, () => io.stableAttachments(headGroup))
-  const messages = buildCleared({ head: headRows(workingRows, first), tail: workingRows.slice(use.keepFrom), cuts: use.cuts }, ledgerRow, attachments, headKept)
+  const tail = workingRows.slice(use.keepFrom)
+  const planned = plannedStepSpans(tail, liveIssues)
+  const untracked = planned.spans.length ? [] : use.steps ?? []
+  const replacementPlan = stepReplacements(
+    tail,
+    [...planned.spans, ...untracked.map(step => ({ id: step.id, startToolUseId: step.startToolUseId, endToolUseId: step.endToolUseId, status: 'done' as const }))],
+    [...planned.records, ...untracked],
+  )
+  const base = replacementPlan.collapsed.length ? await io.basePath() : ''
+  const preservedCollapsed: typeof replacementPlan.collapsed = []
+  for (const step of replacementPlan.collapsed) {
+    const path = `${base}.step-${step.id.replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`
+    try {
+      await io.writeFile(path, renderRange(step.rows, Number.MAX_SAFE_INTEGER).text)
+      preservedCollapsed.push(step)
+    } catch (error) {
+      await logPersistenceFailure(io, error)
+      for (const id of step.rows.flatMap(row => row.toolResults ?? []).map(result => result.tool_use_id)) delete replacementPlan.replace[id]
+    }
+  }
+  const messages = buildCleared({ head: headRows(workingRows, first), tail, cuts: use.cuts, replace: replacementPlan.replace }, ledgerRow, attachments, headKept)
   const declined = notShrunk(workingRows, messages)
   if (declined) return declined
   const tokensBefore = sum(workingRows)
@@ -514,6 +561,16 @@ async function applyFoldPlan(
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     else await io.storeDelete(topicKey)
+    const collapsedIds = new Set(preservedCollapsed.map(step => step.id))
+    const records = untracked.filter(step => collapsedIds.has(step.id))
+    if (records.length) {
+      const recordKey = `step-records:${key}`
+      const stored = await io.storeGet(recordKey)
+      await io.storeSet(recordKey, [...(Array.isArray(stored) ? stored : []), ...records.map(step => ({
+        id: step.id, line: `${step.intent} → ${step.finding} → ${step.decision}`, files: step.files,
+        startToolUseId: step.startToolUseId, endToolUseId: step.endToolUseId, seq: use.seq,
+      }))].slice(-200))
+    }
     const previousSnapshot = (await readLedgerSnapshots(rewind, key)).at(-1)
     await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(ledgerRow), fileLedger, use.topics, [
       ...(use.coveredRows ?? previousSnapshot?.coveredRows ?? []), ...use.dropFps,
@@ -731,9 +788,11 @@ async function pruneWithheld(io: FoldJobIo, live: readonly SessionMessage[], led
     const base = await io.basePath()
     const dir = base.slice(0, base.lastIndexOf('/'))
     const prefix = base.slice(dir.length + 1) + WITHHELD
+    const stepPrefix = base.slice(dir.length + 1) + '.step-'
     if (!(await io.fileExists(dir))) return
     const pointed = [ledger, ...live.flatMap(message => (message.toolResults ?? []).map(result => result.text))].join('\n')
-    const stale = (await io.fileList(dir)).filter(file => file.kind === 'file' && file.name.startsWith(prefix) && !pointed.includes(`${dir}/${file.name}`)).map(file => `${dir}/${file.name}`)
+    const managed = (await io.fileList(dir)).filter(file => file.kind === 'file' && (file.name.startsWith(prefix) || file.name.startsWith(stepPrefix)))
+    const stale = managed.filter(file => file.name.startsWith(prefix) && !pointed.includes(`${dir}/${file.name}`)).map(file => `${dir}/${file.name}`)
     if (stale.length === 0) return
     const result = await io.run(['rm', '-f', '--', ...stale], { timeoutMs: 5000 })
     if (result.exitCode !== 0) io.log(`clm escape: could not remove ${stale.length} withheld file(s) (exit ${result.exitCode}: ${result.stderr})`, { to: 'debug' })

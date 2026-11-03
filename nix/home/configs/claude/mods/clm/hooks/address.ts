@@ -21,6 +21,8 @@ const MAX_STAMPS = 4000
 export type AddressIo = {
   get: (key: string) => Promise<unknown>
   set: (key: string, value: unknown) => Promise<void>
+  basePath?: () => Promise<string>
+  readFile?: (path: string) => Promise<string | undefined>
 }
 
 const addressIndexKey = (key: string) => `address-index:${key}`
@@ -111,7 +113,19 @@ export function recallRows(rows: readonly AddressRow[], address: string): { text
 }
 
 export async function recallAddress(io: AddressIo, key: string, address: unknown) {
-  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d, @first..@last, #C12 or clauses.' }
+  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d, @first..@last, @step:<id>, #C12 or clauses.' }
+  const step = /^\s*@step:([\w-]+)(?:#(\d+))?\s*$/.exec(address)
+  if (step?.[1]) {
+    const page = step[2] === undefined ? 1 : Number(step[2])
+    if (!Number.isInteger(page) || page < 1) return { result: `step address ${address.trim()} has an invalid page`, isError: true, isReadOnly: true }
+    if (!io.basePath || !io.readFile) return { result: `folded step ${step[1]} has no sidecar reader`, isError: true, isReadOnly: true }
+    const path = `${await io.basePath()}.step-${step[1]}.txt`
+    const text = await io.readFile(path)
+    if (text === undefined) return { result: `folded step ${step[1]} sidecar was not found`, isError: true, isReadOnly: true }
+    const start = (page - 1) * 40_000
+    if (start >= text.length && page > 1) return { result: `folded step ${step[1]} has no page #${page}`, isError: true, isReadOnly: true }
+    return { result: text.slice(start, start + 40_000), isReadOnly: true }
+  }
   const recalled = /^\s*(?:#C\d+|clauses)\s*$/i.test(address)
     ? recallClauses(readClauseStore(await io.get(clauseStoreKey(key))), address)
     : recallRows(await addressRows(io, key), address)

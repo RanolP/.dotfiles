@@ -12,8 +12,10 @@ import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMer
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { buildCleared, estTokens, fingerprint, foldedRows, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
-import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, readLegacyTopics } from './fold-runtime'
+import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
 import { applyClauses, emptyClauseStore, parseClause } from './clauses'
+import { recallAddress } from './address'
+import { plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps } from './stepfold'
 import type { Opts } from './fold-runtime'
 import type { RewindIo, RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
@@ -29,6 +31,97 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
 const ENGINE_SUMMARY_TEXTS = ['ENGINE SUMMARY', '[clm clauses]\n- (none)']
+
+const stepUse = (id: string, tool: string, input: Record<string, unknown> = {}) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input, text: '' }] })
+const stepResult = (id: string, text: string, isError = false) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError }] })
+const stepRecord = { id: 'step-1', intent: 'inspect output', finding: 'the output is settled', decision: 'keep the compact result', files: ['hooks/fold.ts'] }
+const doneSpan = (startToolUseId: string, endToolUseId: string) => ({ id: stepRecord.id, startToolUseId, endToolUseId, status: 'done' as const })
+
+// Regression caught: replacing a result removed its row or separated a tool_use from its tool_result.
+test('step replacement keeps every row and tool pair', () => {
+  const rows = [stepUse('large', 'Bash'), stepResult('large', BIG + BIG), stepUse('api', 'Bash'), stepResult('api', 'API 400')]
+  const folded = stepReplacements(rows, [doneSpan('large', 'api')], [stepRecord])
+  const after = buildCleared({ head: [], tail: rows, cuts: {}, replace: folded.replace }, M('user', 'ledger'))
+  expect(after).toHaveLength(rows.length + 1)
+  expect(after.flatMap(row => row.toolUses.map(use => use.tool_use_id))).toEqual(['large', 'api'])
+  expect(after.flatMap(row => row.toolResults?.map(result => result.tool_use_id) ?? [])).toEqual(['large', 'api'])
+  expect(after.flatMap(row => row.toolResults?.map(result => result.text) ?? [])).toContain('API 400')
+})
+
+// Regression caught: an error inside a completed step was replaced by its successful summary.
+test('step replacement keeps error results verbatim', () => {
+  const rows = [stepUse('error', 'Bash'), stepResult('error', 'failure ' + BIG + BIG, true), stepUse('ok', 'Bash'), stepResult('ok', BIG + BIG)]
+  const folded = stepReplacements(rows, [doneSpan('error', 'ok')], [stepRecord])
+  expect(folded.replace.error).toBeUndefined()
+  expect(folded.replace.ok).toContain('[clm step step-1 done:')
+})
+
+// Regression caught: folding a Read result forced the next Edit to re-read the same absolute path.
+test('step replacement keeps a result whose absolute input path is referenced later', () => {
+  const rows = [
+    stepUse('read', 'Read', { file_path: '/work/repo/src/app.ts' }), stepResult('read', BIG + BIG),
+    stepUse('other', 'Bash'), stepResult('other', BIG + BIG),
+    stepUse('edit', 'Edit', { file_path: '/work/repo/src/app.ts' }), stepResult('edit', 'edited'),
+  ]
+  const folded = stepReplacements(rows, [doneSpan('read', 'other')], [stepRecord])
+  expect(folded.replace.read).toBeUndefined()
+  expect(folded.replace.other).toContain('[clm step step-1 done:')
+})
+
+// Regression caught: an active step and results after the last completed span were folded with older work.
+test('step replacement keeps doing spans and post-span rows verbatim', () => {
+  const rows = [
+    stepUse('done', 'Bash'), stepResult('done', BIG + BIG),
+    stepUse('doing', 'Bash'), stepResult('doing', BIG + BIG),
+    stepUse('after', 'Bash'), stepResult('after', BIG + BIG),
+  ]
+  const folded = stepReplacements(rows, [doneSpan('done', 'done'), { id: 'step-2', startToolUseId: 'doing', endToolUseId: 'doing', status: 'doing' }], [stepRecord])
+  expect(Object.keys(folded.replace)).toEqual(['done'])
+  expect(folded.replace.doing).toBeUndefined()
+  expect(folded.replace.after).toBeUndefined()
+})
+
+// Regression caught: split parsing dropped model step spans or rejected replies from the pre-U3 shape.
+test('parseSplitAnswer keeps steps and accepts the old shape', () => {
+  expect(parseSplitAnswer('{"split":2,"ops":[],"steps":[{"from":"a","to":"b"}]}')).toMatchObject({ steps: [{ from: 'a', to: 'b' }] })
+  expect(parseSplitAnswer('{"split":2,"ops":[]}')).toMatchObject({ split: 2, steps: [] })
+})
+
+// Regression caught: one malformed model step rejected the otherwise valid fold proposal.
+test('invalid fold steps are discarded one by one', () => {
+  const rows = [M('user', 'work'), stepUse('a', 'Bash'), stepResult('a', BIG), stepUse('final', 'Bash')]
+  const steps = validateFoldSteps(rows, [
+    { from: 'missing', to: 'a', intent: 'bad', finding: 'bad', decision: 'bad' },
+    { from: 'a', to: 'a', intent: '검사 수행', finding: '원인 확인', decision: '수정 유지', files: ['a.ts'] },
+    { from: 'final', to: 'final', intent: '진행 중', finding: '진행 중', decision: '진행 중' },
+  ], 7)
+  expect(steps).toEqual([{ id: 's7-1', startToolUseId: 'a', endToolUseId: 'a', intent: '검사 수행', finding: '원인 확인', decision: '수정 유지', files: ['a.ts'] }])
+})
+
+// Regression caught: a step completed while summarization ran was absent from swap-time collapse state.
+test('swap-time tracker state resolves a newly completed step span', () => {
+  const rows = [stepUse('start', 'Bash'), stepResult('start', BIG + BIG), stepUse('end', 'mcp__clm__clm_task', { id: 'step-1', status: 'done' }), stepResult('end', 'done')]
+  const root = { id: 'root', title: 'root', status: 'doing', notes: [], linked: [], planMode: 'inline', origin: { session: 's1', repo: 'r', cwd: '/w' }, updated: '' } satisfies Issue
+  const child = { id: 'step-1', title: 'step', status: 'done', parent: 'root', notes: [], linked: [], origin: root.origin, updated: '', result: { ...stepRecord, source: 'model', ts: '', span: { startToolUseId: 'start', endToolUseId: 'end' } } } satisfies Issue
+  const resolved = plannedStepSpans(rows, [root, child])
+  expect(stepReplacements(rows, resolved.spans, resolved.records).replace.start).toContain('[clm step step-1 done:')
+})
+
+// Regression caught: @step recall returned the folded stub instead of the swap-time sidecar and could not page it.
+test('@step recall reads and pages the original sidecar', async () => {
+  const raw = `original output ${'z'.repeat(45_000)}`
+  const io = { get: async () => undefined, set: async () => undefined, basePath: async () => '/state/clm-s1', readFile: async (path: string) => path.endsWith('.step-step-1.txt') ? raw : undefined }
+  expect((await recallAddress(io, 's1:main', '@step:step-1')).result?.slice(0, 15)).toBe('original output')
+  expect((await recallAddress(io, 's1:main', '@step:step-1#2')).result).toBe(raw.slice(40_000, 80_000))
+  expect((await recallAddress(io, 's1:main', '@step:missing')).result).toContain('missing')
+})
+
+// Regression caught: one-turn no-plan folds paid for step extraction below the 20k-token threshold.
+test('one-turn no-plan step extraction starts only above 20k estimated tokens', () => {
+  expect(shouldRequestSingleTurnSteps([M('user', 'x'.repeat(47_000))], false)).toBe(false)
+  expect(shouldRequestSingleTurnSteps([M('user', 'x'.repeat(49_000))], false)).toBe(true)
+  expect(shouldRequestSingleTurnSteps([M('user', 'x'.repeat(49_000))], true)).toBe(false)
+})
 
 // Regression caught: facts and legacy were absent from the trim order, so a ledger row could ship over its token cap.
 test('an oversized ledger with large facts and legacy sections is capped without trimming user instructions', () => {

@@ -22,7 +22,7 @@ import { migrateLegacyLedger } from './resident'
 export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
 export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; firstObserved?: number; estimatorVersion?: number }
 export type TopicState = RewindTopic
-export type SplitAnswer = { split: number; mergeReply: string }
+export type SplitAnswer = { split: number; mergeReply: string; steps: unknown[] }
 export type PreparedFold = { plan: ClearPlan; mergeReply: string }
 export type TrackerView = { issues: Issue[]; dropped: Issue[]; finished: Issue[]; doneTitles: Set<string> }
 export type Fold = { plan: ClearPlan; notes: string; fullNotes: string; ops: Payload[]; asks: Payload[]; seq: number; fallback: boolean; promoted: Payload[]; hold: Held[]; settled: string[]; topics?: TopicState[]; clauses?: ClauseStore; clauseOps?: FoldClauseOp[]; tailTokens: number }
@@ -65,7 +65,7 @@ export function parseSplitAnswer(raw: string): SplitAnswer | string {
   try { value = JSON.parse(normalizeLedger(raw)) } catch (err) { return `split reply is not JSON (${String(err).slice(0, 80)})` }
   if (!isRecord(value) || typeof value.split !== 'number' || !Number.isInteger(value.split)) return `split must be an integer turn number (received ${JSON.stringify(isRecord(value) ? value.split : undefined)})`
   if (!Array.isArray(value.ops)) return 'split reply needs ops'
-  return { split: value.split, mergeReply: JSON.stringify({ ops: value.ops }) }
+  return { split: value.split, mergeReply: JSON.stringify({ ops: value.ops }), steps: Array.isArray(value.steps) ? value.steps : [] }
 }
 
 function isTopicList(value: unknown): value is TopicState[] {

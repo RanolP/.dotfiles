@@ -15,9 +15,9 @@ Read this when `quint typecheck` fails or a run throws. Most errors come from th
 - **Parameterless pure def has no parentheses**: `pure def name = ...`.
 - **A variant constructor takes one argument**: `Timeout((h, r))` or `Vote({ voter: 1, value: 2 })`.
 - **`oneOf` is a method, only inside `nondet`**: `nondet t = THREADS.oneOf()`.
-- **Reserved words are not identifiers or field names**: `val`, `def`, `to` (the `i.to(j)` range), `from`, `import`, and so on. Use `dst`, `src`, `sender`.
+- **Built-in operator names cannot be redefined**: `val to = 1` or `def f(to: int)` fails with `QNT101: Built-in name 'to' is redefined`. Name parameters and definitions `dst`, `src`, `sender`. Record fields may use them (`type R = { from: int, to: int }` runs under 0.33.1).
 - **An action and a pure def cannot share a name**: `canRead` / `read`, `applyTransfer` / `transfer`.
-- **Every action assigns every var**: `x' = x` for the unchanged ones. A missing one passes `typecheck` and `run` silently under 0.33.1 -- the var just drops out of every later state in the trace -- so scan each action's assignment list against the `var` list.
+- **Every action assigns every var**: `x' = x` for the unchanged ones. A missing one passes `typecheck` under 0.33.1; at `run` the var drops out of every later state, and any property that reads it fails with `QNT502: Variable x not set` (a property that never reads it passes silently). Scan each action's assignment list against the `var` list.
 - **State is read only in `val`, `def`, and actions**; a `pure def` takes everything as arguments.
 - **`assume` documents a premise and is not checked** by `typecheck`, `run`, or `verify`. To check a condition on constants, write `run quorumTest = all { 2 * F < N }` and run `quint test`.
 - **`Option` is not built in**: it comes from `basicSpells.qnt` (`import basicSpells.* from "./basicSpells"`). A single scratchpad file declares its own `type Opt = Some(int) | None` instead.
@@ -31,7 +31,6 @@ Read this when `quint typecheck` fails or a run throws. Most errors come from th
 | `s.getOnlyElement()` | `s.size() != 1` | guard the size, or `nondet x = s.oneOf()` |
 | `l.head()` / `l.tail()` | `l` empty | `l.length() > 0` |
 | `l.nth(i)` | `i < 0` or `i >= l.length()` | bound `i` |
-| `i.to(j)` | `i > j` | ensure `i <= j` |
 
 ## Instance modules
 
@@ -53,6 +52,6 @@ Run an instance with `--main buggy`; the definitions are reachable by their plai
 <!--
 Adapted (modified, condensed) from github.com/quint-co/quint at fa42a10, skills/quint-lang/SKILL.md,
 skills/quint-lang/guidelines/constraints.md and skills/quint-lang/guidelines/patterns.md (sections 4-6)
--- Apache-2.0, Copyright Informal Systems and the Quint contributors.
+-- Apache-2.0, Copyright the Quint contributors.
 The instance-module example was checked under quint 0.33.1. Changes: Copyright 2026 RanolP, MIT.
 -->

@@ -92,19 +92,31 @@ $ quint typecheck lostUpdate.qnt
 [exit 0]
 
 # 1. witnesses on the racy instance (no invariant, so the counts cover all 10000 traces)
-$ quint run lostUpdate.qnt --main buggy --witnesses someoneHasRead allDone --max-steps 10 --verbosity 1
-[ok] No violation found (32ms at 312500 traces/second).
+$ quint run lostUpdate.qnt --main buggy --witnesses someoneHasRead allDone --max-steps 10 --seed 0x1 --max-samples 10000
+An example execution:
+...                                   (one example trace, omitted)
+[ok] No violation found (222ms at 45045 traces/second).
+Trace length statistics: max=5, min=5, average=5.00
+You may increase --max-samples and --max-steps.
+Use --verbosity to produce more (or less) output.
 Witnesses:
 someoneHasRead was witnessed in 10000 trace(s) out of 10000 explored (100.00%)
 allDone was witnessed in 10000 trace(s) out of 10000 explored (100.00%)
-Use --seed=0x37eacdf9beb0927d --backend=rust to reproduce.
+Use --seed=0x3d9e1 --backend=rust to reproduce.
+[exit 0]
 
 # 2. target invariant with the fix on: must be clean
-$ quint run lostUpdate.qnt --main fixed --invariants noLostUpdate --witnesses allDone --max-steps 10 --verbosity 1
-[ok] No violation found (24ms at 416667 traces/second).
+$ quint run lostUpdate.qnt --main fixed --invariants noLostUpdate --witnesses allDone --max-steps 10 --seed 0x1 --max-samples 10000
+An example execution:
+...                                   (one example trace, omitted)
+[ok] No violation found (195ms at 51282 traces/second).
+Trace length statistics: max=3, min=3, average=3.00
+You may increase --max-samples and --max-steps.
+Use --verbosity to produce more (or less) output.
 Witnesses:
 allDone was witnessed in 10000 trace(s) out of 10000 explored (100.00%)
-Use --seed=0x70c84e6f8db78618 --backend=rust to reproduce.
+Use --seed=0x284c5 --backend=rust to reproduce.
+[exit 0]
 
 # 3. reachability sanity: must be violated
 $ quint run lostUpdate.qnt --main fixed --invariant sanityNeverAllDone --max-steps 10 --verbosity 1
@@ -131,14 +143,16 @@ $ quint run lostUpdate.qnt --main buggy --invariants noLostUpdate --max-steps 10
 error: Invariant violated
 ```
 
-Runs 1-4 omitted `--seed`, so each sampled up to the 10000 default (runs 3-4 stopped at the first violation). `--verbosity 1` drops the example trace; at the default verbosity 2 every run also prints `An example execution:`, including the clean ones, so read the `[ok]` / `[violation]` line and the exit code.
+Runs 1-2 are the confirmation runs: they pass their own `--seed 0x1` together with `--max-samples 10000`, so re-running either command reproduces the same 10000 traces (run 2 re-run gave the same counts and printed seed). The `Use --seed=...` line they print (`0x3d9e1`, `0x284c5`) names only the last trace sampled, not the run, so the report records `0x1`. They run at the default verbosity because only verbosity >= 2 prints `Trace length statistics`: max 5 on `buggy` (2 reads + 2 writes + the initial state) and max 3 on `fixed`, both below `--max-steps + 1 = 11` because both instances terminate by design once every thread is done. Default verbosity also prints `An example execution:` on a clean run, so read the `[ok]` / `[violation]` line and the exit code.
+
+Runs 3-4 are violation searches without `--seed`, each sampling up to the 10000 default and stopping at the first violation; there the printed seed does replay the violating trace (run 5). `--verbosity 1` drops their example trace.
 
 `someoneHasRead` is 0% on `fixed` by design: `read` is disabled when `ATOMIC` is true, which is why run 2 lists only `allDone`.
 
 ## The report
 
 - **spec**: `<scratchpad>/quint/lostUpdate.qnt`, module `lostUpdate`; instances `buggy` (`ATOMIC = false, THREADS = Set(1, 2)`) and `fixed` (`ATOMIC = true, THREADS = Set(1, 2)`).
-- **bounds**: `--max-steps 10`, `--max-samples` 10000 (default), seeds `0x37eacdf9beb0927d` (run 1), `0x70c84e6f8db78618` (run 2), `0x7d7f6efbbcca6c64` (run 3), `0xe6c1b4275fc31772` (run 4).
+- **bounds**: `--max-steps 10`, `--max-samples 10000`; clean runs 1-2 with the passed seed `--seed 0x1`; violations replay with the printed seeds `0x7d7f6efbbcca6c64` (run 3) and `0xe6c1b4275fc31772` (run 4).
 - **witnesses**: `buggy`: `someoneHasRead` 10000 of 10000 (100%), `allDone` 10000 of 10000 (100%). `fixed`: `allDone` 10000 of 10000 (100%).
 - **invariants**: `noLostUpdate` on `fixed`: no counterexample in 10000 sampled traces of <= 10 steps. On `buggy`: VIOLATED at state 4.
 - **sanity / bug toggle**: `sanityNeverAllDone` violated as required. `noLostUpdate` violated with the fix off, clean with it on, so the property guards the bug.

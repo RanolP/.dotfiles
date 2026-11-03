@@ -72,7 +72,7 @@ This is what turns a counterexample trace into a code-level explanation: each tr
 
 <!--
 Adapted (modified, condensed) from github.com/quint-co/quint at fa42a10, skills/quint-modeling/guidelines/from-code.md
--- Apache-2.0, Copyright Informal Systems and the Quint contributors; and from github.com/opum-ai/proof-skills at
+-- Apache-2.0, Copyright the Quint contributors; and from github.com/opum-ai/proof-skills at
 578749f, skills/tlaplus-model/SKILL.md (atomic-region list, environment faults as actions) and
 skills/formal-verify/SKILL.md (correspondence map) -- MIT, Copyright (c) 2026 Opum AI.
 Changes: Copyright 2026 RanolP, MIT.

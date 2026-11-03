@@ -13,7 +13,7 @@ Every flag below was checked against `quint run --help` of quint 0.33.1.
 | `--witnesses a b c` | none | count how many traces reach each target state |
 | `--max-steps N` | `20` | depth of every trace |
 | `--max-samples N` | `10000`, **but `1` when `--seed` is given** | number of traces |
-| `--seed S` | random | reproduce one trace |
+| `--seed S` | random | fix the random choices: replays a printed violation seed, or makes a whole run repeatable together with `--max-samples` |
 | `--mbt` | off | adds `mbt::actionTaken` and `mbt::nondetPicks` to every state |
 | `--verbosity 0..5` | `2` | `3` adds nondet picks and state changes when diagnosing |
 | `--out-itf file_{seq}.itf.json` | none | write the trace as JSON (ITF) for scripting |
@@ -21,7 +21,7 @@ Every flag below was checked against `quint run --help` of quint 0.33.1.
 
 `quint test <file> --main <module>` runs `run` definitions; `--match` selects them by name or regex (by default, names ending in `Test`). `quint typecheck <file>` and `quint parse <file>` are the fast inner loop.
 
-**`--seed` drops the sample count to 1.** A confirmation run with a seed and no `--max-samples` checks a single trace. In the worked example, `--seed 1` on the racy instance printed `[ok] No violation found` over 1 trace, while the same command without the seed found the lost update within 13. So: use `--seed` alone only to replay a counterexample; for a reproducible confirmation run pass both `--seed S --max-samples 10000`.
+**`--seed` drops the sample count to 1.** A confirmation run with a seed and no `--max-samples` checks a single trace. In the worked example, `--seed 1` on the racy instance printed `[ok] No violation found` over 1 trace, while the same command without the seed found the lost update within 13. So: use `--seed` alone only to replay a counterexample; for a reproducible confirmation run pass both `--seed S --max-samples 10000` and report S.
 
 ## Reading the output
 
@@ -32,8 +32,8 @@ Read the status line and the exit code, not the presence of a trace. At the defa
 | `[ok] No violation found (...)` | 0 | no counterexample in the traces sampled |
 | `[violation] Found an issue (...)` + `error: Invariant violated` | 1 | the printed trace ends in a state that breaks the invariant |
 | `X was witnessed in K trace(s) out of N explored (P%)` | -- | reachability count for witness X |
-| `Trace length statistics: max=.., min=.., average=..` | -- | counts states including the initial one, so a full-depth trace has length `--max-steps + 1`; a max below that means traces stopped at a state with no enabled action |
-| `Use --seed=0x... --backend=rust to reproduce.` | -- | the seed to put in the report and to replay with |
+| `Trace length statistics: max=.., min=.., average=..` | -- | printed only at `--verbosity` 2 (the default) or higher, on a clean run; counts states including the initial one, so a full-depth trace has length `--max-steps + 1`; a max below that means traces stopped at a state with no enabled action |
+| `Use --seed=0x... --backend=rust to reproduce.` | -- | after a violation: the seed that replays the violating trace -- report it. After a clean run: only the last sampled trace's seed, which does not reproduce the run -- report the `--seed` you passed instead |
 
 A violating run stops at the first violation, so its witness counts cover only the traces explored before it ("13 out of 13"). Take witness percentages from a run with no violation (the fixed instance, or a run without the target invariant).
 
@@ -70,7 +70,7 @@ Root cause by where it breaks:
 
 <!--
 Adapted (modified) from github.com/quint-co/quint at fa42a10, skills/quint-lang/guidelines/simulations.md
-and skills/quint-lang/guidelines/cli.md -- Apache-2.0, Copyright Informal Systems and the Quint contributors.
+and skills/quint-lang/guidelines/cli.md -- Apache-2.0, Copyright the Quint contributors.
 The --seed sample-count note, the output table, and the verify prompt note are original, checked against
 quint 0.33.1. Changes: Copyright 2026 RanolP, MIT.
 -->

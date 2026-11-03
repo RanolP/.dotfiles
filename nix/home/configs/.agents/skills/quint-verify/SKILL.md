@@ -38,7 +38,7 @@ Typecheck after every addition (`quint typecheck <file>`), and `quint run` after
 
 ## Wording the result
 
-State a clean run as "no counterexample in N sampled traces of <= M steps (seed S)", in those words. Sampling is not exhaustive, so "verified", "proven", "safe", and "correct" overstate it; the user decides whether the sample size is enough. A violation is conclusive -- one trace disproves an invariant. Name the abstractions that could hide a bug in "does not cover".
+State a clean run as "no counterexample in N sampled traces of <= M steps (seed S)", in those words, where S is the seed you passed. Sampling is not exhaustive, so "verified", "proven", "safe", and "correct" overstate it; the user decides whether the sample size is enough. A violation is conclusive -- one trace disproves an invariant. Name the abstractions that could hide a bug in "does not cover".
 
 ## Escalating to `quint verify`
 
@@ -49,7 +49,7 @@ State a clean run as "no counterexample in N sampled traces of <= M steps (seed 
 Report exactly these fields, in this order:
 
 - **spec**: file path, module, and every `--main` instance run with its `const` bindings.
-- **bounds**: `--max-steps`, `--max-samples`, `--seed` (the reproduce seed quint printed) for each run.
+- **bounds**: `--max-steps`, `--max-samples`, and the seed for each run: for a clean run the `--seed` you passed (run confirmations as `--seed 0x1 --max-samples 10000` so they can be re-run), for a violation the seed quint printed, which replays that one trace.
 - **witnesses**: per witness, `reached in K of N traces (P%)`, taken from a run with no violation.
 - **invariants**: per invariant and instance, `no counterexample in N traces of <= M steps` or `VIOLATED at state K`.
 - **sanity / bug toggle**: the sanity property's outcome (must be violated) and the target invariant with the fix off (must be violated) and on (must be clean).
@@ -60,7 +60,7 @@ Report exactly these fields, in this order:
 <!--
 Adapted (modified, condensed into one scratchpad flow) from:
 - github.com/quint-co/quint at fa42a10, skills/quint-modeling/SKILL.md and
-  skills/quint-lang/guidelines/simulations.md -- Apache-2.0, Copyright Informal Systems and the Quint contributors.
+  skills/quint-lang/guidelines/simulations.md -- Apache-2.0, Copyright the Quint contributors.
 - github.com/opum-ai/proof-skills at 578749f, skills/formal-verify/SKILL.md and skills/tlaplus-model/SKILL.md
   (prove-the-model-can-fail, frozen properties, honesty wording, correspondence map) -- MIT, Copyright (c) 2026 Opum AI.
 Changes and original text: Copyright 2026 RanolP, MIT.

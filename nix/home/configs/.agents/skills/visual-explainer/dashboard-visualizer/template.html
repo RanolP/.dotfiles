@@ -1,0 +1,208 @@
+<title>Dashboard name</title>
+<style>
+  /* Tokens: chart-visualizer's --cv-* set, unchanged, plus the delta colours.
+     Keep both files' values in step; README section 3 of chart-visualizer lists them. */
+  :root {
+    --cv-bg: #f4f4f4; --cv-surface: #ffffff; --cv-ink: #161616; --cv-muted: #525252;
+    --cv-grid: #e0e0e0; --cv-axis: #8d8d8d;
+    --cv-s1: #8a3ffc; --cv-s2: #009d9a; --cv-s3: #0f62fe;
+    --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+    --cv-up: #198038;        /* good change, Carbon green 60, 5.0:1 on surface */
+    --cv-down: #da1e28;      /* bad change, Carbon red 60, 5.0:1 on surface */
+    --cv-selected: #edf5ff;  /* active filter fill, Carbon blue 10 */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --cv-bg: #0b0b0b; --cv-surface: #161616; --cv-ink: #f4f4f4; --cv-muted: #c6c6c6;
+      --cv-grid: #393939; --cv-axis: #6f6f6f;
+      --cv-s1: #a56eff; --cv-s2: #009d9a; --cv-s3: #4589ff;
+      --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+      --cv-up: #42be65; --cv-down: #ff8389; --cv-selected: #001d6c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --cv-bg: #0b0b0b; --cv-surface: #161616; --cv-ink: #f4f4f4; --cv-muted: #c6c6c6;
+    --cv-grid: #393939; --cv-axis: #6f6f6f;
+    --cv-s1: #a56eff; --cv-s2: #009d9a; --cv-s3: #4589ff;
+    --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+    --cv-up: #42be65; --cv-down: #ff8389; --cv-selected: #001d6c;
+  }
+  body { background: var(--cv-bg); color: var(--cv-ink); padding-inline: 16px; padding-block: 24px;
+         font-family: ui-sans-serif, -apple-system, "Segoe UI", "Noto Sans", sans-serif; }
+  .db { max-width: 1280px; margin: 0 auto; display: grid; gap: 16px; }
+
+  /* Header: title left, the one filter group right; wraps under the title when narrow. */
+  .db-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+  .db-head h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  .db-head p { color: var(--cv-muted); font-size: 13px; margin: 2px 0 0; }
+  .db-range { display: inline-flex; border: 1px solid var(--cv-grid); border-radius: 8px; background: var(--cv-surface); }
+  .db-range button { font: inherit; font-size: 13px; color: var(--cv-muted); background: none; border: 0;
+                     padding: 6px 12px; min-height: 32px; border-radius: 7px; cursor: pointer; }
+  .db-range button[aria-pressed="true"] { background: var(--cv-selected); color: var(--cv-ink); font-weight: 600; }
+  .db-range button:focus-visible { outline: 2px solid var(--cv-s3); outline-offset: -2px; }
+
+  /* KPI strip: one row of equal cards. */
+  .db-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .kpi { background: var(--cv-surface); border-radius: 8px; padding: 16px; min-width: 0; }
+  .kpi-label { color: var(--cv-muted); font-size: 13px; margin: 0; }
+  .kpi-value { font-size: 32px; font-weight: 600; letter-spacing: -0.02em; margin: 4px 0; }
+  .kpi-delta { font-size: 13px; margin: 0; color: var(--cv-muted); }
+  .kpi-delta b { font-weight: 600; }
+  .kpi-delta .up { color: var(--cv-up); }
+  .kpi-delta .down { color: var(--cv-down); }
+
+  /* Panels: a 12-column grid; each panel's span comes from its chart's shape. */
+  .db-panels { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+  .panel { background: var(--cv-surface); border-radius: 8px; padding: 16px; min-width: 0; }
+  .panel.w8 { grid-column: span 8; } .panel.w4 { grid-column: span 4; }
+  .panel h2 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .panel .sub { color: var(--cv-muted); font-size: 13px; margin: 0; }
+  .cv-chart { width: 100%; height: 300px; margin-top: 12px; }
+
+  /* Narrow: panels stack in reading order; KPI cards go two across, a trailing odd card takes the row. */
+  @media (max-width: 760px) {
+    .panel.w8, .panel.w4 { grid-column: 1 / -1; }
+    .db-kpis { grid-template-columns: repeat(2, 1fr); }
+    .kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }
+    .kpi-value { font-size: 28px; }
+  }
+</style>
+
+<main class="db">
+  <header class="db-head">
+    <div><h1>Signups</h1><p>Illustrative data</p></div>
+    <div class="db-range" role="group" aria-label="Time range">
+      <button type="button" data-range="30d" aria-pressed="false">30 days</button>
+      <button type="button" data-range="90d" aria-pressed="true">90 days</button>
+      <button type="button" data-range="12m" aria-pressed="false">12 months</button>
+    </div>
+  </header>
+
+  <section class="db-kpis" aria-label="Headline figures">
+    <article class="kpi"><p class="kpi-label">Signups</p><p class="kpi-value" id="k-signups"></p><p class="kpi-delta" id="d-signups"></p></article>
+    <article class="kpi"><p class="kpi-label">Conversion</p><p class="kpi-value" id="k-conv"></p><p class="kpi-delta" id="d-conv"></p></article>
+    <article class="kpi"><p class="kpi-label">Cost per signup</p><p class="kpi-value" id="k-cps"></p><p class="kpi-delta" id="d-cps"></p></article>
+  </section>
+
+  <section class="db-panels">
+    <article class="panel w8">
+      <h2>Signups over time</h2><p class="sub">This period against the previous one</p>
+      <div class="cv-chart" id="c-trend" role="img" aria-label="Signups over the selected range, compared with the previous period"></div>
+    </article>
+    <article class="panel w4">
+      <h2>Signups by channel</h2><p class="sub">Selected range</p>
+      <div class="cv-chart" id="c-channel" role="img" aria-label="Signups by channel, largest first"></div>
+    </article>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/6.1.0/echarts.min.js"></script>
+<script>
+(() => {
+  // ---- data: one deterministic fixture per range, so the gate renders the same frame every time ----
+  const ranges = {
+    '30d': { labels: Array.from({ length: 30 }, (_, i) => `Oct ${i + 1}`), base: 120, step: 1.2 },
+    '90d': { labels: Array.from({ length: 13 }, (_, i) => `W${i + 31}`), base: 820, step: 9 },
+    '12m': { labels: ['Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'], base: 3400, step: 60 },
+  };
+  const wave = (r, shift) => r.labels.map((_, i) => Math.round(r.base + r.step * i + r.base * 0.08 * Math.sin(i * 1.3 + shift)));
+  const fixture = (key) => {
+    const r = ranges[key], now = wave(r, 0), prev = wave(r, 2).map((v) => Math.round(v * 0.88));
+    const sum = (a) => a.reduce((x, y) => x + y, 0), total = sum(now), before = sum(prev);
+    const share = [0.38, 0.27, 0.19, 0.11, 0.05];
+    return {
+      labels: r.labels, now, prev,
+      channels: ['Search', 'Referral', 'Social', 'Email', 'Ads'].map((name, i) => ({ name, value: Math.round(total * share[i]) })),
+      kpi: { signups: [total, before], conv: [3.4, 3.1], cps: [12.8, 11.9] },
+    };
+  };
+
+  // ---- tokens and theming: the same pattern as chart-visualizer/template.html ----
+  const tokens = () => {
+    const cs = getComputedStyle(document.documentElement), v = (n) => cs.getPropertyValue(n).trim();
+    return { surface: v('--cv-surface'), ink: v('--cv-ink'), muted: v('--cv-muted'), grid: v('--cv-grid'),
+             axis: v('--cv-axis'), series: [1, 2, 3, 4, 5, 6].map((i) => v('--cv-s' + i)) };
+  };
+  const base = (t) => ({
+    animation: false, aria: { enabled: true }, color: t.series,
+    textStyle: { fontFamily: 'inherit', color: t.muted },
+    tooltip: { backgroundColor: t.surface, borderColor: t.grid, textStyle: { color: t.ink } },
+  });
+  const axisText = (t) => ({ color: t.muted, fontSize: 12, hideOverlap: true });
+
+  const trendOption = (t, d) => ({
+    ...base(t),
+    grid: { left: 8, right: 16, top: 40, bottom: 8, containLabel: true },
+    legend: { top: 0, left: 0, itemWidth: 14, itemHeight: 4, textStyle: { color: t.muted, fontSize: 12 } },
+    tooltip: { ...base(t).tooltip, trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: t.axis } } },
+    xAxis: { type: 'category', data: d.labels, boundaryGap: false, axisTick: { show: false },
+             axisLine: { lineStyle: { color: t.axis } }, axisLabel: axisText(t) },
+    yAxis: { type: 'value', axisLabel: { color: t.muted, fontSize: 12 }, splitLine: { lineStyle: { color: t.grid } } },
+    series: [
+      // The previous period is context: gray and dashed, drawn first so the current line sits on top.
+      { name: 'Previous period', type: 'line', data: d.prev, showSymbol: false, color: t.axis,
+        lineStyle: { width: 2, type: 'dashed', color: t.axis } },
+      { name: 'This period', type: 'line', data: d.now, showSymbol: false, color: t.series[0],
+        lineStyle: { width: 2, cap: 'round', join: 'round' }, itemStyle: { borderColor: t.surface, borderWidth: 2 },
+        areaStyle: { color: t.series[0], opacity: 0.1 } },
+    ],
+  });
+
+  const channelOption = (t, d) => {
+    const rows = [...d.channels].reverse();   // ECharts draws category 0 at the bottom; largest goes on top
+    return {
+      ...base(t),
+      grid: { left: 8, right: 48, top: 8, bottom: 8, containLabel: true },
+      tooltip: { ...base(t).tooltip, trigger: 'item' },
+      xAxis: { type: 'value', show: false },
+      yAxis: { type: 'category', data: rows.map((r) => r.name), axisTick: { show: false },
+               axisLine: { show: false }, axisLabel: { color: t.muted, fontSize: 12 } },
+      series: [{ name: 'Signups', type: 'bar', data: rows.map((r) => r.value), barMaxWidth: 24,
+                 itemStyle: { color: t.series[0], borderRadius: [0, 4, 4, 0] },
+                 label: { show: true, position: 'right', color: t.ink, fontSize: 12,
+                          formatter: (p) => p.value.toLocaleString('en') } }],
+    };
+  };
+
+  // ---- KPI cards: value, then a signed delta with its baseline in words ----
+  const fmt = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+  const delta = (id, [now, before], lowerIsBetter) => {
+    const pct = ((now - before) / before) * 100, good = lowerIsBetter ? pct < 0 : pct > 0;
+    const arrow = pct >= 0 ? '▲' : '▼';
+    document.getElementById(id).innerHTML =
+      `<b class="${good ? 'up' : 'down'}">${arrow} ${Math.abs(pct).toFixed(1)}%</b> vs previous period`;
+  };
+  const renderKpis = (k) => {
+    document.getElementById('k-signups').textContent = fmt.format(k.signups[0]);
+    document.getElementById('k-conv').textContent = k.conv[0].toFixed(1) + '%';
+    document.getElementById('k-cps').textContent = '$' + k.cps[0].toFixed(2);
+    delta('d-signups', k.signups, false); delta('d-conv', k.conv, false); delta('d-cps', k.cps, true);
+  };
+
+  // ---- wiring: one paint() for range changes, theme changes and first load ----
+  const charts = [
+    { el: document.getElementById('c-trend'), option: trendOption },
+    { el: document.getElementById('c-channel'), option: channelOption },
+  ].map((c) => ({ ...c, chart: echarts.init(c.el, null, { renderer: 'svg' }) }));
+  let range = '90d', pending = charts.length;
+  charts.forEach((c) => c.chart.on('finished', () => { if (--pending === 0) document.body.setAttribute('data-charts-ready', ''); }));
+
+  const paint = () => {
+    const t = tokens(), d = fixture(range);
+    renderKpis(d.kpi);
+    charts.forEach((c) => c.chart.setOption(c.option(t, d), { notMerge: true }));
+  };
+  document.querySelectorAll('.db-range button').forEach((b) => b.addEventListener('click', () => {
+    range = b.dataset.range;
+    document.querySelectorAll('.db-range button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    paint();
+  }));
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);
+  new MutationObserver(paint).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  const ro = new ResizeObserver(() => charts.forEach((c) => c.chart.resize()));
+  charts.forEach((c) => ro.observe(c.el));
+  paint();
+})();
+</script>

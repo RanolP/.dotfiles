@@ -80,3 +80,15 @@ SOFTWARE.
 
 - `chart-visualizer/template.html` loads `https://cdnjs.cloudflare.com/ajax/libs/echarts/6.1.0/echarts.min.js` at runtime; no ECharts code is in this repository.
 - License: Apache License 2.0, Copyright The Apache Software Foundation.
+
+## claude-chart-dashboard (dashboard-visualizer)
+
+- Source: https://github.com/raghuramsirigiri/claude-chart-dashboard, `plugins/chart-dashboard/skills/chart-dashboard/references/layout-dashboard.md`, commit e389b8ab6c9d5a0155787afacb1922c49b470e4b (2026-10-29).
+- Adapted: the 12-column panel grid, a natural cell per chart shape (round, plotted, listed, wide) chosen before composing rows, rows that add up to 12, an earned lead panel, and top-to-bottom reading order; restated in `dashboard-visualizer/README.md`.
+- License: MIT, Copyright (c) 2026 Raghuram Sirigiri. MIT text in this repository at `LICENSES/MIT.txt`.
+
+## dashboard-design-skill (dashboard-visualizer)
+
+- Source: https://github.com/abdiraimov-otabek/dashboard-design-skill, `skills/dashboard-design/SKILL.md` and `references/{layout,components}.md`, commit b813324aea08dc19a82d2bd9ea73824dfdd0e844 (2026-10-28).
+- Adapted: one question per screen, KPI card anatomy (label, value, delta with a worded baseline), deltas coloured by meaning with lower-is-better metrics flipped, the previous period as a gray dashed line, the header filter group, and the KPI strip two across on phones; restated in `dashboard-visualizer/README.md`.
+- License: MIT, Copyright (c) 2026 Otabek Abdiraimov. MIT text in this repository at `LICENSES/MIT.txt`.

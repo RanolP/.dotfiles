@@ -1,6 +1,6 @@
 ---
 name: visual-explainer
-description: Draw any explanatory visual (today a state machine, flow, architecture or sequence diagram as hand-placed SVG) and hold it to one render gate - render to PNG headless, look at it, fix every overlap, overflow and contrast fault, repeat - in light and dark themes and at 400 px. Use for any visual in an Artifact HTML page, a Claude Docs SVG widget, or an explanation.
+description: Draw any explanatory visual and hold it to one render gate - render to PNG headless, look at it, fix every overlap, overflow and contrast fault, repeat - in light and dark themes and at 400 px. Covers node-and-edge diagrams (state machine, flow, architecture, sequence) as hand-placed SVG; charts for anything with an axis or a quantity; dashboards of KPI cards plus charts answering one question; timelines for roadmaps and dated events, and gantt charts for task schedules with dependencies; and slide decks that step through one claim per 16:9 slide. Use for any visual in an Artifact HTML page, a Claude Docs SVG widget, or an explanation.
 when_to_use: When a diagram, flowchart, state diagram, sequence diagram, architecture or data-flow picture, or another explanatory visual is about to be drawn, or the user asks for one ("그림으로", "다이어그램", "도식화").
 ---
 

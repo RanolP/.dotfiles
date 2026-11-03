@@ -422,8 +422,13 @@ const RESULT_REQUIRED = 'clm_task: done for a planned step needs result {intent,
 const validResult = (value: ClmTaskInput['result']) => {
   if (!value) return undefined
   const clauses = [value.intent, value.finding, value.decision]
-  const length = clauses.reduce((sum, clause) => sum + (typeof clause === 'string' ? clause.length : 0), 0)
-  if (!clauses.every(clause => typeof clause === 'string' && clause.trim() && clause.length <= 160) || length > 360)
+  if (!clauses.every(clause => typeof clause === 'string' && clause.trim()))
+    return { deny: 'clm_task: result needs non-empty intent, finding and decision strings.' }
+  const lengths = clauses.map(clause => clause.length)
+  if (lengths.some(length => length > 160))
+    return { deny: `clm_task: keep each result clause under 160 characters (intent ${lengths[0]}, finding ${lengths[1]}, decision ${lengths[2]}).` }
+  const length = lengths.reduce((sum, clauseLength) => sum + clauseLength, 0)
+  if (length > 360)
     return { deny: `clm_task: keep result intent, finding and decision to one short clause each, under 360 characters together (received ${length}).` }
   if (value.files !== undefined && (!Array.isArray(value.files) || value.files.length > 5 || !value.files.every(file => typeof file === 'string' && file.trim())))
     return { deny: 'clm_task: list at most five non-empty file paths in result.files.' }
@@ -456,7 +461,7 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   const ownRootOwner = taskOwner(ownRoot, focus.stack, roots, byId)
   if (ownRootOwner !== (agentId ?? 'main')) return { result: `clm_task: ${ownRoot} belongs to ${taskOwnerName(ownRootOwner)}.` }
   if (input.plan) {
-    if (byId.get(ownRoot)?.planMode === 'planner') return { deny: 'clm_task: a stepped goal records its steps from the planner agent; spawn it first.' }
+    if (byId.get(ownRoot)?.planMode === 'planner') return { deny: 'clm_task: a stepped goal takes no plan list. Spawn the planner agent (subagent_type "planner") if you have not, then record each step it returns in order with its own clm_task call {status:"todo", title:"<step>"}.' }
     const taskIds: string[] = []
     for (const [index, title] of input.plan.entries()) {
       const taskId = await createChildTask(io, origin, title, index === 0 ? 'doing' : 'todo', '', ownRoot, true)

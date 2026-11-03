@@ -554,7 +554,7 @@ test('a stepped root suppresses inline plan context and denies a clm_task plan',
     readAll: async () => parseLog(seen.files[TRACKER] ?? ''),
   })).toBeUndefined()
   expect(await $.tool.call({ tool: TASK_TOOL, status: 'todo', plan: ['inspect', 'change'] } as ToolCallInput)).toEqual({
-    deny: 'clm_task: a stepped goal records its steps from the planner agent; spawn it first.',
+    deny: 'clm_task: a stepped goal takes no plan list. Spawn the planner agent (subagent_type "planner") if you have not, then record each step it returns in order with its own clm_task call {status:"todo", title:"<step>"}.',
   })
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).some(issue => issue.parent === 's1-root')).toBe(false)
 })
@@ -598,6 +598,24 @@ test('clm_task explains the received length when a planned result exceeds 360 ch
     result: { intent: clause, finding: clause, decision: clause },
   } as ToolCallInput)).toEqual({
     deny: 'clm_task: keep result intent, finding and decision to one short clause each, under 360 characters together (received 363).',
+  })
+})
+
+// Regression caught: one oversized clause received the joined-length denial instead of naming each clause length.
+test('clm_task reports every clause length when one planned result clause exceeds 160 characters', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
+    { op: 'planned', issue: 's1-root', mode: 'inline' },
+    { op: 'create', issue: 's1-step', title: 'change panel', status: 'doing' },
+    { op: 'parent', issue: 's1-step', parent: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'continue' },
+  ])
+  expect(await $.tool.call({
+    tool: TASK_TOOL, id: 's1-step', status: 'done',
+    result: { intent: 'x'.repeat(161), finding: 'x', decision: 'x' },
+  } as ToolCallInput)).toEqual({
+    deny: 'clm_task: keep each result clause under 160 characters (intent 161, finding 1, decision 1).',
   })
 })
 

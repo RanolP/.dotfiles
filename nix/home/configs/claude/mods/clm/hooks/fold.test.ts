@@ -10,7 +10,7 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { buildCleared, estTokens, fingerprint, foldedRows, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
+import { buildCleared, estTokens, fingerprint, foldedRows, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
 import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, readLegacyTopics } from './fold-runtime'
 import { applyClauses, emptyClauseStore, parseClause } from './clauses'
@@ -29,6 +29,20 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
 const ENGINE_SUMMARY_TEXTS = ['ENGINE SUMMARY', '[clm clauses]\n- (none)']
+
+// Regression caught: facts and legacy were absent from the trim order, so a ledger row could ship over its token cap.
+test('an oversized ledger with large facts and legacy sections is capped without trimming user instructions', () => {
+  const maxTokens = 600
+  const instruction = '- keep this standing instruction intact'
+  const ledger = residentLedgerText(undefined, undefined, 0, 0, [instruction], {
+    facts: Array.from({ length: 20 }, (_, i) => `fact ${i} ${'f'.repeat(240)}`),
+    legacy: Array.from({ length: 20 }, (_, i) => `legacy ${i} ${'l'.repeat(240)}`),
+  })
+  expect(estTokens(M('user', ledger))).toBeGreaterThan(maxTokens)
+  const row = ledgerRowText(1, '2026-11-03 00:00 KST', '', ledger, maxTokens)
+  expect(estTokens(M('user', row))).toBeLessThanOrEqual(maxTokens)
+  expect(section(row, 'user instructions').trim()).toBe(instruction)
+})
 
 test('a fact from an address row recorded without promptSeq does not lose to an older fact', () => {
   const older = applyClauses(emptyClauseStore(), [{ ...parseClause('measured(lint_css_ci, seconds, 48).'), text: '48 seconds', quote: '48 seconds', address: '@old', issue: null, origin: 'fold', kind: 'fact', evidence: { ref: 'tu_old', quote: '48 seconds' } }], 9, '2026-10-27T00:00:00Z').next

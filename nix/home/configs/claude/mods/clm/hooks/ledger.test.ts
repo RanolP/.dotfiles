@@ -632,9 +632,9 @@ test('a row built from oversized sections no longer exceeds ledgerTarget', async
     section('where we are', ['- focused task @aabbccdd', ...items('old topic', 12), '- stack 2 · pending 0']),
     section('what to do', items('child task', 6)),
     section('what to request', items('open request', 5)),
-    section('constraints & preferences', ['- keep the migration constraint']),
+    section('user instructions', ['- keep the migration constraint']),
     section('uncertain', items('uncertain issue', 5)),
-    section('learned', items('old learned', 25)),
+    section('facts', items('old learned', 25)),
     section('owned resources', items('owned resource', 8)),
   ].join('\n\n')
   const row = ledgerRowText(9, '2026-10-16 09:00 KST', '/ledger.md', ledger, 400)

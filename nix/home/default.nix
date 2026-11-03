@@ -304,6 +304,7 @@ let
     ui-automation = localSkill "ui-automation";
     record-replay = localSkill "record-replay";
     metro-wait = localSkill "metro-wait";
+    quint-verify = localSkill "quint-verify";
     evidence-store = localSkill "evidence-store";
     teardown = localSkill "teardown";
     apology = localSkill "apology";

@@ -45,6 +45,28 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 Viva Republica (Toss)", "2026 RanolP"]
 SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
 
+# quint-verify: adapted (modified, condensed) from github.com/quint-co/quint at fa42a10
+# (skills/quint-modeling, skills/quint-lang; Apache-2.0, core contributors of Informal Systems per its
+# LICENSE) and github.com/opum-ai/proof-skills at 578749f (skills/formal-verify, skills/tlaplus-model;
+# MIT). Each file's footer names the upstream files it draws on.
+[[annotations]]
+path = [
+    "nix/home/configs/.agents/skills/quint-verify/SKILL.md",
+    "nix/home/configs/.agents/skills/quint-verify/references/from-code.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2021-2023 Informal Systems and the Quint contributors", "2026 Opum AI", "2026 RanolP"]
+SPDX-License-Identifier = "Apache-2.0 AND MIT"
+
+[[annotations]]
+path = [
+    "nix/home/configs/.agents/skills/quint-verify/references/running.md",
+    "nix/home/configs/.agents/skills/quint-verify/references/syntax.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2021-2023 Informal Systems and the Quint contributors", "2026 RanolP"]
+SPDX-License-Identifier = "Apache-2.0 AND MIT"
+
 # YAGNI ladder ("lazy senior dev") rules adapted from github.com/DietrichGebert/ponytail (MIT).
 [[annotations]]
 path = ["nix/home/configs/claude/CLAUDE.md"]
@@ -85,6 +107,7 @@ path = [
     "nix/home/configs/.agents/skills/parallel-worktree-workflow/SKILL.md",
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
     "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
+    "nix/home/configs/.agents/skills/quint-verify/references/worked-example.md",
     "nix/home/configs/.agents/skills/want-exit/SKILL.md",
     "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/template.html",
     "nix/home/configs/.agents/skills/visual-explainer/timeline-visualizer/README.md",

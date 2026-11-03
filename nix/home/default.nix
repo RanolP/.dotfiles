@@ -332,6 +332,7 @@ let
 in
 {
   imports = [
+    ./programs/figma-cli.nix
     ./programs/git.nix
     ./programs/jira-cli.nix
     ./programs/nushell.nix

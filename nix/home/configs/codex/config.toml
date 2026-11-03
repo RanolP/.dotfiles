@@ -21,6 +21,9 @@ project_doc_fallback_filenames = []
 
 [sandbox_workspace_write]
 network_access = true
+# pnpm keeps the global store only when it can write the store's parent;
+# otherwise it creates .pnpm-store/ in each worktree (issue #15).
+writable_roots = ["/Users/ranolp/Library/pnpm"]
 
 [shell_environment_policy]
 experimental_use_profile = true

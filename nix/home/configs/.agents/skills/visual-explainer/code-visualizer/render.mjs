@@ -12,7 +12,8 @@ import { bundledThemes } from 'shiki';
 import { registerCustomTheme } from '@pierre/diffs';
 import { preloadDiffHTML, preloadFile } from '@pierre/diffs/ssr';
 
-// Nord, https://www.nordtheme.com (MIT). Dark is Shiki's bundled `nord` unchanged.
+// Nord, https://www.nordtheme.com (MIT). Dark is Shiki's bundled `nord` with only the comment colour
+// raised from #616E88 to #A6AFC0 (mixed 58% toward nord4, hue kept) so comments pass 4.5:1 on changed lines.
 // Light swaps Polar Night and Snow Storm and darkens each accent in OKLCH lightness (hue kept)
 // until it passes WCAG AA 4.5:1 on the lightest diff line background; NOTICE.md lists the values.
 const LIGHT = {
@@ -40,7 +41,10 @@ ANSI_NAMES.forEach((n, i) => {
   nordLight.colors[`terminal.ansiBright${n}`] = ANSI_LIGHT[i + 8];
 });
 registerCustomTheme('nord-light', async () => nordLight);
-const theme = { dark: 'nord', light: 'nord-light' };
+const nordDark = JSON.parse(JSON.stringify(nord, (k, v) => typeof v === 'string' ? v.replace(/#616E88/gi, '#A6AFC0') : v));
+Object.assign(nordDark, { name: 'nord-comments', displayName: 'Nord (brighter comments)' });
+registerCustomTheme('nord-comments', async () => nordDark);
+const theme = { dark: 'nord-comments', light: 'nord-light' };
 
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 // The wrapper the package's own SSR component emits (dist/ssr/FileDiffReact.js): a declarative shadow root.

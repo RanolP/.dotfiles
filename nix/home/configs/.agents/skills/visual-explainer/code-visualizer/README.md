@@ -42,7 +42,7 @@ sh ~/.claude/skills/visual-explainer/code-visualizer/render.sh spec.json out.htm
 
 ## 3. Palette
 
-- **Dark** is Shiki's bundled `nord` theme unchanged, on Polar Night (`#2E3440`).
+- **Dark** (`nord-comments`) is Shiki's bundled `nord` theme on Polar Night (`#2E3440`) with one change: comments use `#A6AFC0` instead of `#616E88` so they pass 4.5:1 on changed lines. See `../NOTICE.md`.
 - **Light** (`nord-light`, built in `render.mjs`) swaps Polar Night and Snow Storm for backgrounds and text and darkens each Frost and Aurora accent in OKLCH lightness, hue kept, until it passes WCAG AA 4.5:1 on the darkest code background, the word highlight on a deleted line. The adjusted values are listed in `../NOTICE.md`.
 - Diff line tints are softened from the package defaults (10 % mix of the add or delete colour, 10 % word highlight) so tokens keep their contrast on changed lines; line numbers use 80 % of the text colour.
 - Theme follows `prefers-color-scheme` and is overridden by `data-theme="light"` or `"dark"` on `<html>`, in both directions.
@@ -61,4 +61,4 @@ Run the gate from `../SKILL.md` at 1200 and 400 px with `data-theme` set to ligh
 
 - zero `<script>` elements, counting inside every shadow root, and zero requests besides the page itself;
 - `document.documentElement.scrollWidth` equals the viewport width;
-- every visible text run, walked through the shadow roots with its background composited from its ancestors, has contrast 4.5:1 or more in light. Dark is Nord unchanged and its comment, red, blue and purple tokens fall below 4.5:1 there.
+- every visible text run, walked through the shadow roots with its background composited from its ancestors, has contrast 4.5:1 or more in light. Dark keeps Nord's red, blue and purple, which fall below 4.5:1 there; dark comments pass.

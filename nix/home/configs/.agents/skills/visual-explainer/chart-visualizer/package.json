@@ -1,0 +1,11 @@
+{
+  "name": "chart-visualizer-function-graph",
+  "private": true,
+  "type": "module",
+  "description": "Pre-renders function-plot graphs to static, theme-following SVG inside an HTML fragment.",
+  "dependencies": {
+    "d3-color": "3.1.0",
+    "function-plot": "1.26.0",
+    "jsdom": "30.1.3"
+  }
+}

@@ -130,3 +130,11 @@ SOFTWARE.
 - `shiki` 4.6.0 (npm) highlights the code and supplies the `nord` theme. License: MIT, Copyright (c) 2021 Pine Wu, (c) 2023 Anthony Fu. MIT text in this repository at `LICENSES/MIT.txt`.
 - Both are pinned in `code-visualizer/package-lock.json` and installed by `npm ci` into `~/.cache/visual-explainer/code-visualizer`; no code from either is in this repository. A page `render.sh` writes contains `@pierre/diffs`' stylesheet and markup inside each declarative shadow root.
 - The ANSI-to-HTML converter in `render.mjs` is original code.
+
+## function-plot, jsdom and d3-color (chart-visualizer function graphs; installed at render time, output embeds their SVG)
+
+- `function-plot` 1.26.0 (npm, https://github.com/mauriciopoppe/function-plot) draws the graphs; a page `chart-visualizer/function-graph.sh` writes contains the SVG it produced, recoloured through CSS variables. License: MIT, Copyright (c) 2015 Mauricio Poppe. MIT text in this repository at `LICENSES/MIT.txt`.
+- `jsdom` 30.1.3 (npm) supplies the DOM function-plot draws into, so no browser runs at build time. License: MIT, Copyright (c) 2010 Elijah Insua. MIT text in this repository at `LICENSES/MIT.txt`.
+- `d3-color` 3.1.0 (npm) derives the brightened scatter and text fills that the renderer maps back to tokens. License: ISC, Copyright 2010-2022 Mike Bostock; https://github.com/d3/d3-color/blob/v3.1.0/LICENSE.
+- All three are pinned in `chart-visualizer/package-lock.json` and installed by `npm ci` into `~/.cache/visual-explainer/chart-visualizer`; no code from any of them is in this repository.
+- Palette: the Nord values and light-theme adjustments listed under "Nord (code-visualizer)" above, in slot order `nord8`, `nord11`, `nord14`, `nord15`, `nord12`, `nord13`; dark muted text `#A0A9BA` as in code-visualizer.

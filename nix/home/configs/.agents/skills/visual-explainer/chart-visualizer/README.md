@@ -87,3 +87,40 @@ Keep new colours as tokens in all three CSS blocks, then read them in `tokens()`
 ## 7. Gate
 
 Run the gate from `../SKILL.md`, waiting on `[data-chart-ready]` before each screenshot. Each round, also check the render against dataviz's `references/anti-patterns.md`, and confirm the theme toggle repaints: set `data-theme="dark"` on `<html>` under light media and see the dark series colours.
+
+## 8. Function graphs (함수 그래프)
+
+A plotted formula, y = f(x), with labelled axes: a curve's shape, where two functions cross, a parameter's effect. Measured data on an axis stays an ECharts chart (sections 1-7); a formula goes here. The page is pre-rendered by function-plot 1.26.0 into static SVG and carries no `<script>` and no CDN load.
+
+Write a spec, then run the one command:
+
+```
+sh ~/.claude/skills/visual-explainer/chart-visualizer/function-graph.sh spec.json out.html
+```
+
+```json
+{"title": "Two curves near the origin",
+ "graphs": [{
+   "title": "sin x stays bounded; x²/4 does not",
+   "sub": "x from −6 to 6.",
+   "label": "sin x oscillates between −1 and 1 while x squared over 4 grows past it on both sides; they meet at x = 0 and cross again near x = 1.9",
+   "caption": "The parabola leaves the band [−1, 1] at |x| = 2; the sine never does.",
+   "plot": {
+     "grid": true,
+     "xAxis": {"label": "x", "domain": [-6, 6]},
+     "yAxis": {"label": "y", "domain": [-2, 6]},
+     "data": [{"fn": "sin(x)", "legend": "y = sin x"}, {"fn": "x^2/4", "legend": "y = x² / 4"}]}}]}
+```
+
+- `plot` is function-plot's own options object (`fn`, `points`, `vector`, `fnType: "parametric"` or `"polar"`, `derivative`, `annotations`) without `target`, `width`, `height` or colours; `legend` on a datum adds an HTML legend entry in that series' colour. Up to six series.
+- `label` is required: the claim, read by screen readers from the plot's `role="img"`, in fuller words than the caption.
+- An `fn` with no `graphType` or `sampler` is drawn as a `polyline` from the `builtIn` sampler, so a curve leaving the domain is cut at the edge instead of clamped into a flat line along it.
+- Each graph is rendered twice, 640 x 400 above 700 px and 340 x 300 at 700 px and below, and CSS shows one, so tick labels stay 12-13 px on a phone instead of shrinking with a scaled-down wide render.
+- function-plot runs in jsdom; no browser opens at build time. The first run installs the versions pinned in `package-lock.json` into `~/.cache/visual-explainer/chart-visualizer` (`npm ci`); later runs reuse it until the lockfile changes. Nothing is installed globally or into this repository.
+
+Theme: each series is drawn in a sentinel colour and rewritten to `var(--fg-s1)` through `var(--fg-s6)`; axes, gridlines and tick text are restyled by class (`currentColor`, `--fg-grid`, `--fg-axis`), so the SVG follows `prefers-color-scheme` and `data-theme` in both directions. A colour the renderer cannot map to a token stops the render instead of shipping one that ignores the theme. The palette is Nord: dark uses Nord's values, with muted text at `#A0A9BA` as in code-visualizer; light uses Snow Storm surfaces and code-visualizer's darkened accents. Slot order is `nord8`, `nord11`, `nord14`, `nord15`, `nord12`, `nord13`.
+
+Gate: section 7's rounds at 1200 and 400 px in light and dark, plus zero `<script>`, zero requests besides the page itself, `scrollWidth` equal to the viewport width, and tick and axis-label text at 4.5:1 or more on the surface.
+
+- Manim (3Blue1Brown's animation engine): deferred. pycairo 1.29.2 has no macOS arm64 wheel on PyPI, so installing it compiles; its MP4 or GIF output has unselectable text and colours that ignore the theme; `MathTex` needs a multi-GB LaTeX. Revisit when a topic cannot be explained without motion, starting with a prebuilt pycairo route.
+- JSXGraph: excluded; function-plot covers static function graphs.

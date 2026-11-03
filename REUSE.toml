@@ -92,6 +92,9 @@ path = [
     "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/render.sh",
     "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/package.json",
     "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/package-lock.json",
+    "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/function-graph.sh",
+    "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/package.json",
+    "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/package-lock.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
@@ -133,7 +136,10 @@ SPDX-License-Identifier = "MIT AND (Apache-2.0 OR MIT)"
 
 # Original code carrying the Nord palette values (nordtheme.com, MIT) and a light variant derived from them.
 [[annotations]]
-path = ["nix/home/configs/.agents/skills/visual-explainer/code-visualizer/render.mjs"]
+path = [
+    "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/render.mjs",
+    "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/function-graph.mjs",
+]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 RanolP", "2016-present Sven Greb"]
 SPDX-License-Identifier = "MIT"

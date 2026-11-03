@@ -92,9 +92,11 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
 
-# Adapted (not verbatim) from github.com/nicobailon/visual-explainer v0.14.0 (MIT) and the
+# Adapted (not verbatim) from github.com/nicobailon/visual-explainer v0.14.0 (MIT), the
 # Sui documentation Technical Diagram Standards, docs.sui.io/references/contribute/diagram-standards
-# (Apache-2.0); NOTICE.md carries both attributions and the visual-explainer MIT notice verbatim.
+# (Apache-2.0), the FT Visual Vocabulary in github.com/Financial-Times/chart-doctor (MIT) and the
+# IBM Carbon data-viz palettes, @carbon/charts 1.27.25 (Apache-2.0); NOTICE.md carries every
+# attribution and the MIT notices verbatim.
 [[annotations]]
 path = [
     "nix/home/configs/.agents/skills/visual-explainer/SKILL.md",
@@ -102,9 +104,11 @@ path = [
     "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/README.md",
     "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/rules.md",
     "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/audit.js",
+    "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/README.md",
+    "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/template.html",
 ]
 precedence = "aggregate"
-SPDX-FileCopyrightText = ["2026 RanolP", "2025 Nico Bailon", "Mysten Labs, Inc."]
+SPDX-FileCopyrightText = ["2026 RanolP", "2025 Nico Bailon", "Mysten Labs, Inc.", "2016 FT Interactive News", "IBM Corp."]
 SPDX-License-Identifier = "MIT AND Apache-2.0"
 
 # Original prose; the failure taxonomy is credited to Justin Le,

@@ -11,7 +11,7 @@ Every visual is markup you place by hand and then look at as rendered pixels. Th
 ## Route by kind
 
 - **Node and edge diagrams** (state machine, flow, architecture, data flow, sequence): read `diagram-visualizer/README.md` and draw from `diagram-visualizer/template.html`.
-- **Anything with an axis or a quantity** (charts): load the built-in `dataviz` skill, then run the gate below.
+- **Anything with an axis or a quantity** (charts): load the built-in `dataviz` skill, then read `chart-visualizer/README.md` and draw from `chart-visualizer/template.html` (Apache ECharts themed from Carbon-based tokens).
 
 Credits and licenses for the adapted methods and numbers are in `NOTICE.md`.
 

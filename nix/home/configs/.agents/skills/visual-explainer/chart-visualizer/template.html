@@ -1,0 +1,114 @@
+<title>Chart name</title>
+<style>
+  /* Light palette on bare :root, dark redefines the same tokens (Artifact theme contract).
+     Series colours: IBM Carbon data-viz steps, re-ordered and re-stepped until the
+     built-in dataviz validator passes every check on this surface (see README section 3). */
+  :root {
+    --cv-bg: #f4f4f4;        /* page (Carbon gray 10) */
+    --cv-surface: #ffffff;   /* chart card, the surface the palette was validated on */
+    --cv-ink: #161616;       /* titles, values (Carbon text-primary) */
+    --cv-muted: #525252;     /* axis labels, legend, captions (text-secondary, 7.8:1) */
+    --cv-grid: #e0e0e0;      /* hairline gridlines (gray 20) */
+    --cv-axis: #8d8d8d;      /* baseline (gray 50) */
+    --cv-s1: #8a3ffc; --cv-s2: #009d9a; --cv-s3: #0f62fe;
+    --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --cv-bg: #0b0b0b; --cv-surface: #161616; --cv-ink: #f4f4f4; --cv-muted: #c6c6c6;
+      --cv-grid: #393939; --cv-axis: #6f6f6f;
+      --cv-s1: #a56eff; --cv-s2: #009d9a; --cv-s3: #4589ff;
+      --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --cv-bg: #0b0b0b; --cv-surface: #161616; --cv-ink: #f4f4f4; --cv-muted: #c6c6c6;
+    --cv-grid: #393939; --cv-axis: #6f6f6f;
+    --cv-s1: #a56eff; --cv-s2: #009d9a; --cv-s3: #4589ff;
+    --cv-s4: #ee5396; --cv-s5: #b28600; --cv-s6: #1192e8;
+  }
+  body { background: var(--cv-bg); color: var(--cv-ink); padding-inline: 16px; padding-block: 24px;
+         font-family: ui-sans-serif, -apple-system, "Segoe UI", "Noto Sans", sans-serif; }
+  figure.cv { margin: 0 auto; max-width: 960px; background: var(--cv-surface); border-radius: 8px; padding: 16px; }
+  figure.cv h2 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  figure.cv .cv-sub { color: var(--cv-muted); font-size: 13px; margin: 0 0 8px; }
+  /* The chart box owns its height; width follows the container, so ResizeObserver drives resize(). */
+  .cv-chart { width: 100%; height: 320px; }
+  figcaption, details { color: var(--cv-muted); font-size: 13px; line-height: 1.5; margin-top: 8px; }
+  details table { border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  details th, details td { padding: 2px 10px; text-align: right; border-bottom: 1px solid var(--cv-grid); }
+  details th:first-child, details td:first-child { text-align: left; }
+  .cv-table { overflow-x: auto; }
+</style>
+
+<figure class="cv">
+  <h2>Weekly active users, 2026</h2>
+  <p class="cv-sub">Thousands, by platform. Illustrative data.</p>
+  <!-- role/aria-label carry the claim; ECharts' own aria adds the series summary. -->
+  <div class="cv-chart" id="cv-chart" role="img"
+       aria-label="Weekly active users rose on both platforms in 2026; web passed app in July"></div>
+  <figcaption>Web passed the app in July and kept the lead through December.</figcaption>
+  <details><summary>Data table</summary><div class="cv-table" id="cv-table"></div></details>
+</figure>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/6.1.0/echarts.min.js"></script>
+<script>
+(() => {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const series = [
+    { name: 'App', data: [42, 44, 47, 49, 52, 54, 55, 56, 58, 59, 61, 62] },
+    { name: 'Web', data: [30, 33, 37, 41, 46, 51, 57, 61, 64, 68, 71, 75] },
+  ];
+
+  // Every colour comes from the CSS tokens, so one stylesheet themes page and chart alike.
+  const tokens = () => {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (n) => cs.getPropertyValue(n).trim();
+    return { surface: v('--cv-surface'), ink: v('--cv-ink'), muted: v('--cv-muted'),
+             grid: v('--cv-grid'), axis: v('--cv-axis'),
+             series: [1, 2, 3, 4, 5, 6].map((i) => v('--cv-s' + i)) };
+  };
+
+  const option = (t) => ({
+    animation: false,                      // the gate screenshots a finished frame
+    aria: { enabled: true },
+    color: t.series,                       // fixed order: slot n always means series n
+    textStyle: { fontFamily: 'inherit', color: t.muted },
+    grid: { left: 8, right: 48, top: 40, bottom: 8, containLabel: true },
+    legend: { top: 0, left: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 4,
+              textStyle: { color: t.muted, fontSize: 12 } },
+    tooltip: { trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: t.axis } },
+               backgroundColor: t.surface, borderColor: t.grid, textStyle: { color: t.ink } },
+    xAxis: { type: 'category', data: months, boundaryGap: false,
+             axisLine: { lineStyle: { color: t.axis } }, axisTick: { show: false },
+             axisLabel: { color: t.muted, fontSize: 12, hideOverlap: true } },
+    yAxis: { type: 'value', axisLabel: { color: t.muted, fontSize: 12 },
+             splitLine: { lineStyle: { color: t.grid, width: 1 } } },
+    series: series.map((s) => ({
+      ...s, type: 'line', symbol: 'circle', symbolSize: 8, showSymbol: false,
+      lineStyle: { width: 2, cap: 'round', join: 'round' },
+      itemStyle: { borderColor: t.surface, borderWidth: 2 },
+      // Direct label on the last point only; the legend still carries identity.
+      endLabel: { show: true, color: t.ink, fontSize: 12, formatter: '{c}' },
+    })),
+  });
+
+  const el = document.getElementById('cv-chart');
+  const chart = echarts.init(el, null, { renderer: 'svg' });
+  const paint = () => chart.setOption(option(tokens()), { notMerge: true });
+  chart.on('finished', () => el.setAttribute('data-chart-ready', ''));
+  paint();
+
+  // Re-theme on either theme signal: the OS preference or the viewer's data-theme stamp.
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);
+  new MutationObserver(paint).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  new ResizeObserver(() => chart.resize()).observe(el);
+
+  // Table view: the same numbers without colour or hover.
+  const rows = months.map((m, i) => `<tr><td>${m}</td>${series.map((s) => `<td>${s.data[i]}</td>`).join('')}</tr>`);
+  document.getElementById('cv-table').innerHTML =
+    `<table><thead><tr><th>Month</th>${series.map((s) => `<th>${s.name}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+})();
+</script>

@@ -37,6 +37,48 @@ const stepResult = (id: string, text: string, isError = false) => M('user', '', 
 const stepRecord = { id: 'step-1', intent: 'inspect output', finding: 'the output is settled', decision: 'keep the compact result', files: ['hooks/fold.ts'] }
 const doneSpan = (startToolUseId: string, endToolUseId: string) => ({ id: stepRecord.id, startToolUseId, endToolUseId, status: 'done' as const })
 
+async function swapStepResult(raw: string, failSidecar = false) {
+  const rows = handled([
+    M('user', 'start'), M('user', 'old turn'), M('assistant', 'old '.repeat(3000)),
+    stepUse('step-start', 'Bash', { command: 'produce output' }), stepResult('step-start', raw),
+    stepUse('step-end', 'mcp__clm__clm_task', { id: 'step-1', status: 'done' }), stepResult('step-end', 'done'),
+  ])
+  const stored = new Map<string, unknown>()
+  const files = new Map<string, string>()
+  const base = '/state/clm-s1'
+  const io = {
+    sessionId: async () => 'step-swap', now: async () => 0, usageReading: async () => undefined,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
+    storeGet: async (key: string) => stored.get(key), storeSet: async (key: string, value: unknown) => { stored.set(key, value) }, storeDelete: async (key: string) => { stored.delete(key) },
+    serialize: async (_session: string, run: () => Promise<unknown>) => run(),
+    pendingKey: async () => 'pending:step-swap', topicsKey: async () => 'topics:step-swap', ledgerPath: async () => `${base}.md`, basePath: async () => base,
+    readFile: async (path: string) => files.get(path),
+    writeFile: async (path: string, text: string) => { if (failSidecar && path.includes('.step-')) throw new Error('sidecar write failed'); files.set(path, text) },
+    readRewindIo: () => ({ storeGet: async (key: string) => stored.get(key), storeSet: async (key: string, value: unknown) => { stored.set(key, value) } }),
+    captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
+    append: async () => [], updateHeld: async () => undefined, readAll: async () => [],
+    trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
+    residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
+    stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }), markStableAttachmentsCarried: async () => undefined,
+    fileExists: async () => false, fileList: async () => [], run: async () => ({ exitCode: 0, stderr: '' }),
+    logEvent: async () => undefined, log: () => undefined,
+  } as unknown as FoldJobIo
+  const key = transcriptKey(await io.sessionId())
+  const first = protectedIndex(rows)
+  const keepFrom = first + 3
+  const plan = {
+    ...readyPlan, notes: '## 목표\n- preserve step output', fullNotes: '## 목표\n- preserve step output', seq: 1,
+    keepFrom, keepFp: fingerprint(rows[keepFrom]!), dropFps: foldedRows(rows, first, keepFrom).map(fingerprint), keptTurns: 1,
+    steps: [{ ...stepRecord, id: 's1-1', startToolUseId: 'step-start', endToolUseId: 'step-end' }],
+  }
+  clearFoldJob(key)
+  setRewindFoldJob(key, plan, rows.map(fingerprint))
+  try {
+    const result = await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => ({ messages: [M('user', 'ENGINE SUMMARY')] }))
+    return { base, files, io, raw, result }
+  } finally { clearFoldJob(key) }
+}
+
 // Regression caught: replacing a result removed its row or separated a tool_use from its tool_result.
 test('step replacement keeps every row and tool pair', () => {
   const rows = [stepUse('large', 'Bash'), stepResult('large', BIG + BIG), stepUse('api', 'Bash'), stepResult('api', 'API 400')]
@@ -79,6 +121,40 @@ test('step replacement keeps doing spans and post-span rows verbatim', () => {
   expect(Object.keys(folded.replace)).toEqual(['done'])
   expect(folded.replace.doing).toBeUndefined()
   expect(folded.replace.after).toBeUndefined()
+})
+
+// Regression caught: a previous fold's long stub was folded again and replaced its raw sidecar.
+test('step replacement skips existing fold stubs', () => {
+  const stub = `[clm step step-1 done: already folded]${'x'.repeat(10_000)}`
+  const rows = [stepUse('stub', 'Bash'), stepResult('stub', stub)]
+  const folded = stepReplacements(rows, [doneSpan('stub', 'stub')], [stepRecord])
+  expect(folded.replace).toEqual({})
+  expect(folded.collapsed).toEqual([])
+})
+
+// Regression caught: a low-value step collapse paid the recall cost while saving less than 2k estimated tokens.
+test('step replacement skips total savings below 2k tokens', () => {
+  const rows = [stepUse('small', 'Bash'), stepResult('small', 'x'.repeat(2000))]
+  const folded = stepReplacements(rows, [doneSpan('small', 'small')], [stepRecord])
+  expect(folded.replace).toEqual({})
+  expect(folded.collapsed).toEqual([])
+})
+
+// Regression caught: a failed sidecar write still swapped in a stub whose original output could no longer be recalled.
+test('a sidecar write failure keeps the original result in swapped messages', async () => {
+  const raw = `original ${'x'.repeat(30_000)}`
+  const swapped = await swapStepResult(raw, true)
+  expect(swapped.result.messages?.flatMap(row => row.toolResults?.map(result => result.text) ?? [])).toContain(raw)
+})
+
+// Regression caught: renderRange clipped the step sidecar, so recall after resume lost the end of a large result.
+test('a large result round-trips through the real step sidecar writer and recall pages', async () => {
+  const raw = `${'line '.repeat(14_000)}\nLAST-LINE`
+  const swapped = await swapStepResult(raw)
+  const recallIo = { get: async () => undefined, set: async () => undefined, basePath: async () => swapped.base, readFile: async (path: string) => swapped.files.get(path) }
+  const first = (await recallAddress(recallIo, 's1:main', '@step:s1-1')).result ?? ''
+  const second = (await recallAddress(recallIo, 's1:main', '@step:s1-1#2')).result ?? ''
+  expect(first + second).toContain('LAST-LINE')
 })
 
 // Regression caught: split parsing dropped model step spans or rejected replies from the pre-U3 shape.

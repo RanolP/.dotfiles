@@ -7,9 +7,9 @@ import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import {
   composeLedger, EMPTY_LEDGER, factLines, instructionValues, mergeableNotes, notesOf, parseChanges, parseMerge,
   fallbackLedger, oversizeLines, carryLegacyInstructions, preservedLines, rememberOversize, rememberPreserved, renderTurns,
-  lessonRejectionReason, LESSON_SYSTEM, SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
+  lessonRejectionReason, LESSON_SYSTEM, normalizeLedger, SPLIT_MERGE_SYSTEM, withheldLines, withheldPointer,
 } from './ledger'
-import { focusOf, injected, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
+import { focusOf, injected, isRecord, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held } from './held'
 import type { Fold, FoldPreview, Meta, Opts, PreparedFold, TopicState, TrackerView } from './fold-runtime'
 import { atFoldPoint, calibrateFirstReading, foldableTokens, parseSplitAnswer } from './fold-runtime'
@@ -18,7 +18,7 @@ import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
 import { fnv1a, type SentAt } from './address'
 import { applyFoldClauseOps, clauseStoreKey, emptyClauseStore, livePredicates, readClauseStore, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
-import { plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps, type FoldStep } from './stepfold'
+import { finalizeStepReplacements, plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps, type FoldStep } from './stepfold'
 
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; asks?: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
@@ -328,6 +328,25 @@ function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryM
   }
 }
 
+async function singleTurnSteps(io: FoldJobIo, opts: Opts, folded: Fold): Promise<FoldStep[]> {
+  const view = await io.trackerView(await io.captureOrigin())
+  if (!shouldRequestSingleTurnSteps(folded.plan.tail, view.issues.some(issue => issue.planMode))) return []
+  const response = await io.complete({
+    model: opts.model, system: STEP_FOLD_SYSTEM,
+    prompt: `<kept_turn>\n${xmlText(renderRange(folded.plan.tail, 120_000, 0, await io.sentAt()).text)}\n</kept_turn>`,
+    maxTokens: 2048, timeoutMs: 120_000,
+  })
+  if (!response.isAnswered) return []
+  try {
+    const answer: unknown = JSON.parse(normalizeLedger(response.text))
+    if (!isRecord(answer) || !Array.isArray(answer.steps)) return []
+    return validateFoldSteps(folded.plan.tail, answer.steps, folded.seq)
+  } catch (err) {
+    io.log(`clm: single-turn step summary ignored (${String(err).slice(0, 160)})`, { to: 'debug' })
+    return []
+  }
+}
+
 async function prepareSingleFold(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string, saveMeta: SaveMeta): Promise<Pending | undefined> {
   const startedAt = await io.now()
   let folded: Fold | string
@@ -340,23 +359,7 @@ async function prepareSingleFold(io: FoldJobIo, opts: Opts, rows: readonly Sessi
   }
   await saveMeta(meta)
   extractLessons(io, folded.plan.dropped, folded.seq)
-  let steps: FoldStep[] = []
-  const view = await io.trackerView(await io.captureOrigin())
-  const hasPlan = view.issues.some(issue => issue.planMode)
-  if (shouldRequestSingleTurnSteps(folded.plan.tail, hasPlan)) {
-    const response = await io.complete({
-      model: opts.model, system: STEP_FOLD_SYSTEM,
-      prompt: `<kept_turn>\n${xmlText(renderRange(folded.plan.tail, 120_000, 0, await io.sentAt()).text)}\n</kept_turn>`,
-      maxTokens: 2048, timeoutMs: 120_000,
-    })
-    if (response.isAnswered) {
-      try {
-        const answer: unknown = JSON.parse(response.text)
-        const proposed = typeof answer === 'object' && answer !== null && 'steps' in answer && Array.isArray(answer.steps) ? answer.steps : []
-        steps = validateFoldSteps(folded.plan.tail, proposed, folded.seq)
-      } catch (err) { io.log(`clm: single-turn step summary ignored (${String(err).slice(0, 160)})`, { to: 'debug' }) }
-    }
-  }
+  const steps = await singleTurnSteps(io, opts, folded)
   return pendingFromFold(folded, rows, Math.max(0, (await io.now()) - startedAt), steps)
 }
 
@@ -504,6 +507,12 @@ function landedAsks(asks: readonly Payload[], landing: readonly Payload[], befor
   return confirmQuestion(asks, landing, issues, doneTitles)
 }
 
+const renderStepSidecar = (rows: readonly SessionMessage[]): string => rows.flatMap(row => [
+  `[${row.role}] ${row.text}`,
+  ...row.toolUses.map(use => `  -> ${use.tool} ${JSON.stringify(use.input)}`),
+  ...(row.toolResults ?? []).map(result => `  <- [${result.tool_use_id}] ${result.isError ? 'error ' : ''}${result.text}`),
+]).join('\n')
+
 async function applyFoldPlan(
   io: FoldJobIo, workingRows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, escaped: boolean,
   startedAt: number, key: string, opts: Opts,
@@ -528,7 +537,7 @@ async function applyFoldPlan(
   const tail = workingRows.slice(use.keepFrom)
   const planned = plannedStepSpans(tail, liveIssues)
   const untracked = planned.spans.length ? [] : use.steps ?? []
-  const replacementPlan = stepReplacements(
+  let replacementPlan = stepReplacements(
     tail,
     [...planned.spans, ...untracked.map(step => ({ id: step.id, startToolUseId: step.startToolUseId, endToolUseId: step.endToolUseId, status: 'done' as const }))],
     [...planned.records, ...untracked],
@@ -538,13 +547,14 @@ async function applyFoldPlan(
   for (const step of replacementPlan.collapsed) {
     const path = `${base}.step-${step.id.replace(/[^a-zA-Z0-9_-]/g, '_')}.txt`
     try {
-      await io.writeFile(path, renderRange(step.rows, Number.MAX_SAFE_INTEGER).text)
+      await io.writeFile(path, renderStepSidecar(step.rows))
       preservedCollapsed.push(step)
     } catch (error) {
       await logPersistenceFailure(io, error)
       for (const id of step.rows.flatMap(row => row.toolResults ?? []).map(result => result.tool_use_id)) delete replacementPlan.replace[id]
     }
   }
+  replacementPlan = finalizeStepReplacements(tail, replacementPlan.replace, preservedCollapsed)
   const messages = buildCleared({ head: headRows(workingRows, first), tail, cuts: use.cuts, replace: replacementPlan.replace }, ledgerRow, attachments, headKept)
   const declined = notShrunk(workingRows, messages)
   if (declined) return declined
@@ -561,16 +571,6 @@ async function applyFoldPlan(
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     else await io.storeDelete(topicKey)
-    const collapsedIds = new Set(preservedCollapsed.map(step => step.id))
-    const records = untracked.filter(step => collapsedIds.has(step.id))
-    if (records.length) {
-      const recordKey = `step-records:${key}`
-      const stored = await io.storeGet(recordKey)
-      await io.storeSet(recordKey, [...(Array.isArray(stored) ? stored : []), ...records.map(step => ({
-        id: step.id, line: `${step.intent} → ${step.finding} → ${step.decision}`, files: step.files,
-        startToolUseId: step.startToolUseId, endToolUseId: step.endToolUseId, seq: use.seq,
-      }))].slice(-200))
-    }
     const previousSnapshot = (await readLedgerSnapshots(rewind, key)).at(-1)
     await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(ledgerRow), fileLedger, use.topics, [
       ...(use.coveredRows ?? previousSnapshot?.coveredRows ?? []), ...use.dropFps,
@@ -788,11 +788,10 @@ async function pruneWithheld(io: FoldJobIo, live: readonly SessionMessage[], led
     const base = await io.basePath()
     const dir = base.slice(0, base.lastIndexOf('/'))
     const prefix = base.slice(dir.length + 1) + WITHHELD
-    const stepPrefix = base.slice(dir.length + 1) + '.step-'
     if (!(await io.fileExists(dir))) return
     const pointed = [ledger, ...live.flatMap(message => (message.toolResults ?? []).map(result => result.text))].join('\n')
-    const managed = (await io.fileList(dir)).filter(file => file.kind === 'file' && (file.name.startsWith(prefix) || file.name.startsWith(stepPrefix)))
-    const stale = managed.filter(file => file.name.startsWith(prefix) && !pointed.includes(`${dir}/${file.name}`)).map(file => `${dir}/${file.name}`)
+    // Step sidecars live until the session directory goes; this cleanup owns only withheld files.
+    const stale = (await io.fileList(dir)).filter(file => file.kind === 'file' && file.name.startsWith(prefix) && !pointed.includes(`${dir}/${file.name}`)).map(file => `${dir}/${file.name}`)
     if (stale.length === 0) return
     const result = await io.run(['rm', '-f', '--', ...stale], { timeoutMs: 5000 })
     if (result.exitCode !== 0) io.log(`clm escape: could not remove ${stale.length} withheld file(s) (exit ${result.exitCode}: ${result.stderr})`, { to: 'debug' })

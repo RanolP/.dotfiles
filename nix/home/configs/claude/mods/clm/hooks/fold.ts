@@ -198,12 +198,15 @@ export function cutText(text: string, share: number): string {
   }
   return render(low)
 }
-const applyCuts = (m: SessionMessage, cuts: Record<string, number>, replace: Record<string, string>): SessionMessage =>
-  !m.toolResults?.some(r => replace[r.tool_use_id] !== undefined || cuts[r.tool_use_id] !== undefined)
-    ? m
-    : { ...m, toolResults: m.toolResults.map(r => replace[r.tool_use_id] !== undefined
-      ? { ...r, text: replace[r.tool_use_id]! }
-      : cuts[r.tool_use_id] === undefined ? r : { ...r, text: cutText(r.text, cuts[r.tool_use_id]!) }) }
+const applyCuts = (m: SessionMessage, cuts: Record<string, number>, replace: Record<string, string>): SessionMessage => {
+  if (!m.toolResults?.some(result => replace[result.tool_use_id] !== undefined || cuts[result.tool_use_id] !== undefined)) return m
+  return { ...m, toolResults: m.toolResults.map(result => {
+    const text = replace[result.tool_use_id]
+    if (text !== undefined) return { ...result, text }
+    const share = cuts[result.tool_use_id]
+    return share === undefined ? result : { ...result, text: cutText(result.text, share) }
+  }) }
+}
 
 // A request row kept with its handle and unchanged text brings back its
 // transcript group, the session-start attachments that follow it, so they stay

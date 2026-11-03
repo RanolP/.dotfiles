@@ -1,7 +1,7 @@
 import type { SessionMessage } from 'claude-code'
 
 import { estTokens, isPrompt } from './fold'
-import type { Issue } from './tracker'
+import { isRecord, type Issue } from './tracker'
 
 export type FoldStep = {
   id: string
@@ -31,9 +31,9 @@ const resultEndIndex = (rows: readonly SessionMessage[], id: string, fallback: n
   return fallback
 }
 
-const taskCalls = (rows: readonly SessionMessage[]) => rows.flatMap((row, rowIndex) => row.toolUses.flatMap(use => {
-  if (use.tool !== TASK_TOOL || typeof use.input !== 'object' || use.input === null) return []
-  return [{ id: use.tool_use_id, rowIndex, input: use.input as Record<string, unknown> }]
+const taskCalls = (rows: readonly SessionMessage[]) => rows.flatMap(row => row.toolUses.flatMap(use => {
+  if (use.tool !== TASK_TOOL || !isRecord(use.input)) return []
+  return [{ id: use.tool_use_id, input: use.input }]
 }))
 
 /** Resolves the live tracker plan to tool-use boundaries without changing transcript rows. */
@@ -73,18 +73,24 @@ export function validateFoldSteps(rows: readonly SessionMessage[], proposed: rea
   const accepted: FoldStep[] = []
   let previousEnd = -1
   for (const candidate of proposed.slice(0, 8)) {
-    if (typeof candidate !== 'object' || candidate === null) continue
-    const value = candidate as Record<string, unknown>
-    const from = typeof value.from === 'string' ? positions.get(value.from) : undefined
-    const to = typeof value.to === 'string' ? positions.get(value.to) : undefined
+    if (!isRecord(candidate)) continue
+    const value = candidate
+    const fromId = value.from
+    const toId = value.to
+    const intent = value.intent
+    const finding = value.finding
+    const decision = value.decision
+    if (typeof fromId !== 'string' || typeof toId !== 'string') continue
+    const from = positions.get(fromId)
+    const to = positions.get(toId)
     const files = value.files === undefined ? [] : value.files
     if (from === undefined || to === undefined || from > to || from <= previousEnd
       || (finalIndex !== undefined && from <= finalIndex && finalIndex <= to)
-      || !validClause(value.intent) || !validClause(value.finding) || !validClause(value.decision)
-      || !Array.isArray(files) || files.length > 5 || !files.every(file => typeof file === 'string' && file.trim())) continue
+      || !validClause(intent) || !validClause(finding) || !validClause(decision)
+      || !Array.isArray(files) || files.length > 5 || !files.every((file): file is string => typeof file === 'string' && file.trim().length > 0)) continue
     accepted.push({
-      id: `s${seq}-${accepted.length + 1}`, startToolUseId: value.from as string, endToolUseId: value.to as string,
-      intent: value.intent.trim(), finding: value.finding.trim(), decision: value.decision.trim(), files: files.map(file => file.trim()),
+      id: `s${seq}-${accepted.length + 1}`, startToolUseId: fromId, endToolUseId: toId,
+      intent: intent.trim(), finding: finding.trim(), decision: decision.trim(), files: files.map(file => file.trim()),
     })
     previousEnd = to
   }
@@ -102,7 +108,6 @@ export function stepReplacements(
   const useById = new Map(tail.flatMap(row => row.toolUses.map(use => [use.tool_use_id, use] as const)))
   const replace: Record<string, string> = {}
   const collapsed: CollapsedStep[] = []
-  let savedTokens = 0
   for (const span of spans) {
     if (span.status !== 'done') continue
     const record = recordById.get(span.id)
@@ -110,25 +115,33 @@ export function stepReplacements(
     if (!record || start === undefined || rawEnd === undefined || start > rawEnd) continue
     const end = resultEndIndex(tail, span.endToolUseId, rawEnd)
     const later = tail.slice(end + 1)
-    let first = true
-    let changed = false
-    for (const row of tail.slice(start, end + 1)) for (const result of row.toolResults ?? []) {
-      if (result.isError || result.text.length <= 400) continue
+    const eligible = tail.slice(start, end + 1).flatMap(row => row.toolResults ?? []).filter(result => {
+      if (result.isError || result.text.length <= 400 || result.text.startsWith('[clm step ') || result.text.startsWith('[clm: folded into step ')) return false
       const laterText = later.map(item => `${item.text}\n${JSON.stringify(item.toolUses.map(use => use.input))}`).join('\n')
       const input = JSON.stringify(useById.get(result.tool_use_id)?.input ?? {})
-      const paths = [...input.matchAll(ABSOLUTE_PATH)].map(match => match[1]!)
-      if (laterText.includes(result.tool_use_id) || paths.some(path => laterText.includes(path))) continue
+      const paths = [...input.matchAll(ABSOLUTE_PATH)].flatMap(match => match[1] === undefined ? [] : [match[1]])
+      return !laterText.includes(result.tool_use_id) && !paths.some(path => laterText.includes(path))
+    })
+    for (const [index, result] of eligible.entries()) {
       const address = `@step:${span.id}`
-      const replacement = first
+      const replacement = index === 0
         ? `[clm step ${span.id} done: ${record.intent} → ${record.finding} → ${record.decision}; files: ${record.files.join(', ')}. Its raw tool results are stored: call clm_recall with {"address":"${address}"} before you re-run or re-read them.]`
         : `[clm: folded into step ${span.id}; clm_recall {"address":"${address}"}]`
       replace[result.tool_use_id] = replacement
-      savedTokens += Math.max(0, resultTokens(result.tool_use_id, result.text) - resultTokens(result.tool_use_id, replacement))
-      first = false
-      changed = true
     }
-    if (changed) collapsed.push({ id: span.id, rows: tail.slice(start, end + 1) })
+    if (eligible.length) collapsed.push({ id: span.id, rows: tail.slice(start, end + 1) })
   }
+  return finalizeStepReplacements(tail, replace, collapsed)
+}
+
+export function finalizeStepReplacements(
+  tail: readonly SessionMessage[], replace: Record<string, string>, collapsed: CollapsedStep[],
+): StepReplacementPlan {
+  const originals = new Map(tail.flatMap(row => (row.toolResults ?? []).map(result => [result.tool_use_id, result.text] as const)))
+  const savedTokens = Object.entries(replace).reduce((total, [id, replacement]) => {
+    const original = originals.get(id) ?? ''
+    return total + Math.max(0, resultTokens(id, original) - resultTokens(id, replacement))
+  }, 0)
   return savedTokens < MIN_SAVED_TOKENS ? { replace: {}, collapsed: [], savedTokens: 0 } : { replace, collapsed, savedTokens }
 }
 

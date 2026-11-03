@@ -723,7 +723,8 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
       }
       const planMode = classification.intent === 'question' ? 'none' : parsePlanMode(response.text)
       const plannedRoot = planMode === 'none' ? undefined : createdId ?? classification.target ?? next.stack.at(-1)
-      if (plannedRoot && !currentIssues.some(issue => issue.id === plannedRoot && issue.planMode))
+      const existingPlanMode = currentIssues.find(issue => issue.id === plannedRoot)?.planMode
+      if (plannedRoot && ((planMode === 'planner' && existingPlanMode !== 'planner') || (planMode === 'inline' && !existingPlanMode)))
         payloads.push(planMode === 'planner' ? { op: 'stepped', issue: plannedRoot } : { op: 'planned', issue: plannedRoot, mode: 'inline' })
       const written = await io.writeEvents([
         ...payloads,

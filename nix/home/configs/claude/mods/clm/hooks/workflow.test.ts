@@ -520,8 +520,8 @@ test('a main agent with no focus can create and focus a task by title', OPTS, as
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'child step')?.parent).toBe(root?.id)
 })
 
-// Regression caught: a batch plan attached steps to a sibling outside the focused root or lost their order.
-test('clm_task plan creates ordered focused children with the first doing', OPTS, async ($, on) => {
+// Regression caught: a batch plan attached steps to a sibling, lost their order, or counted one revision per child instead of one per plan call.
+test('clm_task plan creates ordered focused children with first doing at revision one', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [M('user', 'Plan the work.')], replies: [] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'focused work', status: 'doing' },
@@ -537,6 +537,49 @@ test('clm_task plan creates ordered focused children with the first doing', OPTS
   expect(children.map(issue => [issue.title, issue.status])).toEqual([
     ['inspect', 'doing'], ['change', 'todo'], ['verify', 'todo'],
   ])
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-root')?.planRevision).toBe(1)
+})
+
+// Regression caught: a planned step silently closed without its durable intent, finding and decision line.
+test('clm_task denies planned done without result and writes result before done', OPTS, async ($, on) => {
+  const rows = [M('assistant', '', { toolUses: [{ tool_use_id: 'tu_edit', tool: 'Edit', input: { file_path: 'hooks/panel.ts' }, text: '' }] })]
+  const seen = bottoms(on, { rows, replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
+    { op: 'planned', issue: 's1-root', mode: 'inline' },
+    { op: 'create', issue: 's1-step', title: 'change panel', status: 'doing' },
+    { op: 'parent', issue: 's1-step', parent: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'continue' },
+  ])
+  const missing = await $.tool.call({ tool: TASK_TOOL, id: 's1-step', status: 'done' } satisfies ToolCallInput)
+  expect(missing).toEqual({ deny: 'clm_task: done for a planned step needs result {intent, finding, decision} — one short clause each: what you set out to learn or change, what you found, what you decided or changed.' })
+  const completed = await $.tool.call({
+    tool: TASK_TOOL, id: 's1-step', status: 'done',
+    result: { intent: 'change the panel', finding: 'the validation belonged at completion', decision: 'store the result before done', files: ['hooks/panel.ts'] },
+  } as ToolCallInput)
+  expect('deny' in completed).toBe(false)
+  const events = parseLog(seen.files[TRACKER] ?? '')
+  expect(events.slice(-2).map(event => event.op)).toEqual(['result', 'status'])
+  expect(snapshot(events).find(issue => issue.id === 's1-step')).toMatchObject({ status: 'done', result: { files: ['hooks/panel.ts'], source: 'model' } })
+})
+
+// Regression caught: a model could attach an invented file path to a planned step result.
+test('clm_task drops result files absent from the step transcript', OPTS, async ($, on) => {
+  const rows = [M('assistant', '', { toolUses: [{ tool_use_id: 'tu_edit', tool: 'Edit', input: { file_path: 'hooks/panel.ts' }, text: '' }] })]
+  const seen = bottoms(on, { rows, replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
+    { op: 'planned', issue: 's1-root', mode: 'inline' },
+    { op: 'create', issue: 's1-step', title: 'change panel', status: 'doing' },
+    { op: 'parent', issue: 's1-step', parent: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'continue' },
+  ])
+  await $.tool.call({
+    tool: TASK_TOOL, id: 's1-step', status: 'done',
+    result: { intent: 'change the panel', finding: 'one file was touched', decision: 'keep the observed path', files: ['hooks/panel.ts', 'invented.ts'] },
+  } as ToolCallInput)
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-step')?.result?.files).toEqual(['hooks/panel.ts'])
+  expect(seen.logs.join('\n')).toContain('dropped result file path not found in step transcript: invented.ts')
 })
 
 // Regression caught: concurrent agent spawns overwrote task ownership or left an ended agent's root assigned.
@@ -764,6 +807,24 @@ test('an inline plan emits planned instead of stepped', OPTS, async ($, on) => {
   const events = parseLog(seen.files[TRACKER] ?? '')
   expect(events.some(event => event.op === 'planned')).toBe(true)
   expect(events.some(event => event.op === 'stepped')).toBe(false)
+})
+
+// Regression caught: a later planner classification could not upgrade an inline plan, or a later inline classification downgraded a planner plan.
+test('planner classification upgrades inline plans and inline never downgrades planner plans', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [
+    intentReply({ intent: 'handoff', title: 'planned work', plan: 'inline' }),
+    intentReply({ intent: 'continue', target: 's1-1', plan: 'planner' }),
+    intentReply({ intent: 'continue', target: 's1-1', plan: 'inline' }),
+  ] })
+  await $.prompt.submit(promptInput('implement and verify'))
+  await until(() => parseLog(seen.files[TRACKER] ?? '').some(event => event.op === 'planned'))
+  await $.prompt.submit(promptInput('this is now a large end-to-end feature'))
+  await until(() => parseLog(seen.files[TRACKER] ?? '').some(event => event.op === 'stepped'))
+  await $.prompt.submit(promptInput('continue with two actions'))
+  await until(() => seen.intentPrompts.length === 3)
+  const issue = snapshot(parseLog(seen.files[TRACKER] ?? '')).find(item => item.id === 's1-1')
+  expect(issue?.planMode).toBe('planner')
+  expect(parseLog(seen.files[TRACKER] ?? '').filter(event => event.op === 'planned')).toHaveLength(1)
 })
 
 // Regression caught: compaction paraphrased the user's objective and renamed its explicitly planned steps.

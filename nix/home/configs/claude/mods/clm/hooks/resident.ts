@@ -3,6 +3,7 @@ import {
   EMPTY_LEDGER, constraintFactLines, learnedFactLines, notesOf, type Topic,
 } from './ledger'
 import { resourceLedgerForSession } from './resources'
+import { LEDGER_LINE_LIMIT } from './fold'
 import { applyClauses, clauseQuoteOverlaps, clauseStoreKey, emptyClauseStore, parseClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
 
 export type InstructionIndex = { address: string; issue: string | null; text: string }
@@ -149,10 +150,27 @@ export function residentLedgerText(
   const plan = sections.plan
   const clippedObjective = plan?.objective?.text.length && plan.objective.text.length > 600
     ? `${plan.objective.text.slice(0, 599)}…` : plan?.objective?.text
+  const clipPlanLine = (line: string) => {
+    const chars = [...line]
+    return chars.length > LEDGER_LINE_LIMIT ? `${chars.slice(0, LEDGER_LINE_LIMIT - 1).join('')}…` : line
+  }
+  const done = plan?.steps.filter(issue => issue.status === 'done') ?? []
+  const hiddenDone = new Set(done.slice(0, -12).map(issue => issue.id))
+  let collapsedDone = false
+  const stepLines = plan?.steps.flatMap(issue => {
+    if (hiddenDone.has(issue.id)) {
+      if (collapsedDone) return []
+      collapsedDone = true
+      return [`- …+${hiddenDone.size} done (clm_recall @step:${issue.id})`]
+    }
+    const result = issue.status === 'done' ? issue.result : undefined
+    const detail = result ? ` — ${oneLine(result.intent)} → ${oneLine(result.finding)} → ${oneLine(result.decision)}${result.files.length ? ` (files: ${result.files.map(oneLine).join(', ')})` : ''}` : ''
+    return [clipPlanLine(`- [${issue.status === 'done' ? 'x' : issue.status === 'doing' ? '>' : issue.status === 'dropped' ? '-' : ' '}] ${oneLine(issue.title)}${detail} [${issue.id}]`)]
+  }) ?? []
   const planLines = plan ? [
     ...(clippedObjective ? [`- objective (${plan.objective?.address ?? '@unknown'}): ${JSON.stringify(clippedObjective)}`] : []),
     `- revision ${plan.revision}`,
-    ...plan.steps.map(issue => `- [${issue.status === 'done' ? 'x' : issue.status === 'doing' ? '>' : issue.status === 'dropped' ? '-' : ' '}] ${oneLine(issue.title)} [${issue.id}]`),
+    ...stepLines,
   ] : []
   const requests = (sections.requests ?? []).filter(request => request.status === 'open')
     .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)

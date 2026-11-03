@@ -110,6 +110,21 @@ test('the eight-section ledger keeps actions under the focused task and resource
   expect(row).toContain('- stack 2 · pending 1')
 })
 
+// Regression caught: completed planned steps disappeared or rendered without their intent, finding and decision.
+test('a done planned child renders its result in the plan section', () => {
+  const root = {
+    id: 's1-root', title: 'planned work', status: 'doing', notes: [], linked: [], planMode: 'inline', planRevision: 1,
+    origin: { session: 's1', repo: 'github.com/o/r', cwd: '/w' }, updated: '2026-11-03T00:00:00Z',
+  } satisfies Issue
+  const child = {
+    id: 's1-step', title: 'change panel', status: 'done', parent: root.id, notes: [], linked: [],
+    origin: root.origin, updated: root.updated,
+    result: { intent: 'inspect validation', finding: 'result was missing', decision: 'store it on done', files: ['hooks/panel.ts'], source: 'model', ts: root.updated },
+  } satisfies Issue
+  const row = residentLedgerText(root, '@abcd1234', 1, 0, [], { plan: { revision: 1, steps: [child] } })
+  expect(row).toContain('- [x] change panel — inspect validation → result was missing → store it on done (files: hooks/panel.ts) [s1-step]')
+})
+
 test('a legacy prose ledger migrates without losing a line', () => {
   const notes = '## 목표\n- old work\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- [constraint] keep generated files\n- lint failed before the fix'
   const store = migrateLegacyLedger(emptyClauseStore(), notes, [{ topic: 'old work', summary: 'tests remain', seq: 1, focusIssue: 's1-1' }], 3, '2026-10-27T00:00:00Z')

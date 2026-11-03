@@ -215,7 +215,7 @@ export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts'>, le
 }
 
 // clm-prompt
-const LEDGER_LINE_LIMIT = 240
+export const LEDGER_LINE_LIMIT = 240
 const LEDGER_NONE = '- (none yet)'
 const LEDGER_MORE = '- …+'
 const clipLedgerLine = (line: string) => {

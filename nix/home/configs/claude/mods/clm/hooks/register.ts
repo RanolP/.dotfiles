@@ -761,7 +761,17 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
       const failed = verdicts.filter(verdict => !verdict.pass)
       if (failed.length === 0) {
         await append($, [{ op: 'attempt', issue: active.id, method, verdict: 'pass' }], origin)
+        const previousSha = root.worktree.headSha
         const sha = await checkpointCommit({ run: (argv, options) => $.process.run([...argv], options) }, root.worktree, active.title)
+        if (!active.result) {
+          const diff = await $.process.run(['git', '-C', root.worktree.dir, 'diff', '--name-only', previousSha, sha], { timeoutMs: 30_000 })
+          const files = diff.exitCode === 0 ? diff.stdout.split(/\r?\n/).map(file => file.trim()).filter(Boolean).slice(0, 5) : []
+          await append($, [{
+            op: 'result', issue: active.id, intent: active.title.slice(0, 160),
+            finding: verdicts.map(verdict => `${verdict.id}: ${verdict.reason}`).join('; ').replace(/\s+/g, ' ').trim().slice(0, 160),
+            decision: `checkpoint ${sha.slice(0, 8)}`, files, source: 'judge',
+          }], origin)
+        }
         await append($, [
           { op: 'checkpoint', issue: active.id, sha },
           { op: 'status', issue: active.id, status: 'done' },
@@ -1074,13 +1084,14 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_task',
-        description: 'Update a task you are working on: record its ordered plan in one todo call with plan (2-8 short titles), mark a step doing when you start (declare the method you will use), done when you finish it (add evidence with the row and a verbatim quote when one shows the result), or dropped when the user abandons it, citing that user message. To close any other open board issue, such as a deferred todo, pass its id with done or dropped directly; your focus stays where it is. Create a child task for a sub-step you will do yourself.',
+        description: 'Update a task you are working on: record its ordered plan in one todo call with plan (2-8 short titles), mark a step doing when you start (declare the method you will use), done when you finish it (add evidence with the row and a verbatim quote when one shows the result), or dropped when the user abandons it, citing that user message. When you finish a planned step, mark it done with result {intent, finding, decision, files}: one clause each for what you set out to do, what you found, and what you decided or changed, plus up to five file paths you touched or relied on. To close any other open board issue, such as a deferred todo, pass its id with done or dropped directly; your focus stays where it is. Create a child task for a sub-step you will do yourself.',
         inputSchema: {
           type: 'object',
           properties: {
             id: { type: 'string' }, title: { type: 'string' }, status: { type: 'string', enum: ['todo', 'doing', 'done', 'dropped'] },
             method: { type: 'string', description: 'The current approach for a stepped goal task; use a short distinct description.' },
             plan: { type: 'array', minItems: 2, maxItems: 8, items: { type: 'string', maxLength: 120 }, description: 'Ordered short step titles for the focused task.' },
+            result: { type: 'object', properties: { intent: { type: 'string', maxLength: 160 }, finding: { type: 'string', maxLength: 160 }, decision: { type: 'string', maxLength: 160 }, files: { type: 'array', maxItems: 5, items: { type: 'string' } } }, required: ['intent', 'finding', 'decision'], additionalProperties: false },
             note: { type: 'string' }, evidence: { type: 'object', properties: { ref: { type: 'string', description: '"user" for a user message (clm finds the row by the quote), a row ref such as m3, or a tool_use id.' }, quote: { type: 'string', description: 'At least four words, or eight Korean characters, copied verbatim from that row.' } }, required: ['ref', 'quote'], additionalProperties: false },
           },
           required: ['status'], additionalProperties: false,
@@ -1215,7 +1226,8 @@ export const register: Register = (on, options) => {
   })
   on('tool.call', { tool: TASK_TOOL }, async ($, e) => {
     if (!isClmTaskInput(e)) return { deny: 'clm_task requires status and either an issue id or a new task title.' }
-    const result = await runPanelTask(panelIo($), e, e.agentId)
+    const toolUseId = typeof (e as { tool_use_id?: unknown }).tool_use_id === 'string' ? (e as { tool_use_id: string }).tool_use_id : undefined
+    const result = await runPanelTask(panelIo($), e, e.agentId, toolUseId)
     // A drop or done changes which board issues are ready for a co-worker.
     void coworkerIntent(await sid($))?.dispatch()
     return result

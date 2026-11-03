@@ -21,6 +21,8 @@ export type RubricItem =
 export type Verdict = 'pass' | 'fail'
 export type Attempt = { method: string; verdict: Verdict; ts: string }
 export type Method = { text: string; failed: boolean; failures?: number }
+export type StepSpan = { startFp?: string; endFp?: string; startToolUseId?: string; endToolUseId?: string }
+export type StepResult = { intent: string; finding: string; decision: string; files: string[]; source: 'model' | 'judge' | 'fold'; ts: string; span?: StepSpan }
 
 export type Origin = { session: string; repo: string; branch?: string; cwd: string }
 type Base = { ts: string; seq: number; issue: string; origin: Origin }
@@ -29,7 +31,7 @@ export type Intent = 'continue' | 'handoff' | 'interleave' | 'pending' | 'questi
 export type FocusState = { stack: string[]; pending: string[] }
 export type TrackerEvent = Base & (
   | Create
-  | { op: 'status'; status: IssueStatus }
+  | { op: 'status'; status: IssueStatus; startToolUseId?: string }
   | { op: 'retitle'; title: string }
   | { op: 'progress'; done: number; total: number }
   | { op: 'task'; taskId: string }
@@ -38,11 +40,12 @@ export type TrackerEvent = Base & (
   | { op: 'claim'; by: string | null }
   // Links `issue` to `origin.session`, so it is injected there whatever its repo.
   | { op: 'link' }
-  | { op: 'parent'; parent: string | null }
+  | { op: 'parent'; parent: string | null; planBatch?: true }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
   // Stepped goal: the root is planned into steps, each with a rubric, attempts and methodologies.
   | { op: 'stepped' }
   | { op: 'planned'; mode: 'inline' }
+  | { op: 'result'; intent: string; finding: string; decision: string; files: string[]; source: StepResult['source']; span?: StepSpan }
   | { op: 'rubric'; items: RubricItem[] }
   | { op: 'attempt'; method: string; verdict: Verdict }
   | { op: 'method'; text: string; failed: boolean }
@@ -52,7 +55,7 @@ export type TrackerEvent = Base & (
 )
 export type Payload =
   | { op: 'create'; issue?: string; title: string; status: IssueStatus; note?: string; taskId?: string }
-  | { op: 'status'; issue: string; status: IssueStatus }
+  | { op: 'status'; issue: string; status: IssueStatus; startToolUseId?: string }
   | { op: 'retitle'; issue: string; title: string }
   | { op: 'progress'; issue: string; done: number; total: number }
   | { op: 'task'; issue: string; taskId: string }
@@ -60,10 +63,11 @@ export type Payload =
   | { op: 'plan'; issue: string; priority?: number; ready?: boolean }
   | { op: 'claim'; issue: string; by: string | null }
   | { op: 'link'; issue: string }
-  | { op: 'parent'; issue: string; parent: string | null }
+  | { op: 'parent'; issue: string; parent: string | null; planBatch?: true }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
   | { op: 'stepped'; issue: string }
   | { op: 'planned'; issue: string; mode: 'inline' }
+  | { op: 'result'; issue: string; intent: string; finding: string; decision: string; files: string[]; source: StepResult['source']; span?: StepSpan }
   | { op: 'rubric'; issue: string; items: RubricItem[] }
   | { op: 'attempt'; issue: string; method: string; verdict: Verdict }
   | { op: 'method'; issue: string; text: string; failed: boolean }
@@ -88,6 +92,8 @@ export type Issue = {
   stepped?: true
   planMode?: 'inline' | 'planner'
   planRevision?: number
+  result?: StepResult
+  startToolUseId?: string
   /** The latest settled rubric; a later `rubric` op replaces it whole. */
   rubric?: RubricItem[]
   attempts?: Attempt[]
@@ -145,6 +151,7 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
     if (!i) continue
     if (e.op === 'status') {
       i.status = e.status
+      if (e.status === 'doing' && e.startToolUseId) i.startToolUseId = e.startToolUseId
       if (e.status === 'done') i.doneOrder = n
       if (e.status === 'dropped' && i.parent) {
         const root = issues.get(i.parent)
@@ -174,11 +181,15 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
       else {
         i.parent = e.parent
         const root = issues.get(e.parent)
-        if (root?.planMode) root.planRevision = (root.planRevision ?? 0) + 1
+        if (root?.planMode) root.planRevision = e.planBatch ? root.planRevision ?? 1 : (root.planRevision ?? 0) + 1
       }
     }
     else if (e.op === 'stepped') { i.stepped = true; i.planMode = 'planner' }
     else if (e.op === 'planned') i.planMode = e.mode
+    else if (e.op === 'result') i.result = {
+      intent: e.intent, finding: e.finding, decision: e.decision, files: [...e.files], source: e.source, ts: e.ts,
+      ...(e.span ? { span: { ...e.span } } : {}),
+    }
     else if (e.op === 'rubric') i.rubric = e.items.map(item => ({ ...item }))
     else if (e.op === 'attempt') (i.attempts ??= []).push({ method: e.method, verdict: e.verdict, ts: e.ts })
     else if (e.op === 'method') {
@@ -220,7 +231,7 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
         ...base, issue: p.issue ?? issueId(origin.session, seq), op: 'create', title: p.title, status: p.status,
         ...(p.note === undefined ? {} : { note: p.note }), ...(p.taskId === undefined ? {} : { taskId: p.taskId }),
       }
-      case 'status': return { ...base, issue: p.issue, op: 'status', status: p.status }
+      case 'status': return { ...base, issue: p.issue, op: 'status', status: p.status, ...(p.startToolUseId ? { startToolUseId: p.startToolUseId } : {}) }
       case 'retitle': return { ...base, issue: p.issue, op: 'retitle', title: p.title }
       case 'progress': return { ...base, issue: p.issue, op: 'progress', done: p.done, total: p.total }
       case 'task': return { ...base, issue: p.issue, op: 'task', taskId: p.taskId }
@@ -231,9 +242,10 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       }
       case 'claim': return { ...base, issue: p.issue, op: 'claim', by: p.by }
       case 'link': return { ...base, issue: p.issue, op: 'link' }
-      case 'parent': return { ...base, issue: p.issue, op: 'parent', parent: p.parent }
+      case 'parent': return { ...base, issue: p.issue, op: 'parent', parent: p.parent, ...(p.planBatch ? { planBatch: true as const } : {}) }
       case 'stepped': return { ...base, issue: p.issue, op: 'stepped' }
       case 'planned': return { ...base, issue: p.issue, op: 'planned', mode: p.mode }
+      case 'result': return { ...base, issue: p.issue, op: 'result', intent: p.intent, finding: p.finding, decision: p.decision, files: [...p.files], source: p.source, ...(p.span ? { span: { ...p.span } } : {}) }
       case 'rubric': return { ...base, issue: p.issue, op: 'rubric', items: p.items.map(item => ({ ...item })) }
       case 'attempt': return { ...base, issue: p.issue, op: 'attempt', method: p.method, verdict: p.verdict }
       case 'method': return { ...base, issue: p.issue, op: 'method', text: p.text, failed: p.failed }
@@ -393,6 +405,8 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       out.push(`작업 '${title}' 단계 목표로 지정`)
     } else if (e.op === 'planned') {
       out.push(`작업 '${title}' 인라인 계획으로 지정`)
+    } else if (e.op === 'result') {
+      // Step results render in the plan ledger rather than as duplicate notices.
     } else if (e.op === 'rubric') {
       out.push(`작업 '${title}' 완료 기준 ${e.items.length}개 확정`)
     } else if (e.op === 'attempt') {

@@ -233,6 +233,20 @@ test('an all-pass rubric checkpoints the step and advances to the next step', as
   expect(issues.find(issue => issue.id === 's1-step-1')?.checkpoints).toEqual([{ sha: CHECKPOINT_SHA, ts: expect.any(String) }])
 })
 
+// Regression caught: a Stop-pass checkpoint closed a stepped step without a fallback result record.
+test('an all-pass Stop appends a judge result with checkpoint sha and changed files', async ($, on) => {
+  const fixture = steppedStopFixture(on, stepPayloads(), (argv, options) => {
+    if (argv.includes('diff') && argv.includes('--name-only')) return { exitCode: 0, stdout: 'hooks/panel.ts\nhooks/tracker.ts\n', stderr: '' }
+    return defaultProcessResult(argv, options)
+  })
+  await $.classic.Stop({ stop_hook_active: false })
+  const result = snapshot(parseLog(fixture.files[TRACKER] ?? '')).find(issue => issue.id === 's1-step-1')?.result
+  expect(result).toMatchObject({
+    intent: 'Implement the parser', finding: 'tests: exit 0', decision: `checkpoint ${CHECKPOINT_SHA.slice(0, 8)}`,
+    files: ['hooks/panel.ts', 'hooks/tracker.ts'], source: 'judge',
+  })
+})
+
 // Regression caught: background workers writing the worktree were reset while Stop judged their shared step.
 test('a Stop event with background tasks passes through without judging or changing the step', async ($, on) => {
   let judgeCalls = 0

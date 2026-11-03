@@ -69,6 +69,7 @@ export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (input.method !== undefined && input.status !== 'doing') return false
   if (input.plan !== undefined && (input.status !== 'todo' || !Array.isArray(input.plan) || input.plan.length < 2 || input.plan.length > 8
     || !input.plan.every(title => typeof title === 'string' && title.trim() === title && title.length > 0 && title.length <= 120))) return false
+  if (input.result !== undefined && !isRecord(input.result)) return false
   return input.evidence === undefined || (isRecord(input.evidence)
     && typeof input.evidence.ref === 'string' && typeof input.evidence.quote === 'string')
 }
@@ -246,12 +247,12 @@ async function taskEvidenceProblem(
 export const EVIDENCE_FORMAT = 'Set evidence.ref to "user" (or a row ref such as m3) and evidence.quote to at least four words, or eight Korean characters, copied verbatim from one user message.'
 
 async function createChildTask(
-  io: PanelIo, origin: Origin, title: string, status: ClmTaskInput['status'], note: string, parent: string,
+  io: PanelIo, origin: Origin, title: string, status: ClmTaskInput['status'], note: string, parent: string, planBatch = false,
 ): Promise<string | undefined> {
   const created = await io.append([{ op: 'create', title, status, ...(note ? { note } : {}) }], origin)
   const taskId = created.find(event => event.op === 'create')?.issue ?? null
   if (taskId === null) return undefined
-  await io.append([{ op: 'parent', issue: taskId, parent }], origin)
+  await io.append([{ op: 'parent', issue: taskId, parent, ...(planBatch ? { planBatch: true as const } : {}) }], origin)
   return taskId
 }
 
@@ -416,7 +417,18 @@ async function closeUnownedIssue(
   return { result: `clm_task: ${target.id} ${status}; focus unchanged.` }
 }
 
-export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: string): Promise<{ result: string } | { deny: string }> {
+const RESULT_REQUIRED = 'clm_task: done for a planned step needs result {intent, finding, decision} — one short clause each: what you set out to learn or change, what you found, what you decided or changed.'
+
+const validResult = (value: ClmTaskInput['result']) => {
+  if (!value) return undefined
+  const clauses = [value.intent, value.finding, value.decision]
+  if (!clauses.every(clause => typeof clause === 'string' && clause.trim() && clause.length <= 160)) return undefined
+  if (clauses.join('').length > 360) return undefined
+  if (value.files !== undefined && (!Array.isArray(value.files) || value.files.length > 5 || !value.files.every(file => typeof file === 'string' && file.trim()))) return undefined
+  return { intent: value.intent.trim(), finding: value.finding.trim(), decision: value.decision.trim(), files: value.files?.map(file => file.trim()) ?? [] }
+}
+
+export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: string, toolUseId?: string): Promise<{ result: string } | { deny: string }> {
   const origin = await io.captureOrigin()
   // The classifier files the user's deferrals in the background; a main-agent todo for the same work reuses that issue.
   const deferredTitle = agentId === undefined && input.id === undefined && input.status === 'todo' ? input.title?.trim() : undefined
@@ -444,9 +456,10 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   if (input.plan) {
     const taskIds: string[] = []
     for (const [index, title] of input.plan.entries()) {
-      const taskId = await createChildTask(io, origin, title, index === 0 ? 'doing' : 'todo', '', ownRoot)
+      const taskId = await createChildTask(io, origin, title, index === 0 ? 'doing' : 'todo', '', ownRoot, true)
       if (taskId) taskIds.push(taskId)
     }
+    if (taskIds[0] && toolUseId) await io.append([{ op: 'status', issue: taskIds[0], status: 'doing', startToolUseId: toolUseId }], origin)
     return { result: `clm_task: plan recorded under ${ownRoot}: ${taskIds.join(', ')}; ${taskIds[0]} doing.` }
   }
   const target = input.id === undefined ? undefined : byId.get(input.id)
@@ -463,12 +476,36 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
     : undefined
   if (directionProblem) return { deny: `clm_task: ${directionProblem}` }
   const status = input.status
+  const plannedRoot = target?.parent ? byId.get(target.parent) : undefined
+  const plannedStep = target && plannedRoot?.planMode ? target : undefined
+  const result = validResult(input.result)
+  if (status === 'done' && plannedStep && !result) return { deny: RESULT_REQUIRED }
+  let resultPayload: Extract<Payload, { op: 'result' }> | undefined
+  if (status === 'done' && plannedStep && result) {
+    const rows = await io.sessionMessages(agentId)
+    if (!Array.isArray(rows)) return rows
+    const start = plannedStep.startToolUseId
+      ? rows.findIndex(row => row.toolUses.some(use => use.tool_use_id === plannedStep.startToolUseId)) : -1
+    const transcript = JSON.stringify(rows.slice(start < 0 ? 0 : start).flatMap(row => [
+      ...row.toolUses.map(use => use.input),
+      ...(row.toolResults ?? []).map(result => result.text),
+    ]))
+    const files = result.files.filter(file => {
+      const known = transcript.includes(file)
+      if (!known) io.log(`clm_task: dropped result file path not found in step transcript: ${file}`, { to: 'debug' })
+      return known
+    })
+    const span = { ...(plannedStep.startToolUseId ? { startToolUseId: plannedStep.startToolUseId } : {}), ...(toolUseId ? { endToolUseId: toolUseId } : {}) }
+    resultPayload = { op: 'result', issue: plannedStep.id, ...result, files, source: 'model', ...(Object.keys(span).length ? { span } : {}) }
+  }
   if (status === 'done') {
     const goal = outermostSteppedRootOf(target?.id ?? ownRoot, byId)
     const step = goal && stepForTask(target?.id ?? ownRoot, goal, byId)
     const closesGoal = goal !== undefined && (goal.id === target?.id || (!target && goal.id === ownRoot))
-    if (closesGoal || (target && step?.id === target.id))
+    if (closesGoal || (target && step?.id === target.id)) {
+      if (resultPayload) await io.append([resultPayload], origin)
       return { result: `clm_task: stepped issue ${target?.id ?? ownRoot} stays open until the Stop hook passes its rubric and checkpoints it.` }
+    }
   }
   const audit = status === 'done' && input.evidence ? `cited ${input.evidence.ref}: ${input.evidence.quote}` : undefined
   const note = [input.note?.trim(), audit].filter((line): line is string => Boolean(line)).join('\n')
@@ -476,7 +513,11 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   const taskId = input.id ?? createdTask
   if (!taskId) return { result: 'clm_task: task creation did not return an issue id.' }
   if (input.id !== undefined)
-    await io.append([{ op: 'status', issue: taskId, status }, ...(note ? [{ op: 'note' as const, issue: taskId, text: note }] : [])], origin)
+    await io.append([
+      ...(resultPayload ? [resultPayload] : []),
+      { op: 'status', issue: taskId, status, ...(status === 'doing' && toolUseId ? { startToolUseId: toolUseId } : {}) },
+      ...(note ? [{ op: 'note' as const, issue: taskId, text: note }] : []),
+    ], origin)
   if (taskId === focus.stack.at(-1) && (status === 'done' || status === 'dropped')) {
     const currentEvents = await io.readAll()
     const currentFocus = focusOf(currentEvents, origin.session)

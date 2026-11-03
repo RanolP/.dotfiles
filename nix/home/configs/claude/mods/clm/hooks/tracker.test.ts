@@ -202,6 +202,16 @@ test('planRevision counts add drop and retitle but ignores doing and done', () =
   expect(root?.planRevision).toBe(3)
 })
 
+// Regression caught: later result events left the stale first completion line in the plan ledger.
+test('the newest step result event wins', () => {
+  const events = toEvents([
+    { op: 'create', issue: 'step', title: 'inspect', status: 'doing' },
+    { op: 'result', issue: 'step', intent: 'inspect old', finding: 'old finding', decision: 'old decision', files: [], source: 'model' },
+    { op: 'result', issue: 'step', intent: 'inspect new', finding: 'new finding', decision: 'new decision', files: ['hooks/panel.ts'], source: 'fold' },
+  ], at('s1', 'github.com/o/repo'), 0, '2026-11-03T00:00:00Z')
+  expect(snapshot(events)[0]?.result).toMatchObject({ intent: 'inspect new', finding: 'new finding', decision: 'new decision', files: ['hooks/panel.ts'], source: 'fold' })
+})
+
 // Regression caught: co-worker planning and ownership events were ignored when another session wrote them for the issue.
 test('snapshot applies plan and claim ops written by another session', () => {
   const owner = at('owner', 'github.com/o/r'), worker = at('worker', 'github.com/o/r')

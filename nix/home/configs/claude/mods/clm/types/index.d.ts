@@ -59,6 +59,7 @@ export type ClmTaskInput = {
   note?: string
   method?: string
   plan?: string[]
+  result?: { intent: string; finding: string; decision: string; files?: string[] }
   evidence?: { ref: string; quote: string }
 }
 

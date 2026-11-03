@@ -111,3 +111,21 @@ SOFTWARE.
 - Adapted: the fixed 1920 x 1080 stage scaled as a whole with one transform and no reflow inside it, slide switching by `visibility` / `opacity` classes, one idea per slide with at most three bullets for a presented deck, splitting into more slides instead of shrinking type, keyboard and touch navigation, and reduced-motion support; restated in `slide-visualizer/README.md` and re-implemented in `slide-visualizer/template.html`.
 - Changes: the deck sits in the page rather than filling the window, the type floor is derived from the 400 px width, print rules and inline editing dropped, colours and type taken from the shared tokens.
 - License: MIT, Copyright (c) 2025 Zara Zhang. MIT text in this repository at `LICENSES/MIT.txt`.
+
+## Nord (code-visualizer)
+
+- Source: https://www.nordtheme.com, the palette (Polar Night `nord0`-`nord3`, Snow Storm `nord4`-`nord6`, Frost `nord7`-`nord10`, Aurora `nord11`-`nord15`), and the terminal mapping and syntax colours as shipped in Shiki 4.6.0's bundled `nord` theme (from nordtheme/visual-studio-code).
+- Used: dark theme and dark terminal colours unchanged.
+- Changes, light theme only (`nord-light` in `code-visualizer/render.mjs`): Polar Night and Snow Storm swapped (`#2E3440` -> `#ECEFF4`, `#3B4252` -> `#E5E9F0`, `#434C5E` -> `#D8DEE9` as backgrounds; `#D8DEE9` and `#ECEFF4` -> `#2E3440`, `#E5E9F0` -> `#3B4252` as text). Each accent darkened in OKLCH lightness with hue kept until it reaches 4.5:1 on `#E4DDE2`, the darkest light code background (word highlight on a deleted line); measured 4.58:1 or more on every rendered background:
+  - comment `#616E88` -> `#55627B`
+  - `nord7` `#8FBCBB` -> `#3D6868`, `nord8` `#88C0D0` -> `#316877`, `nord9` `#81A1C1` -> `#466482`, `nord10` `#5E81AC` -> `#41638C`
+  - `nord11` `#BF616A` -> `#9E444E`, `nord12` `#D08770` -> `#934F3A`, `nord13` `#EBCB8B` -> `#7A5D1C`, `nord14` `#A3BE8C` -> `#50683A`, `nord15` `#B48EAD` -> `#795673`
+  - ANSI white `#E5E9F0` -> `#5E6167`, bright white `#ECEFF4` -> `#5F6166`; black `#3B4252` and bright black `#4C566A` already pass and are kept.
+- License: MIT, Copyright (c) 2016-present Sven Greb. MIT text in this repository at `LICENSES/MIT.txt`.
+
+## @pierre/diffs and Shiki (code-visualizer; installed at render time, output embeds their markup)
+
+- `@pierre/diffs` 1.6.2 (npm) renders diffs and files on the server (`preloadDiffHTML`, `preloadFile` from `@pierre/diffs/ssr`). License: Apache License 2.0; the package's `LICENSE.md` is the bare license text and names no copyright holder. Full text in this repository at `LICENSES/Apache-2.0.txt`.
+- `shiki` 4.6.0 (npm) highlights the code and supplies the `nord` theme. License: MIT, Copyright (c) 2021 Pine Wu, (c) 2023 Anthony Fu. MIT text in this repository at `LICENSES/MIT.txt`.
+- Both are pinned in `code-visualizer/package-lock.json` and installed by `npm ci` into `~/.cache/visual-explainer/code-visualizer`; no code from either is in this repository. A page `render.sh` writes contains `@pierre/diffs`' stylesheet and markup inside each declarative shadow root.
+- The ANSI-to-HTML converter in `render.mjs` is original code.

@@ -88,6 +88,10 @@ path = [
     "nix/home/configs/.agents/skills/want-exit/SKILL.md",
     "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/template.html",
     "nix/home/configs/.agents/skills/visual-explainer/timeline-visualizer/README.md",
+    "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/README.md",
+    "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/render.sh",
+    "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/package.json",
+    "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/package-lock.json",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
@@ -126,6 +130,13 @@ path = ["nix/home/configs/.agents/skills/visual-explainer/timeline-visualizer/te
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 RanolP", "2011-2017 Almende B.V", "2017-2019 visjs contributors", "Faris Ansari"]
 SPDX-License-Identifier = "MIT AND (Apache-2.0 OR MIT)"
+
+# Original code carrying the Nord palette values (nordtheme.com, MIT) and a light variant derived from them.
+[[annotations]]
+path = ["nix/home/configs/.agents/skills/visual-explainer/code-visualizer/render.mjs"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 RanolP", "2016-present Sven Greb"]
+SPDX-License-Identifier = "MIT"
 
 # Original prose; the failure taxonomy is credited to Justin Le,
 # blog.jle.im/entry/llms-and-haskell-1-constraint-evading-behavior.html

@@ -15,6 +15,7 @@ Every visual is markup you place by hand and then look at as rendered pixels. Th
 - **Dashboards** (KPI cards plus several charts answering one question): read `dashboard-visualizer/README.md` and draw from `dashboard-visualizer/template.html`; each chart inside follows chart-visualizer.
 - **Timelines** (roadmaps and dated events on one axis, or task schedules with dependencies): read `timeline-visualizer/README.md` and draw from `timeline-visualizer/template.html` (vis-timeline for roadmaps, frappe-gantt for schedules).
 - **Slide decks** (a sequence of claims stepped through one per 16:9 slide): read `slide-visualizer/README.md` and draw from `slide-visualizer/template.html`; a chart or diagram on a slide follows chart-visualizer or diagram-visualizer.
+- **Code** (diffs, code files, coloured terminal output): read `code-visualizer/README.md` and pre-render with `code-visualizer/render.sh`, which writes a static fragment with no script and no CDN load (@pierre/diffs and Shiki, Nord palette).
 
 Credits and licenses for the adapted methods and numbers are in `NOTICE.md`.
 

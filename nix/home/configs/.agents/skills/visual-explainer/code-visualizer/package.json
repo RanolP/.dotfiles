@@ -1,0 +1,10 @@
+{
+  "name": "code-visualizer",
+  "private": true,
+  "type": "module",
+  "description": "Pre-renders diffs, code files and ANSI terminal output to static HTML fragments.",
+  "dependencies": {
+    "@pierre/diffs": "1.6.2",
+    "shiki": "4.6.0"
+  }
+}

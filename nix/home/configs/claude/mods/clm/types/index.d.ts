@@ -53,6 +53,7 @@ export type ClmStatus = {
 
 export type ClmRecallInput = { address: string }
 export type ClmTaskInput = {
+  tool_use_id?: string
   id?: string
   title?: string
   status: 'todo' | 'doing' | 'done' | 'dropped'

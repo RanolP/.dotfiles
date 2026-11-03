@@ -1230,7 +1230,7 @@ export const register: Register = (on, options) => {
   })
   on('tool.call', { tool: TASK_TOOL }, async ($, e) => {
     if (!isClmTaskInput(e)) return { deny: 'clm_task requires status and either an issue id or a new task title.' }
-    const toolUseId = typeof (e as { tool_use_id?: unknown }).tool_use_id === 'string' ? (e as { tool_use_id: string }).tool_use_id : undefined
+    const toolUseId = e.tool_use_id
     const result = await runPanelTask(panelIo($), e, e.agentId, toolUseId)
     // A drop or done changes which board issues are ready for a co-worker.
     void coworkerIntent(await sid($))?.dispatch()

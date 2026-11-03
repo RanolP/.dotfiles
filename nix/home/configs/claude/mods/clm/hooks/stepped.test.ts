@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { parseStepped } from './intent'
+import { parsePlanMode } from './intent'
 import { attemptState, debateRubric, judgeRubric, parseRubric, steppedRootOf, type JudgeIo, type ModelIo } from './stepped'
 import { describe, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { M, seedTracker, TRACKER, turnInput } from './clm-test-support'
@@ -349,9 +349,9 @@ test('an internal judge error allows stop and reports its command diagnostics', 
 })
 
 // Regression caught: planner replies missed the stepped path, or old stepped replies lost compatibility.
-test('parseStepped reads planner mode and the old literal true', async () => {
-  expect(parseStepped('{"intent":"continue","plan":"planner"}')).toBe(true)
-  expect(parseStepped('{"intent":"continue","stepped":true}')).toBe(true)
-  expect(parseStepped('{"intent":"continue"}')).toBe(false)
-  expect(parseStepped('{"intent":"continue","stepped":"yes"}')).toBe(false)
+test('parsePlanMode reads planner mode and only the old literal true as planner', async () => {
+  expect(parsePlanMode('{"intent":"continue","plan":"planner"}')).toBe('planner')
+  expect(parsePlanMode('{"intent":"continue","stepped":true}')).toBe('planner')
+  expect(parsePlanMode('{"intent":"continue"}')).toBe('none')
+  expect(parsePlanMode('{"intent":"continue","stepped":"yes"}')).toBe('none')
 })

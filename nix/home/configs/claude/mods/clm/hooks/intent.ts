@@ -138,14 +138,6 @@ function parseObject(raw: string): Record<string, unknown> {
   return value
 }
 
-/** Planner mode and the old literal `stepped: true` both select the stepped path. */
-export const parseStepped = (raw: string): boolean => {
-  try {
-    const value = parseObject(raw)
-    return value.plan === 'planner' || value.stepped === true
-  } catch { return false }
-}
-
 export type PlanMode = 'none' | 'inline' | 'planner'
 /** A reply without `plan` reads as none; old `stepped: true` replies remain planner plans. */
 export const parsePlanMode = (raw: string): PlanMode => {

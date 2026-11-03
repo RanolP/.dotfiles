@@ -5,6 +5,7 @@ import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCo
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
+import { planPromptContext } from './panel'
 import { backfillClausesChained, INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
 import { applyClauses, emptyClauseStore, parseClause, readClauseStore, renderClauses } from './clauses'
 import { observeTranscript, transcriptRowsKey, type RewindIo } from './rewind'
@@ -540,6 +541,24 @@ test('clm_task plan creates ordered focused children with first doing at revisio
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-root')?.planRevision).toBe(1)
 })
 
+// Regression caught: a stepped root received both planner-spawn and inline-plan instructions, then accepted the inline plan.
+test('a stepped root suppresses inline plan context and denies a clm_task plan', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Plan the work.')], replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'stepped work', status: 'doing' },
+    { op: 'stepped', issue: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
+  ])
+  expect(await planPromptContext({
+    captureOrigin: async () => ({ session: 's1', repo: 'github.com/o/repo', cwd: '/work/repo' }),
+    readAll: async () => parseLog(seen.files[TRACKER] ?? ''),
+  })).toBeUndefined()
+  expect(await $.tool.call({ tool: TASK_TOOL, status: 'todo', plan: ['inspect', 'change'] } as ToolCallInput)).toEqual({
+    deny: 'clm_task: a stepped goal records its steps from the planner agent; spawn it first.',
+  })
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).some(issue => issue.parent === 's1-root')).toBe(false)
+})
+
 // Regression caught: a planned step silently closed without its durable intent, finding and decision line.
 test('clm_task denies planned done without result and writes result before done', OPTS, async ($, on) => {
   const rows = [M('assistant', '', { toolUses: [{ tool_use_id: 'tu_edit', tool: 'Edit', input: { file_path: 'hooks/panel.ts' }, text: '' }] })]
@@ -561,6 +580,25 @@ test('clm_task denies planned done without result and writes result before done'
   const events = parseLog(seen.files[TRACKER] ?? '')
   expect(events.slice(-2).map(event => event.op)).toEqual(['result', 'status'])
   expect(snapshot(events).find(issue => issue.id === 's1-step')).toMatchObject({ status: 'done', result: { files: ['hooks/panel.ts'], source: 'model' } })
+})
+
+// Regression caught: an over-length result was rejected as though result were missing.
+test('clm_task explains the received length when a planned result exceeds 360 characters', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
+    { op: 'planned', issue: 's1-root', mode: 'inline' },
+    { op: 'create', issue: 's1-step', title: 'change panel', status: 'doing' },
+    { op: 'parent', issue: 's1-step', parent: 's1-root' },
+    { op: 'focus', stack: ['s1-root'], pending: [], intent: 'continue' },
+  ])
+  const clause = 'x'.repeat(121)
+  expect(await $.tool.call({
+    tool: TASK_TOOL, id: 's1-step', status: 'done',
+    result: { intent: clause, finding: clause, decision: clause },
+  } as ToolCallInput)).toEqual({
+    deny: 'clm_task: keep result intent, finding and decision to one short clause each, under 360 characters together (received 363).',
+  })
 })
 
 // Regression caught: a model could attach an invented file path to a planned step result.
@@ -841,7 +879,8 @@ test('a planned objective keeps the address row text while merge drops a child r
   const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
   const child = issues.find(issue => issue.parent === objective.issue)
   expect(child).toBeDefined()
-  const gated = await gateMerge({ logEvent: async () => undefined }, [{ op: 'retitle', issue: child!.id, title: 'paraphrased' }], [[]], [], new Map(), 1, new Set(), issues)
+  if (!child) throw new Error('expected a child issue')
+  const gated = await gateMerge({ logEvent: async () => undefined }, [{ op: 'retitle', issue: child.id, title: 'paraphrased' }], [[]], [], new Map(), 1, new Set(), issues)
   expect(gated.ops).toEqual([])
   expect((seen.store['objective:s1:main'] as { text: string }).text).toBe(prompt)
 })

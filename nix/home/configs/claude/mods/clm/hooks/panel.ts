@@ -306,7 +306,7 @@ export async function planPromptContext(io: Pick<PanelIo, 'captureOrigin' | 'rea
   const byId = new Map(issues.map(issue => [issue.id, issue]))
   let root = byId.get(focusOf(events, origin.session).stack.at(-1) ?? '')
   while (root && !root.planMode) root = root.parent ? byId.get(root.parent) : undefined
-  if (!root || issues.some(issue => issue.parent === root.id)) return undefined
+  if (!root || root.planMode !== 'inline' || issues.some(issue => issue.parent === root.id)) return undefined
   return "Before your first other tool call, record this task's steps with one clm_task call: {status:'todo', plan:['<step>', ...]} (2-8 short titles in order). Mark each step doing when you start it and done with its result when you finish it."
 }
 
@@ -422,10 +422,12 @@ const RESULT_REQUIRED = 'clm_task: done for a planned step needs result {intent,
 const validResult = (value: ClmTaskInput['result']) => {
   if (!value) return undefined
   const clauses = [value.intent, value.finding, value.decision]
-  if (!clauses.every(clause => typeof clause === 'string' && clause.trim() && clause.length <= 160)) return undefined
-  if (clauses.join('').length > 360) return undefined
-  if (value.files !== undefined && (!Array.isArray(value.files) || value.files.length > 5 || !value.files.every(file => typeof file === 'string' && file.trim()))) return undefined
-  return { intent: value.intent.trim(), finding: value.finding.trim(), decision: value.decision.trim(), files: value.files?.map(file => file.trim()) ?? [] }
+  const length = clauses.reduce((sum, clause) => sum + (typeof clause === 'string' ? clause.length : 0), 0)
+  if (!clauses.every(clause => typeof clause === 'string' && clause.trim() && clause.length <= 160) || length > 360)
+    return { deny: `clm_task: keep result intent, finding and decision to one short clause each, under 360 characters together (received ${length}).` }
+  if (value.files !== undefined && (!Array.isArray(value.files) || value.files.length > 5 || !value.files.every(file => typeof file === 'string' && file.trim())))
+    return { deny: 'clm_task: list at most five non-empty file paths in result.files.' }
+  return { result: { intent: value.intent.trim(), finding: value.finding.trim(), decision: value.decision.trim(), files: value.files?.map(file => file.trim()) ?? [] } }
 }
 
 export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: string, toolUseId?: string): Promise<{ result: string } | { deny: string }> {
@@ -454,6 +456,7 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   const ownRootOwner = taskOwner(ownRoot, focus.stack, roots, byId)
   if (ownRootOwner !== (agentId ?? 'main')) return { result: `clm_task: ${ownRoot} belongs to ${taskOwnerName(ownRootOwner)}.` }
   if (input.plan) {
+    if (byId.get(ownRoot)?.planMode === 'planner') return { deny: 'clm_task: a stepped goal records its steps from the planner agent; spawn it first.' }
     const taskIds: string[] = []
     for (const [index, title] of input.plan.entries()) {
       const taskId = await createChildTask(io, origin, title, index === 0 ? 'doing' : 'todo', '', ownRoot, true)
@@ -478,8 +481,10 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   const status = input.status
   const plannedRoot = target?.parent ? byId.get(target.parent) : undefined
   const plannedStep = target && plannedRoot?.planMode ? target : undefined
-  const result = validResult(input.result)
-  if (status === 'done' && plannedStep && !result) return { deny: RESULT_REQUIRED }
+  const resultValidation = validResult(input.result)
+  if (status === 'done' && plannedStep && !input.result) return { deny: RESULT_REQUIRED }
+  if (status === 'done' && plannedStep && resultValidation && 'deny' in resultValidation) return resultValidation
+  const result = resultValidation && 'result' in resultValidation ? resultValidation.result : undefined
   let resultPayload: Extract<Payload, { op: 'result' }> | undefined
   if (status === 'done' && plannedStep && result) {
     const rows = await io.sessionMessages(agentId)
@@ -512,6 +517,8 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   const createdTask = input.id === undefined && title ? await createChildTask(io, origin, title, status, note, ownRoot) : undefined
   const taskId = input.id ?? createdTask
   if (!taskId) return { result: 'clm_task: task creation did not return an issue id.' }
+  if (createdTask && status === 'doing' && toolUseId)
+    await io.append([{ op: 'status', issue: createdTask, status: 'doing', startToolUseId: toolUseId }], origin)
   if (input.id !== undefined)
     await io.append([
       ...(resultPayload ? [resultPayload] : []),

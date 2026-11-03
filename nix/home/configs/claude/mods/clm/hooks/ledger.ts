@@ -294,6 +294,7 @@ export const MERGE_SYSTEM = [
   'Instruction clauses are outside your authority. Use only fact and goal clauses.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'For each existing issue changed by the turns, write an update using its existing id so its history stays attached. Omit an op for each unchanged issue. Items listed under <legacy> have no issue yet: create one for each that still holds.',
+  'The tracker renders the objective and the step list. Write ops only for issue changes the removed turns show, and keep the objective text out of notes and facts.',
   'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
   'When the user resumes a dropped direction, move that dropped issue back to todo or doing by its id; it keeps its id and history that way.',
   'Keep the recorded state of each step listed under <finished_earlier>.',

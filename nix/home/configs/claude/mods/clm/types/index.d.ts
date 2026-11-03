@@ -58,6 +58,7 @@ export type ClmTaskInput = {
   status: 'todo' | 'doing' | 'done' | 'dropped'
   note?: string
   method?: string
+  plan?: string[]
   evidence?: { ref: string; quote: string }
 }
 

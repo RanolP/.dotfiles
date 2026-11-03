@@ -42,6 +42,7 @@ export type TrackerEvent = Base & (
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
   // Stepped goal: the root is planned into steps, each with a rubric, attempts and methodologies.
   | { op: 'stepped' }
+  | { op: 'planned'; mode: 'inline' }
   | { op: 'rubric'; items: RubricItem[] }
   | { op: 'attempt'; method: string; verdict: Verdict }
   | { op: 'method'; text: string; failed: boolean }
@@ -62,6 +63,7 @@ export type Payload =
   | { op: 'parent'; issue: string; parent: string | null }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
   | { op: 'stepped'; issue: string }
+  | { op: 'planned'; issue: string; mode: 'inline' }
   | { op: 'rubric'; issue: string; items: RubricItem[] }
   | { op: 'attempt'; issue: string; method: string; verdict: Verdict }
   | { op: 'method'; issue: string; text: string; failed: boolean }
@@ -84,6 +86,8 @@ export type Issue = {
   doneOrder?: number
   /** The root of a stepped goal: its children are planned steps. */
   stepped?: true
+  planMode?: 'inline' | 'planner'
+  planRevision?: number
   /** The latest settled rubric; a later `rubric` op replaces it whole. */
   rubric?: RubricItem[]
   attempts?: Attempt[]
@@ -142,8 +146,18 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
     if (e.op === 'status') {
       i.status = e.status
       if (e.status === 'done') i.doneOrder = n
+      if (e.status === 'dropped' && i.parent) {
+        const root = issues.get(i.parent)
+        if (root?.planMode) root.planRevision = (root.planRevision ?? 0) + 1
+      }
     }
-    else if (e.op === 'retitle') i.title = e.title
+    else if (e.op === 'retitle') {
+      i.title = e.title
+      if (i.parent) {
+        const root = issues.get(i.parent)
+        if (root?.planMode) root.planRevision = (root.planRevision ?? 0) + 1
+      }
+    }
     else if (e.op === 'progress') i.progress = { done: e.done, total: e.total }
     else if (e.op === 'task') i.taskId = e.taskId
     else if (e.op === 'note') i.notes.push(e.text)
@@ -157,9 +171,14 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
     }
     else if (e.op === 'parent') {
       if (e.parent === null) delete i.parent
-      else i.parent = e.parent
+      else {
+        i.parent = e.parent
+        const root = issues.get(e.parent)
+        if (root?.planMode) root.planRevision = (root.planRevision ?? 0) + 1
+      }
     }
-    else if (e.op === 'stepped') i.stepped = true
+    else if (e.op === 'stepped') { i.stepped = true; i.planMode = 'planner' }
+    else if (e.op === 'planned') i.planMode = e.mode
     else if (e.op === 'rubric') i.rubric = e.items.map(item => ({ ...item }))
     else if (e.op === 'attempt') (i.attempts ??= []).push({ method: e.method, verdict: e.verdict, ts: e.ts })
     else if (e.op === 'method') {
@@ -214,6 +233,7 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       case 'link': return { ...base, issue: p.issue, op: 'link' }
       case 'parent': return { ...base, issue: p.issue, op: 'parent', parent: p.parent }
       case 'stepped': return { ...base, issue: p.issue, op: 'stepped' }
+      case 'planned': return { ...base, issue: p.issue, op: 'planned', mode: p.mode }
       case 'rubric': return { ...base, issue: p.issue, op: 'rubric', items: p.items.map(item => ({ ...item })) }
       case 'attempt': return { ...base, issue: p.issue, op: 'attempt', method: p.method, verdict: p.verdict }
       case 'method': return { ...base, issue: p.issue, op: 'method', text: p.text, failed: p.failed }
@@ -371,6 +391,8 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       out.push(`주 작업 초점 갱신 (${e.intent})`)
     } else if (e.op === 'stepped') {
       out.push(`작업 '${title}' 단계 목표로 지정`)
+    } else if (e.op === 'planned') {
+      out.push(`작업 '${title}' 인라인 계획으로 지정`)
     } else if (e.op === 'rubric') {
       out.push(`작업 '${title}' 완료 기준 ${e.items.length}개 확정`)
     } else if (e.op === 'attempt') {

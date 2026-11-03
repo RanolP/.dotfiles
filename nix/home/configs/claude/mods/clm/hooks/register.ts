@@ -1,6 +1,6 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields, type Payloads } from './events'
-import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, STEPPED_WORKTREE_CONTEXT, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, STEPPED_WORKTREE_CONTEXT, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, planPromptContext, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
@@ -829,8 +829,8 @@ const heldIo = ($: EngineInterface): HeldIo => ({
 })
 const readHeld = async ($: EngineInterface) => readHeldStore(heldIo($), await sid($))
 const updateHeld = async ($: EngineInterface, settled: readonly string[], added: readonly Held[]) => updateHeldStore(heldIo($), await sid($), settled, added)
-const gateMerge = ($: EngineInterface, ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>) =>
-  gateHeldMerge(heldIo($), ops, evidence, facts, sources, ratio, dropped)
+const gateMerge = ($: EngineInterface, ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[]) =>
+  gateHeldMerge(heldIo($), ops, evidence, facts, sources, ratio, dropped, issues)
 const reviewFold = ($: EngineInterface, opts: Opts, input: import('./held').ReviewInput) => reviewHeldFold(heldIo($), opts, input)
 
 const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
@@ -840,7 +840,7 @@ const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
   trackerView: (origin, ops) => trackerViewDomain({ readAll: () => readAll($) }, origin, ops),
   readHeld: () => readHeld($),
   heldClaims: (held, issues, session) => heldClaims(held, issues, session),
-  gateMerge: (ops, evidence, facts, sources, ratio, dropped) => gateMerge($, ops, evidence, facts, sources, ratio, dropped),
+  gateMerge: (ops, evidence, facts, sources, ratio, dropped, issues) => gateMerge($, ops, evidence, facts, sources, ratio, dropped, issues),
   reviewFold: (opts, input) => reviewFold($, opts, input),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
   clauseStore: async key => readClauseStore(await sessionStoreGet($, clauseStoreKey(key))) ?? emptyClauseStore(),
@@ -895,6 +895,7 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   complete: request => $.model.complete(request),
   get: key => sessionStoreGet($, key),
   set: (key, value) => sessionStoreSet($, key, value),
+  addressRows: key => addressRows(addressIo($), key),
   writeEvents: (payloads, origin) => writeEvents($, payloads, origin),
   serialize: (session, run) => serialized(session, run),
   syncPanel: (origin, events) => syncPanelSafely($, origin, events),
@@ -1073,12 +1074,13 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_task',
-        description: 'Update a task you are working on: mark it todo to record a planned step, doing when you start (declare the method you will use), done when you finish it (add evidence with the row and a verbatim quote when one shows the result), or dropped when the user abandons it, citing that user message. To close any other open board issue, such as a deferred todo, pass its id with done or dropped directly; your focus stays where it is. Create a child task for a sub-step you will do yourself.',
+        description: 'Update a task you are working on: record its ordered plan in one todo call with plan (2-8 short titles), mark a step doing when you start (declare the method you will use), done when you finish it (add evidence with the row and a verbatim quote when one shows the result), or dropped when the user abandons it, citing that user message. To close any other open board issue, such as a deferred todo, pass its id with done or dropped directly; your focus stays where it is. Create a child task for a sub-step you will do yourself.',
         inputSchema: {
           type: 'object',
           properties: {
             id: { type: 'string' }, title: { type: 'string' }, status: { type: 'string', enum: ['todo', 'doing', 'done', 'dropped'] },
             method: { type: 'string', description: 'The current approach for a stepped goal task; use a short distinct description.' },
+            plan: { type: 'array', minItems: 2, maxItems: 8, items: { type: 'string', maxLength: 120 }, description: 'Ordered short step titles for the focused task.' },
             note: { type: 'string' }, evidence: { type: 'object', properties: { ref: { type: 'string', description: '"user" for a user message (clm finds the row by the quote), a row ref such as m3, or a tool_use id.' }, quote: { type: 'string', description: 'At least four words, or eight Korean characters, copied verbatim from that row.' } }, required: ['ref', 'quote'], additionalProperties: false },
           },
           required: ['status'], additionalProperties: false,
@@ -1258,6 +1260,12 @@ export const register: Register = (on, options) => {
       if (stepped) sections.push({ id: 'clm:stepped', text: stepped, scope: 'session' as const })
     } catch (err) {
       $.ui.log(`clm stepped: prompt context failed issue=unknown argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
+    }
+    try {
+      const plan = await planPromptContext(panelIo($))
+      if (plan) sections.push({ id: 'clm:plan', text: plan, scope: 'session' as const })
+    } catch (err) {
+      $.ui.log(`clm plan: prompt context failed issue=unknown argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
     }
     return { ...r, sections }
   })

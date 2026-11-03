@@ -67,6 +67,8 @@ export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (input.note !== undefined && typeof input.note !== 'string') return false
   if (input.method !== undefined && (typeof input.method !== 'string' || !input.method.trim() || input.method.length > 300)) return false
   if (input.method !== undefined && input.status !== 'doing') return false
+  if (input.plan !== undefined && (input.status !== 'todo' || !Array.isArray(input.plan) || input.plan.length < 2 || input.plan.length > 8
+    || !input.plan.every(title => typeof title === 'string' && title.trim() === title && title.length > 0 && title.length <= 120))) return false
   return input.evidence === undefined || (isRecord(input.evidence)
     && typeof input.evidence.ref === 'string' && typeof input.evidence.quote === 'string')
 }
@@ -296,6 +298,17 @@ export async function steppedPromptContext(io: Pick<PanelIo, 'captureOrigin' | '
   return undefined
 }
 
+export async function planPromptContext(io: Pick<PanelIo, 'captureOrigin' | 'readAll'>): Promise<string | undefined> {
+  const origin = await io.captureOrigin()
+  const events = await io.readAll()
+  const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
+  const byId = new Map(issues.map(issue => [issue.id, issue]))
+  let root = byId.get(focusOf(events, origin.session).stack.at(-1) ?? '')
+  while (root && !root.planMode) root = root.parent ? byId.get(root.parent) : undefined
+  if (!root || issues.some(issue => issue.parent === root.id)) return undefined
+  return "Before your first other tool call, record this task's steps with one clm_task call: {status:'todo', plan:['<step>', ...]} (2-8 short titles in order). Mark each step doing when you start it and done with its result when you finish it."
+}
+
 function stepForTask(taskId: string, root: Issue, byId: ReadonlyMap<string, Issue>): Issue | undefined {
   let current = byId.get(taskId)
   const seen = new Set<string>()
@@ -428,6 +441,14 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   if (!ownRoot) return { result: `clm_task: subagent ${agentId} has no task assigned by the harness.` }
   const ownRootOwner = taskOwner(ownRoot, focus.stack, roots, byId)
   if (ownRootOwner !== (agentId ?? 'main')) return { result: `clm_task: ${ownRoot} belongs to ${taskOwnerName(ownRootOwner)}.` }
+  if (input.plan) {
+    const taskIds: string[] = []
+    for (const [index, title] of input.plan.entries()) {
+      const taskId = await createChildTask(io, origin, title, index === 0 ? 'doing' : 'todo', '', ownRoot)
+      if (taskId) taskIds.push(taskId)
+    }
+    return { result: `clm_task: plan recorded under ${ownRoot}: ${taskIds.join(', ')}; ${taskIds[0]} doing.` }
+  }
   const target = input.id === undefined ? undefined : byId.get(input.id)
   if (input.id !== undefined) {
     if (!target) return { result: `clm_task: issue ${input.id} does not exist in this session.` }

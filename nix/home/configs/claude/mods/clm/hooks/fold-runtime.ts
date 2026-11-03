@@ -35,7 +35,7 @@ export type FoldRuntimeIo = {
   trackerView: (origin: Origin, ops?: readonly Payload[]) => Promise<TrackerView>
   readHeld: () => Promise<Held[]>
   heldClaims: (held: readonly Held[], issues: readonly Issue[], session: string) => HeldClaims
-  gateMerge: (ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>) => Promise<{ ops: Payload[]; evidence: Evidence[][]; facts: Fact[] }>
+  gateMerge: (ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[]) => Promise<{ ops: Payload[]; evidence: Evidence[][]; facts: Fact[] }>
   reviewFold: (opts: Opts, input: ReviewInput) => Promise<Reviewed>
   residentLedger: (key: string, issues: readonly Issue[], state: FocusState, events: readonly TrackerEvent[], preview?: FoldPreview) => Promise<string>
   clauseStore: (key: string) => Promise<ClauseStore>
@@ -203,7 +203,7 @@ export async function fold(
       claimed = ops
       meta.fails = 0
       if (merged.rejected) await io.logEvent('ops-rejected', { ratio, reason: `${merged.rejected} op(s) failed validation; ${ops.length} kept` })
-      const gated = await io.gateMerge(ops, evidence, facts, range.sources, ratio, new Set(view.dropped.map(issue => issue.id)))
+      const gated = await io.gateMerge(ops, evidence, facts, range.sources, ratio, new Set(view.dropped.map(issue => issue.id)), view.issues)
       ;({ ops, evidence, facts } = gated)
     } else {
       meta.fails += 1

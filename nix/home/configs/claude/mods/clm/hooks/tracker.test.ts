@@ -186,6 +186,22 @@ test('merging two session logs, the later status of one issue wins', async () =>
   expect(issue!.status).toBe('done')
 })
 
+// Regression caught: status transitions rewrote the plan revision while structural plan edits were missed.
+test('planRevision counts add drop and retitle but ignores doing and done', () => {
+  const events = toEvents([
+    { op: 'create', issue: 'root', title: 'goal', status: 'doing' },
+    { op: 'planned', issue: 'root', mode: 'inline' },
+    { op: 'create', issue: 'step', title: 'first step', status: 'todo' },
+    { op: 'parent', issue: 'step', parent: 'root' },
+    { op: 'status', issue: 'step', status: 'doing' },
+    { op: 'status', issue: 'step', status: 'done' },
+    { op: 'retitle', issue: 'step', title: 'renamed step' },
+    { op: 'status', issue: 'step', status: 'dropped' },
+  ], at('s1', 'github.com/o/repo'), 0, '2026-11-03T00:00:00Z')
+  const root = snapshot(events).find(item => item.id === 'root')
+  expect(root?.planRevision).toBe(3)
+})
+
 // Regression caught: co-worker planning and ownership events were ignored when another session wrote them for the issue.
 test('snapshot applies plan and claim ops written by another session', () => {
   const owner = at('owner', 'github.com/o/r'), worker = at('worker', 'github.com/o/r')

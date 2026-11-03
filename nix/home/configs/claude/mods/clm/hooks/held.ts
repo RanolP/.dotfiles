@@ -1,6 +1,6 @@
 import { checkEvidence, describeOp, gateOps, withhold, isDoneClaim, isDropClaim, isReopenClaim, resolveRef, type Evidence, type Source } from './evidence'
 import { instructionKey, parseReview, REVIEW_SYSTEM, type Fact } from './ledger'
-import { isRecord, type Payload } from './tracker'
+import { isRecord, type Issue, type Payload } from './tracker'
 
 export type Held = { key: string; nonce: string; kind: 'drop' | 'fact'; factKind?: Fact['kind']; issue?: string; text?: string; evidence: Evidence[]; sources: Record<string, Source> }
 export type HeldClaim = { held: Extract<Held, { kind: 'drop' }>; issue: Issue; evidence: Evidence[] }
@@ -78,10 +78,14 @@ export function heldClaims(list: readonly Held[], issues: readonly Issue[], sess
 
 export async function gateMerge(
   io: Pick<HeldIo, 'logEvent'>, ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[],
-  sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>,
+  sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[] = [],
 ): Promise<Gated> {
   const gated = gateOps(ops, evidence, sources, dropped)
   const rejections = [...gated.rejections]
+  const byId = new Map(issues.map(issue => [issue.id, issue]))
+  const keep = gated.ops.map(op => !(op.op === 'retitle' && byId.get(byId.get(op.issue)?.parent ?? '')?.planMode))
+  const keptOps = gated.ops.filter((_, index) => keep[index])
+  const keptEvidence = gated.evidence.filter((_, index) => keep[index])
   const kept: Fact[] = []
   for (const fact of facts) {
     const checked = checkEvidence(fact.evidence, sources)
@@ -90,7 +94,7 @@ export async function gateMerge(
     else rejections.push(`fact "${fact.text}" dropped (${checked.problems.join('; ') || (fact.kind === 'constraint' ? 'constraint needs tool-result evidence' : 'no evidence')})`)
   }
   if (rejections.length) await io.logEvent('evidence-rejected', { ratio, reason: rejections.join(' | ').slice(0, 2000) })
-  return { ops: gated.ops, evidence: gated.evidence, facts: kept }
+  return { ops: keptOps, evidence: keptEvidence, facts: kept }
 }
 
 export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, input: ReviewInput): Promise<Reviewed> {

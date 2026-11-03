@@ -12,6 +12,7 @@ import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { CONFIRM_ITEMS, CONFIRM_PREFIX } from './evidence'
+import { gateMerge } from './held'
 import { focusOf, parseLog, parseOps, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { fingerprint } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
@@ -519,6 +520,25 @@ test('a main agent with no focus can create and focus a task by title', OPTS, as
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'child step')?.parent).toBe(root?.id)
 })
 
+// Regression caught: a batch plan attached steps to a sibling outside the focused root or lost their order.
+test('clm_task plan creates ordered focused children with the first doing', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Plan the work.')], replies: [] })
+  seedTracker(seen, [
+    { op: 'create', issue: 's1-root', title: 'focused work', status: 'doing' },
+    { op: 'planned', issue: 's1-root', mode: 'inline' },
+    { op: 'create', issue: 's1-other', title: 'other work', status: 'todo' },
+    { op: 'create', issue: 's1-sibling', title: 'existing sibling', status: 'todo' },
+    { op: 'parent', issue: 's1-sibling', parent: 's1-other' },
+    { op: 'focus', stack: ['s1-root'], pending: ['s1-other'], intent: 'handoff' },
+  ])
+  const result = await $.tool.call({ tool: TASK_TOOL, status: 'todo', plan: ['inspect', 'change', 'verify'] } as ToolCallInput)
+  if ('deny' in result) throw new Error(result.deny)
+  const children = snapshot(parseLog(seen.files[TRACKER] ?? '')).filter(issue => issue.parent === 's1-root')
+  expect(children.map(issue => [issue.title, issue.status])).toEqual([
+    ['inspect', 'doing'], ['change', 'todo'], ['verify', 'todo'],
+  ])
+})
+
 // Regression caught: concurrent agent spawns overwrote task ownership or left an ended agent's root assigned.
 test('parallel spawns keep separate child tasks and clear each root when its agent ends', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [M('user', 'Delegate two checks.')], replies: [] })
@@ -733,6 +753,58 @@ const UPGRADE_BENCH = 'oh fuck. upgrade했을 때 벤치마크 일단 해봐'
 const CACHE_BENCH = 'oh fuck. 캐시만 패치해서 벤치마크 해봐.'
 const upgradeClause = { clause: 'benchmark(stylelint, upgrade).', text: 'stylelint 벤치마크는 업그레이드한 상태로 잰다.', quote: 'upgrade했을 때 벤치마크 일단 해봐' }
 const cacheClause = { clause: 'benchmark(stylelint, cache_patch_only).', text: 'stylelint 벤치마크는 캐시만 패치한 상태로 잰다.', quote: '캐시만 패치해서 벤치마크 해봐' }
+
+// Regression caught: inline work was sent through the planner-only stepped path.
+test('an inline plan emits planned instead of stepped', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [intentReply({
+    intent: 'handoff', title: '구현하고 검증하기', plan: 'inline',
+  })] })
+  await $.prompt.submit(promptInput('구현하고 검증해줘'))
+  await until(() => (seen.files[TRACKER] ?? '').includes('"planned"'))
+  const events = parseLog(seen.files[TRACKER] ?? '')
+  expect(events.some(event => event.op === 'planned')).toBe(true)
+  expect(events.some(event => event.op === 'stepped')).toBe(false)
+})
+
+// Regression caught: compaction paraphrased the user's objective and renamed its explicitly planned steps.
+test('a planned objective keeps the address row text while merge drops a child retitle', OPTS, async ($, on) => {
+  const prompt = 'inspect the current behavior\nthen implement only U1'
+  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [intentReply({
+    intent: 'handoff', title: 'U1 구현', plan: 'inline',
+  })] })
+  await $.prompt.submit(promptInput(prompt))
+  await until(() => seen.store['objective:s1:main'] !== undefined)
+  const objective = seen.store['objective:s1:main'] as { issue: string; text: string; address: string }
+  expect(objective.text).toBe(prompt)
+  await $.tool.call({ tool: TASK_TOOL, status: 'todo', plan: ['inspect', 'implement'] } satisfies ToolCallInput)
+  const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
+  const child = issues.find(issue => issue.parent === objective.issue)
+  expect(child).toBeDefined()
+  const gated = await gateMerge({ logEvent: async () => undefined }, [{ op: 'retitle', issue: child!.id, title: 'paraphrased' }], [[]], [], new Map(), 1, new Set(), issues)
+  expect(gated.ops).toEqual([])
+  expect((seen.store['objective:s1:main'] as { text: string }).text).toBe(prompt)
+})
+
+// Regression caught: routine follow-up prompts churned the objective while a real root handoff did not replace it.
+test('continue keeps the objective and handoff replaces it', OPTS, async ($, on) => {
+  const first = 'build the first root'
+  const followUp = 'continue with the next detail'
+  const second = 'switch to the second root'
+  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [
+    intentReply({ intent: 'handoff', title: 'first root', plan: 'inline' }),
+    intentReply({ intent: 'continue', target: 's1-1' }),
+    intentReply({ intent: 'handoff', title: 'second root', plan: 'inline' }),
+  ] })
+  await $.prompt.submit(promptInput(first))
+  await until(() => (seen.store['objective:s1:main'] as { text?: string } | undefined)?.text === first)
+  const original = seen.store['objective:s1:main']
+  await $.prompt.submit(promptInput(followUp))
+  await until(() => seen.intentPrompts.length === 2 && (seen.files[TRACKER] ?? '').split('\n').filter(line => line.includes('"focus"')).length >= 2)
+  expect(seen.store['objective:s1:main']).toEqual(original)
+  await $.prompt.submit(promptInput(second))
+  await until(() => (seen.store['objective:s1:main'] as { text?: string } | undefined)?.text === second)
+  expect((seen.store['objective:s1:main'] as { text: string }).text).toBe(second)
+})
 
 test("a three-word instruction 'always use pnpm' lands a clause", OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({

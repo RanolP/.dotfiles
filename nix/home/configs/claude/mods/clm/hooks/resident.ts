@@ -15,6 +15,7 @@ export type ResidentLedgerRequest = {
 export type ResidentLedgerSections = {
   where?: readonly string[]
   children?: readonly Issue[]
+  plan?: { objective?: { text: string; address: string }; revision: number; steps: readonly Issue[] }
   requests?: readonly ResidentLedgerRequest[]
   facts?: readonly string[]
   constraints?: readonly string[]
@@ -38,6 +39,7 @@ export type ResidentIo = {
 type LedgerPreview = { notes?: string; topics?: Topic[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] }; clauses?: ClauseStore }
 export const instructionIndexKey = (key: string) => `instruction-index:${key}`
 export const issueAddressKey = (key: string) => `issue-addresses:${key}`
+export const objectiveKey = (key: string) => `objective:${key}`
 export function isInstructionIndex(value: unknown): value is InstructionIndex {
   return isRecord(value) && typeof value.address === 'string' && (/^@[\da-f]{8}$/i.test(value.address) || value.address === '@unknown')
     && (typeof value.issue === 'string' || value.issue === null) && typeof value.text === 'string'
@@ -85,8 +87,10 @@ export async function residentLedger(
   const top = topId ? byId.get(topId) : undefined
   const ancestors = new Set<string>()
   let current = top
+  let planRoot: Issue | undefined
   while (current && !ancestors.has(current.id)) {
     ancestors.add(current.id)
+    if (!planRoot && current.planMode) planRoot = current
     current = current.parent ? byId.get(current.parent) : undefined
   }
   let clauseStore = preview.clauses ?? readClauseStore(await io.get(clauseStoreKey(key))) ?? emptyClauseStore()
@@ -108,9 +112,14 @@ export async function residentLedger(
   const liveQuotes = clauseStore.clauses.filter(clause => clause.status === 'live' && clause.kind === 'instruction').map(clause => clause.quote)
   const requests = (await io.readRequests(key)).filter(request => request.status === 'open' && !liveQuotes.some(quote => clauseQuoteOverlaps(request.quote, quote)))
   const resources = await resourceLedgerForSession(key.split(':')[0] ?? '')
+  const objective = await io.get(objectiveKey(key))
+  const plannedObjective = planRoot && isRecord(objective) && objective.issue === planRoot.id
+    && typeof objective.text === 'string' && typeof objective.address === 'string'
+    ? { text: objective.text, address: objective.address } : undefined
   const sections: ResidentLedgerSections = {
     where,
     children: shownIssues.filter(issue => topId !== undefined && issue.parent === topId && isOpen(issue)),
+    ...(planRoot ? { plan: { objective: plannedObjective, revision: planRoot.planRevision ?? 0, steps: shownIssues.filter(issue => issue.parent === planRoot.id) } } : {}),
     requests,
     facts,
     questions: shownIssues.filter(issue => issue.status === 'question'),
@@ -137,6 +146,14 @@ export function residentLedgerText(
       const note = shownNote(issue)
       return `- ${oneLine(issue.title)}${note ? ` — ${oneLine(note)}` : ''} [${issue.id}]`
     })
+  const plan = sections.plan
+  const clippedObjective = plan?.objective?.text.length && plan.objective.text.length > 600
+    ? `${plan.objective.text.slice(0, 599)}…` : plan?.objective?.text
+  const planLines = plan ? [
+    ...(clippedObjective ? [`- objective (${plan.objective?.address ?? '@unknown'}): ${JSON.stringify(clippedObjective)}`] : []),
+    `- revision ${plan.revision}`,
+    ...plan.steps.map(issue => `- [${issue.status === 'done' ? 'x' : issue.status === 'doing' ? '>' : issue.status === 'dropped' ? '-' : ' '}] ${oneLine(issue.title)} [${issue.id}]`),
+  ] : []
   const requests = (sections.requests ?? []).filter(request => request.status === 'open')
     .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
   const facts = [...(sections.facts ?? []), ...(sections.constraints ?? []), ...(sections.learned ?? [])].map(oneLine).filter(Boolean).map(line => line.startsWith('- ') ? line : bullet(line))
@@ -152,7 +169,7 @@ export function residentLedgerText(
   const body = (lines: readonly string[]) => lines.length ? lines.join('\n') : '- (none yet)'
   return [
     '## where we are', where.join('\n'),
-    '## what to do', body(tasks),
+    ...(plan ? ['## plan', body(planLines)] : ['## what to do', body(tasks)]),
     '## what to request', body(requests),
     // Shown only while a question waits, so the common case pays nothing for it.
     ...(questions.length ? ['## open questions', questions.join('\n')] : []),

@@ -1,6 +1,6 @@
 # Notice
 
-This skill is original prose by RanolP (MIT). Its methods, measured thresholds and palette values are adapted, not copied verbatim, from the sources below. Libraries the templates load from a CDN at runtime are referenced, not vendored, and are listed for credit.
+This skill is original prose by RanolP (MIT). Its methods, measured thresholds and palette values are adapted, not copied verbatim, from the sources below. Libraries the templates load from a CDN at runtime are referenced, not vendored, and are listed for credit; the one exception is the two timeline stylesheets, copied verbatim into `timeline-visualizer/template.html` as noted below.
 
 ## visual-explainer
 
@@ -92,3 +92,15 @@ SOFTWARE.
 - Source: https://github.com/abdiraimov-otabek/dashboard-design-skill, `skills/dashboard-design/SKILL.md` and `references/{layout,components}.md`, commit b813324aea08dc19a82d2bd9ea73824dfdd0e844 (2026-10-28).
 - Adapted: one question per screen, KPI card anatomy (label, value, delta with a worded baseline), deltas coloured by meaning with lower-is-better metrics flipped, the previous period as a gray dashed line, the header filter group, and the KPI strip two across on phones; restated in `dashboard-visualizer/README.md`.
 - License: MIT, Copyright (c) 2026 Otabek Abdiraimov. MIT text in this repository at `LICENSES/MIT.txt`.
+
+## vis-timeline (timeline-visualizer; script referenced, stylesheet vendored)
+
+- Script: `https://cdnjs.cloudflare.com/ajax/libs/vis-timeline/8.5.6/vis-timeline-graph2d.min.js`, loaded at runtime.
+- Vendored: `styles/vis-timeline-graph2d.min.css` from the npm package `vis-timeline@8.5.6`, copied verbatim with its comments removed into the first `<style>` block of `timeline-visualizer/template.html`; the template's own rules after it override the colours.
+- License: dual Apache License 2.0 or MIT, at the user's choice (package.json `"(Apache-2.0 OR MIT)"`); this repository uses it under MIT. Copyright (c) 2011-2017 Almende B.V, (c) 2017-2019 visjs contributors. Texts in this repository at `LICENSES/Apache-2.0.txt` and `LICENSES/MIT.txt`.
+
+## frappe-gantt (timeline-visualizer; script referenced, stylesheet vendored)
+
+- Script: `https://cdnjs.cloudflare.com/ajax/libs/frappe-gantt/1.2.2/frappe-gantt.umd.min.js`, loaded at runtime.
+- Vendored: `dist/frappe-gantt.css` from the npm package `frappe-gantt@1.2.2`, copied verbatim with its comments removed into the second `<style>` block of `timeline-visualizer/template.html`; the template maps its `--g-*` variables onto the shared tokens.
+- License: MIT (package.json `"license": "MIT"`, author Faris Ansari; source https://github.com/frappe/gantt). The npm package ships no license file. MIT text in this repository at `LICENSES/MIT.txt`.

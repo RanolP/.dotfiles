@@ -87,6 +87,7 @@ path = [
     "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
     "nix/home/configs/.agents/skills/want-exit/SKILL.md",
     "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/template.html",
+    "nix/home/configs/.agents/skills/visual-explainer/timeline-visualizer/README.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
@@ -113,6 +114,15 @@ path = [
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 RanolP", "2025 Nico Bailon", "Mysten Labs, Inc.", "2016 FT Interactive News", "IBM Corp.", "2026 Raghuram Sirigiri", "2026 Otabek Abdiraimov"]
 SPDX-License-Identifier = "MIT AND Apache-2.0"
+
+# Original markup plus two vendored stylesheets copied verbatim (comments removed):
+# vis-timeline 8.5.6 styles/vis-timeline-graph2d.min.css, (Apache-2.0 OR MIT), used under MIT;
+# frappe-gantt 1.2.2 dist/frappe-gantt.css, MIT.
+[[annotations]]
+path = ["nix/home/configs/.agents/skills/visual-explainer/timeline-visualizer/template.html"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 RanolP", "2011-2017 Almende B.V", "2017-2019 visjs contributors", "Faris Ansari"]
+SPDX-License-Identifier = "MIT AND (Apache-2.0 OR MIT)"
 
 # Original prose; the failure taxonomy is credited to Justin Le,
 # blog.jle.im/entry/llms-and-haskell-1-constraint-evading-behavior.html

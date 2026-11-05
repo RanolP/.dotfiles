@@ -36,10 +36,11 @@
   .tl-page h1 { font-size: 22px; margin: 0 0 24px; }
   .tl-panel { background: var(--cv-surface); border: 1px solid var(--cv-grid); border-radius: 8px; padding: 16px; margin-bottom: 24px; min-width: 0; }
   .tl-panel h2 { font-size: 16px; margin: 0; }
-  .tl-panel .sub { margin: 2px 0 12px; color: var(--cv-muted); font-size: 13px; }
   .tl-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 0 12px; padding: 0; list-style: none; font-size: 13px; color: var(--cv-muted); }
   .tl-key li::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; background: var(--k); vertical-align: -1px; }
   .tl-key li.today::before { width: 2px; height: 12px; border-radius: 0; }
+  .tl-key li.tl-hint { color: var(--cv-ink); }
+  .tl-key li.tl-hint::before { content: none; }
   details { margin-top: 12px; font-size: 13px; }
   .tl-table { overflow-x: auto; }
   table { border-collapse: collapse; margin-top: 8px; }
@@ -100,12 +101,12 @@
 
   <section class="tl-panel" aria-labelledby="roadmap-h">
     <h2 id="roadmap-h">Roadmap</h2>
-    <p class="sub">Drag sideways to pan; hold Ctrl and scroll to zoom.</p>
     <ul class="tl-key">
       <li style="--k: var(--cv-s1)">Platform</li>
       <li style="--k: var(--cv-s2)">App</li>
       <li style="--k: var(--cv-s3)">Growth</li>
       <li class="today" style="--k: var(--cv-ink)">Today</li>
+      <li class="tl-hint">Drag sideways to pan; hold Ctrl and scroll to zoom.</li>
     </ul>
     <div id="roadmap" class="tl-roadmap" role="region" aria-label="Roadmap from September 2026 to March 2027; the table below lists every item."></div>
     <details>
@@ -116,7 +117,7 @@
 
   <section class="tl-panel" aria-labelledby="gantt-h">
     <h2 id="gantt-h">Launch schedule</h2>
-    <p class="sub">Arrows run from a task to the tasks waiting on it; shading is progress.</p>
+    <ul class="tl-key"><li class="tl-hint">Arrows run from a task to the tasks waiting on it; shading is progress.</li></ul>
     <div id="gantt" class="tl-gantt" role="region" aria-label="Gantt chart of the launch tasks and their dependencies."></div>
   </section>
 </main>

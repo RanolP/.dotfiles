@@ -36,7 +36,6 @@
   /* Header: title left, the one filter group right; wraps under the title when narrow. */
   .db-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
   .db-head h1 { font-size: 20px; font-weight: 600; margin: 0; }
-  .db-head p { color: var(--cv-muted); font-size: 13px; margin: 2px 0 0; }
   .db-range { display: inline-flex; border: 1px solid var(--cv-grid); border-radius: 8px; background: var(--cv-surface); }
   .db-range button { font: inherit; font-size: 13px; color: var(--cv-muted); background: none; border: 0;
                      padding: 6px 12px; min-height: 32px; border-radius: 7px; cursor: pointer; }
@@ -71,7 +70,7 @@
 
 <main class="db">
   <header class="db-head">
-    <div><h1>Signups</h1><p>Illustrative data</p></div>
+    <div><h1>Signups</h1></div>
     <div class="db-range" role="group" aria-label="Time range">
       <button type="button" data-range="30d" aria-pressed="false">30 days</button>
       <button type="button" data-range="90d" aria-pressed="true">90 days</button>

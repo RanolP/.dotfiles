@@ -43,7 +43,7 @@ Pick the form from what the slide has to say. Most slides in a technical explain
 | The slide says | Form |
 |---|---|
 | A dependency, a flow, an order | Inline SVG node-and-arrow graph — nodes as `<rect>`+`<text>`, edges as `<path>` with a `marker-end` arrowhead; lay out left-to-right or top-down by rank |
-| A sequence over time | Inline SVG timeline — one axis, labeled ticks, events as dots with captions |
+| A sequence over time | Inline SVG timeline — one axis, labeled ticks, events as dots, each with one label |
 | Before vs after | Two columns side by side, or one `.bg-dark` slide holding the after |
 | A measured number | `.hero-number` — one number, huge, accent color |
 | A distribution or a series | Load the `dataviz` skill first, then draw it as inline SVG — it carries the palette, axis, and chart-form rules |
@@ -83,7 +83,6 @@ Self-contained, no external dependencies. Fill in the placeholders, swap the pal
       --gray-50: #f9f9f9;
       --gray-200: #e5e5e5;
       --gray-400: #9ca3af;
-      --gray-500: #6b7280;
       --gray-900: #111;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -105,19 +104,14 @@ Self-contained, no external dependencies. Fill in the placeholders, swap the pal
       margin: 0 auto;
     }
     /* Typography scale */
-    .eyebrow { font-size: .875rem; letter-spacing: .15em; text-transform: uppercase; color: var(--gray-400); margin-bottom: 1.5rem; }
     .h1 { font-size: clamp(3rem, 8vw, 5.5rem); font-weight: 700; letter-spacing: -.03em; line-height: 1; margin-bottom: 1.5rem; }
     .h2 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 700; letter-spacing: -.02em; line-height: 1.1; margin-bottom: 2rem; }
     .hero-number { font-size: clamp(5rem, 18vw, 9rem); font-weight: 700; line-height: 1; color: var(--accent); }
-    .lead { font-size: clamp(1.1rem, 2.5vw, 1.375rem); color: var(--gray-500); max-width: 36rem; }
-    .caption { font-size: 1rem; color: var(--gray-400); max-width: 30rem; margin-top: 1.5rem; }
     /* Section backgrounds */
     .bg-white  { background: #fff; }
     .bg-muted  { background: var(--gray-50); }
     .bg-dark   { background: var(--gray-900); color: #fff; }
-    .bg-dark .lead, .bg-dark .caption { color: var(--gray-400); }
     .bg-accent-fill { background: var(--accent); color: #fff; }
-    .bg-accent-fill .lead { color: rgba(255,255,255,.75); }
     /* Dividers between slides */
     section + section { border-top: 1px solid var(--gray-200); }
     .bg-dark + section, section + .bg-dark,
@@ -159,16 +153,13 @@ Self-contained, no external dependencies. Fill in the placeholders, swap the pal
 
   <!-- Slide 1: Title -->
   <section class="bg-white">
-    <p class="eyebrow">CATEGORY</p>
     <h1 class="h1">TITLE</h1>
-    <p class="lead">ONE_LINE_HOOK</p>
   </section>
 
   <!-- Slide 2: Big number — the ONE emphasis -->
   <section class="bg-muted">
-    <p class="eyebrow">CONTEXT</p>
+    <h2 class="h2">WHAT_THE_NUMBER_PROVES</h2>
     <p class="hero-number">THE_NUMBER</p>
-    <p class="lead mt-md">WHAT_IT_MEANS</p>
   </section>
 
   <!-- Slide 3: Node-and-arrow diagram -->
@@ -191,28 +182,24 @@ Self-contained, no external dependencies. Fill in the placeholders, swap the pal
         <text x="545" y="85" text-anchor="middle" font-size="15" fill="#fff">NODE_C</text>
       </svg>
     </div>
-    <p class="caption">WHAT_THE_DIAGRAM_SHOWS</p>
   </section>
 
   <!-- Slide 4: Code change -->
   <section class="bg-muted">
-    <h2 class="h2">WHAT_CHANGED</h2>
-    <pre><code><span class="del">- OLD_LINE</span>
+    <h2 class="h2">WHAT_CHANGED_AND_WHY</h2>
+    <pre><code>FILE_PATH:LINE
+<span class="del">- OLD_LINE</span>
 <span class="add">+ NEW_LINE</span></code></pre>
-    <p class="caption">FILE_PATH:LINE — WHY</p>
   </section>
 
   <!-- Slide 5: Dark contrast section -->
   <section class="bg-dark">
-    <p class="eyebrow">BEFORE_LABEL</p>
     <h2 class="h2">THE_KEY_POINT</h2>
-    <p class="lead">BRIEF_EXPLANATION</p>
   </section>
 
   <!-- Last slide: closing -->
   <section class="bg-accent-fill">
     <h2 class="h2">CLOSING_STATEMENT</h2>
-    <p class="lead">OPTIONAL_SUBTEXT</p>
   </section>
 
 </body>

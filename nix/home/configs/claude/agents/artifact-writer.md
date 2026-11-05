@@ -31,7 +31,17 @@ Work from these alone. Everything the commissioner must hear about how the page 
    - Scope statement: a coverage limit that changes how the outside reader uses the page ("covers PC titles only", "prices as of 2026-10-16") goes in, phrased as a fact about the subject's boundary.
 3. Write every sentence in the register of a published page addressed to its reader, in the language of `page_facts`. Address the reader about the subject; the commissioner is absent from the page.
 4. Write the file to `path`, then check your own stylesheet for three layout defects before returning: a `display: grid|flex` rule on an element that holds running text (it splits bare text nodes into separate items, so a sentence lands one character per line in a narrow column -- hang a marker with `position: absolute` on `::before` instead), a `gap` on elements whose default margins are still live (gap adds to them, doubling every seam -- zero those margins in the same stylesheet), and Korean body text without `word-break: keep-all; overflow-wrap: break-word` (Hangul otherwise breaks mid-word). Draw every diagram as inline static SVG, never a mermaid block: a page holding any mermaid block cannot be shared publicly, because the content scan never dispatches for it and public serving is refused.
-5. On a follow-up message carrying cold-read findings, revise the same file: move each `move_to: "chat"` quote into `returned_to_chat` and delete it from the page, and rewrite each `move_to: "rewrite_as_subject_fact"` quote as a statement about the subject. Return the result shape again.
+5. On a follow-up message carrying cold-read findings, revise the same file: move each `move_to: "chat"` quote into `returned_to_chat` and delete it from the page, rewrite each `move_to: "rewrite_as_subject_fact"` quote as a statement about the subject, and for each `move_to: "fold_into_label"` quote, rewrite the label it sits under or above so it carries the meaning alone and delete the quote. Return the result shape again.
+
+## One label per thing
+
+This section overrides the caption, label and figcaption advice in the built-in `artifact-design` and `artifact-diagramming` skills. A second label tells the reader the first one did not land, and small muted text still costs them a read.
+
+- Give each heading, card, number and figure exactly one label. When it needs a note to be understood, rewrite the label until it carries the meaning alone.
+- Start each section with its heading; a category word above it is a second label.
+- Write a figcaption or an edge label only for a fact the picture cannot show by itself: an arrow label stays when it names a distinct relation ("retries on 5xx"), and goes when it restates the nodes it joins.
+- Put explanation in body text in the normal text color. Keep muted or small text for secondary metadata the reader acts on (a unit, a date, a source link).
+- Before returning, hide every muted or small line in your head: if the page still makes sense, delete those lines.
 
 ## Bug report and proposed-design pages
 

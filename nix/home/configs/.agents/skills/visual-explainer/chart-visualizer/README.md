@@ -102,7 +102,6 @@ sh ~/.claude/skills/visual-explainer/chart-visualizer/function-graph.sh spec.jso
 {"title": "Two curves near the origin",
  "graphs": [{
    "title": "sin x stays bounded; x²/4 does not",
-   "sub": "x from −6 to 6.",
    "label": "sin x oscillates between −1 and 1 while x squared over 4 grows past it on both sides; they meet at x = 0 and cross again near x = 1.9",
    "caption": "The parabola leaves the band [−1, 1] at |x| = 2; the sine never does.",
    "plot": {
@@ -114,6 +113,7 @@ sh ~/.claude/skills/visual-explainer/chart-visualizer/function-graph.sh spec.jso
 
 - `plot` is function-plot's own options object (`fn`, `points`, `vector`, `fnType: "parametric"` or `"polar"`, `derivative`, `annotations`) without `target`, `width`, `height` or colours; `legend` on a datum adds an HTML legend entry in that series' colour. Up to six series.
 - `label` is required: the claim, read by screen readers from the plot's `role="img"`, in fuller words than the caption.
+- `title` is the graph's one label. `caption` is optional and renders in body colour under the plot; give it only a fact the plot cannot show by itself, such as the crossing point above.
 - An `fn` with no `graphType` or `sampler` is drawn as a `polyline` from the `builtIn` sampler, so a curve leaving the domain is cut at the edge instead of clamped into a flat line along it.
 - Each graph is rendered twice, 640 x 400 above 700 px and 340 x 300 at 700 px and below, and CSS shows one, so tick labels stay 12-13 px on a phone instead of shrinking with a scaled-down wide render.
 - function-plot runs in jsdom; no browser opens at build time. The first run installs the versions pinned in `package-lock.json` into `~/.cache/visual-explainer/chart-visualizer` (`npm ci`); later runs reuse it until the lockfile changes. Nothing is installed globally or into this repository.

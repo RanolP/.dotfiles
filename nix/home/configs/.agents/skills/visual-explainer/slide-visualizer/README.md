@@ -15,7 +15,7 @@ A scrolling page is better when the reader will search, skim, compare or come ba
 - **Headline is the claim**, written as a full sentence with the takeaway in it ("App signups passed web in Q4 2025"), never a topic label ("Signups"). Reading only the headlines in order tells the whole story.
 - **One piece of evidence** under it: a chart, a diagram, a number, or at most three short bullets. A slide that needs more is two slides.
 - **Optional foot line** for the source or the next step, in `--cv-muted`.
-- **Title slide**: kicker (what and when), the deck's main claim as the `<h1>`, byline. **Closing slide**: the decision or next step as the headline, up to three bullets, who to ask.
+- **Title slide**: the deck's main claim as the `<h1>`, with the period it covers inside the sentence, then the byline. **Closing slide**: the decision or next step as the headline, up to three bullets, who to ask.
 - When content outgrows a slide, split it into a continuation slide; shrinking type below the floor in section 3 is not an option.
 
 ## 2. Stage and scaling
@@ -46,7 +46,7 @@ The viewer refuses the fullscreen and print APIs, so the deck lives in the page 
 
 ## 5. Tokens
 
-Use chart-visualizer's `--cv-*` tokens unchanged (light on `:root`, dark under both the media guard and `:root[data-theme="dark"]`). The slide surface is `--cv-surface` on a `--cv-bg` page, headlines `--cv-ink`, kickers and foot lines `--cv-muted`, and the title slide's accent bar `--cv-s1`. Type is the system UI stack shared with the other visuals.
+Use chart-visualizer's `--cv-*` tokens unchanged (light on `:root`, dark under both the media guard and `:root[data-theme="dark"]`). The slide surface is `--cv-surface` on a `--cv-bg` page, headlines `--cv-ink`, foot lines `--cv-muted`, and the title slide's accent bar `--cv-s1`. Type is the system UI stack shared with the other visuals.
 
 ## 6. Charts and diagrams on a slide
 

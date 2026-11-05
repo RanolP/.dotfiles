@@ -2,7 +2,7 @@
 // no <script>, no external request. Run through ./function-graph.sh, which installs the pinned packages.
 // usage: function-graph.sh <spec.json> <out.html>
 //   spec: {"title": "...", "graphs": [{
-//     "title": "...", "sub": "...", "caption": "...", "label": "the claim, read by screen readers",
+//     "title": "...", "caption": "a fact the plot cannot show (optional)", "label": "the claim, read by screen readers",
 //     "plot": {<function-plot options without target, width, height>}}]}
 //   Each plot.data[i] may carry "legend": "y = sin x"; series i takes colour slot i + 1 (six slots).
 import fs from 'node:fs';
@@ -96,8 +96,7 @@ body{background:var(--fg-bg);color:var(--fg-ink)}
 .fg-page{padding:16px;max-width:960px;margin:0 auto;box-sizing:border-box;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 .fg-page h1{font-size:1.4rem;margin:0 0 16px}
 .fg{margin:0 0 24px;background:var(--fg-surface);border-radius:8px;padding:16px}
-.fg h2{font-size:16px;font-weight:600;margin:0 0 4px}
-.fg-sub,.fg figcaption{color:var(--fg-muted);font-size:13px;margin:0 0 8px}
+.fg h2{font-size:16px;font-weight:600;margin:0 0 8px}
 .fg figcaption{margin:8px 0 0}
 .fg-legend{display:flex;flex-wrap:wrap;gap:4px 16px;margin:0 0 8px;padding:0;list-style:none;font-size:13px;color:var(--fg-muted)}
 .fg-legend li::before{content:"";display:inline-block;width:12px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle;background:var(--sw)}
@@ -124,7 +123,7 @@ spec.graphs.forEach((g, n) => {
     ? `<li style="--sw:var(--fg-s${i + 1})">${esc(d.legend)}</li>` : '').join('');
   // Two renders, shown by width with no script: 640 x 400 above 700 px, 340 x 300 at 700 px and below,
   // so tick labels stay near 13 px instead of shrinking with a scaled-down wide render.
-  body += `<figure class="fg">${g.title ? `<h2>${esc(g.title)}</h2>` : ''}${g.sub ? `<p class="fg-sub">${esc(g.sub)}</p>` : ''}`
+  body += `<figure class="fg">${g.title ? `<h2>${esc(g.title)}</h2>` : ''}`
     + (legend ? `<ul class="fg-legend">${legend}</ul>` : '')
     + `<div class="fg-plot" role="img" aria-label="${esc(g.label)}">`
     + `<div class="fg-wide">${renderSvg(g.plot, 640, 400, `fg${n}w`)}</div>`

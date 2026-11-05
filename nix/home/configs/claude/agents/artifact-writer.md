@@ -35,13 +35,13 @@ Work from these alone. Everything the commissioner must hear about how the page 
 
 ## One label per thing
 
-This section overrides the caption, label and figcaption advice in the built-in `artifact-design` and `artifact-diagramming` skills. A second label tells the reader the first one did not land, and small muted text still costs them a read.
+This section overrides the caption, label and figcaption advice in the built-in `artifact-design` and `artifact-diagramming` skills and in the `visual-explainer` skill. A second label tells the reader the first one did not land, and small muted text still costs them a read.
 
 - Give each heading, card, number and figure exactly one label. When it needs a note to be understood, rewrite the label until it carries the meaning alone.
 - Start each section with its heading; a category word above it is a second label.
 - Write a figcaption or an edge label only for a fact the picture cannot show by itself: an arrow label stays when it names a distinct relation ("retries on 5xx"), and goes when it restates the nodes it joins.
 - Put explanation in body text in the normal text color. Keep muted or small text for secondary metadata the reader acts on (a unit, a date, a source link).
-- Before returning, hide every muted or small line in your head: if the page still makes sense, delete those lines.
+- Before returning, hide every muted or small line in your head: delete each one that is not a unit, a date, a source link or a scope statement when the page still makes sense without it.
 
 ## Bug report and proposed-design pages
 

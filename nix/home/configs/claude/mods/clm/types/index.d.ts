@@ -1,4 +1,4 @@
-import type { StableAttachmentType } from '../hooks/fold'
+import type { QueuedMessage, StableAttachmentType } from '../hooks/fold'
 
 export type ClmBoardIssue = {
   id: string
@@ -86,6 +86,7 @@ export type ClmStableAttachmentType = StableAttachmentType
 export type ClmStableAttachmentValue = { full?: string; inHead?: boolean; headDigest?: string; deltas: string[]; carriedAtSeq: number }
 export type ClmStableAttachmentSession = Partial<Record<ClmStableAttachmentType, ClmStableAttachmentValue>>
 export type ClmStableAttachmentState = Record<string, ClmStableAttachmentSession>
+export type ClmQueuedMessageState = Record<string, QueuedMessage[]>
 
 export type Clm = {
   /** Create an issue in this session, or set an existing issue's status. */
@@ -107,7 +108,7 @@ declare module 'claude-code' {
   }
 
   interface PluginState {
-    clm: { workflow: ClmWorkflow; stableAttachments: ClmStableAttachmentState }
+    clm: { workflow: ClmWorkflow; stableAttachments: ClmStableAttachmentState; queuedMessages: ClmQueuedMessageState }
   }
 
   interface EngineInterface {

@@ -3,15 +3,15 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, mergeInstructions, isHeld, readOpts, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, mergeInstructions, isHeld, readOpts, resetUserWorkflow, restoreFailedContinuation, sessionIssues, storeQueuedMessage, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { buildCleared, estTokens, fingerprint, foldedRows, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION } from './fold'
-import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, setRewindFoldJob, transcriptKey } from './fold-job'
+import { buildCleared, estTokens, fingerprint, foldedRows, isLedgerRow, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION, withQueuedMessages, type QueuedMessage } from './fold'
+import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, setRewindFoldJob, transcriptKey } from './fold-job'
 import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
 import { applyClauses, emptyClauseStore, parseClause } from './clauses'
 import { recallAddress } from './address'
@@ -31,6 +31,11 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
 const ENGINE_SUMMARY_TEXTS = ['ENGINE SUMMARY', '[clm clauses]\n- (none)']
+const queuedSource = (message: QueuedMessage) => {
+  const row = withQueuedMessages([], [message], () => undefined)[0]
+  if (row === undefined) throw new Error('queued source was not inserted')
+  return row
+}
 
 const stepUse = (id: string, tool: string, input: Record<string, unknown> = {}) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input, text: '' }] })
 const stepResult = (id: string, text: string, isError = false) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError }] })
@@ -60,6 +65,7 @@ async function swapStepResult(raw: string, failSidecar = false) {
     trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
     residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
     stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }), markStableAttachmentsCarried: async () => undefined,
+    queuedMessages: async () => [], markQueuedMessagesFolded: async () => undefined,
     fileExists: async () => false, fileList: async () => [], run: async () => ({ exitCode: 0, stderr: '' }),
     logEvent: async () => undefined, log: () => undefined,
   } as unknown as FoldJobIo
@@ -83,11 +89,111 @@ async function swapStepResult(raw: string, failSidecar = false) {
 test('step replacement keeps every row and tool pair', () => {
   const rows = [stepUse('large', 'Bash'), stepResult('large', BIG + BIG), stepUse('api', 'Bash'), stepResult('api', 'API 400')]
   const folded = stepReplacements(rows, [doneSpan('large', 'api')], [stepRecord])
-  const after = buildCleared({ head: [], tail: rows, cuts: {}, replace: folded.replace }, M('user', 'ledger'))
+  const after = buildCleared({ head: [], dropped: [], tail: rows, cuts: {}, replace: folded.replace }, M('user', 'ledger'))
   expect(after).toHaveLength(rows.length + 1)
   expect(after.flatMap(row => row.toolUses.map(use => use.tool_use_id))).toEqual(['large', 'api'])
   expect(after.flatMap(row => row.toolResults?.map(result => result.tool_use_id) ?? [])).toEqual(['large', 'api'])
   expect(after.flatMap(row => row.toolResults?.map(result => result.text) ?? [])).toContain('API 400')
+})
+
+// Regression caught: a mid-turn user message vanished because the compact swap only rebuilt session.messages() rows.
+test('buildCleared places an unhandled queued message verbatim after the ledger', () => {
+  const queued = queuedSource({ uuid: 'queued-1', text: '이미지 스캔 <- CVE 스캔에 통합할 것', at: Date.parse('2026-11-06T06:54:51Z') })
+  const ledger = M('user', '[clm ledger #1 · 2026-11-06 16:00 KST]')
+  const rows = buildCleared({ head: [M('user', 'start')], dropped: [M('assistant', 'working'), queued], tail: [M('user', 'new tail')], cuts: {} }, ledger)
+  expect(rows[1]?.text).toBe(ledger.text)
+  expect(rows[2]?.text).toBe('<clm-queued-message at="2026-11-06 15:54 KST" folded>\nThe user sent this while you were working. Act on it unless the tail shows it is already handled.\n이미지 스캔 <- CVE 스캔에 통합할 것\n</clm-queued-message>')
+  expect(rows[3]?.text).toBe('new tail')
+})
+
+// Regression caught: a captured queued command existed in state but no fold path read it back.
+test('a queued_command captured before a fold appears verbatim after the ledger', () => {
+  const text = '이미지 스캔 <- CVE 스캔에 통합할 것'
+  const source = withQueuedMessages([M('user', 'start'), M('assistant', 'working')], [{ uuid: 'captured-row', text, at: Date.parse('2026-11-06T06:54:51Z') }], () => undefined)
+  const messages = buildCleared({ head: source.slice(0, 1), dropped: source.slice(1), tail: [], cuts: {} }, M('user', '[clm ledger #1 · now]'))
+  const ledgerIndex = messages.findIndex(row => isLedgerRow(row))
+  expect(ledgerIndex).toBeGreaterThan(-1)
+  expect(messages[ledgerIndex + 1]?.text).toContain(`\n${text}\n</clm-queued-message>`)
+})
+
+// Regression caught: session.messages() omitted queued_command rows from the transcript sent to the fold summarizer.
+test('a queued message inside the fold range reaches the summarizer as a user row', () => {
+  const rows = [M('user', 'start'), M('assistant', 'working'), M('user', 'later')]
+  const sent = ['2026-11-06T06:50:00Z', '2026-11-06T06:53:00Z', '2026-11-06T06:56:00Z']
+  const source = withQueuedMessages(rows, [{ uuid: 'queued-2', text: '이미지 스캔 <- CVE 스캔에 통합할 것', at: Date.parse('2026-11-06T06:54:51Z') }], row => sent[rows.indexOf(row)])
+  const dropped = foldedRows(source, protectedIndex(source), 3)
+  expect(dropped.map(row => ({ role: row.role, text: row.text }))).toContainEqual({ role: 'user', text: '이미지 스캔 <- CVE 스캔에 통합할 것' })
+})
+
+// Regression caught: queued rows had no session timestamp, so a later captured message was inserted ahead of an earlier one.
+test('queued messages with the same timestamp retain capture order', () => {
+  const rows = [M('user', 'start'), M('assistant', 'working')]
+  const at = Date.parse('2026-11-06T06:54:51Z')
+  const source = withQueuedMessages(rows, [{ uuid: 'queued-3', text: 'first', at }, { uuid: 'queued-4', text: 'second', at }], () => undefined)
+  expect(source.slice(-2).map(row => row.text)).toEqual(['first', 'second'])
+})
+
+// Regression caught: a queued-message wrapper was carried again after its text had already entered the ledger.
+test('the next fold drops a queued message wrapper already folded into the ledger', () => {
+  const queued = queuedSource({ uuid: 'queued-5', text: 'preserve once', at: 1_762_419_291_000 })
+  const first = buildCleared({ head: [M('user', 'start')], dropped: [queued], tail: [], cuts: {} }, M('user', '[clm ledger #1 · now]'))
+  const second = buildCleared({ head: first, dropped: [], tail: [], cuts: {} }, M('user', '[clm ledger #2 · now]'))
+  expect(second.map(row => row.text)).toEqual(['start', '[clm ledger #2 · now]'])
+})
+
+test('a queued message older than every live row after an engine handoff is not re-emitted as unhandled', () => {
+  const rows = [M('user', 'start'), M('assistant', 'newer')]
+  const source = withQueuedMessages(rows, [{ uuid: 'folded-by-engine', text: 'already folded', at: 1 }], () => '2026-11-06T06:00:00Z')
+  expect(source.map(row => row.text)).toEqual(['start', 'already folded', 'newer'])
+})
+
+test('a queued message that arrived after the last assistant row of a long turn whose rows share one turn-end stamp is re-emitted after the ledger', () => {
+  const start = M('user', 'start')
+  const assistant = M('assistant', 'working')
+  const later = stepResult('tool', 'still working')
+  const source = withQueuedMessages([start, assistant, later], [{ uuid: 'late-queued', text: 'new direction', at: 1, after: fingerprint(assistant) }], () => '2026-11-06T06:10:00Z')
+  const ledgerRow = M('user', '[clm ledger #1 · now]')
+  const rebuilt = buildCleared({ head: [start], dropped: source.slice(1), tail: [], cuts: {} }, ledgerRow)
+  expect(rebuilt[rebuilt.findIndex(isLedgerRow) + 1]?.text).toContain('\nnew direction\n</clm-queued-message>')
+})
+
+test('a queued_command seen twice is stored once', () => {
+  const message = { uuid: 'same-row', text: 'once', at: 1 }
+  const once = storeQueuedMessage({}, 'session', message)
+  const twice = storeQueuedMessage(once, 'session', message)
+  expect(twice.session).toEqual([message])
+})
+
+test('a queued message in the kept tail followed by an assistant row survives the swap', () => {
+  const queued = queuedSource({ uuid: 'tail-queued', text: 'keep this direction', at: Date.parse('2026-11-06T06:54:51Z') })
+  const ledgerRow = M('user', '[clm ledger #1 · now]')
+  const rows = buildCleared({ head: [M('user', 'start')], dropped: [M('assistant', 'old reply')], tail: [queued, M('assistant', 'new reply')], cuts: {} }, ledgerRow)
+  expect(rows.map(row => row.text)).toEqual([
+    'start',
+    ledgerRow.text,
+    '<clm-queued-message at="2026-11-06 15:54 KST">\nThe user sent this while you were working. Act on it unless the tail shows it is already handled.\nkeep this direction\n</clm-queued-message>',
+    'new reply',
+  ])
+})
+
+test('a tail-kept queued message survives a second fold: still present when it stays in the tail, and handed to the summarizer when it enters the fold range', () => {
+  const queued = queuedSource({ uuid: 'tail-twice', text: 'keep through two folds', at: Date.parse('2026-11-06T06:54:51Z') })
+  const first = buildCleared({ head: [M('user', 'start')], dropped: [], tail: [queued, M('assistant', 'new reply')], cuts: {} }, M('user', '[clm ledger #1 · now]'))
+  const wrapper = first.find(row => row.text.includes('keep through two folds'))
+  if (wrapper === undefined) throw new Error('first fold dropped the queued wrapper')
+  const start = first[0]
+  if (start === undefined) throw new Error('first fold dropped the head')
+  const second = buildCleared({ head: [start], dropped: [], tail: [wrapper, M('assistant', 'newer reply')], cuts: {} }, M('user', '[clm ledger #2 · now]'))
+  expect(second.some(row => row.text === wrapper.text)).toBe(true)
+  expect(foldedRows(second, protectedIndex(second), second.length).some(row => row.text === wrapper.text)).toBe(true)
+})
+
+// Regression caught: adding queued-message carry moved or rewrote a stable attachment ahead of the ledger.
+test('queued-message carry leaves a stable attachment byte-identical before the ledger', () => {
+  const stable = stableAttachmentRow('session_context', '{"cwd":"/work/repo"}')
+  const rows = buildCleared({ head: [M('user', 'start')], dropped: [], tail: [], cuts: {} }, M('user', '[clm ledger #1 · now]'), [stable])
+  expect(rows[1]).toEqual(stable)
+  expect(rows[2]?.text).toBe('[clm ledger #1 · now]')
 })
 
 // Regression caught: an error inside a completed step was replaced by its successful summary.
@@ -271,6 +377,7 @@ test('a plugin compaction with no clm plan returns the engine summary and logs i
     readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
     storeGet: async () => undefined, storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:s1',
     backfillClauses: async () => undefined,
+    queuedMessages: async () => [], markQueuedMessagesFolded: async () => undefined,
     logEvent: async (event: string, fields: Record<string, unknown>) => { events.push({ event, fields }); logged.resolve() }, log: () => undefined,
   } as unknown as FoldJobIo
   const summary = { messages: [M('user', 'ENGINE SUMMARY')] }
@@ -289,6 +396,7 @@ test('a swap whose io read rejects hands off to the engine summary exactly once'
     readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
     storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:swap-read-fails',
     readRewindIo: () => ({}), captureOrigin: async () => { throw new Error('origin read failed') },
+    queuedMessages: async () => [], markQueuedMessagesFolded: async () => undefined,
     logEvent: async () => undefined, log: () => undefined,
   } as unknown as FoldJobIo
   const key = transcriptKey(await io.sessionId())
@@ -323,6 +431,7 @@ test('a ready plan whose stable rows grow total context leaves the ledger, its s
     trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
     residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
     stableAttachments: async (headKept: boolean) => ({ rows: [stableAttachmentRow('output_style_instructions', 's'.repeat(20_000))], headKept }),
+    queuedMessages: async () => [], markQueuedMessagesFolded: async () => undefined,
     logEvent: async () => undefined, log: (text: string) => { logs.push(text) },
   } as unknown as FoldJobIo
   const key = transcriptKey(await io.sessionId())
@@ -375,6 +484,7 @@ test('an auto compaction joining a plugin rewind swap whose rows grew hands off 
     readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
     residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
     stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }),
+    queuedMessages: async () => [], markQueuedMessagesFolded: async () => undefined,
     logEvent: async () => undefined, log: () => undefined,
   } as unknown as FoldJobIo
   const key = transcriptKey(await io.sessionId())
@@ -490,6 +600,7 @@ test('a compact returns folded messages when store persistence exceeds its limit
   const io: FoldJobIo = {
     sessionId: async () => 's1', sessionMessages: async () => rows,
     stableAttachments: async () => { throw new Error('attachment read failed') }, markStableAttachmentsCarried: async () => undefined,
+    queuedMessages: async () => [], markQueuedMessagesFolded: async () => undefined,
     sessionCompact: async () => ({ messages: rows }), now: async () => Date.parse('2026-10-06T00:00:00Z'),
     after: () => ({ cancel: () => undefined }), usageReading: async () => 6000, sentAt: async () => () => undefined,
     readMeta: async () => { throw new Error('malformed session state') }, writeMeta: async () => undefined,
@@ -532,6 +643,60 @@ test('a compact returns folded messages when store persistence exceeds its limit
   for (const reason of ['malformed session state', 'transcript write failed', 'tracker write failed', 'held store full', 'resident index write failed', 'attachment read failed', 'over the 4194304 limit']) {
     expect(failures.some(failure => failure.includes(reason))).toBe(true)
   }
+})
+
+test('a queued message placed by maybeClear lands at the same index when handleSessionCompact rebuilds the plan, so the plan is not discarded', OPTS, async () => {
+  const anchor = M('assistant', 'working')
+  const rows = [M('user', 'start'), anchor, M('assistant', BIG), M('assistant', 'keep')]
+  const queued: QueuedMessage = { uuid: 'queued-1', text: 'new instruction', at: 2000, after: fingerprint(anchor) }
+  const files: Record<string, string> = {}
+  const stored = new Map<string, unknown>()
+  const rewind: RewindIo = {
+    storeGet: async key => stored.get(key), storeSet: async (key, value) => { stored.set(key, value) },
+    storeDelete: async key => { stored.delete(key) }, writeFile: async (path, text) => { files[path] = text },
+    ledgerPath: async () => LEDGER_FILE, topicsKey: async key => `topics:${key}`, pendingKey: async key => `pending:${key}`,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined,
+    readyFoldDropFps: () => undefined, clearReadyFold: async () => undefined, setRewindReady: () => undefined,
+    logEvent: async () => undefined, log: () => undefined,
+  }
+  const timestamps = new Map([[fingerprint(rows[0]), '1970-01-01T00:00:01.000Z'], [fingerprint(anchor), '1970-01-01T00:00:02.000Z']])
+  let sentAtReads = 0
+  let handoffs = 0
+  const io = {
+    sessionId: async () => 'queued-plan', sessionMessages: async () => rows,
+    stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }), markStableAttachmentsCarried: async () => undefined,
+    queuedMessages: async () => [queued], markQueuedMessagesFolded: async () => undefined,
+    sessionCompact: async () => ({ messages: rows }), now: async () => 3000,
+    after: (_ms: number, fn: () => void) => ({ cancel: () => undefined, fn }), usageReading: async () => undefined,
+    sentAt: async () => ++sentAtReads === 1 ? message => timestamps.get(fingerprint(message)) : () => undefined,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined,
+    readLedger: async () => undefined, ledgerPath: async () => LEDGER_FILE, basePath: async () => '/state/queued-plan',
+    readFile: async () => undefined, writeFile: async (path: string, text: string) => { files[path] = text }, appendFile: async () => undefined,
+    lessonsPath: async () => '', fileExists: async () => false, fileList: async () => [], run: async () => ({ exitCode: 0, stderr: '' }),
+    storeGet: async (key: string) => stored.get(key), storeSet: async (key: string, value: unknown) => { stored.set(key, value) }, storeDelete: async (key: string) => { stored.delete(key) },
+    serialize: async <T>(_session: string, run: () => Promise<T>) => run(), pendingKey: async () => 'pending:queued-plan', topicsKey: async () => 'topics:queued-plan',
+    captureOrigin: async () => ({ session: 'queued-plan', repo: 'example.invalid/repo', cwd: '/work/repo' }),
+    readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set<string>() }),
+    updateHeld: async () => undefined, backfillClauses: async () => undefined,
+    residentLedger: async (_key: string, _issues: readonly Issue[], _state: { stack: string[]; pending: string[] }, _events: readonly never[], preview?: { notes: string }) => preview?.notes ?? '',
+    append: async () => [], projectPanel: async () => undefined, readRewindIo: () => rewind, observeTranscript: async () => undefined,
+    fold: async (_opts: Opts, working: readonly SessionMessage[]) => {
+      const first = protectedIndex(working)
+      const keepFrom = working.length - 1
+      return {
+        plan: { head: [working[first]], dropped: foldedRows(working, first, keepFrom), tail: working.slice(keepFrom), keptTurns: 1, cuts: {} },
+        notes: '## goal\n- keep', fullNotes: '## goal\n- keep', ops: [], asks: [], seq: 1, fallback: false,
+        promoted: [], hold: [], settled: [], tailTokens: 1,
+      }
+    },
+    complete: async () => ({ isAnswered: false, text: '', reason: 'unused' }), logEvent: async () => undefined, log: () => undefined,
+  } satisfies FoldJobIo
+  clearFoldJob('queued-plan:main')
+  await maybeClear(io, { ...OPTS.options, queueTarget: 1 }, false)
+  const result = await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => { handoffs++; return { messages: [M('assistant', 'ENGINE SUMMARY')] } })
+  clearFoldJob('queued-plan:main')
+  expect(handoffs).toBe(0)
+  expect(compactedMessages(result).some(message => message.text.includes('clm ledger #1'))).toBe(true)
 })
 
 // Regression caught: session-owned transcript indexes kept increasing the engine-wide store.

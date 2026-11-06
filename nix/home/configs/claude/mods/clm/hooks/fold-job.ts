@@ -1,7 +1,7 @@
 import type { SessionMessage, SessionCompactResult } from 'claude-code'
 import {
   buildCleared, estTokens, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, keepsHeadGroup, kst, ledgerRowText, liveRows, planClear,
-  protectedIndex, sum, type ClearPlan,
+  protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type ClearPlan, type QueuedMessage,
 } from './fold'
 import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import {
@@ -50,6 +50,8 @@ export type FoldJobIo = {
   sessionMessages(): Promise<SessionMessage[]>
   stableAttachments(headKept: boolean): Promise<{ rows: SessionMessage[]; headKept: boolean }>
   markStableAttachmentsCarried(seq: number, rows: readonly SessionMessage[], headKept: boolean): Promise<void>
+  queuedMessages(): Promise<QueuedMessage[]>
+  markQueuedMessagesFolded(messages: readonly QueuedMessage[]): Promise<void>
   sessionCompact(): Promise<SessionCompactResult>
   now(): Promise<number>
   after(ms: number, fn: () => void): { cancel(): void }
@@ -136,6 +138,10 @@ async function persistCompactResult(
 }
 const changeHash = (line: string): string => fnv1a(line).toString(16)
 const isPromptStart = (message: SessionMessage) => isPrompt(message) && !isHarnessText(message.text)
+const rowsWithQueuedMessages = async (io: Pick<FoldJobIo, 'queuedMessages' | 'sentAt'>, rows: readonly SessionMessage[]): Promise<SessionMessage[]> => {
+  const queued = await io.queuedMessages()
+  return queued.length === 0 ? [...rows] : withQueuedMessages(rows, queued, await io.sentAt())
+}
 
 export const foldJobIdle = (key: string): boolean => (foldJobs.get(key)?.state ?? 'idle') === 'idle'
 
@@ -479,7 +485,7 @@ export async function maybeClear(io: FoldJobIo, opts: Opts, canSwap = true): Pro
   }
   if (current && current.state !== 'idle') return
   const meta = await io.readMeta()
-  const rows = liveRows(await io.sessionMessages(), meta.boundary)
+  const rows = await rowsWithQueuedMessages(io, liveRows(await io.sessionMessages(), meta.boundary))
   const used = await io.usageReading()
   if (used !== undefined && meta.firstObserved === undefined) {
     calibrateFirstReading(meta, rows, used)
@@ -555,7 +561,12 @@ async function applyFoldPlan(
     }
   }
   const replacementPlan = finalizeStepReplacements(tail, proposed.replace, preservedCollapsed)
-  const messages = buildCleared({ head: headRows(workingRows, first), tail, cuts: use.cuts, replace: replacementPlan.replace }, ledgerRow, attachments, headKept)
+  const dropped = foldedRows(workingRows, first, use.keepFrom)
+  const foldedQueued = dropped.flatMap(message => {
+    const queued = queuedMessageSourceOf(message)
+    return queued ? [queued] : []
+  })
+  const messages = buildCleared({ head: headRows(workingRows, first), dropped, tail, cuts: use.cuts, replace: replacementPlan.replace }, ledgerRow, attachments, headKept)
   const declined = notShrunk(workingRows, messages)
   if (declined) return declined
   const tokensBefore = sum(workingRows)
@@ -585,6 +596,7 @@ async function applyFoldPlan(
       lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset },
     })
     await io.markStableAttachmentsCarried(use.seq, attachments, headKept)
+    await io.markQueuedMessagesFolded(foldedQueued)
     await io.logEvent('clear', {
       tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1,
       durationMs: swapMs, ...(use.summaryMs === undefined ? {} : { summaryMs: use.summaryMs }),
@@ -675,6 +687,8 @@ export async function handOff(io: FoldJobIo, key: string, handoff: () => Promise
   try { io.log(`clm: ${why}; the engine summarizer compacts instead`, { to: 'debug' }) } catch { /* logging never blocks compaction */ }
   await persistStep<void>(io, undefined, () => io.backfillClauses(key))
   const result = await handoff()
+  const queued = await io.queuedMessages()
+  await io.markQueuedMessagesFolded(queued)
   const store = readClauseStore(await persistStep(io, undefined, () => io.storeGet(clauseStoreKey(key)))) ?? emptyClauseStore()
   const issues = snapshot(typeof io.readAll === 'function' ? await persistStep<TrackerEvent[]>(io, [], () => io.readAll()) : [])
   const clauses = renderClauses(store, () => true, 40, ['instruction'], assumptionStatuses(store, issues))
@@ -709,7 +723,7 @@ async function compactOrHandOff(
   const key = transcriptKey(await io.sessionId())
   const entryState: CompactEntryState = foldJobs.get(key)?.state ?? 'none'
   const meta = await persistStep(io, { seq: 0, fails: 0 }, () => io.readMeta())
-  const workingRows = liveRows(all, meta.boundary)
+  const workingRows = await rowsWithQueuedMessages(io, liveRows(all, meta.boundary))
   const first = protectedIndex(workingRows)
   const decline = (outcome: string, why: string) => compactResult(io, compactStartedAt, trigger, entryState, outcome, handOff(io, key, handoff, why))
   const ensureShrunk = (result: Promise<SwapResult>) => result.then(done => 'notShrunk' in done ? handOff(io, key, handoff, done.notShrunk) : done)

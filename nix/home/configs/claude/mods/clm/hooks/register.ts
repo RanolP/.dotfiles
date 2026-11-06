@@ -4,8 +4,8 @@ import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentT
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
-  buildCleared, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, keepSpawnReminders, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
-  type Boundary, type ClearPlan, type StableAttachmentType,
+  buildCleared, fingerprint, isHarnessText, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, keepSpawnReminders, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, stripReminders, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
+  type Boundary, type ClearPlan, type QueuedMessage, type StableAttachmentType,
 } from './fold'
 import {
   checkEvidence, clippedSource, describeOp, gateOps, isDoneClaim, isDropClaim, isReopenClaim, renderRange,
@@ -24,7 +24,7 @@ import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from 
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
 import { backfillClausesChained, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
-import type { ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
+import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
@@ -336,6 +336,7 @@ const writeMeta = async ($: EngineInterface, m: Meta) => sessionStoreSet($, awai
 export type StableAttachmentInput = { type: StableAttachmentType; text: string; origin: unknown; agentId?: string; detail?: unknown }
 export type StableAttachmentIo = Pick<EngineInterface, 'state'> & StoreWriter
 const STABLE_ATTACHMENTS = { plugin: 'clm', key: 'stableAttachments' } as const
+const QUEUED_MESSAGES: { plugin: 'clm'; key: 'queuedMessages' } = { plugin: 'clm', key: 'queuedMessages' }
 const MAX_STABLE_ATTACHMENT_DELTAS = 32
 const INSTRUCTIONS_PREAMBLE = 'Codebase and user instructions are shown below.'
 const isInstructionDelta = (text: string) => !text.startsWith(INSTRUCTIONS_PREAMBLE)
@@ -520,6 +521,49 @@ export async function handleStableAttachment($: StableAttachmentIo, input: Stabl
     const result = input.type !== 'instructions' && !changed && value.carriedAtSeq > 0 && (delta || value.carriedAtSeq > (progress.droppedAtSeq ?? 0)) ? { text: null } : undefined
     if (result) progress.droppedAtSeq = value.carriedAtSeq
     return { next: { ...sessions, [session]: state }, result }
+  })
+}
+
+const isQueuedMessage = (value: unknown): value is QueuedMessage =>
+  isRecord(value) && typeof value.uuid === 'string' && typeof value.text === 'string' && typeof value.at === 'number' && (value.after === undefined || typeof value.after === 'string')
+const queuedMessageStore = (value: unknown): QueuedMessageStore => {
+  const store: QueuedMessageStore = {}
+  if (!isRecord(value)) return store
+  for (const [session, messages] of Object.entries(value)) if (Array.isArray(messages) && messages.every(isQueuedMessage)) store[session] = messages
+  return store
+}
+export const storeQueuedMessage = (store: QueuedMessageStore, session: string, message: QueuedMessage): QueuedMessageStore =>
+  store[session]?.some(item => item.uuid === message.uuid) ? store : { ...store, [session]: [...store[session] ?? [], message] }
+const lastMainRow = new Map<string, string>()
+const appendedFingerprint = (role: 'user' | 'assistant', content: readonly { type: string; [field: string]: unknown }[]): string => fingerprint({
+  role,
+  text: content.flatMap(block => block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join(''),
+  toolUses: content.flatMap(block => block.type === 'tool_use' && typeof block.id === 'string' ? [{ tool_use_id: block.id, tool: typeof block.name === 'string' ? block.name : '', input: {}, text: '' }] : []),
+  ...(role === 'user' ? { toolResults: content.flatMap(block => block.type === 'tool_result' && typeof block.tool_use_id === 'string' ? [{ tool_use_id: block.tool_use_id, text: '', isError: false }] : []) } : {}),
+})
+const captureAppendedRow = async ($: StableAttachmentIo & Pick<EngineInterface, 'clock'>, uuid: string, type: string, name: string | undefined, content: readonly { type: string; [field: string]: unknown }[]): Promise<void> => {
+  const session = await $.session.id()
+  if (type === 'user' || type === 'assistant') {
+    lastMainRow.set(session, appendedFingerprint(type, content))
+    return
+  }
+  if (type !== 'attachment' || name !== 'queued_command') return
+  const text = content.flatMap(block => block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('')
+  if (text === '') return
+  const message: QueuedMessage = { uuid, text, at: await $.clock.now(), ...(lastMainRow.get(session) === undefined ? {} : { after: lastMainRow.get(session) }) }
+  await update($, QUEUED_MESSAGES, current => storeQueuedMessage(queuedMessageStore(current), session, message))
+}
+const queuedMessages = async ($: StableAttachmentIo): Promise<QueuedMessage[]> => {
+  const session = await $.session.id()
+  return [...queuedMessageStore((await $.state.get(QUEUED_MESSAGES)).value)[session] ?? []]
+}
+const markQueuedMessagesFolded = async ($: StableAttachmentIo, folded: readonly QueuedMessage[]): Promise<void> => {
+  if (!folded.length) return
+  const session = await $.session.id()
+  const uuids = new Set(folded.map(message => message.uuid))
+  await update($, QUEUED_MESSAGES, current => {
+    const store = queuedMessageStore(current)
+    return { ...store, [session]: (store[session] ?? []).filter(message => !uuids.has(message.uuid)) }
   })
 }
 
@@ -962,6 +1006,8 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   sessionMessages: () => $.session.messages(),
   stableAttachments: headKept => stableAttachmentRows($, headKept),
   markStableAttachmentsCarried: (seq, rows, headKept) => markStableAttachmentsCarried($, seq, rows, headKept),
+  queuedMessages: () => queuedMessages($),
+  markQueuedMessagesFolded: messages => markQueuedMessagesFolded($, messages),
   sessionCompact: () => $.session.compact({}),
   now: () => $.clock.now(),
   after: (ms, fn) => $.clock.after(ms, fn),
@@ -1250,6 +1296,12 @@ export const register: Register = (on, options) => {
   })
   on('tool.describe', { tool: 'TaskCreate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('tool.describe', { tool: 'TaskUpdate' }, ($, e) => ({ ...e, isDeferred: true }))
+  on('session.append', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && result.deny === undefined && result.message.isMeta !== true)
+      await captureAppendedRow($, result.uuid, result.message.type, result.message.name, result.message.content)
+    return result
+  })
   on('prompt.attachment', { type: 'todo_reminder' }, () => ({ text: null }))
   on('prompt.attachment', async ($, e) => {
     if (e.agentId !== undefined) return

@@ -1,4 +1,5 @@
 import type { SessionMessage } from 'claude-code'
+import type { SentAt } from './address'
 
 // Matches the header of rows written before the Haiku-summary wording too, and
 // both header times: the KST stamp below and the UTC ISO time older rows carry.
@@ -36,6 +37,9 @@ export const STABLE_ATTACHMENT_TYPES = ['instructions', 'session_context', 'coor
 export type StableAttachmentType = typeof STABLE_ATTACHMENT_TYPES[number]
 export const isStableAttachmentType = (value: unknown): value is StableAttachmentType => STABLE_ATTACHMENT_TYPES.some(type => type === value)
 const CARRIED_ATTACHMENT = new RegExp(`^<clm-stable-attachment type="(${STABLE_ATTACHMENT_TYPES.join('|')})">\\n([\\s\\S]*)\\n<\\/clm-stable-attachment>$`)
+const FOLDED_QUEUED_MESSAGE = /^<clm-queued-message at="[^"]+" folded>\nThe user sent this while you were working\. Act on it unless the tail shows it is already handled\.\n[\s\S]*\n<\/clm-queued-message>$/
+export type QueuedMessage = { uuid: string; text: string; at: number; after?: string }
+const queuedMessageSources = new WeakMap<SessionMessage, QueuedMessage>()
 export const stableAttachmentRow = (type: StableAttachmentType, text: string): SessionMessage => ({
   role: 'user', text: `<clm-stable-attachment type="${type}">\n${text}\n</clm-stable-attachment>`, toolUses: [],
 })
@@ -48,13 +52,15 @@ export const stableAttachmentOf = (m: SessionMessage): { type: StableAttachmentT
 }
 const isCarriedAttachment = (m: SessionMessage) => stableAttachmentOf(m) !== undefined
 const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
+const isQueuedMessage = (m: SessionMessage) => isBare(m) && m.role === 'user' && FOLDED_QUEUED_MESSAGE.test(m.text)
+const queuedMessageText = (message: QueuedMessage, folded = false) => `<clm-queued-message at="${kst(message.at)}"${folded ? ' folded' : ''}>\nThe user sent this while you were working. Act on it unless the tail shows it is already handled.\n${message.text}\n</clm-queued-message>`
 const isLocalCommand = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.localCommand.test(m.text)
 const isReminderRow = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.remindersOnly.test(m.text)
 const isEmptyRow = (m: SessionMessage) => isBare(m) && (m.text.trim() === '' || (m.role === 'assistant' && m.text.trim() === '(no content)'))
 export const isSystemRow = (m: SessionMessage): boolean => {
   if (!isBare(m)) return false
   if (m.role === 'assistant') return isEmptyRow(m)
-  return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text) || isLocalCommand(m) || isCarriedAttachment(m)
+  return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text) || isLocalCommand(m) || isCarriedAttachment(m) || isQueuedMessage(m)
 }
 /** A user-facing time on the Asia/Seoul clock, `2026-10-13 18:04 KST`; Korea keeps no DST, so +9h is exact. */
 export const kst = (t: number | string | Date = new Date()): string => {
@@ -77,6 +83,39 @@ const HARNESS_TEXT = /^(?:Another Claude session sent a message:|Base directory 
 export const isHarnessText = (text: string) => HARNESS_TEXT.test(text)
 /** A prompt the user wrote: what may be quoted as the user and kept under 사용자 지시. */
 export const isUserTyped = (m: SessionMessage) => !isCompactSummary(m) && isPrompt(m) && !isHarnessText(stripReminders(m.text))
+export const queuedMessageSourceRow = (message: QueuedMessage): SessionMessage => ({
+  role: 'user', text: message.text, toolUses: [],
+})
+export const queuedMessageSourceOf = (message: SessionMessage): QueuedMessage | undefined => queuedMessageSources.get(message)
+export const withQueuedMessages = (rows: readonly SessionMessage[], queued: readonly QueuedMessage[], sentAt: SentAt): SessionMessage[] => {
+  const pending = queued.filter(message => {
+    const existing = rows.find(row => queuedMessageSourceOf(row)?.uuid === message.uuid || row.text === queuedMessageText(message))
+    if (existing !== undefined) queuedMessageSources.set(existing, message)
+    return existing === undefined
+  }).map(message => {
+    const row = queuedMessageSourceRow(message)
+    queuedMessageSources.set(row, message)
+    return row
+  })
+  const combined = [...rows]
+  for (const message of pending) {
+    const source = queuedMessageSourceOf(message)
+    const anchor = source?.after === undefined ? -1 : combined.findLastIndex(row => fingerprint(row) === source.after)
+    if (anchor >= 0) {
+      combined.splice(Math.max(protectedIndex(combined) + 1, anchor + 1), 0, message)
+      continue
+    }
+    const queuedAt = source?.at ?? Number.POSITIVE_INFINITY
+    const after = combined.findLastIndex(row => {
+      const at = queuedMessageSourceOf(row)?.at ?? new Date(sentAt(row) ?? '').getTime()
+      return !Number.isNaN(at) && at <= queuedAt
+    })
+    const hasStamped = combined.some(row => !Number.isNaN(new Date(sentAt(row) ?? '').getTime()))
+    const index = after < 0 ? (hasStamped ? protectedIndex(combined) + 1 : combined.length) : Math.max(protectedIndex(combined) + 1, after + 1)
+    combined.splice(index, 0, message)
+  }
+  return combined
+}
 
 // A ledger row ahead of every prompt means the first request was already
 // folded away; the ledger then marks the head, and buildCleared replaces it.
@@ -216,9 +255,24 @@ const applyCuts = (m: SessionMessage, cuts: Record<string, number>, replace: Rec
 export const keepsHeadGroup = (msgs: readonly SessionMessage[], first: number): boolean =>
   first === 0 && msgs[0] !== undefined && isPrompt(msgs[0]) && msgs[0].handle !== undefined
 
-export function buildCleared(plan: Pick<ClearPlan, 'head' | 'tail' | 'cuts' | 'replace'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
+export function buildCleared(plan: Pick<ClearPlan, 'head' | 'dropped' | 'tail' | 'cuts' | 'replace'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
   const kept = keepHead ? plan.head.find(isPrompt) : undefined
-  return [...plan.head.filter(m => !isCompactSummary(m) && !isLedgerRow(m) && !isCarriedAttachment(m)), ...attachments, ledgerRow, ...plan.tail.filter(m => !isCarriedAttachment(m))].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts, plan.replace ?? {}))))
+  const folded = [...plan.head, ...plan.dropped]
+  const newestAssistant = folded.findLastIndex(message => message.role === 'assistant')
+  const queued = folded.slice(newestAssistant + 1).flatMap(message => {
+    const source = queuedMessageSourceOf(message)
+    return source ? [source] : []
+  }).map((message): SessionMessage => ({
+    role: 'user',
+    text: queuedMessageText(message, true),
+    toolUses: [],
+  }))
+  const head = plan.head.filter(m => !isCompactSummary(m) && !isLedgerRow(m) && !isCarriedAttachment(m) && !isQueuedMessage(m) && queuedMessageSourceOf(m) === undefined)
+  const tail = plan.tail.filter(m => !isCarriedAttachment(m) && !isQueuedMessage(m)).map((message): SessionMessage => {
+    const source = queuedMessageSourceOf(message)
+    return source === undefined ? message : { role: 'user', text: queuedMessageText(source), toolUses: [] }
+  })
+  return [...head, ...attachments, ledgerRow, ...queued, ...tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts, plan.replace ?? {}))))
 }
 
 // clm-prompt

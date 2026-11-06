@@ -1,4 +1,4 @@
-import { isRecord } from './tracker'
+import { assumptionStatusOfIssue, isAssumptionLabel, isRecord, labelVisibility, type AssumptionLabel, type AssumptionStatus, type Issue, type LabelVisibility } from './tracker'
 
 // The user's standing requests as restricted Prolog clauses. A newer clause
 // retracts an older one when both define the same key of a predicate: same
@@ -11,7 +11,7 @@ export type Term = { atom: string } | { num: number } | { var: string } | { str:
 export type Goal = { neg: boolean; name: string; args: Term[] }
 export type ClauseSource = { address: string; promptSeq: number; quote: string }
 export type ClauseOrigin = 'user' | 'fold' | 'legacy'
-export type ClauseKind = 'instruction' | 'fact' | 'goal'
+export type ClauseKind = 'instruction' | 'fact' | 'goal' | 'assume'
 export type ClauseEvidence = { ref: string; quote: string; tool?: string }
 export type Clause = {
   id: string; head: { name: string; args: Term[] }; neg: boolean; body: Goal[]
@@ -19,6 +19,7 @@ export type Clause = {
   source: string; text: string; quote: string; address: string; promptSeq: number; sources: ClauseSource[]
   issue: string | null; at: string; status: 'live' | 'retracted'
   origin: ClauseOrigin; kind: ClauseKind; evidence?: ClauseEvidence
+  label?: AssumptionLabel; assumptionStatus?: AssumptionStatus; resolution?: 'closed'
   retraction?: { at: string; by: string; bySource: string; reason: 'conflict' | 'explicit' | 'rewind' }
 }
 export type ClauseStore = {
@@ -31,6 +32,7 @@ export type ParsedClause = Pick<Clause, 'head' | 'neg' | 'body'>
 export type IncomingClause = ParsedClause & {
   text: string; quote: string; address: string; issue: string | null; key?: number
   origin?: ClauseOrigin; kind?: ClauseKind; evidence?: ClauseEvidence
+  label?: AssumptionLabel; assumptionStatus?: AssumptionStatus
 }
 export type BacklogEntry = { address: string; promptSeq: number; text: string; attempts?: number }
 
@@ -49,21 +51,22 @@ export const SEED_PREDICATES: ClauseStore['predicates'] = {
 }
 
 export type FoldClause = {
-  clause: string; text: string; kind: 'fact' | 'goal'; promptSeq: number; address: string; issue?: string | null; key?: number
+  clause: string; text: string; kind: 'fact' | 'goal' | 'assume'; promptSeq: number; address: string; issue?: string | null; key?: number; label?: AssumptionLabel
   evidence?: ClauseEvidence
 }
-export type FoldClauseOp = FoldClause | { retract: string }
+export type FoldClauseOp = FoldClause | { retract: string } | { assumption: string; status: AssumptionStatus } | { resolve: string; decision: 'close' | 'keep'; onto?: string | null }
 
 const isEvidence = (value: unknown): value is ClauseEvidence => isRecord(value)
   && typeof value.ref === 'string' && typeof value.quote === 'string'
   && (value.tool === undefined || typeof value.tool === 'string')
 const isFoldClause = (value: unknown): value is FoldClause => isRecord(value)
   && typeof value.clause === 'string' && typeof value.text === 'string'
-  && (value.kind === 'fact' || value.kind === 'goal')
+  && (value.kind === 'fact' || value.kind === 'goal' || value.kind === 'assume')
   && Number.isInteger(value.promptSeq) && Number(value.promptSeq) >= 0
   && typeof value.address === 'string'
   && (value.issue === undefined || value.issue === null || typeof value.issue === 'string')
   && (value.key === undefined || Number.isInteger(value.key))
+  && (value.label === undefined || isAssumptionLabel(value.label))
   && (value.kind === 'goal' || isEvidence(value.evidence))
 const isFoldRetract = (value: unknown): value is { retract: string } => isRecord(value)
   && Object.keys(value).length === 1 && typeof value.retract === 'string'
@@ -72,23 +75,51 @@ const isFoldRetract = (value: unknown): value is { retract: string } => isRecord
 export function applyFoldClauseOps(store: ClauseStore, ops: readonly FoldClauseOp[], now: string): ClauseStore {
   const parsed = ops.map(op => {
     if (isFoldRetract(op)) return op
+    if ('assumption' in op || 'resolve' in op) return op
     if (!isFoldClause(op)) return undefined
     try { return { op, parsed: parseClause(op.clause) } } catch { return undefined }
   })
   if (parsed.some(op => op === undefined)) return store
   let next = store
+  const batchAssumptions = new Map<string, string>()
+  const labelled = new Set<string>()
   for (const item of parsed) {
     if (!item) return store
     const op = 'op' in item ? item.op : item
+    if ('assumption' in op) {
+      next = { ...next, clauses: next.clauses.map(clause => clause.id === op.assumption && clause.kind === 'assume' ? { ...clause, assumptionStatus: op.status } : clause) }
+      continue
+    }
+    if ('resolve' in op) {
+      next = { ...next, clauses: next.clauses.map(clause => clause.id !== op.resolve ? clause : op.decision === 'close'
+        ? { ...clause, resolution: 'closed' }
+        : { ...clause, label: op.onto ? [[op.onto]] : undefined, resolution: undefined }) }
+      continue
+    }
     if ('retract' in op) {
       next = applyRetract(next, [{ id: op.retract, quote: op.retract }], () => true, '@fold', now, 'fold').next
       continue
     }
-    next = applyClauses(next, [{
+    const applied = applyClauses(next, [{
       ...item.parsed, text: op.text, quote: op.evidence?.quote ?? op.text, address: op.address,
-      issue: op.issue ?? null, key: op.key, origin: 'fold', kind: op.kind, evidence: op.evidence,
-    }], op.promptSeq, now).next
+      issue: op.issue ?? null, key: op.key, origin: 'fold', kind: op.kind, evidence: op.evidence, label: op.label,
+      ...(op.kind === 'assume' ? { assumptionStatus: 'live' } : {}),
+    }], op.promptSeq, now)
+    next = applied.next
+    const source = printClause(item.parsed)
+    const stored = applied.added.find(clause => clause.source === source) ?? next.clauses.find(clause => clause.status === 'live' && clause.source === source)
+    if (stored !== undefined && op.kind === 'assume') { batchAssumptions.set(op.clause, stored.id); batchAssumptions.set(source, stored.id) }
+    if (stored !== undefined && op.label !== undefined) labelled.add(stored.id)
   }
+  if (labelled.size > 0) next = { ...next, clauses: next.clauses.map(clause => {
+    if (labelled.has(clause.id) === false || clause.label === undefined) return clause
+    const label = clause.label.map(environment => environment.flatMap(id => {
+      const landed = batchAssumptions.get(id)
+      if (landed !== undefined) return [landed]
+      try { parseClause(id); return [] } catch { return [id] }
+    }))
+    return { ...clause, label: label.some(environment => environment.length === 0) ? undefined : label }
+  }) }
   return next
 }
 
@@ -291,13 +322,14 @@ export function applyClauses(
     const same = clauses.find(clause => clause.status === 'live' && clause.source === source)
     if (same) {
       same.sources.push({ address: item.address, promptSeq, quote: item.quote })
-      if (promptSeq >= same.promptSeq) Object.assign(same, { text: normalizeText(item.text), quote: item.quote, address: item.address, promptSeq, issue: item.issue, at: now, origin, kind, ...(item.evidence ? { evidence: item.evidence } : {}) })
+      if (promptSeq >= same.promptSeq) Object.assign(same, { text: normalizeText(item.text), quote: item.quote, address: item.address, promptSeq, issue: item.issue, at: now, origin, kind, ...(item.evidence ? { evidence: item.evidence } : {}), ...(item.label ? { label: item.label } : {}), ...(item.assumptionStatus ? { assumptionStatus: item.assumptionStatus } : {}) })
       continue
     }
     const clause: Clause = {
       id: `C${nextId++}`, ...parsed, source, quote: item.quote, address: item.address, promptSeq,
       sources: [{ address: item.address, promptSeq, quote: item.quote }], issue: item.issue, at: now, status: 'live',
-      text: normalizeText(item.text), origin, kind, ...(item.evidence ? { evidence: item.evidence } : {}),
+      text: normalizeText(item.text), origin, kind, ...(item.evidence ? { evidence: item.evidence } : {}), ...(item.label ? { label: item.label } : {}),
+      ...(kind === 'assume' ? { assumptionStatus: item.assumptionStatus ?? 'live' } : {}),
     }
     const rivals = clauses.filter(other => other.status === 'live' && conflicts(clause, other, key))
     const newer = rivals.filter(other => other.promptSeq > promptSeq).sort((a, b) => b.promptSeq - a.promptSeq)[0]
@@ -384,7 +416,8 @@ function isClause(value: unknown): value is Clause {
 }
 
 const isOrigin = (value: unknown): value is ClauseOrigin => value === 'user' || value === 'fold' || value === 'legacy'
-const isKind = (value: unknown): value is ClauseKind => value === 'instruction' || value === 'fact' || value === 'goal'
+const isKind = (value: unknown): value is ClauseKind => value === 'instruction' || value === 'fact' || value === 'goal' || value === 'assume'
+const isAssumptionStatus = (value: unknown): value is AssumptionStatus => value === 'live' || value === 'merged' || value === 'rejected'
 const normalizeText = (text: string) => text.replace(/\s+/g, ' ').trim().slice(0, 200)
 
 const isClauseSource = (value: unknown): value is ClauseSource => isRecord(value)
@@ -397,6 +430,9 @@ export function readClauseStore(value: unknown): ClauseStore | undefined {
     ...clause,
     origin: isOrigin(clause.origin) ? clause.origin : 'user',
     kind: isKind(clause.kind) ? clause.kind : 'instruction',
+    ...(isAssumptionLabel(clause.label) ? { label: clause.label.map(environment => [...environment]) } : {}),
+    ...(clause.kind === 'assume' ? { assumptionStatus: isAssumptionStatus(clause.assumptionStatus) ? clause.assumptionStatus : 'live' } : {}),
+    ...(clause.resolution === 'closed' ? { resolution: 'closed' } : {}),
     sources: Array.isArray(clause.sources) && clause.sources.every(isClauseSource)
       ? clause.sources
       : [{ address: clause.address, promptSeq: clause.promptSeq, quote: clause.quote }],
@@ -426,9 +462,31 @@ export function livePredicates(store: ClauseStore, cap = 40): string[] {
     .map(([name, clause]) => `${name} key=${store.predicates[name]?.key ?? defaultKey(clause.head.args.length)} e.g. ${clause.source}`)
 }
 
+export function assumptionStatuses(store: ClauseStore, issues: readonly Issue[]): Map<string, AssumptionStatus> {
+  const issueStatus = (issue: Issue): [string, AssumptionStatus] => [issue.id, assumptionStatusOfIssue(issue)]
+  return new Map<string, AssumptionStatus>([
+    ...issues.map(issueStatus),
+    ...store.clauses.filter(clause => clause.kind === 'assume').map(clause => [clause.id, clause.assumptionStatus ?? 'live']),
+  ])
+}
+export function clauseVisibility(clause: Clause, statuses: ReadonlyMap<string, AssumptionStatus>): LabelVisibility {
+  if (clause.kind === 'assume' && clause.assumptionStatus === 'rejected') return 'invalid'
+  const label = clause.kind === 'assume' ? (clause.label ?? [[]]).map(environment => [...new Set([...environment, clause.id])]) : clause.label
+  return labelVisibility(label, id => statuses.get(id))
+}
+export function pendingClauseIds(store: ClauseStore, statuses: ReadonlyMap<string, AssumptionStatus>): string[] {
+  return store.clauses.filter(clause => clause.status === 'live' && clause.resolution !== 'closed' && clause.kind !== 'assume'
+    && clauseVisibility(clause, statuses) === 'invalid').map(clause => clause.id)
+}
 /** Live clauses in scope as `- text (Cn @addr)`, capped with a pointer to clm_recall. */
-export function renderClauses(store: ClauseStore, inScope: (issue: string | null) => boolean, cap = 40, kinds?: readonly ClauseKind[]): string[] {
-  const live = store.clauses.filter(clause => clause.status === 'live' && inScope(clause.issue) && (!kinds || kinds.includes(clause.kind)))
+export function renderClauses(store: ClauseStore, inScope: (issue: string | null) => boolean, cap = 40, kinds?: readonly ClauseKind[], statuses?: ReadonlyMap<string, AssumptionStatus>, branch = false, branchIds?: ReadonlySet<string>): string[] {
+  const live = store.clauses.filter(clause => clause.status === 'live' && inScope(clause.issue) && (!kinds || kinds.includes(clause.kind))
+    && (!statuses || clauseVisibility(clause, statuses) === (branch ? 'branch' : 'main'))
+    && (branch === false || branchIds === undefined || clause.label?.some(environment => {
+      const known = environment.filter(id => statuses?.has(id) === true)
+      return known.some(id => statuses?.get(id) === 'live' && branchIds.has(id))
+        && known.every(id => statuses?.get(id) === 'merged' || branchIds.has(id))
+    })))
   const lines = live.slice(-cap).reverse().map(clause => `- ${clause.text.replace(/\s+/g, ' ').trim()} (${clause.id} ${clause.address})`)
   if (live.length > cap) lines.push(`- ${live.length - cap} more: clm_recall clauses`)
   return lines
@@ -460,6 +518,9 @@ export function clauseQuoteOverlaps(left: string, right: string): boolean {
 
 export function describeClause(clause: Clause): string {
   const lines = [`${clause.id} ${clause.status} ${clause.source}  % ${clause.address} ${clause.at}`, `  text: ${clause.text}`, `  quote: ${clause.quote}`]
+  if (clause.assumptionStatus) lines.push(`  assumptionStatus: ${clause.assumptionStatus}`)
+  if (clause.label) lines.push(`  label: ${JSON.stringify(clause.label)}`)
+  if (clause.resolution) lines.push(`  resolution: ${clause.resolution}`)
   if (clause.evidence) lines.push(`  evidence: ${clause.evidence.ref}${clause.evidence.tool ? ` (${clause.evidence.tool})` : ''}: ${clause.evidence.quote}`)
   const r = clause.retraction
   if (r) lines.push(`  retracted ${r.at} (${r.reason}) by ${r.by}: ${r.bySource}`)

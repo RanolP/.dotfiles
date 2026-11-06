@@ -58,6 +58,7 @@ export type ClmTaskInput = {
   title?: string
   status: 'todo' | 'doing' | 'done' | 'dropped'
   note?: string
+  hypothesis?: boolean
   method?: string
   plan?: string[]
   result?: { intent: string; finding: string; decision: string; files?: string[] }

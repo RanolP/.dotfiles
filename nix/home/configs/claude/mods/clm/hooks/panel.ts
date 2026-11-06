@@ -65,6 +65,8 @@ export function isClmTaskInput(value: unknown): value is ClmTaskInput {
   if (input.id !== undefined && typeof input.id !== 'string') return false
   if (input.title !== undefined && typeof input.title !== 'string') return false
   if (input.note !== undefined && typeof input.note !== 'string') return false
+  if (input.hypothesis !== undefined && typeof input.hypothesis !== 'boolean') return false
+  if (input.hypothesis && (input.id !== undefined || (input.status !== 'todo' && input.status !== 'doing'))) return false
   if (input.method !== undefined && (typeof input.method !== 'string' || !input.method.trim() || input.method.length > 300)) return false
   if (input.method !== undefined && input.status !== 'doing') return false
   if (input.plan !== undefined && (input.status !== 'todo' || !Array.isArray(input.plan) || input.plan.length < 2 || input.plan.length > 8
@@ -247,9 +249,9 @@ async function taskEvidenceProblem(
 export const EVIDENCE_FORMAT = 'Set evidence.ref to "user" (or a row ref such as m3) and evidence.quote to at least four words, or eight Korean characters, copied verbatim from one user message.'
 
 async function createChildTask(
-  io: PanelIo, origin: Origin, title: string, status: ClmTaskInput['status'], note: string, parent: string, planBatch = false,
+  io: PanelIo, origin: Origin, title: string, status: ClmTaskInput['status'], note: string, parent: string, planBatch = false, hypothesis = false,
 ): Promise<string | undefined> {
-  const created = await io.append([{ op: 'create', title, status, ...(note ? { note } : {}) }], origin)
+  const created = await io.append([{ op: 'create', title, status, ...(note ? { note } : {}), ...(hypothesis ? { hypothesis: true } : {}) }], origin)
   const taskId = created.find(event => event.op === 'create')?.issue ?? null
   if (taskId === null) return undefined
   await io.append([{ op: 'parent', issue: taskId, parent, ...(planBatch ? { planBatch: true as const } : {}) }], origin)
@@ -364,7 +366,7 @@ async function focusMainTask(
   const todoTitle = input.status === 'todo' && input.id === undefined ? input.title?.trim() : undefined
   if (todoTitle) {
     const note = input.note?.trim()
-    const created = await io.append([{ op: 'create', title: todoTitle, status: 'todo', ...(note ? { note } : {}) }], origin)
+    const created = await io.append([{ op: 'create', title: todoTitle, status: 'todo', ...(note ? { note } : {}), ...(input.hypothesis ? { hypothesis: true } : {}) }], origin)
     const todoId = created.find(event => event.op === 'create')?.issue
     if (!todoId) return { result: 'clm_task: task creation did not return an issue id.' }
     return { result: `clm_task: ${todoId} todo; recorded for later, focus unchanged.` }
@@ -384,7 +386,7 @@ async function focusMainTask(
     const title = input.title?.trim()
     if (!title) return { result: `clm_task: the main agent has no focused task to own. ${FOCUS_HINT}` }
     const note = input.note?.trim()
-    const created = await io.append([{ op: 'create', title, status: 'doing', ...(note ? { note } : {}) }], origin)
+    const created = await io.append([{ op: 'create', title, status: 'doing', ...(note ? { note } : {}), ...(input.hypothesis ? { hypothesis: true } : {}) }], origin)
     taskId = created.find(event => event.op === 'create')?.issue
     if (!taskId) return { result: 'clm_task: task creation did not return an issue id.' }
   }
@@ -519,7 +521,7 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
   }
   const audit = status === 'done' && input.evidence ? `cited ${input.evidence.ref}: ${input.evidence.quote}` : undefined
   const note = [input.note?.trim(), audit].filter((line): line is string => Boolean(line)).join('\n')
-  const createdTask = input.id === undefined && title ? await createChildTask(io, origin, title, status, note, ownRoot) : undefined
+  const createdTask = input.id === undefined && title ? await createChildTask(io, origin, title, status, note, ownRoot, false, input.hypothesis) : undefined
   const taskId = input.id ?? createdTask
   if (!taskId) return { result: 'clm_task: task creation did not return an issue id.' }
   if (createdTask && status === 'doing' && toolUseId)

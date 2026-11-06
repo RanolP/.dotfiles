@@ -17,7 +17,7 @@ import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type Rewind
 import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
 import { fnv1a, type SentAt } from './address'
-import { applyFoldClauseOps, clauseStoreKey, emptyClauseStore, livePredicates, readClauseStore, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
+import { applyFoldClauseOps, assumptionStatuses, clauseStoreKey, emptyClauseStore, livePredicates, readClauseStore, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
 import { finalizeStepReplacements, plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps, type FoldStep } from './stepfold'
 
 type Pending = {
@@ -273,7 +273,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       if (attempt === 1) io.log(`clm: split summary rejected (${retryRule}); the next turn end may retry`, { to: 'debug' })
       continue
     }
-    const merge = parseMerge(answer.mergeReply, known, factLines(notesOf(previous)))
+    const merge = parseMerge(answer.mergeReply, known, factLines(notesOf(previous)), new Set(clauses.clauses.map(clause => clause.id)))
     if (typeof merge === 'string') {
       retryRule = `The previous summary failed validation: ${merge}. Return the required {"split","ops"} JSON object.`
       if (attempt === 1) io.log(`clm: split summary rejected (${merge}); the next turn end may retry`, { to: 'debug' })
@@ -676,7 +676,8 @@ export async function handOff(io: FoldJobIo, key: string, handoff: () => Promise
   await persistStep<void>(io, undefined, () => io.backfillClauses(key))
   const result = await handoff()
   const store = readClauseStore(await persistStep(io, undefined, () => io.storeGet(clauseStoreKey(key)))) ?? emptyClauseStore()
-  const clauses = renderClauses(store, () => true, 40, ['instruction'])
+  const issues = snapshot(typeof io.readAll === 'function' ? await persistStep<TrackerEvent[]>(io, [], () => io.readAll()) : [])
+  const clauses = renderClauses(store, () => true, 40, ['instruction'], assumptionStatuses(store, issues))
   const messages = result.messages?.length
     ? [result.messages[0]!, { role: 'user' as const, text: `[clm clauses]\n${clauses.join('\n') || '- (none)'}`, toolUses: [] }, ...result.messages.slice(1).filter(row => !row.text.startsWith('[clm clauses]'))]
     : result.messages

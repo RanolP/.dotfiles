@@ -172,7 +172,7 @@ export async function fold(
   const priorFacts = factLines(notes)
   const range = renderRange(plan.dropped, undefined, undefined, await io.sentAt())
   let ops: Payload[] = [], evidence: Evidence[][] = [], facts: Fact[] = [], retracted: string[] = []
-  let clauseOps: (import('./ledger').FoldClauseDraft | { retract: string })[] = []
+  let clauseOps: import('./ledger').Merge['clauseOps'] = []
   let fallback = false
   let promoted: Payload[] = [], hold: Held[] = [], claimed: Payload[] = []
   const held = io.heldClaims(await io.readHeld(), view.issues, here.session)
@@ -196,7 +196,7 @@ export async function fold(
           `<removed_turns>\n${range.text}\n</removed_turns>`,
         ].join('\n\n'), maxTokens: 4096, timeoutMs: 120_000,
       })
-    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id)), priorFacts) : `merge model gave no text (${response.reason})`
+    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id)), priorFacts, new Set(baseClauses.clauses.map(clause => clause.id))) : `merge model gave no text (${response.reason})`
     const bad = typeof merged === 'string' ? merged : undefined
     if (typeof merged !== 'string') {
       ;({ ops, evidence, facts, retracted, clauseOps } = merged)
@@ -225,8 +225,8 @@ export async function fold(
     if (reviewed.failed) { retracted = []; clauseOps = [] }
     facts = reviewed.facts
     const acceptedFacts = new Set(facts.map(fact => fact.text))
-    clauseOps = clauseOps.filter(op => 'retract' in op || op.kind === 'goal' || acceptedFacts.has(op.text))
-    const draftedFacts = new Set(clauseOps.flatMap(op => 'retract' in op || op.kind !== 'fact' ? [] : [op.text]))
+    clauseOps = clauseOps.filter(op => 'retract' in op || 'assumption' in op || 'resolve' in op || op.kind === 'goal' || acceptedFacts.has(op.text))
+    const draftedFacts = new Set(clauseOps.flatMap(op => 'retract' in op || 'assumption' in op || 'resolve' in op || op.kind === 'goal' ? [] : [op.text]))
     for (const fact of facts) if (!draftedFacts.has(fact.text)) {
       clauseOps.push({ clause: `legacy_fact('F${fnv1a(fact.text).toString(16)}').`, kind: 'fact', text: fact.text, evidence: fact.evidence })
     }
@@ -259,6 +259,7 @@ export async function fold(
   }
   const resolvedOps: FoldClauseOp[] = clauseOps.flatMap(op => {
     if ('retract' in op) return [op]
+    if ('assumption' in op || 'resolve' in op) return [op]
     const proof = op.evidence[0]
     const row = (proof ? sourceRow(proof.ref) : undefined) ?? [...rows].reverse().find(isUserTyped)
     if (!row) return []
@@ -276,7 +277,7 @@ export async function fold(
         clause = printClause(parsed)
       }
     }
-    return [{ clause, kind: op.kind, text: op.text, issue, key: op.key,
+    return [{ clause, kind: op.kind, text: op.text, issue, key: op.key, label: op.label,
       promptSeq: foldClausePromptSeq(address?.promptSeq, droppedPromptSeq, baseClauses), address: address?.address ?? '@unknown',
       ...(proof ? { evidence: { ref: proof.ref, quote: proof.quote, ...(source?.tool ? { tool: source.tool } : {}) } } : {}),
     }]

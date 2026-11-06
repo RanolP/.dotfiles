@@ -1,10 +1,10 @@
-import { isOpen, isRecord, shownNote, type Issue, type TrackerEvent } from './tracker'
+import { effectiveIssueLabel, isOpen, isRecord, labelVisibility, shownNote, type Issue, type TrackerEvent } from './tracker'
 import {
   EMPTY_LEDGER, constraintFactLines, learnedFactLines, notesOf, type Topic,
 } from './ledger'
 import { resourceLedgerForSession } from './resources'
 import { LEDGER_LINE_LIMIT } from './fold'
-import { applyClauses, clauseQuoteOverlaps, clauseStoreKey, emptyClauseStore, parseClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
+import { applyClauses, assumptionStatuses, clauseQuoteOverlaps, clauseStoreKey, emptyClauseStore, parseClause, pendingClauseIds, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
 
 export type InstructionIndex = { address: string; issue: string | null; text: string }
 export type ResidentLedgerRequest = {
@@ -25,6 +25,7 @@ export type ResidentLedgerSections = {
   legacy?: readonly string[]
   learned?: readonly string[]
   resources?: readonly string[]
+  pendingInvalid?: readonly string[]
 }
 
 export type ResidentIo = {
@@ -85,19 +86,7 @@ export async function residentLedger(
   const addresses = isRecord(addressesRaw) ? addressesRaw : {}
   const byId = new Map(shownIssues.map(issue => [issue.id, issue]))
   const topId = shownState.stack.at(-1)
-  const top = topId ? byId.get(topId) : undefined
-  const ancestors = new Set<string>()
-  let current = top
-  let planRoot: Issue | undefined
-  while (current && !ancestors.has(current.id)) {
-    ancestors.add(current.id)
-    if (!planRoot && current.planMode) planRoot = current
-    current = current.parent ? byId.get(current.parent) : undefined
-  }
   let clauseStore = preview.clauses ?? readClauseStore(await io.get(clauseStoreKey(key))) ?? emptyClauseStore()
-  const inScope = (issue: string | null) => issue === null || ancestors.has(issue)
-  // With no focus there is no position to narrow to, so show every open goal.
-  const goalInScope = ancestors.size ? inScope : (issue: string | null) => issue === null || shownIssues.some(candidate => candidate.id === issue && isOpen(candidate))
   const rawNotes = preview.notes ?? notesOf((await io.readLedger()) ?? EMPTY_LEDGER)
   const meta = await io.readMeta()
   const topics = preview.topics ?? await io.readLegacyTopics(rawNotes, meta.seq, key)
@@ -107,9 +96,40 @@ export async function residentLedger(
     if (!preview.clauses) await io.set?.(clauseStoreKey(key), clauseStore)
     if (clauseStore.legacy?.length) io.log?.(`clm: ${clauseStore.legacy.length} legacy ledger line(s) could not migrate`, { to: 'debug' })
   }
-  const instructions = renderClauses(clauseStore, inScope, 40, ['instruction'])
-  const facts = renderClauses(clauseStore, inScope, 15, ['fact'])
-  const where = renderClauses(clauseStore, goalInScope, 20, ['goal'])
+  const statuses = assumptionStatuses(clauseStore, shownIssues)
+  const issueVisibility = (issue: Issue) => issue.status === 'dropped' ? 'invalid' : labelVisibility(effectiveIssueLabel(issue, byId), id => statuses.get(id))
+  const candidate = topId ? byId.get(topId) : undefined
+  const top = candidate && issueVisibility(candidate) !== 'invalid' ? candidate : undefined
+  const ancestors = new Set<string>()
+  let current = top
+  let planRoot: Issue | undefined
+  while (current && !ancestors.has(current.id)) {
+    ancestors.add(current.id)
+    if (!planRoot && current.planMode) planRoot = current
+    current = current.parent ? byId.get(current.parent) : undefined
+  }
+  const inScope = (issue: string | null) => issue === null || ancestors.has(issue)
+  // With no focus there is no position to narrow to, so show every open goal.
+  const goalInScope = ancestors.size ? inScope : (issue: string | null) => issue === null || shownIssues.some(candidateIssue => candidateIssue.id === issue && isOpen(candidateIssue))
+  const activeBranchIds = new Set([...ancestors, ...clauseStore.clauses.filter(clause => clause.kind === 'assume' && clause.issue !== null && ancestors.has(clause.issue)).map(clause => clause.id)])
+  const underActiveBranch = (issue: Issue) => {
+    const seen = new Set<string>()
+    let cursor: Issue | undefined = issue
+    while (cursor && !seen.has(cursor.id)) {
+      if (ancestors.has(cursor.id)) return true
+      seen.add(cursor.id)
+      cursor = cursor.parent ? byId.get(cursor.parent) : undefined
+    }
+    return false
+  }
+  const visible = (issue: Issue) => issueVisibility(issue) === 'main' || (issueVisibility(issue) === 'branch' && underActiveBranch(issue))
+  const scopedClauses = (scope: (issue: string | null) => boolean, cap: number, kinds: Parameters<typeof renderClauses>[3]) => [
+    ...renderClauses(clauseStore, scope, cap, kinds, statuses),
+    ...(ancestors.size ? renderClauses(clauseStore, scope, cap, kinds, statuses, true, activeBranchIds) : []),
+  ].slice(0, cap)
+  const instructions = scopedClauses(inScope, 40, ['instruction'])
+  const facts = scopedClauses(inScope, 15, ['fact'])
+  const where = scopedClauses(goalInScope, 20, ['goal'])
   const liveQuotes = clauseStore.clauses.filter(clause => clause.status === 'live' && clause.kind === 'instruction').map(clause => clause.quote)
   const requests = (await io.readRequests(key)).filter(request => request.status === 'open' && !liveQuotes.some(quote => clauseQuoteOverlaps(request.quote, quote)))
   const resources = await resourceLedgerForSession(key.split(':')[0] ?? '')
@@ -119,14 +139,16 @@ export async function residentLedger(
     ? { text: objective.text, address: objective.address } : undefined
   const sections: ResidentLedgerSections = {
     where,
-    children: shownIssues.filter(issue => topId !== undefined && issue.parent === topId && isOpen(issue)),
-    ...(planRoot ? { plan: { objective: plannedObjective, revision: planRoot.planRevision ?? 0, steps: shownIssues.filter(issue => issue.parent === planRoot.id) } } : {}),
+    children: shownIssues.filter(issue => top !== undefined && issue.parent === top.id && isOpen(issue) && visible(issue)),
+    ...(planRoot ? { plan: { objective: plannedObjective, revision: planRoot.planRevision ?? 0, steps: shownIssues.filter(issue => issue.parent === planRoot.id && visible(issue)) } } : {}),
     requests,
     facts,
-    questions: shownIssues.filter(issue => issue.status === 'question'),
-    uncertain: shownIssues.filter(issue => issue.status === 'uncertain'),
+    questions: shownIssues.filter(issue => issue.status === 'question' && visible(issue)),
+    uncertain: shownIssues.filter(issue => issue.status === 'uncertain' && visible(issue)),
     legacy: clauseStore.legacy,
     resources,
+    pendingInvalid: [...shownIssues.filter(issue => issue.status !== 'dropped' && issue.resolution !== 'closed'
+      && issueVisibility(issue) === 'invalid').map(issue => issue.id), ...pendingClauseIds(clauseStore, statuses)],
   }
   return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, shownState.stack.length, shownState.pending.length, instructions, sections)
 }
@@ -141,7 +163,9 @@ export function residentLedgerText(
   const focus = top
     ? `- ${oneLine(top.title)}${lastNote ? ` — ${oneLine(lastNote)}` : ''} ${topAddress ?? '@unknown'}`
     : '- (none)'
-  const where = [focus, ...(sections.where ?? []).map(line => oneLine(line).replace(/^-\s*/, '')).filter(Boolean).map(line => `- ${line}`), `- stack ${stackSize} · pending ${pendingCount}`]
+  const invalid = [...new Set(sections.pendingInvalid ?? [])]
+  const held = invalid.length ? `- 보류: 기각된 가정에 기댄 추론 ${invalid.length}개가 결정을 기다린다 — 사용자에게 닫을지 살릴지 묻는다 [${invalid.join(', ')}]` : undefined
+  const where = [focus, ...(sections.where ?? []).map(line => oneLine(line).replace(/^-\s*/, '')).filter(Boolean).map(line => `- ${line}`), ...(held ? [held] : []), `- stack ${stackSize} · pending ${pendingCount}`]
   const tasks = (sections.children ?? []).filter(issue => issue.parent === top?.id && isOpen(issue))
     .map(issue => {
       const note = shownNote(issue)

@@ -1,7 +1,8 @@
 import { test, expect } from 'claude-code/testing'
 
-import { applyClauses, applyFoldClauseOps, applyRetract, clauseStoreKey, dropClauses, emptyClauseStore, parseClause, printClause, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
+import { applyClauses, applyFoldClauseOps, applyRetract, clauseStoreKey, dropClauses, emptyClauseStore, parseClause, printClause, readClauseStore, renderClauses, type ClauseStore, type FoldClauseOp, type IncomingClause } from './clauses'
 import { parseMerge } from './ledger'
+import { parseOps } from './tracker'
 import { recallAddress } from './address'
 import { supportedRequestQuote } from './intent'
 
@@ -64,6 +65,107 @@ test('a fold op can never retract a user instruction clause', () => {
 test('a malformed fold reply leaves the store unchanged', () => {
   const store = applyClauses(emptyClauseStore(), [clause('forbid(push).')], 1, NOW).next
   expect(typeof parseMerge('{"ops":[{"clause":', new Set())).toBe('string')
+})
+
+// Regression caught: assumption lifecycle ops crossed stores and updated neither their clause nor their issue.
+test('parseMerge routes C-ids to the clause store and issue ids to the tracker for assumption and resolve', () => {
+  const merged = parseMerge(JSON.stringify({ ops: [
+    { op: 'assumption', id: 'C1', status: 'rejected' },
+    { op: 'resolve', id: 'C2', decision: 'keep', onto: 'I-P' },
+    { op: 'assumption', id: 'I-H', status: 'merged' },
+    { op: 'resolve', id: 'I-C', decision: 'close' },
+  ] }), new Set(['I-H', 'I-C', 'I-P']))
+  if (typeof merged === 'string') throw new Error(merged)
+  expect(merged.clauseOps).toEqual([
+    { assumption: 'C1', status: 'rejected' },
+    { resolve: 'C2', decision: 'keep', onto: 'I-P' },
+  ])
+  expect(merged.ops).toEqual([
+    { op: 'status', issue: 'I-H', status: 'done' },
+    { op: 'resolve', issue: 'I-C', decision: 'close' },
+  ])
+})
+
+// Regression caught: one bad label discarded every valid update in the folded turns.
+test('a reply with one unknown label keeps its other ops and reports rejected: 1', () => {
+  const reply = JSON.stringify({ ops: [
+    { clause: 'found(subject, state, hidden).', kind: 'fact', text: 'hidden', label: [['C77']] },
+    { op: 'status', issue: 'I-C', status: 'done' },
+  ] })
+  const merged = parseMerge(reply, new Set(['I-C']))
+  if (typeof merged === 'string') throw new Error(merged)
+  expect(merged.rejected).toBe(1)
+  expect(merged.clauseOps).toEqual([])
+  expect(merged.ops).toEqual([{ op: 'status', issue: 'I-C', status: 'done' }])
+
+  const tracker = parseOps(JSON.stringify([
+    { op: 'label', issue: 'I-C', label: [['C77']] },
+    { op: 'status', issue: 'I-C', status: 'done' },
+  ]), new Set(['I-C']))
+  if (typeof tracker === 'string') throw new Error(tracker)
+  expect(tracker.rejected).toBe(1)
+  expect(tracker.ops).toEqual([{ op: 'status', issue: 'I-C', status: 'done' }])
+})
+
+// Regression caught: guessed same-batch ids shifted when an earlier draft refreshed an existing clause.
+test('a label citing a same-batch assume clause by text resolves to the id it was actually given, even when an earlier draft duplicated an existing clause', () => {
+  const seeded = applyFoldClauseOps(emptyClauseStore(), [{
+    clause: 'found(existing, state, known).', text: 'existing', kind: 'fact', promptSeq: 1, address: '@seed', evidence: { ref: 'm1', quote: 'existing' },
+  }], NOW)
+  const reply = JSON.stringify({ ops: [
+    { clause: 'found(existing, state, known).', kind: 'fact', text: 'existing again', evidence: [{ ref: 'm2', quote: 'existing again' }] },
+    { clause: 'hypothesis(server_log).', kind: 'assume', text: 'server log', evidence: [{ ref: 'm2', quote: 'server log' }] },
+    { clause: 'found(subject, state, derived).', kind: 'fact', text: 'derived', evidence: [{ ref: 'm2', quote: 'derived' }], label: [['hypothesis(server_log).']] },
+  ] })
+  const merged = parseMerge(reply, new Set(), [], new Set(['C1']))
+  if (typeof merged === 'string') throw new Error(merged)
+  const prepared: FoldClauseOp[] = []
+  for (const op of merged.clauseOps) {
+    if ('retract' in op || 'assumption' in op || 'resolve' in op) { prepared.push(op); continue }
+    const evidence = op.evidence[0]
+    if (evidence) prepared.push({ ...op, promptSeq: 2, address: '@fold', evidence })
+  }
+  const landed = applyFoldClauseOps(seeded, prepared, LATER)
+  expect(landed.clauses.find(item => item.source === 'hypothesis(server_log).')?.id).toBe('C2')
+  expect(landed.clauses.find(item => item.source === 'found(subject, state, derived).')?.label).toEqual([['C2']])
+})
+
+// Regression caught: a stale stored label became a permanent invisible branch after its assumption disappeared.
+test('a stored clause whose label names only a missing id still renders', () => {
+  const store = applyFoldClauseOps(emptyClauseStore(), [{
+    clause: 'found(subject, state, visible).', text: 'orphaned support stays visible', kind: 'fact', promptSeq: 1, address: '@fold', evidence: { ref: 'm1', quote: 'visible' }, label: [['C77']],
+  }], NOW)
+  expect(renderClauses(store, () => true, 15, ['fact'], new Map()).join('\n')).toContain('orphaned support stays visible')
+})
+
+// Regression caught: one same-batch assumption that never landed kept a mixed label on a permanent hidden branch.
+test('a clause whose label mixes a known assumption with one that never landed renders on main once that assumption merges', () => {
+  const store = applyFoldClauseOps(emptyClauseStore(), [
+    { clause: 'hypothesis(known).', text: 'known assumption', kind: 'assume', promptSeq: 1, address: '@fold', evidence: { ref: 'm1', quote: 'known' } },
+    { clause: 'found(subject, state, visible).', text: 'supported result', kind: 'fact', promptSeq: 1, address: '@fold', evidence: { ref: 'm1', quote: 'visible' }, label: [['C1', 'hypothesis(missing).']] },
+    { assumption: 'C1', status: 'merged' },
+  ], NOW)
+  expect(renderClauses(store, () => true, 15, ['fact'], new Map([['C1', 'merged']])).join('\n')).toContain('supported result')
+})
+
+// Regression caught: clause pending decisions failed to close, detach, re-parent, or update assumption status.
+test('applyFoldClauseOps applies resolve close, keep, keep-onto and assumption status update', () => {
+  const seeded = applyFoldClauseOps(emptyClauseStore(), [
+    { clause: 'hypothesis(server_log).', text: 'server log assumption', kind: 'assume', promptSeq: 1, address: '@fold', evidence: { ref: 'm1', quote: 'server log' } },
+    { clause: 'found(close_case, state, pending).', text: 'close case', kind: 'fact', promptSeq: 1, address: '@fold', evidence: { ref: 'm1', quote: 'close case' }, label: [['C1']] },
+    { clause: 'found(keep_case, state, pending).', text: 'keep case', kind: 'fact', promptSeq: 1, address: '@fold', evidence: { ref: 'm1', quote: 'keep case' }, label: [['C1']] },
+    { clause: 'found(onto_case, state, pending).', text: 'onto case', kind: 'fact', promptSeq: 1, address: '@fold', evidence: { ref: 'm1', quote: 'onto case' }, label: [['C1']] },
+  ], NOW)
+  const updated = applyFoldClauseOps(seeded, [
+    { assumption: 'C1', status: 'merged' },
+    { resolve: 'C2', decision: 'close' },
+    { resolve: 'C3', decision: 'keep' },
+    { resolve: 'C4', decision: 'keep', onto: 'I-P' },
+  ], LATER)
+  expect(updated.clauses.find(item => item.id === 'C1')?.assumptionStatus).toBe('merged')
+  expect(updated.clauses.find(item => item.id === 'C2')?.resolution).toBe('closed')
+  expect(updated.clauses.find(item => item.id === 'C3')?.label).toBeUndefined()
+  expect(updated.clauses.find(item => item.id === 'C4')?.label).toEqual([['I-P']])
 })
 
 test('the rendered ledger hides evidence quotes and Prolog source', () => {

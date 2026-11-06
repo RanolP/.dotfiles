@@ -60,6 +60,36 @@ const localIssue = (id: string, title: string, status: Issue['status']): Issue =
   ...issue(id, title, status), origin: at('s1', 'github.com/o/repo'),
 })
 
+// Regression caught: tracker pending decisions left closed issues open and kept stale branch ancestry on kept issues.
+test('tracker snapshot resolve closes to dropped and keep removes parent and label', () => {
+  const origin = at('s1', 'github.com/o/repo')
+  const issues = snapshot(toEvents([
+    { op: 'create', issue: 'I-P', title: 'parent', status: 'todo', hypothesis: true },
+    { op: 'create', issue: 'I-C', title: 'close', status: 'todo', label: [['I-P']] },
+    { op: 'parent', issue: 'I-C', parent: 'I-P' },
+    { op: 'create', issue: 'I-K', title: 'keep', status: 'todo', label: [['I-P']] },
+    { op: 'parent', issue: 'I-K', parent: 'I-P' },
+    { op: 'resolve', issue: 'I-C', decision: 'close' },
+    { op: 'resolve', issue: 'I-K', decision: 'keep' },
+  ], origin, 0, '2026-10-06T00:00:00Z'))
+  expect(issues.find(item => item.id === 'I-C')).toMatchObject({ status: 'dropped', resolution: 'closed' })
+  expect(issues.find(item => item.id === 'I-K')?.parent).toBeUndefined()
+  expect(issues.find(item => item.id === 'I-K')?.label).toBeUndefined()
+})
+
+// Regression caught: folded assumption decisions were parsed as unknown operations instead of issue status transitions.
+test('parseOps maps assumption merged and rejected to done and dropped', () => {
+  const parsed = parseOps(JSON.stringify([
+    { op: 'assumption', id: 'I-M', status: 'merged' },
+    { op: 'assumption', id: 'I-R', status: 'rejected' },
+  ]), new Set(['I-M', 'I-R']))
+  if (typeof parsed === 'string') throw new Error(parsed)
+  expect(parsed.ops).toEqual([
+    { op: 'status', issue: 'I-M', status: 'done' },
+    { op: 'status', issue: 'I-R', status: 'dropped' },
+  ])
+})
+
 // Regression caught: returning to a lower task left the interleaved task doing alongside it.
 test('interleave then continue back pops the side task and restores one doing issue', async () => {
   const issues = [localIssue('s1-a', 'main task', 'doing'), localIssue('s1-b', 'side task', 'todo')]

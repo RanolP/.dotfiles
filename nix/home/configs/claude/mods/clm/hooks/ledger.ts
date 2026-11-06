@@ -4,7 +4,7 @@ import { fnv1a, type SentAt } from './address'
 import { parseClause } from './clauses'
 import { readEvidence, sentStamp, type Evidence } from './evidence'
 import { estTokens, isUserTyped, stripReminders } from './fold'
-import { isTrackerSection, parseOps, sectionLines, shownNote, type Issue, type Payload } from './tracker'
+import { isAssumptionLabel, isTrackerSection, parseOps, sectionLines, shownNote, type Issue, type Payload } from './tracker'
 
 export const SECTIONS = ['목표', '사용자 지시', '한 일', '할 일', '미결 질문', '핵심 사실·경로'] as const
 export const EMPTY_LEDGER = SECTIONS.map(s => `## ${s}\n- (none yet)`).join('\n\n')
@@ -282,8 +282,12 @@ export const MERGE_SYSTEM = [
   '  {"op":"retitle","issue":"<id from the issues>","title":"<new one line title>"}',
   '  {"op":"progress","issue":"<id from the issues>","done":<integer>,"total":<positive integer>}',
   '  {"op":"note","issue":"<id from the issues>","text":"<one line>"}',
-  `  {"clause":"<restricted Prolog>","kind":"fact","text":"<one Korean sentence>",${EVIDENCE_FIELD}}`,
-  '  {"clause":"goal(\'issue-id\', slug).","kind":"goal","text":"<one Korean sentence>","issue":"<issue id>"}',
+  `  {"clause":"<restricted Prolog>","kind":"fact","text":"<one Korean sentence>","label":[["<assumption id>", ...], ...],${EVIDENCE_FIELD}}`,
+  '  {"clause":"goal(\'issue-id\', slug).","kind":"goal","text":"<one Korean sentence>","issue":"<issue id>","label":[["<assumption id>", ...], ...]}',
+  `  {"clause":"hypothesis(slug).","kind":"assume","text":"<one Korean sentence>",${EVIDENCE_FIELD}}`,
+  `  {"op":"assumption","id":"<issue-or-assumption-id>","status":"merged|rejected",${EVIDENCE_FIELD}}`,
+  '  {"op":"label","issue":"<issue id>","label":[["<assumption id>"]]}',
+  '  {"op":"resolve","id":"<pending issue-or-clause-id>","decision":"close|keep","onto":"<optional parent issue id>"}',
   '  {"retract":"<C-id from live_clauses>"} when a newer fact or goal makes it stale.',
   'Every done (a create with status done, or a status op to done) and every fact carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
   'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
@@ -291,12 +295,15 @@ export const MERGE_SYSTEM = [
   'Write a changeable fact value at the start of text as a short identifier key followed by `=`, for example `pull_request=42`, so its next value replaces it.',
   'A constraint carries a quote from a tool result. A lesson carries the failed result or the user correction verbatim as its quote.',
   'Every id, number and date in one claim comes from the same row and names the same object as that row; a `(=...)` date beside a relative expression comes from that row\'s header time plus the expression.',
-  'Instruction clauses are outside your authority. Use only fact and goal clauses.',
+  'Instruction clauses are outside your authority. Use only fact, goal, and assume clauses.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question still waiting for an answer (question, the note naming who must answer).',
   'For each existing issue changed by the turns, write an update using its existing id so its history stays attached. Omit an op for each unchanged issue. Items listed under <legacy> have no issue yet: create one for each that still holds.',
   'The tracker renders the objective and the step list. Write ops only for issue changes the removed turns show, and keep the objective text out of notes and facts.',
   'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
   'When the user resumes a dropped direction, move that dropped issue back to todo or doing by its id; it keeps its id and history that way.',
+  'When a folded user message rejects a hypothesis issue or an assume clause, emit {"op":"assumption","id":...,"status":"rejected"} citing that message; for an objection to a note, write a corrected note on the same issue.',
+  'When a clause or issue holds only while certain assumptions hold, give it label: a list of alternatives, each alternative the list of assumption ids that together support it; a clause may cite an assume clause from this reply by its clause text; an issue label cites existing assumption ids only.',
+  'When the user decides a pending dependent, emit a resolve op that closes it or keeps it unconditionally, using onto only when the user names its new parent.',
   'Keep the recorded state of each step listed under <finished_earlier>.',
   'An open option becomes a tracker create op with status question, not a fact.',
   'Write {"ops":[]} when nothing changed. Write titles, notes and clause text in Korean, keeping code identifiers, paths and commands verbatim.',
@@ -357,27 +364,29 @@ export function parseChanges(reply: string): string[] {
   return body.split('\n').map(line => line.trim()).filter(line => line && !/[<>]/.test(line)).slice(0, 3).map(line => clip(line, 80))
 }
 const isOp = (o: unknown, op: string): o is Record<string, unknown> => typeof o === 'object' && o !== null && 'op' in o && o.op === op
-export type FoldClauseDraft = { clause: string; kind: 'fact' | 'goal'; text: string; evidence: Evidence[]; issue?: string; key?: number }
-const isFoldClauseDraft = (value: unknown): value is { clause: string; kind: 'fact' | 'goal'; text: string; evidence?: unknown; issue?: unknown; key?: unknown } => typeof value === 'object' && value !== null
+export type FoldClauseDraft = { clause: string; kind: 'fact' | 'goal' | 'assume'; text: string; evidence: Evidence[]; issue?: string; key?: number; label?: string[][] }
+type FoldAssumptionOp = { assumption: string; status: 'live' | 'merged' | 'rejected' } | { resolve: string; decision: 'close' | 'keep'; onto?: string | null }
+const isFoldClauseDraft = (value: unknown): value is { clause: string; kind: 'fact' | 'goal' | 'assume'; text: string; evidence?: unknown; issue?: unknown; key?: unknown; label?: unknown } => typeof value === 'object' && value !== null
   && 'clause' in value && typeof value.clause === 'string' && 'text' in value && typeof value.text === 'string'
-  && 'kind' in value && (value.kind === 'fact' || value.kind === 'goal')
+  && 'kind' in value && (value.kind === 'fact' || value.kind === 'goal' || value.kind === 'assume')
 const validClauseEvidence = (value: unknown): value is Evidence[] => Array.isArray(value)
   && value.every(item => typeof item === 'object' && item !== null && !Array.isArray(item)
     && 'ref' in item && typeof item.ref === 'string' && 'quote' in item && typeof item.quote === 'string')
-export type Merge = { ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; clauseOps: (FoldClauseDraft | { retract: string })[]; retracted: string[]; rejected: number }
+export type Merge = { ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; clauseOps: (FoldClauseDraft | { retract: string } | FoldAssumptionOp)[]; retracted: string[]; rejected: number }
 /**
  * Splits a merge reply into validated tracker ops (with the evidence each
  * cited), proposed facts and retracted facts, or says why it is unusable.
  * A retract naming no line of `facts` and a fact with no text are dropped and
  * counted as rejected. Evidence is only read here; the caller checks it.
  */
-export function parseMerge(reply: string, known: ReadonlySet<string>, facts: readonly string[] = []): Merge | string {
+export function parseMerge(reply: string, known: ReadonlySet<string>, facts: readonly string[] = [], knownClauses: ReadonlySet<string> = new Set()): Merge | string {
   let rawOps: unknown
   try {
     const value: unknown = JSON.parse(normalizeLedger(reply))
     rawOps = typeof value === 'object' && value !== null && 'ops' in value ? value.ops : undefined
   } catch (err) { return 'reply is not JSON (' + String(err).slice(0, 80) + ')' }
   if (!Array.isArray(rawOps)) return 'ops are not a JSON array'
+  const knownLabels = new Set([...known, ...knownClauses])
   for (const raw of rawOps) {
     if (typeof raw !== 'object' || raw === null) return 'ops contain a non-object'
     if ('clause' in raw) {
@@ -385,13 +394,24 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, facts: rea
       if (raw.evidence !== undefined && !validClauseEvidence(raw.evidence)) return 'ops contain invalid clause evidence'
       if (raw.issue !== undefined && typeof raw.issue !== 'string') return 'ops contain an invalid clause issue'
       if (raw.key !== undefined && (!Number.isInteger(raw.key) || Number(raw.key) < 0)) return 'ops contain an invalid clause key'
+      if (raw.label !== undefined && !isAssumptionLabel(raw.label)) return 'ops contain an invalid clause label'
       try { parseClause(raw.clause) } catch (err) { return `ops contain an invalid clause (${String(err).slice(0, 80)})` }
     }
     if ('retract' in raw && (Object.keys(raw).length !== 1 || typeof raw.retract !== 'string')) return 'ops contain an invalid clause retract'
   }
-  const clauseDrafts: FoldClauseDraft[] = rawOps.filter(isFoldClauseDraft).map(o => ({
+  const candidates = rawOps.filter(isFoldClauseDraft)
+  const rejectedDrafts = new Set<(typeof candidates)[number]>()
+  let rejectedSize = -1
+  while (rejectedSize !== rejectedDrafts.size) {
+    rejectedSize = rejectedDrafts.size
+    const batchAssumptions = new Set(candidates.filter(item => item.kind === 'assume' && rejectedDrafts.has(item) === false).map(item => item.clause))
+    for (const item of candidates) if (isAssumptionLabel(item.label)
+      && item.label.some(environment => environment.some(id => knownLabels.has(id) === false && batchAssumptions.has(id) === false))) rejectedDrafts.add(item)
+  }
+  const clauseDrafts: FoldClauseDraft[] = candidates.filter(item => rejectedDrafts.has(item) === false).map(o => ({
     clause: o.clause, kind: o.kind, text: oneLine(o.text).slice(0, 200), evidence: readEvidence(o.evidence),
     ...(typeof o.issue === 'string' ? { issue: o.issue } : {}), ...(typeof o.key === 'number' ? { key: o.key } : {}),
+    ...(isAssumptionLabel(o.label) ? { label: o.label } : {}),
   }))
   const clauseRetracts = rawOps.flatMap(o => typeof o === 'object' && o !== null && 'retract' in o && typeof o.retract === 'string' ? [{ retract: o.retract }] : [])
   const factOps = rawOps.filter(o => isOp(o, 'fact'))
@@ -405,12 +425,20 @@ export function parseMerge(reply: string, known: ReadonlySet<string>, facts: rea
   const knownFacts = new Set(facts.map(instructionKey))
   const retractOps = rawOps.filter(o => isOp(o, 'retract'))
   const retracted = retractOps.flatMap(o => (typeof o.fact === 'string' && knownFacts.has(instructionKey(o.fact.replace(/^\s*-\s*/, ''))) ? [o.fact] : []))
-  const tracker = rawOps.filter(o => !isFoldClauseDraft(o) && !(typeof o === 'object' && o !== null && 'retract' in o) && !isOp(o, 'fact') && !isOp(o, 'retract'))
-  const ops = parseOps(JSON.stringify(tracker), known)
+  const clauseAssumptions: FoldAssumptionOp[] = rawOps.flatMap(o => {
+    if (isOp(o, 'assumption') && typeof o.id === 'string' && /^C\d+$/.test(o.id) && (o.status === 'merged' || o.status === 'rejected')) return [{ assumption: o.id, status: o.status }]
+    if (!isOp(o, 'resolve') || typeof o.id !== 'string' || !/^C\d+$/.test(o.id) || (o.decision !== 'close' && o.decision !== 'keep')) return []
+    const onto = o.onto
+    if (onto !== undefined && onto !== null && (typeof onto !== 'string' || !known.has(onto))) return []
+    return [{ resolve: o.id, decision: o.decision, ...(onto === undefined ? {} : { onto }) }]
+  })
+  const tracker = rawOps.filter(o => !isFoldClauseDraft(o) && !(typeof o === 'object' && o !== null && 'retract' in o) && !isOp(o, 'fact') && !isOp(o, 'retract')
+    && !(isOp(o, 'assumption') && typeof o.id === 'string' && /^C\d+$/.test(o.id)) && !(isOp(o, 'resolve') && typeof o.id === 'string' && /^C\d+$/.test(o.id)))
+  const ops = parseOps(JSON.stringify(tracker), known, knownLabels)
   if (typeof ops === 'string') return ops
-  const clauseFacts = clauseDrafts.filter(item => item.kind === 'fact').map(item => ({ text: item.text, evidence: item.evidence }))
-  const rejected = ops.rejected + factOps.length - proposed.length + retractOps.length - retracted.length
-  return { ops: ops.ops, evidence: ops.evidence, facts: [...proposed, ...clauseFacts], clauseOps: [...clauseDrafts, ...legacyClauseFacts, ...clauseRetracts], retracted, rejected }
+  const clauseFacts = clauseDrafts.filter(item => item.kind === 'fact' || item.kind === 'assume').map(item => ({ text: item.text, evidence: item.evidence }))
+  const rejected = rejectedDrafts.size + ops.rejected + factOps.length - proposed.length + retractOps.length - retracted.length
+  return { ops: ops.ops, evidence: ops.evidence, facts: [...proposed, ...clauseFacts], clauseOps: [...clauseDrafts, ...legacyClauseFacts, ...clauseRetracts, ...clauseAssumptions], retracted, rejected }
 }
 
 // --- review -------------------------------------------------------------------

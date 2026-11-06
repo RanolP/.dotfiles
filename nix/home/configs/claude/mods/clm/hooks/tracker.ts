@@ -11,8 +11,13 @@ import type { Worktree } from './worktree'
 
 export const STATUSES = ['todo', 'doing', 'ready-to-land', 'done', 'question', 'uncertain', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
+export type AssumptionStatus = 'live' | 'merged' | 'rejected'
+export type AssumptionLabel = string[][]
+export type LabelVisibility = 'main' | 'branch' | 'invalid'
 export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' && (STATUSES as readonly string[]).includes(v)
 export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+export const isAssumptionLabel = (value: unknown): value is AssumptionLabel => Array.isArray(value)
+  && value.every(environment => Array.isArray(environment) && environment.every(id => typeof id === 'string'))
 
 /** A step's done state: a command that exits 0, or a criterion a cited transcript quote must prove. */
 export type RubricItem =
@@ -26,7 +31,7 @@ export type StepResult = { intent: string; finding: string; decision: string; fi
 
 export type Origin = { session: string; repo: string; branch?: string; cwd: string }
 type Base = { ts: string; seq: number; issue: string; origin: Origin }
-type Create = { op: 'create'; title: string; status: IssueStatus; note?: string; taskId?: string }
+type Create = { op: 'create'; title: string; status: IssueStatus; note?: string; taskId?: string; label?: AssumptionLabel; hypothesis?: true }
 export type Intent = 'continue' | 'handoff' | 'interleave' | 'pending' | 'question'
 export type FocusState = { stack: string[]; pending: string[] }
 export type TrackerEvent = Base & (
@@ -41,6 +46,8 @@ export type TrackerEvent = Base & (
   // Links `issue` to `origin.session`, so it is injected there whatever its repo.
   | { op: 'link' }
   | { op: 'parent'; parent: string | null; planBatch?: true }
+  | { op: 'label'; label?: AssumptionLabel }
+  | { op: 'resolve'; decision: 'close' | 'keep'; onto?: string | null }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
   // Stepped goal: the root is planned into steps, each with a rubric, attempts and methodologies.
   | { op: 'stepped' }
@@ -54,7 +61,7 @@ export type TrackerEvent = Base & (
   | { op: 'land' }
 )
 export type Payload =
-  | { op: 'create'; issue?: string; title: string; status: IssueStatus; note?: string; taskId?: string }
+  | { op: 'create'; issue?: string; title: string; status: IssueStatus; note?: string; taskId?: string; label?: AssumptionLabel; hypothesis?: true }
   | { op: 'status'; issue: string; status: IssueStatus; startToolUseId?: string }
   | { op: 'retitle'; issue: string; title: string }
   | { op: 'progress'; issue: string; done: number; total: number }
@@ -64,6 +71,8 @@ export type Payload =
   | { op: 'claim'; issue: string; by: string | null }
   | { op: 'link'; issue: string }
   | { op: 'parent'; issue: string; parent: string | null; planBatch?: true }
+  | { op: 'label'; issue: string; label?: AssumptionLabel }
+  | { op: 'resolve'; issue: string; decision: 'close' | 'keep'; onto?: string | null }
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
   | { op: 'stepped'; issue: string }
   | { op: 'planned'; issue: string; mode: 'inline' }
@@ -110,6 +119,28 @@ export type Issue = {
   priority?: number
   ready?: boolean
   claimedBy?: string
+  label?: AssumptionLabel
+  hypothesis?: true
+  resolution?: 'closed'
+}
+
+export const assumptionStatusOfIssue = (issue: Pick<Issue, 'status'>): AssumptionStatus =>
+  issue.status === 'dropped' ? 'rejected' : issue.status === 'done' ? 'merged' : 'live'
+export function labelVisibility(label: AssumptionLabel | undefined, status: (id: string) => AssumptionStatus | undefined): LabelVisibility {
+  if (label === undefined) return 'main'
+  const known = label.map(environment => environment.filter(id => status(id) !== undefined))
+  if (known.some(environment => environment.length === 0)) return 'main'
+  const surviving = known.filter(environment => !environment.some(id => status(id) === 'rejected'))
+  if (!surviving.length) return 'invalid'
+  return surviving.some(environment => environment.every(id => status(id) === 'merged')) ? 'main' : 'branch'
+}
+export function effectiveIssueLabel(issue: Issue, byId: ReadonlyMap<string, Issue>): AssumptionLabel | undefined {
+  const ancestors: string[] = []
+  const seen = new Set<string>()
+  let parent = issue.parent ? byId.get(issue.parent) : undefined
+  while (parent && !seen.has(parent.id)) { if (parent.hypothesis) ancestors.push(parent.id); seen.add(parent.id); parent = parent.parent ? byId.get(parent.parent) : undefined }
+  if (!ancestors.length) return issue.label
+  return (issue.label ?? [[]]).map(environment => [...new Set([...environment, ...ancestors])])
 }
 
 export const issueId = (session: string, seq: number) => `${session.slice(0, 8)}-${seq}`
@@ -142,7 +173,8 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
       if (!issues.has(e.issue))
         issues.set(e.issue, {
           id: e.issue, title: e.title, status: e.status, origin: e.origin, notes: e.note ? [e.note] : [], linked: [],
-          ...(e.taskId ? { taskId: e.taskId } : {}), updated: e.ts, ...(e.status === 'done' ? { doneOrder: n } : {}),
+          ...(e.taskId ? { taskId: e.taskId } : {}), ...(e.label ? { label: e.label.map(environment => [...environment]) } : {}),
+          ...(e.hypothesis ? { hypothesis: true } : {}), updated: e.ts, ...(e.status === 'done' ? { doneOrder: n } : {}),
         })
       continue
     }
@@ -182,6 +214,19 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
         i.parent = e.parent
         const root = issues.get(e.parent)
         if (root?.planMode) root.planRevision = e.planBatch ? root.planRevision ?? 1 : (root.planRevision ?? 0) + 1
+      }
+    }
+    else if (e.op === 'label') {
+      if (e.label === undefined) delete i.label
+      else i.label = e.label.map(environment => [...environment])
+    }
+    else if (e.op === 'resolve') {
+      if (e.decision === 'close') { i.status = 'dropped'; i.resolution = 'closed' }
+      else {
+        delete i.resolution
+        delete i.label
+        if (e.onto === undefined || e.onto === null) delete i.parent
+        else i.parent = e.onto
       }
     }
     else if (e.op === 'stepped') { i.stepped = true; i.planMode = 'planner' }
@@ -230,6 +275,7 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       case 'create': return {
         ...base, issue: p.issue ?? issueId(origin.session, seq), op: 'create', title: p.title, status: p.status,
         ...(p.note === undefined ? {} : { note: p.note }), ...(p.taskId === undefined ? {} : { taskId: p.taskId }),
+        ...(p.label === undefined ? {} : { label: p.label.map(environment => [...environment]) }), ...(p.hypothesis ? { hypothesis: true } : {}),
       }
       case 'status': return { ...base, issue: p.issue, op: 'status', status: p.status, ...(p.startToolUseId ? { startToolUseId: p.startToolUseId } : {}) }
       case 'retitle': return { ...base, issue: p.issue, op: 'retitle', title: p.title }
@@ -243,6 +289,8 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       case 'claim': return { ...base, issue: p.issue, op: 'claim', by: p.by }
       case 'link': return { ...base, issue: p.issue, op: 'link' }
       case 'parent': return { ...base, issue: p.issue, op: 'parent', parent: p.parent, ...(p.planBatch ? { planBatch: true as const } : {}) }
+      case 'label': return { ...base, issue: p.issue, op: 'label', ...(p.label === undefined ? {} : { label: p.label.map(environment => [...environment]) }) }
+      case 'resolve': return { ...base, issue: p.issue, op: 'resolve', decision: p.decision, ...(p.onto === undefined ? {} : { onto: p.onto }) }
       case 'stepped': return { ...base, issue: p.issue, op: 'stepped' }
       case 'planned': return { ...base, issue: p.issue, op: 'planned', mode: p.mode }
       case 'result': return { ...base, issue: p.issue, op: 'result', intent: p.intent, finding: p.finding, decision: p.decision, files: [...p.files], source: p.source, ...(p.span ? { span: { ...p.span } } : {}) }
@@ -334,7 +382,7 @@ export function sectionLines(issues: readonly Issue[], section: string): string[
  * naming an issue the model was not shown, or a status outside the set, is
  * dropped and counted; the rest still land.
  */
-export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payload[]; evidence: Evidence[][]; rejected: number } | string {
+export function parseOps(raw: string, known: ReadonlySet<string>, knownAssumptions: ReadonlySet<string> = known): { ops: Payload[]; evidence: Evidence[][]; rejected: number } | string {
   let list: unknown
   try {
     list = JSON.parse(raw)
@@ -349,6 +397,9 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
   const evidence: Evidence[][] = []
   let rejected = 0
   for (const o of list as Record<string, unknown>[]) {
+    if (o?.op === 'label' && o.label !== undefined && isAssumptionLabel(o.label) === false) return 'ops contain an invalid label'
+    if (o?.op === 'label' && isAssumptionLabel(o.label) && o.label.some(environment => environment.some(id => !knownAssumptions.has(id))))
+      { rejected++; continue }
     const before = ops.length
     const title = text(o?.title, 200), note = text(o?.note ?? o?.text, 300)
     // `uncertain` and `ready-to-land` stay parseable in stored events, but no fold op may produce them.
@@ -362,6 +413,13 @@ export function parseOps(raw: string, known: ReadonlySet<string>): { ops: Payloa
       ops.push({ op: 'progress', issue: o.issue, done: o.done, total: o.total })
     else if (o?.op === 'note' && typeof o.issue === 'string' && known.has(o.issue) && note)
       ops.push({ op: 'note', issue: o.issue, text: note })
+    else if (o?.op === 'label' && typeof o.issue === 'string' && known.has(o.issue) && (o.label === undefined || isAssumptionLabel(o.label)))
+      ops.push({ op: 'label', issue: o.issue, ...(o.label === undefined ? {} : { label: o.label }) })
+    else if (o?.op === 'assumption' && typeof o.id === 'string' && known.has(o.id) && (o.status === 'merged' || o.status === 'rejected'))
+      ops.push({ op: 'status', issue: o.id, status: o.status === 'merged' ? 'done' : 'dropped' })
+    else if (o?.op === 'resolve' && typeof o.id === 'string' && known.has(o.id) && (o.decision === 'close' || o.decision === 'keep')
+      && (o.onto === undefined || o.onto === null || (typeof o.onto === 'string' && known.has(o.onto))))
+      ops.push({ op: 'resolve', issue: o.id, decision: o.decision, ...(o.onto === undefined ? {} : { onto: o.onto }) })
     else rejected++
     if (ops.length > before) evidence.push(readEvidence(o?.evidence))
   }

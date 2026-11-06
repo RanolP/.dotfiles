@@ -12,6 +12,10 @@
       "type": "http",
       "url": "https://mcp.sentry.dev/mcp"
     },
+    "parallel": {
+      "type": "http",
+      "url": "https://mcp.parallel.ai/mcp?login"
+    },
     "rea": {
       "command": "rea",
       "args": ["mcp"]

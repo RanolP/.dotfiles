@@ -30,7 +30,8 @@ from datetime import datetime
 
 REMINDER = (
     "Shape: end on the outcome, cut closers; user must act -> say it and stop; "
-    "paths open -> offer choices; else one-line next step, continue."
+    "a reversible next step the request implies -> do it, don't ask; "
+    "only the user can pick -> offer choices."
 )
 
 # Injection cost grows with turns^2, so a long reminder is a session-wide tax.

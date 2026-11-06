@@ -2,11 +2,11 @@
 
 pkgs.stdenv.mkDerivation rec {
   pname = "xcodes";
-  version = "1.6.2";
+  version = "2.1.0";
 
   src = pkgs.fetchurl {
-    url = "https://github.com/XcodesOrg/xcodes/releases/download/${version}/xcodes-${version}.macos.arm64.tar.gz";
-    sha256 = "1xy4hn96qlkg1d2q7lppw53vwj860gvdqjv7zmihv18jmw102ly4";
+    url = "https://github.com/XcodesOrg/xcodes/releases/download/${version}/xcodes-${version}.macos.arm64.bottle.tar.gz";
+    sha256 = "0c14gxlgfsldfjwicg3160cnhd5l35sdklq94wq46rx1zk0lq9dc";
   };
 
   sourceRoot = ".";

@@ -13,8 +13,9 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, Time
 // with that tool_use and stops with `tool_use`, so Claude Code runs the tool
 // inside this agent's loop (hooks, permissions, MCP auth all apply); the next
 // step reads the tool_result and hands it back to the codex call that is still
-// waiting. The agent's first message (CLAUDE.md, skill listing, environment)
-// becomes codex's developer instructions.
+// waiting. Codex's developer instructions are built by developerInstructions:
+// the environment and skill listing from the agent's first message, the
+// implementer role, the owner's agent and style rules, and the target repo's own rules.
 //
 // A hooks module has no Node and no sockets, so the daemon is a node bridge
 // (daemon/codex-bridge.mjs) speaking HTTP on a unix socket to the mod and
@@ -199,6 +200,146 @@ const PREAMBLE = `You are running as a subagent inside a Claude Code session; a 
 - Where the instructions below name Claude tools you do not have (Read, Edit, Write, Bash, Grep, Glob, Agent, Task*), use your shell or apply_patch for the same effect, or skip the step.
 
 The Claude session's context for this agent follows.`
+
+// Of the main session's first-message context, an implementer acts on the
+// environment, the model and date lines, and the skill listing it loads through
+// the relayed Skill tool. The rest (the main session's CLAUDE.md and memory,
+// the deferred-tool list, git status of the main checkout) is orchestration
+// for Claude main: 86k characters at the median, which pushed codex threads
+// into auto-compaction. The target repo's own rules come from projectRules.
+const IMPLEMENTER_CONTEXT = [/^# Environment\b/, /^You are powered by the model\b/, /^Today's date is\b/, /^The following skills are available for use with the Skill tool\b/]
+const implementerContext = (api: readonly ApiMessage[]): string => {
+  const segments = inheritedContext(api).match(/<system-reminder>[\s\S]*?<\/system-reminder>/g) ?? []
+  const keep = (segment: string) => {
+    const inner = segment.slice('<system-reminder>'.length, -'</system-reminder>'.length).trim()
+    return IMPLEMENTER_CONTEXT.some(re => re.test(inner))
+  }
+  return segments.filter(keep).join('\n\n')
+}
+
+const IMPLEMENTER_ROLE = `## Your role: implement one settled change
+The brief names a change already decided. Carry it out in this order:
+1. Baseline: run the brief's verify command before editing, and record its pass and fail counts.
+2. Preserve every HEAD behaviour the brief does not name as changing.
+3. Grep every caller of each export you change, and update each caller that has to move with it.
+4. Reuse the nearest existing helper or sibling pattern, and name it in your report.
+5. Keep the diff minimal, with new code placed in the base file's existing order.
+6. Report done once the verify command passes at or above the baseline, with a checklist of every brief item and the file:line that satisfies it.
+7. Stage your changes with git add and leave every commit to the Claude session: the sandbox blocks the signing socket, so a commit made here fails.
+Write to the owner's agent rules, style rules and the target repository's rules below; a reviewer grades the change against them.`
+
+// Both deployed by nix/home/default.nix. Codex runs in an isolated CODEX_HOME,
+// so ~/.codex/AGENTS.md never loads: the owner's agent-agnostic rules come from
+// here, without the Claude-only appendix. code-reviewer grades against the same style file.
+const AGENT_RULES_PATH = '.claude/shared/agent-rules.md'
+const STYLE_RULES_PATH = '.claude/shared/style-rules.md'
+
+// A repo's rule files from its git toplevel down to the root, read in that order.
+const RULE_FILES = ['AGENTS.md', 'CLAUDE.md', '.claude/CLAUDE.md']
+
+type Run = EngineInterface['process']['run']
+
+const dirsFromTop = async (run: Run, root: string): Promise<string[]> => {
+  try {
+    const r = await run(['git', 'rev-parse', '--show-toplevel', '--show-prefix'], { cwd: root })
+    const [top = '', prefix = ''] = r.stdout.split('\n')
+    if (r.exitCode !== 0 || !top) return [root]
+    const parts = prefix.split('/').filter(Boolean)
+    return [top, ...parts.map((_, i) => [top, ...parts.slice(0, i + 1)].join('/'))]
+  } catch {
+    return [root]
+  }
+}
+
+const realpaths = async (run: Run, paths: readonly string[]): Promise<string[]> => {
+  if (!paths.length) return []
+  try {
+    const r = await run(['realpath', ...paths], { cwd: '/' })
+    const resolved = r.stdout.split('\n').filter(Boolean)
+    return r.exitCode === 0 && resolved.length === paths.length ? resolved : [...paths]
+  } catch {
+    return [...paths]
+  }
+}
+
+const existing = async ($: EngineInterface, paths: readonly string[]) =>
+  (await Promise.all(paths.map(async p => (await $.fs.exists(p).catch(() => false)) ? p : undefined))).filter((p): p is string => p !== undefined)
+
+type Log = (line: string) => void
+
+// An unreadable rule file costs the thread that file, not the step.
+const readOrSkip = async ($: EngineInterface, path: string, what: string, log: Log): Promise<string | undefined> => {
+  try {
+    return await $.fs.read(path)
+  } catch (err) {
+    log(`cannot read ${what} at ${path}; the codex thread starts without it: ${String(err)}`)
+    return undefined
+  }
+}
+
+// The inherited context carries the main session's project file, not the
+// worktree's: in 110 of 268 measured rollouts the target repo's CLAUDE.md or
+// AGENTS.md reached codex by no path. codex-config.mjs turns codex's own
+// AGENTS.md loading off (project_doc_max_bytes = 0), so this is the single
+// path and nothing arrives twice. A line that is only `@path` imports that file
+// in place, one level deep, as Claude Code reads it; a file already emitted
+// (CLAUDE.md as `@AGENTS.md`) is not repeated.
+const projectRules = async ($: EngineInterface, roots: readonly string[], log: Log): Promise<string> => {
+  const run: Run = (argv, init) => $.process.run(argv, init)
+  const home = (await $.env.get('HOME')) ?? ''
+  const dirs = [...new Set((await Promise.all(roots.map(root => dirsFromTop(run, root)))).flat())]
+  const files = await existing($, dirs.flatMap(dir => RULE_FILES.map(f => `${dir}/${f}`)))
+  const real = await realpaths(run, files)
+  const seen = new Set<string>()
+  const claim = (realPath: string) => !seen.has(realPath) && seen.add(realPath).has(realPath)
+  const sections: string[] = []
+  for (const [i, path] of files.entries()) {
+    if (!claim(real[i] ?? path)) continue
+    const dir = path.slice(0, path.lastIndexOf('/'))
+    const content = await readOrSkip($, path, 'a repository rule file', log)
+    if (content === undefined) continue
+    const lines = content.split('\n')
+    const targets = lines.map(line => {
+      const target = /^@(\S+)\s*$/.exec(line)?.[1]
+      if (target === undefined) return undefined
+      return target.startsWith('~/') ? `${home}${target.slice(1)}` : target.startsWith('/') ? target : `${dir}/${target}`
+    })
+    const present = await existing($, targets.filter((p): p is string => p !== undefined))
+    const presentReal = await realpaths(run, present)
+    const realOf = new Map(present.map((p, j) => [p, presentReal[j] ?? p]))
+    const expanded: string[] = []
+    for (const [j, line] of lines.entries()) {
+      const target = targets[j]
+      const targetReal = target === undefined ? undefined : realOf.get(target)
+      if (target === undefined || targetReal === undefined) expanded.push(line)
+      else if (claim(targetReal)) {
+        const imported = await readOrSkip($, target, `the file ${path} imports`, log)
+        if (imported !== undefined) expanded.push(imported)
+      }
+    }
+    const text = expanded.join('\n').trim()
+    if (text) sections.push(`Contents of ${path}:\n${text}`)
+  }
+  return sections.join('\n\n')
+}
+
+const sharedRules = async ($: EngineInterface, rel: string, what: string, log: Log): Promise<string> =>
+  ((await readOrSkip($, `${(await $.env.get('HOME')) ?? ''}/${rel}`, what, log)) ?? '').trim()
+
+// The first step's developer instructions: tool mapping, the implementer's
+// share of the inherited context, the role, the owner's agent rules, the style
+// rules the reviewer grades against, and the rules of every repo the agent writes.
+const developerInstructions = async ($: EngineInterface, api: readonly ApiMessage[], roots: readonly string[], log: Log): Promise<string> => {
+  const parts = [
+    PREAMBLE,
+    implementerContext(api),
+    IMPLEMENTER_ROLE,
+    await sharedRules($, AGENT_RULES_PATH, "the owner's agent rules", log),
+    await sharedRules($, STYLE_RULES_PATH, 'the style rules', log),
+    await projectRules($, roots, log),
+  ]
+  return parts.filter(Boolean).join('\n\n')
+}
 
 // In auto mode the harness delivers a subagent's report only through a
 // SubagentHandback call and drops its final text, so the mod makes that call
@@ -463,6 +604,11 @@ async function subagentTypeOf(st: ModState, $: EngineInterface, agents: Readonly
 }
 
 const writableFix = 'add a line `writable: /abs/repo, /abs/other-worktree` to the brief naming every directory the worker must write'
+const doneWhenFix = 'add a line `Done when: <a failing test that must pass, or a concrete input -> output>` to the brief'
+// A brief that writes code names its finish line: a worker left to judge done for itself stops at a partial implementation.
+export const doneWhenError = (prompt: string, writableRoots: readonly string[]) =>
+  writableRoots.length && !/^Done when:[ \t]*\S/m.test(prompt) ? `Codex subagent spawn denied: prompt is missing the required Done when: line; ${doneWhenFix}.` : undefined
+
 async function writableRootsFromPrompt($: EngineInterface, prompt: string, cwd: string, required: boolean): Promise<{ writableRoots?: string[]; error?: string }> {
   const writableLine = /^writable:[ \t]*(.+)$/m.exec(prompt)?.[1]
   if (writableLine === undefined)
@@ -546,6 +692,8 @@ export const register: Register = (on) => {
       const spawnCwd = e.cwd ?? await $.session.cwd()
       const parsed = await writableRootsFromPrompt($, e.prompt, spawnCwd, true)
       if (parsed.error) return { deny: parsed.error }
+      const doneWhen = doneWhenError(e.prompt, parsed.writableRoots ?? [])
+      if (doneWhen) return { deny: doneWhen }
       writableRoots = parsed.writableRoots!
       cwd = writableRoots[0]
       r = await next(e)
@@ -784,7 +932,7 @@ export const register: Register = (on) => {
         if (!prompt) throw new Error(`agent ${agentId} has neither a pending prompt nor the tool_result for ${agent.waiting?.toolUseId ?? '(none)'}`)
         if (!agent.threadId) {
           body.dynamicTools = agent.relay.tools
-          body.developerInstructions = `${PREAMBLE}\n\n${inheritedContext(api)}`
+          body.developerInstructions = await developerInstructions($, api, [...new Set([...agent.writableRoots, agent.cwd])], line => diag(st, $, line))
         }
         body.prompt = prompt
       }

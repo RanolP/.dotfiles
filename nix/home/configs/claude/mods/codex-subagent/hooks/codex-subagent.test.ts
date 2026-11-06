@@ -1,6 +1,6 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
-import { bridgeFingerprint, bridgeReady, codexName, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import { bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 import { codexConfig } from '../daemon/codex-config.mjs'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
@@ -128,7 +128,7 @@ test('a spawned codex agent is remembered by the bridge so a restart can recover
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
   })
 
-  await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repoB, /other-worktree\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repoA' } satisfies AgentSpawnArgs)
+  await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repoB, /other-worktree\nImplement the change\nDone when: the test passes', subagentType: 'codex-subagent:luna', cwd: '/repoA' } satisfies AgentSpawnArgs)
   expect(remembered).toEqual([{ key: 'spawned-codex', type: 'luna', cwd: '/repoB', writableRoots: ['/repoB', '/other-worktree'] }])
   // Regression caught: the hook stopped passing the auto-compaction limit to the bridge, so codex kept the engine's larger context window.
   expect(spawnArgv[0]?.[4]).toBe('150000')
@@ -155,7 +155,7 @@ test("a codex agent's auto-compaction never reaches the Claude compactor and kee
     return { messages: [row('user', 'CLAUDE COMPACTOR')] }
   })
 
-  await $.agent.spawn({ prompt: 'writable: /repo\nImplement it', subagentType: 'codex-subagent:sol', cwd: '/repo' } satisfies AgentSpawnArgs)
+  await $.agent.spawn({ prompt: 'writable: /repo\nImplement it\nDone when: the test passes', subagentType: 'codex-subagent:sol', cwd: '/repo' } satisfies AgentSpawnArgs)
   const messages = [
     row('user', 'initial request'),
     row('assistant', 'first relayed answer'),
@@ -1002,7 +1002,7 @@ test('a codex step that fails after a keepalive beat writes its error past the t
 test('a codex step whose hook overruns its budget ends with an error turn and never reaches Claude', { timeoutMs: 30_000 }, async ($, on) => {
   mock.clock(on)
   on('agent.spawn', () => new Promise(() => {}))
-  const spawnArgs: AgentSpawnArgs = { prompt: 'Budget: 10 min\nwritable: /repo\nimplement it', subagentType: 'codex-subagent:luna', cwd: '/repo' }
+  const spawnArgs: AgentSpawnArgs = { prompt: 'Budget: 10 min\nwritable: /repo\nimplement it\nDone when: the test passes', subagentType: 'codex-subagent:luna', cwd: '/repo' }
   const { api, claude } = codexStepHarness(on, route => reply({ error: `no route ${route}` }, 404))
   void $.agent.spawn(spawnArgs).catch(() => {})
 
@@ -1113,9 +1113,12 @@ test('a reloaded module re-registers its agent types on the first hook without s
   expect(registered).toEqual(Object.entries(TYPES).map(([name, t]) => ({ name, model: t.model })))
 })
 
-// Regression caught: the limit left the generated codex config's top level, so codex never compacted before Claude's unknown-model window.
+// Regression caught: the limit left the generated codex config's top level, so codex never compacted before Claude's unknown-model window,
+// or codex's own AGENTS.md loading came back on and the target repo's AGENTS.md reached the thread twice.
 test('codex config carries the auto-compaction limit at top level', () => {
-  expect(codexConfig('model = "m"\n[tools]\nweb_search = true\n', 150000).split(/^\[/m)[0]).toMatch(/^model_auto_compact_token_limit = 150000$/m)
+  const topLevel = codexConfig('model = "m"\n[tools]\nweb_search = true\n', 150000).split(/^\[/m)[0]
+  expect(topLevel).toMatch(/^model_auto_compact_token_limit = 150000$/m)
+  expect(topLevel).toMatch(/^project_doc_max_bytes = 0$/m)
 })
 
 // Regression caught: an edit to daemon/codex-config.mjs alone left the fingerprint unchanged, so a running bridge kept its old generated codex config.
@@ -1129,4 +1132,87 @@ test('bridge fingerprint changes when only codex-config.mjs changes', async () =
   const before = await bridgeFingerprint(fake)
   config = 'export const v = 2\n'
   expect(await bridgeFingerprint(fake)).not.toBe(before)
+})
+
+// Regression: the Codex implementer is graded by code-reviewer's style rules it never saw, misses the
+// worktree's own AGENTS.md/CLAUDE.md (codex loads only AGENTS.md at its cwd), loses the owner's agent-agnostic
+// rules (codex's isolated CODEX_HOME never loads ~/.codex/AGENTS.md), fails the step on one unreadable rule file,
+// or still receives the main session's orchestration rules, which crowd its context into auto-compaction.
+test("a codex thread's developer instructions carry the style rules and the worktree's rules, not main's orchestration rules", async ($, on) => {
+  mock.clock(on)
+  const agentId = 'a-instructions'
+  const api: ApiMessage[] = [{ role: 'user', content: [
+    { type: 'text', text: '<system-reminder>\nThe following deferred tools are now available via ToolSearch.\nEnterWorktree\n</system-reminder>' },
+    { type: 'text', text: '<system-reminder>\n# Environment\n - Primary working directory: /wt/pkg\n</system-reminder>' },
+    { type: 'text', text: '<system-reminder>\nCodebase and user instructions are shown below.\n\nContents of /home/test/.claude-personal/CLAUDE.md:\n## Delegation is pre-approved; size the unit, then commit to one strategy\n</system-reminder>' },
+    { type: 'text', text: 'implement it' },
+  ] }]
+  const rows: SessionMessage[] = [row('user', 'implement it')]
+  const files: Record<string, string> = {
+    '/home/test/.claude/shared/agent-rules.md': '# Shared Agent Rules\n\n## Scope and shape of code\n- Stop at the first rung that holds.\n',
+    '/home/test/.claude/shared/style-rules.md': "# Owner's standing style rules\n- **Type it safely.** An escape hatch is a defect: `as never`.\n",
+    '/wt/AGENTS.md': 'Worktree rule: run bun test before reporting.\n',
+    '/wt/CLAUDE.md': '@AGENTS.md\n',
+    '/wt/pkg/.claude/CLAUDE.md': 'Package rule: keep exports sorted.\n',
+  }
+  const steps: Record<string, unknown>[] = []
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('tool.list', async () => ({ value: [] }))
+  on('session.messages', async (_$, e) => ({ value: e.as === 'api' ? api : rows }))
+  const unreadable = '/wt/pkg/AGENTS.md'
+  on('fs.exists', async (_$, e) => ({ value: e.path in files || e.path === unreadable }))
+  on('fs.read', async (_$, e) => e.path in files ? { value: files[e.path] } : { deny: `no file ${e.path}` })
+  on('process.run', async (_$, e) => {
+    if (e.argv[0] === 'git') return { value: { exitCode: 0, stdout: '/wt\npkg/\n', stderr: '' } }
+    if (e.argv[0] === 'realpath') return { value: { exitCode: 0, stdout: `${e.argv.slice(1).join('\n')}\n`, stderr: '' } }
+    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+  })
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    const route = new URL(e.url).pathname
+    const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
+    if (route === '/recover') return json({ found: true, type: 'sol', cwd: '/wt/pkg', writableRoots: ['/wt/pkg'] })
+    if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
+    if (route === '/wait') return json({ threadId: 'thread-instructions', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
+    return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
+  })
+
+  const stream = $.turn.step({ turnId: 'turn-instructions', index: 0, model: 'gpt-5.6-sol', messageCount: api.length, agentId })
+  let r = await stream.next()
+  while (!r.done) r = await stream.next()
+  const instructions = String(steps[0]?.developerInstructions)
+  expect(instructions).toStartWith('You are running as a subagent inside a Claude Code session')
+  expect(instructions).toContain('# Environment\n - Primary working directory: /wt/pkg')
+  expect(instructions).toContain('1. Baseline: run the brief\'s verify command before editing')
+  expect(instructions).toContain('7. Stage your changes with git add and leave every commit to the Claude session: the sandbox blocks the signing socket, so a commit made here fails.')
+  expect(instructions).toContain('## Scope and shape of code\n- Stop at the first rung that holds.')
+  expect(instructions.indexOf('# Shared Agent Rules')).toBeGreaterThan(instructions.indexOf('## Your role'))
+  expect(instructions).toContain("# Owner's standing style rules\n- **Type it safely.**")
+  expect(instructions).not.toContain(`Contents of ${unreadable}`)
+  expect(instructions).toContain('Contents of /wt/AGENTS.md:\nWorktree rule: run bun test before reporting.')
+  expect(instructions).toContain('Contents of /wt/pkg/.claude/CLAUDE.md:\nPackage rule: keep exports sorted.')
+  // /wt/CLAUDE.md only imports AGENTS.md, which is already in, so it adds nothing.
+  expect(instructions.split('Worktree rule').length).toBe(2)
+  expect(instructions).not.toContain('Contents of /wt/CLAUDE.md')
+  expect(instructions).not.toContain('Delegation is pre-approved')
+  expect(instructions).not.toContain('deferred tools')
+})
+
+// Regression: a code-writing brief with no finish line reaches codex, and the worker decides for itself when a partial change is done.
+test('a codex spawn whose brief writes code but names no Done when: line is denied with the brief fix', async ($, on) => {
+  let spawnCalls = 0
+  on('process.run', async (_$, e) => ({ value: { exitCode: e.argv[0] === 'test' ? 0 : 128, stdout: '', stderr: '' } }))
+  on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-5.6-sol' } })
+
+  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repo\nImplement the change', subagentType: 'codex-subagent:sol', cwd: '/repo' } satisfies AgentSpawnArgs)
+
+  expect(result.deny).toBe('Codex subagent spawn denied: prompt is missing the required Done when: line; add a line `Done when: <a failing test that must pass, or a concrete input -> output>` to the brief.')
+  expect(spawnCalls).toBe(0)
+  expect(doneWhenError('writable: /repo\nDone when:\nfix it', ['/repo'])).toContain('missing the required Done when: line')
+  expect(doneWhenError('writable: /repo\nDone when: `bun test` passes 46/46', ['/repo'])).toBeUndefined()
 })

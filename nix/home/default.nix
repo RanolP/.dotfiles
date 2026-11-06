@@ -636,6 +636,15 @@ in
       # dropped in 2026-09: 0 spawns and 0 humanize skill invocations across
       # 437 recorded sessions, at ~360 tokens of every session's first request.
       ".claude/agents".source = ./configs/claude/agents;
+      # The owner's style rubric as one text for grader and implementer:
+      # code-reviewer reads it at this path, and codex-subagent copies it into
+      # every Codex implementer's developer instructions. It sits outside
+      # agents/ because every .md there is read as an agent definition.
+      ".claude/shared/style-rules.md".source = ./configs/claude/shared/style-rules.md;
+      # The agent-agnostic rules alone, without the Claude-only appendix: codex
+      # runs in an isolated CODEX_HOME where ~/.codex/AGENTS.md never loads, so
+      # codex-subagent copies this into every implementer's instructions.
+      ".claude/shared/agent-rules.md".source = sharedAgentRules;
       # One explicit entry per style, never directory recursion: every file here
       # shows up in the /config picker, and settings.json's "outputStyle" names
       # the one whose body goes resident.

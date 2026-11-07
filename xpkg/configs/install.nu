@@ -27,6 +27,11 @@ mise-config ($nu.home-dir | path join '.config' 'mise' 'config.toml')
 echo $"(ansi purple)>>(ansi reset) Updating .gitconfig"
 nu $'($configs)/gitconfig.nu'
 
+if $nu.os-info.name == windows {
+    echo $"(ansi purple)>>(ansi reset) Setting the Korean 103-key keyboard type"
+    nu $'($configs)/keyboard/install.nu'
+}
+
 if (installed code) {
     echo $"(ansi purple)>>(ansi reset) Symlinking VS Code settings"
     nu $'($configs)/vscode/install.nu'

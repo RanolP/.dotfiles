@@ -2,7 +2,7 @@
 # arguments so the output can be rendered into a scratch directory and checked
 # without touching the live config.
 
-def dotfiles [...parts: string] { $nu.home-path | path join '.dotfiles' ...$parts }
+def dotfiles [...parts: string] { $nu.home-dir | path join '.dotfiles' ...$parts }
 
 # nix/home/programs/aliases.nix is a flat attrset of `name = "value";` lines.
 # Anything else (a nix expression, an escape, an interpolation) fails loudly
@@ -72,7 +72,7 @@ export def mise-config [target: path] {
     let overlay = (open (dotfiles xpkg configs mise config.toml))
     let shared_tools = ($shared.tools? | default {})
     let overlay_tools = ($overlay.tools? | default {} | items {|name, spec|
-        let pin = ($shared_tools | get -i $name)
+        let pin = ($shared_tools | get -o $name)
         let pinned = if ($pin | describe | str starts-with 'record') { $pin.version? } else { $pin }
         let spec = if ($spec | describe | str starts-with 'record') and ($spec.version? == null) and ($pinned != null) {
             {version: $pinned} | merge $spec

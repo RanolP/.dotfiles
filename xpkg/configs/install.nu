@@ -10,36 +10,44 @@ if ($nu.os-info.name == windows) and (not (is-admin)) {
 
 let configs = $env.FILE_PWD
 
+# The elevated process `sudo` relaunches into gets the registry PATH, which has
+# no mise install dirs (they only enter PATH through `mise activate` in an
+# interactive shell), so a bare `which` misses every mise-managed tool and its
+# configs get skipped silently. Ask mise as well.
+def installed [tool: string] {
+    (not (which $tool | is-empty)) or ((do -i { ^mise which $tool } | complete).exit_code == 0)
+}
+
 echo $"(ansi purple)>>(ansi reset) Generating nushell configs \(Windows overlay + shared nix\)"
 nushell-config $nu.env-path $nu.config-path
 
 echo $"(ansi purple)>>(ansi reset) Merging mise config \(shared nix + Windows overlay\)"
-mise-config ($nu.home-path | path join '.config' 'mise' 'config.toml')
+mise-config ($nu.home-dir | path join '.config' 'mise' 'config.toml')
 
 echo $"(ansi purple)>>(ansi reset) Updating .gitconfig"
 nu $'($configs)/gitconfig.nu'
 
-if not (which code | is-empty) {
+if (installed code) {
     echo $"(ansi purple)>>(ansi reset) Symlinking VS Code settings"
     nu $'($configs)/vscode/install.nu'
 }
 
-if not (which claude | is-empty) {
+if (installed claude) {
     echo $"(ansi purple)>>(ansi reset) Installing Claude Code configs"
     nu $'($configs)/claude/install.nu'
 }
 
-if not (which codex | is-empty) {
+if (installed codex) {
     echo $"(ansi purple)>>(ansi reset) Installing Codex configs"
     nu $'($configs)/codex/install.nu'
 }
 
-if not (which pi | is-empty) {
+if (installed pi) {
     echo $"(ansi purple)>>(ansi reset) Installing Pi configs"
     nu $'($configs)/pi/install.nu'
 }
 
-if not (which opencode | is-empty) {
+if (installed opencode) {
     echo $"(ansi purple)>>(ansi reset) Installing opencode configs"
     nu $'($configs)/opencode/install.nu'
 }

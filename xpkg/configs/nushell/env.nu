@@ -6,7 +6,7 @@
 # Based on the Nushell 0.87.1 default env file.
 
 def create_left_prompt [] {
-    let home =  $nu.home-path
+    let home =  $nu.home-dir
 
     # Perform tilde substitution on dir
     # To determine if the prefix of the path matches the home dir, we split the current path into
@@ -105,4 +105,14 @@ $env.NU_PLUGIN_DIRS = [
 $env.PATH = ($env.PATH | append '~/.opencode/bin')
 
 # The shared env below reads $env.HOME, which Windows does not set.
-$env.HOME = ($env.HOME? | default $nu.home-path)
+$env.HOME = ($env.HOME? | default $nu.home-dir)
+
+# config.nu `source`s this at parse time, so it must exist before config.nu is
+# read -- generating it there fails the whole config on a fresh machine. An
+# empty file keeps the `source` valid when mise is absent.
+let mise_path = ($nu.default-config-dir | path join .mise.nu)
+if (which mise | is-empty) {
+    if not ($mise_path | path exists) { "" | save -f $mise_path }
+} else {
+    ^mise activate nu | save -f $mise_path
+}

@@ -7,7 +7,7 @@
 # and plan tools. Copying is reliable; re-run this after editing the nix sources.
 # Only the OS-specific bits (statusline.js, the rewritten settings.json
 # tokens) are xpkg-local.
-let home = $nu.home-path
+let home = $nu.home-dir
 let nix = $'($home)/.dotfiles/nix/home/configs'
 let local = $env.FILE_PWD
 
@@ -18,7 +18,7 @@ do -i { mkdir $'($home)/.claude/skills' }
 do -i { mkdir $'($home)/.claude/mods' }
 
 echo $"     (ansi blue)Merge(ansi reset) CLAUDE.md from shared AGENTS.md + claude-specific rules"
-let merged = (open $'($nix)/.agents/AGENTS.md') + "\n" + (open $'($nix)/claude/CLAUDE.md')
+let merged = (open --raw $'($nix)/.agents/AGENTS.md') + "\n" + (open --raw $'($nix)/claude/CLAUDE.md')
 $merged | save -f $'($home)/.claude/CLAUDE.md'
 
 # Claude Code rewrites settings.json at runtime, so a symlink would get
@@ -106,12 +106,12 @@ do -i { cp --recursive $'($nix)/.agents/skills/apology' $'($home)/.claude/skills
 # repo no longer has (the handoff skill, time-budget.py, ...), and leave every
 # other file in these directories alone.
 def retired [repo_dir: string] {
-    git -C ($nu.home-path | path join '.dotfiles') log --format= --name-only --diff-filter=D -- $repo_dir
+    git -C ($nu.home-dir | path join '.dotfiles') log --format= --name-only --diff-filter=D -- $repo_dir
     | lines
     | where {|l| $l starts-with $'($repo_dir)/' }
     | each {|l| $l | str substring (($repo_dir | str length) + 1).. | split row '/' | first }
     | uniq
-    | where {|n| not ($nu.home-path | path join '.dotfiles' $repo_dir $n | path exists) }
+    | where {|n| not ($nu.home-dir | path join '.dotfiles' $repo_dir $n | path exists) }
 }
 echo $"     (ansi blue)Remove(ansi reset) retired hooks, agents and skills"
 for r in [

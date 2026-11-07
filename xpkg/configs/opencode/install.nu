@@ -4,7 +4,7 @@
 # ~/.config/opencode/opencode.jsonc (symlinks need elevation on Windows). The
 # directory also holds opencode-managed node_modules/ and providers/, so only
 # the one file is written.
-let home = $nu.home-path
+let home = $nu.home-dir
 let nix = $'($home)/.dotfiles/nix/home/configs'
 
 do -i { mkdir $'($home)/.config/opencode' }

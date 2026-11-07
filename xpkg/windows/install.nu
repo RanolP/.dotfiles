@@ -63,7 +63,7 @@ export def main [] {
     let host = (sys host | get hostname)
     let skip = ($def.skip_dependencies? | default [])
     let common = ($def.winget?.packages? | default [])
-    let profile = ($def.profiles? | get -i $host | get -i packages | default [])
+    let profile = ($def.profiles? | get -o $host | get -o packages | default [])
     let declared = ($common ++ $profile | uniq)
 
     print $"(ansi green)==(ansi reset) profile (ansi cyan)($host)(ansi reset): ($declared | length) declared \(($common | length) common + ($profile | length) profile\)"

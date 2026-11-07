@@ -27,7 +27,7 @@ git config --global diff.colorMoved default
 git config --global diff.algorithm histogram
 
 # global excludes (core.excludesFile) -- mirrors programs.git.ignores in git.nix
-let git_ignore = ($nu.home-path | path join '.config' 'git' 'ignore')
+let git_ignore = ($nu.home-dir | path join '.config' 'git' 'ignore')
 mkdir ($git_ignore | path dirname)
 ".nanno-workers.json\n.slopless/\n" | save -f $git_ignore
 git config --global core.excludesFile ($git_ignore | str replace --all '\' '/')

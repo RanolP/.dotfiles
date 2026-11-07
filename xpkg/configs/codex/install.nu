@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 
-let home = $nu.home-path
+let home = $nu.home-dir
 let nix = $'($home)/.dotfiles/nix/home/configs'
 
 do -i { mkdir $'($home)/.codex/hooks' }

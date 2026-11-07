@@ -3,7 +3,7 @@
 # ~/.claude.json is Claude Code's mutable runtime state (projects, tokens,
 # caches), so unlike the other configs it is MERGED, never copied: only the
 # declared mcpServers keys are set, and every other key stays as found.
-let home = $nu.home-path
+let home = $nu.home-dir
 let target = $'($home)/.claude.json'
 let backup = $'($target).xpkg.backup'
 let tmp = $'($target).xpkg.tmp'
@@ -18,7 +18,7 @@ let state = try { open --raw $target | from json } catch {|e|
 
 echo $"     (ansi blue)Merge(ansi reset) mcpServers \(($declared | columns | str join ', ')\) into ~/.claude.json"
 if not ($backup | path exists) { cp $target $backup }
-let current = ($state | get --ignore-errors mcpServers | default {})
+let current = ($state | get -o mcpServers | default {})
 let merged = ($state | upsert mcpServers ($current | merge $declared))
 $merged | to json --indent 2 | save -f $tmp
 mv --force $tmp $target

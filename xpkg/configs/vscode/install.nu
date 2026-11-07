@@ -7,11 +7,11 @@ if ($nu.os-info.kernel_version | str contains 'WSL2') {
 
 # ref: https://code.visualstudio.com/docs/getstarted/settings#_settings-file-locations
 let target = if $nu.os-info.name == macos {
-    $'($nu.home-path)/Library/Application Support/Code/User/settings.json'
+    $'($nu.home-dir)/Library/Application Support/Code/User/settings.json'
 } else if $nu.os-info.name == windows {
     $'($env.APPDATA)\Code\User\settings.json'
 } else if $nu.os-info.family == unix {
-    $'($nu.home-path)/.config/Code/User/settings.json'
+    $'($nu.home-dir)/.config/Code/User/settings.json'
 } else {
     ''
 }

@@ -5,7 +5,7 @@
 # relative `packages` entries. Pi never npm-installs a local package, so the
 # two directories with third-party dependencies get theirs from their
 # committed pnpm lockfiles here.
-let home = $nu.home-path
+let home = $nu.home-dir
 let nix = $'($home)/.dotfiles/nix/home/configs'
 let agent = $'($home)/.pi/agent'
 let vendor = $'($agent)/vendor/choco-pi'

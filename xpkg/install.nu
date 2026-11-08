@@ -6,7 +6,8 @@
 
 if ($nu.os-info.name == windows) and (not (is-admin)) {
     echo $"(ansi yellow)!!(ansi reset) Relaunch ~/.dotfiles/xpkg/install.nu with admin privileges"
-    sudo nu ~/.dotfiles/xpkg/install.nu
+    # gsudo, not sudo: inside nu, sudo resolves to the disabled Windows sudo.exe in system32.
+    gsudo nu ~/.dotfiles/xpkg/install.nu
     return
 }
 

@@ -41,7 +41,7 @@ def install-winget [id: string, skip_deps: bool] {
 
 def install-direct [name: string, url: string, args: list<string>] {
     print $"     (ansi green)++(ansi reset) ($name) (ansi dark_gray)\(($url)\)(ansi reset)"
-    let exe = ($nu.temp-path | path join $"xpkg-($name | str replace -a ' ' '-').exe")
+    let exe = ($nu.temp-dir | path join $"xpkg-($name | str replace -a ' ' '-').exe")
     try { http get --raw $url | save -f $exe } catch {|e|
         print $"     (ansi red)!!(ansi reset) ($name) (ansi red)download failed(ansi reset): ($e.msg)"
         return

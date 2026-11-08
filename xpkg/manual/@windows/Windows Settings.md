@@ -43,6 +43,7 @@
 
 ### Language & region
 
+- Windows display language : English (United States)
 - Region - Country or region : Korea
 
 ### Typing

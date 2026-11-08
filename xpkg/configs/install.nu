@@ -1,11 +1,10 @@
 #!/usr/bin/env nu
 source ~/.dotfiles/xpkg/utils/normalize.nu
 use ~/.dotfiles/xpkg/configs/render.nu [nushell-config mise-config]
+use ~/.dotfiles/xpkg/utils/@windows/bootstrap.nu [relaunch-elevated]
 
 if ($nu.os-info.name == windows) and (not (is-admin)) {
-    echo $"(ansi yellow)!!(ansi reset) Relaunch ~/.dotfiles/xpkg/configs/install.nu with admin privileges"
-    # gsudo, not sudo: inside nu, sudo resolves to the disabled Windows sudo.exe in system32.
-    gsudo nu ~/.dotfiles/xpkg/configs/install.nu
+    relaunch-elevated ~/.dotfiles/xpkg/configs/install.nu
     return
 }
 

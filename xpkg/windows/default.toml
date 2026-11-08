@@ -23,6 +23,7 @@ packages = [
   "EclipseAdoptium.Temurin.21.JDK",
   "Espanso.Espanso",
   "FTB.App",
+  "gerardog.gsudo",
   "Git.Git",
   "GitHub.cli",
   "Google.GoogleDrive",

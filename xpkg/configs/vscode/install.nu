@@ -22,7 +22,7 @@ do -i { ln -s -f $'($env.FILE_PWD)/settings.json' $target }
 let installed = (code --list-extensions | from ssv -n | get column0)
 let extensionList = (open $'($env.FILE_PWD)/extensions.toml' | values | flatten | parse --regex '^(?<name>[^@]+)(?:@(?<version>.+))?$')
 for extension in $extensionList {
-    if $extension.version == '' or $extension.version == 'latest' {
+    if $extension.version in [null '' 'latest'] {
         if ($installed | find $extension.name | is-empty) {
             echo $"     (ansi blue)Install(ansi reset) ($extension.name)"
             code --force --install-extension $extension.name

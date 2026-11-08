@@ -8,7 +8,9 @@
 
 [tools]
 "aqua:arxanas/git-branchless" = "latest"
-"cargo:html-query" = "latest"
+# The release binary, not a cargo build. Pinned: the repo's "latest" release
+# is the html-query-extractor crate, not hq.
+"github:orf/html-query" = { version = "1.2.2", bin = "hq", version_prefix = "html-query-v" }
 claude = { bin = "claude", platforms = """
 [windows-x64]
 bin = "claude.exe"

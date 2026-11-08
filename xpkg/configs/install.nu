@@ -25,6 +25,12 @@ nushell-config $nu.env-path $nu.config-path
 echo $"(ansi purple)>>(ansi reset) Merging mise config \(shared nix + Windows overlay\)"
 mise-config ($nu.home-dir | path join '.config' 'mise' 'config.toml')
 
+# Writing the config installs nothing; tools the overlay adds (pnpm for the Pi
+# step below) stay missing until this runs. One tool failing should not skip
+# every config after it.
+echo $"(ansi purple)>>(ansi reset) Installing mise tools"
+try { ^mise install } catch {|e| print -e $"(ansi red)!!(ansi reset) mise install failed: ($e.msg)" }
+
 echo $"(ansi purple)>>(ansi reset) Updating .gitconfig"
 nu $'($configs)/gitconfig.nu'
 

@@ -18,7 +18,10 @@ cp --recursive $'($nix)/pi/choco-pi' $vendor
 
 for dir in [packages/choco-pi-web-access extensions] {
     print $"     (ansi blue)Install(ansi reset) vendor/choco-pi/($dir) dependencies"
-    let result = (do { cd $'($vendor)/($dir)'; ^pnpm install --frozen-lockfile --ignore-scripts } | complete)
+    # The elevated install process has no mise dirs on PATH. `mise which`
+    # rather than `mise exec`, which would first install every missing tool.
+    let pnpm = (^mise which pnpm | str trim)
+    let result = (do { cd $'($vendor)/($dir)'; ^$pnpm install --frozen-lockfile --ignore-scripts } | complete)
     print $result.stdout
     if ($result.stderr | is-not-empty) { print -e $result.stderr }
     if $result.exit_code != 0 {

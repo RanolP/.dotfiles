@@ -5,13 +5,15 @@
 //     {"kind": "diff", "old": "a.ts", "new": "b.ts", "name": "src/a.ts", "caption": "..."},
 //     {"kind": "file", "path": "b.ts", "name": "src/a.ts"},
 //     {"kind": "term", "path": "test.log", "caption": "pnpm test"},
-//     {"kind": "patch", "path": "fix.patch", "caption": "..."}]}
+//     {"kind": "patch", "path": "fix.patch", "caption": "..."},
+//     {"kind": "interdiff", "old": "base/fix.patch", "new": "head/fix.patch", "caption": "..."}]}
 //   Paths are relative to the spec file. "name" sets the header and the language (by extension).
 import fs from 'node:fs';
 import path from 'node:path';
 import { bundledThemes } from 'shiki';
 import { parsePatchFiles, registerCustomTheme } from '@pierre/diffs';
 import { preloadDiffHTML, preloadFile, preloadFileDiff } from '@pierre/diffs/ssr';
+import { interdiffFile, normalizeUnnumberedHunks, parsePatch, patchPackage } from './interdiff.mjs';
 
 // Nord, https://www.nordtheme.com (MIT). Dark is Shiki's bundled `nord` with only the comment colour
 // raised from #616E88 to #A6AFC0 (mixed 58% toward nord4, hue kept) so comments pass 4.5:1 on changed lines.
@@ -59,19 +61,55 @@ async function diffBlock(b, dir) {
   return `<div class="cv-split">${host(await render('split'))}</div><div class="cv-unified">${host(await render('unified'))}</div>`;
 }
 
+const parseFiles = (text) => parsePatchFiles(normalizeUnnumberedHunks(text), undefined, true);
+async function fileDiffHtml(fileDiff, overflow = 'scroll') {
+  const render = async (diffStyle) => (await preloadFileDiff({ fileDiff, options: { theme, diffStyle, overflow } })).prerenderedHTML;
+  return `<div class="cv-file"><div class="cv-split">${host(await render('split'))}</div><div class="cv-unified">${host(await render('unified'))}</div></div>`;
+}
+
 // A unified diff (git format-patch, pnpm / patch-package, diff -u) as one rendered diff per file it touches.
 // A commit message or other text before the first file is shown above that commit's files.
 async function patchBlock(b, dir) {
-  const patches = parsePatchFiles(fs.readFileSync(path.resolve(dir, b.path), 'utf8'), undefined, true);
+  const patches = parseFiles(fs.readFileSync(path.resolve(dir, b.path), 'utf8'));
   if (!patches.some((p) => p.files.length)) throw new Error(`${b.path}: no file diffs found`);
   let html = '';
   for (const { patchMetadata, files } of patches) {
     if (patchMetadata?.trim()) html += `<pre class="cv-term" tabindex="0">${esc(patchMetadata.replace(/\n+$/, ''))}</pre>`;
-    for (const fileDiff of files) {
-      const render = async (diffStyle) => (await preloadFileDiff({ fileDiff, options: { theme, diffStyle, overflow: 'scroll' } })).prerenderedHTML;
-      html += `<div class="cv-file"><div class="cv-split">${host(await render('split'))}</div><div class="cv-unified">${host(await render('unified'))}</div></div>`;
-    }
+    for (const fileDiff of files) html += await fileDiffHtml(fileDiff);
   }
+  return html;
+}
+
+// Two versions of one patch file, shown as the code each version produces: per target file, the
+// base version's post-image against the head version's (interdiff.mjs). A file only one version
+// patches is shown as that version's own diff.
+async function interdiffBlock(b, dir) {
+  const read = (p) => fs.readFileSync(path.resolve(dir, p), 'utf8');
+  const [baseText, headText] = [read(b.old), read(b.new)];
+  const [ours, theirs] = [[parsePatch(baseText).files, parsePatch(headText).files],
+    [parseFiles(baseText).flatMap((p) => p.files), parseFiles(headText).flatMap((p) => p.files)]];
+  for (const i of [0, 1]) if (ours[i].length !== theirs[i].length)
+    throw new Error(`${[b.old, b.new][i]}: found ${ours[i].length} patched files, @pierre/diffs found ${theirs[i].length}`);
+  if (!ours[0].length && !ours[1].length) throw new Error(`${b.old}, ${b.new}: no file diffs found`);
+  const [pa, pb] = [patchPackage(path.basename(b.old)), patchPackage(path.basename(b.new))];
+  const bump = pa && pb && pa.pkg === pb.pkg && pa.version !== pb.version ? `${pa.pkg} ${pa.version} to ${pb.version}` : null;
+  const note = (t) => `<p class="cv-cap">${esc(t)}</p>`;
+  const baseByName = new Map(ours[0].map((f, i) => [f.name, i]));
+  let html = note(bump
+    ? `The upstream package moves from ${bump}, so each file compares the code the two versions' hunks produce, in hunk order; line numbers count lines within those hunks. Red: base version of the patch. Green: head version.`
+    : 'Each file compares the code the base version of the patch produces (red, left) with the code the head version produces (green, right). Line numbers are lines of the patched file; a gap between hunks is upstream code neither version touches.');
+  const same = [];
+  for (const [i, f] of ours[1].entries()) {
+    if (!baseByName.has(f.name)) { html += note(`${f.name}: added by this PR`) + await fileDiffHtml(theirs[1][i]); continue; }
+    const j = baseByName.get(f.name); baseByName.delete(f.name);
+    const r = interdiffFile(ours[0][j], f, { inOrder: !!bump });
+    if (!r.hunks.length) { same.push(f.name); continue; }
+    if (!r.aligned && !bump) html += note(`${f.name}: the two versions disagree on upstream line ${r.conflict}, so the upstream source differs between them; compared in hunk order, line numbers count lines within the hunks.`);
+    const [fileDiff] = parseFiles([`diff --git a/${f.name} b/${f.name}`, `--- a/${f.name}`, `+++ b/${f.name}`, ...r.hunks, ''].join('\n'))[0].files;
+    html += await fileDiffHtml(fileDiff, 'wrap'); // wrapped: the change is often at the end of a deeply indented line
+  }
+  for (const [name, j] of baseByName) html += note(`${name}: dropped by this PR`) + await fileDiffHtml(theirs[0][j]);
+  if (same.length) html += note(`Same code from both versions: ${same.join(', ')}`);
   return html;
 }
 
@@ -153,10 +191,10 @@ body{background:var(--cv-bg);color:var(--cv-ink)}
 .cv-page{padding:16px;max-width:1200px;margin:0 auto;box-sizing:border-box;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
 .cv-page h1{font-size:1.4rem;margin:0 0 16px}
 .cv-block{margin:0 0 24px}
-.cv-cap{margin:0 0 8px;color:var(--cv-muted);font-size:.875rem}
+.cv-cap{margin:0 0 8px;color:var(--cv-muted);font-size:.875rem;overflow-wrap:anywhere}
 .cv-block diffs-container{display:block;max-width:100%;overflow-x:clip;border:1px solid var(--cv-line);border-radius:6px}
 .cv-block diffs-container{--diffs-bg-addition-override:color-mix(in lab,var(--diffs-bg) 90%,var(--diffs-addition-base));--diffs-bg-deletion-override:color-mix(in lab,var(--diffs-bg) 90%,var(--diffs-deletion-base));--diffs-bg-addition-emphasis-override:rgb(from var(--diffs-addition-base) r g b/.1);--diffs-bg-deletion-emphasis-override:rgb(from var(--diffs-deletion-base) r g b/.1);--diffs-fg-number-override:color-mix(in lab,var(--diffs-fg) 80%,var(--diffs-bg));--diffs-bg-separator-override:color-mix(in lab,var(--diffs-bg) 95%,var(--diffs-mixer))}
-.cv-file+.cv-file,.cv-term+.cv-file{margin-top:12px}
+.cv-file+.cv-file,.cv-term+.cv-file,.cv-file+.cv-cap{margin-top:12px}
 .cv-unified{display:none}
 @media (max-width:700px){.cv-split{display:none}.cv-unified{display:block}}
 :root[data-theme="dark"] diffs-container{color-scheme:dark}
@@ -171,10 +209,10 @@ const [specPath, out] = process.argv.slice(2);
 if (!out) { console.error('usage: render.sh <spec.json> <out.html>'); process.exit(2); }
 const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
 const dir = path.dirname(path.resolve(specPath));
-const kinds = { diff: diffBlock, file: fileBlock, term: termBlock, patch: patchBlock };
+const kinds = { diff: diffBlock, file: fileBlock, term: termBlock, patch: patchBlock, interdiff: interdiffBlock };
 let body = spec.title ? `<h1>${esc(spec.title)}</h1>` : '';
 for (const b of spec.blocks) {
-  if (!kinds[b.kind]) throw new Error(`unknown block kind "${b.kind}" (diff, file, term, patch)`);
+  if (!kinds[b.kind]) throw new Error(`unknown block kind "${b.kind}" (diff, file, term, patch, interdiff)`);
   body += `<section class="cv-block">${b.caption ? `<p class="cv-cap">${esc(b.caption)}</p>` : ''}${await kinds[b.kind](b, dir)}</section>`;
 }
 const page = `<title>${esc(spec.title ?? 'Code')}</title>\n${STYLE}\n<main class="cv-page">${body}</main>\n`;

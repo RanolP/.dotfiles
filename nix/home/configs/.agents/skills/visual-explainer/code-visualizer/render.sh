@@ -11,5 +11,5 @@ if ! cmp -s "$here/package-lock.json" "$cache/package-lock.json" || [ ! -d "$cac
   install -m 0644 "$here/package.json" "$here/package-lock.json" "$cache/"
   npm ci --prefix "$cache" --no-audit --no-fund >&2
 fi
-install -m 0644 "$here/render.mjs" "$cache/render.mjs"
+install -m 0644 "$here/render.mjs" "$here/interdiff.mjs" "$cache/"
 exec node "$cache/render.mjs" "$@"

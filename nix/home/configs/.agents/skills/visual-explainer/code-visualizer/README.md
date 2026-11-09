@@ -9,6 +9,7 @@ Diffs and files come from `@pierre/diffs` (its server-side `preloadDiffHTML` and
 - **Diff**: showing what a change does, line by line, with the before and after side by side. Show the hunk that carries the point, not a whole pull request; split a large change into one block per file.
 - **Code file**: one file, or the relevant part of it, highlighted with line numbers so a caption can say "line 14".
 - **Patch file**: a `.patch` or `.diff` file read as the change it applies (a pnpm or patch-package patch, `git format-patch` output, `diff -u`), which a code host shows only as a diff of diff text.
+- **Changed patch file**: two versions of one patch file read as the change in the code they produce (`interdiff`), for a pull request that edits a patch that already existed.
 - **Terminal output**: a command's coloured log (test run, `git status`, build errors) as the reader would have seen it.
 
 A picture of how parts relate is a diagram (diagram-visualizer), not a code block.
@@ -27,11 +28,13 @@ sh ~/.claude/skills/visual-explainer/code-visualizer/render.sh spec.json out.htm
   {"kind": "diff", "old": "old.ts", "new": "new.ts", "name": "src/auth/refresh.ts", "caption": "What changed"},
   {"kind": "file", "path": "new.ts", "name": "src/auth/refresh.ts", "caption": "The file after the change"},
   {"kind": "term", "path": "test.log", "caption": "pnpm vitest run"},
-  {"kind": "patch", "path": "react-native-foo@1.2.3.patch", "caption": "patches/react-native-foo@1.2.3.patch"}]}
+  {"kind": "patch", "path": "react-native-foo@1.2.3.patch", "caption": "patches/react-native-foo@1.2.3.patch"},
+  {"kind": "interdiff", "old": "base/react-native-foo@1.2.3.patch", "new": "react-native-foo@1.2.3.patch", "caption": "How the patch's code changed"}]}
 ```
 
 - Paths are relative to the spec. `name` is the header the reader sees and picks the language by its extension.
-- A `patch` block parses any unified diff with the package's own `parsePatchFiles` and renders one diff per file it touches, each with its file header and change counts, in both layouts like a `diff` block. Commit text before the first file (`git format-patch`) shows above that commit's files. A file with no file diff in it stops the render with an error.
+- A `patch` block parses any unified diff with the package's own `parsePatchFiles` and renders one diff per file it touches, each with its file header and change counts, in both layouts like a `diff` block. Commit text before the first file (`git format-patch`) shows above that commit's files. A file with no file diff in it stops the render with an error. PaperMC / paperweight hunk headers with no new-side start (`@@ -223,6 +_,37 @@`) get the start they imply (old start plus the lines earlier hunks in that file added minus removed) before parsing. The HTML runs about 35 times the patch's bytes.
+- An `interdiff` block takes two versions of one patch (`interdiff.mjs`). For each file both patch, it rebuilds the code each version produces over the upstream lines its hunks cover (context plus added lines), aligns the two on upstream (old-side) line numbers, merges overlapping or touching ranges into one region, fills a region's unchanged lines from whichever version quotes them, and diffs the two results; upstream code neither version quotes stays a collapsed separator. Lines wrap so a change at the end of a deeply indented line stays in view. When the file names carry different package versions (`foo@1.2.0.patch`, `foo+1.3.0.patch`) or the versions quote one upstream line differently, the upstream source differs, so it diffs the hunks' code in order and the caption says so. A file only one version patches renders as that version's diff, labelled added or dropped by this PR; files both patch identically are listed by name. Check the alignment with `node interdiff.test.mjs`.
 - Get the two sides of a diff with `git show <rev>:<path> > old.ts`; capture a coloured log with the tool's force-colour switch (`FORCE_COLOR=1`, `git -c color.ui=always`, `--color=always`) and `> test.log 2>&1`.
 - The first run installs the versions pinned in `package-lock.json` into `~/.cache/visual-explainer/code-visualizer` (`npm ci`); later runs reuse it until the lockfile changes. Nothing is installed globally or into this repository.
 - `out.html` is a page fragment (`<title>`, `<style>`, content) ready to publish as an Artifact. To put a block inside a larger page, keep the fragment's one `<style>` and paste its `<section class="cv-block">`.

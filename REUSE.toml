@@ -114,6 +114,8 @@ path = [
     "nix/home/configs/.agents/skills/visual-explainer/timeline-visualizer/README.md",
     "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/README.md",
     "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/render.sh",
+    "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/interdiff.mjs",
+    "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/interdiff.test.mjs",
     "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/package.json",
     "nix/home/configs/.agents/skills/visual-explainer/code-visualizer/package-lock.json",
     "nix/home/configs/.agents/skills/visual-explainer/chart-visualizer/function-graph.sh",

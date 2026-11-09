@@ -4,13 +4,14 @@
 //   spec: {"title": "...", "blocks": [
 //     {"kind": "diff", "old": "a.ts", "new": "b.ts", "name": "src/a.ts", "caption": "..."},
 //     {"kind": "file", "path": "b.ts", "name": "src/a.ts"},
-//     {"kind": "term", "path": "test.log", "caption": "pnpm test"}]}
+//     {"kind": "term", "path": "test.log", "caption": "pnpm test"},
+//     {"kind": "patch", "path": "fix.patch", "caption": "..."}]}
 //   Paths are relative to the spec file. "name" sets the header and the language (by extension).
 import fs from 'node:fs';
 import path from 'node:path';
 import { bundledThemes } from 'shiki';
-import { registerCustomTheme } from '@pierre/diffs';
-import { preloadDiffHTML, preloadFile } from '@pierre/diffs/ssr';
+import { parsePatchFiles, registerCustomTheme } from '@pierre/diffs';
+import { preloadDiffHTML, preloadFile, preloadFileDiff } from '@pierre/diffs/ssr';
 
 // Nord, https://www.nordtheme.com (MIT). Dark is Shiki's bundled `nord` with only the comment colour
 // raised from #616E88 to #A6AFC0 (mixed 58% toward nord4, hue kept) so comments pass 4.5:1 on changed lines.
@@ -56,6 +57,22 @@ async function diffBlock(b, dir) {
   const render = (diffStyle) => preloadDiffHTML({ oldFile, newFile, options: { theme, diffStyle, overflow: 'scroll' } });
   // Both layouts ship; CSS shows split above 700 px and unified below, so no script picks one.
   return `<div class="cv-split">${host(await render('split'))}</div><div class="cv-unified">${host(await render('unified'))}</div>`;
+}
+
+// A unified diff (git format-patch, pnpm / patch-package, diff -u) as one rendered diff per file it touches.
+// A commit message or other text before the first file is shown above that commit's files.
+async function patchBlock(b, dir) {
+  const patches = parsePatchFiles(fs.readFileSync(path.resolve(dir, b.path), 'utf8'), undefined, true);
+  if (!patches.some((p) => p.files.length)) throw new Error(`${b.path}: no file diffs found`);
+  let html = '';
+  for (const { patchMetadata, files } of patches) {
+    if (patchMetadata?.trim()) html += `<pre class="cv-term" tabindex="0">${esc(patchMetadata.replace(/\n+$/, ''))}</pre>`;
+    for (const fileDiff of files) {
+      const render = async (diffStyle) => (await preloadFileDiff({ fileDiff, options: { theme, diffStyle, overflow: 'scroll' } })).prerenderedHTML;
+      html += `<div class="cv-file"><div class="cv-split">${host(await render('split'))}</div><div class="cv-unified">${host(await render('unified'))}</div></div>`;
+    }
+  }
+  return html;
 }
 
 async function fileBlock(b, dir) {
@@ -139,6 +156,7 @@ body{background:var(--cv-bg);color:var(--cv-ink)}
 .cv-cap{margin:0 0 8px;color:var(--cv-muted);font-size:.875rem}
 .cv-block diffs-container{display:block;max-width:100%;overflow-x:clip;border:1px solid var(--cv-line);border-radius:6px}
 .cv-block diffs-container{--diffs-bg-addition-override:color-mix(in lab,var(--diffs-bg) 90%,var(--diffs-addition-base));--diffs-bg-deletion-override:color-mix(in lab,var(--diffs-bg) 90%,var(--diffs-deletion-base));--diffs-bg-addition-emphasis-override:rgb(from var(--diffs-addition-base) r g b/.1);--diffs-bg-deletion-emphasis-override:rgb(from var(--diffs-deletion-base) r g b/.1);--diffs-fg-number-override:color-mix(in lab,var(--diffs-fg) 80%,var(--diffs-bg));--diffs-bg-separator-override:color-mix(in lab,var(--diffs-bg) 95%,var(--diffs-mixer))}
+.cv-file+.cv-file,.cv-term+.cv-file{margin-top:12px}
 .cv-unified{display:none}
 @media (max-width:700px){.cv-split{display:none}.cv-unified{display:block}}
 :root[data-theme="dark"] diffs-container{color-scheme:dark}
@@ -153,10 +171,10 @@ const [specPath, out] = process.argv.slice(2);
 if (!out) { console.error('usage: render.sh <spec.json> <out.html>'); process.exit(2); }
 const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
 const dir = path.dirname(path.resolve(specPath));
-const kinds = { diff: diffBlock, file: fileBlock, term: termBlock };
+const kinds = { diff: diffBlock, file: fileBlock, term: termBlock, patch: patchBlock };
 let body = spec.title ? `<h1>${esc(spec.title)}</h1>` : '';
 for (const b of spec.blocks) {
-  if (!kinds[b.kind]) throw new Error(`unknown block kind "${b.kind}" (diff, file, term)`);
+  if (!kinds[b.kind]) throw new Error(`unknown block kind "${b.kind}" (diff, file, term, patch)`);
   body += `<section class="cv-block">${b.caption ? `<p class="cv-cap">${esc(b.caption)}</p>` : ''}${await kinds[b.kind](b, dir)}</section>`;
 }
 const page = `<title>${esc(spec.title ?? 'Code')}</title>\n${STYLE}\n<main class="cv-page">${body}</main>\n`;

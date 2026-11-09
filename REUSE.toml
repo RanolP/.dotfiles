@@ -107,6 +107,7 @@ path = [
     "nix/home/configs/.agents/skills/parallel-worktree-workflow/SKILL.md",
     "nix/home/configs/.agents/skills/modularize-by-domain/SKILL.md",
     "nix/home/configs/.agents/skills/metro-wait/SKILL.md",
+    "nix/home/configs/.agents/skills/patch-review/SKILL.md",
     "nix/home/configs/.agents/skills/quint-verify/references/worked-example.md",
     "nix/home/configs/.agents/skills/want-exit/SKILL.md",
     "nix/home/configs/.agents/skills/visual-explainer/diagram-visualizer/template.html",

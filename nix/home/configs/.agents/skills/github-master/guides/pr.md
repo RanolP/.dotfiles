@@ -32,7 +32,7 @@ Add a `리뷰 포인트:` sub-bullet only where you judge that without it a Haik
 
 **Show, don't narrate.** A diagram or a rendered screenshot goes *inside* the item it belongs to:
 
-- **Block coding** for flow and branching — an indented `┣━` / `┗━` text tree in a plain fence, per the `docs-write` skill. A structure picture is a hand-drawn SVG rendered to PNG, because mermaid's auto-layout reads poorly. Diagram only what this PR does.
+- **Block coding** for flow and branching — an indented `┣━` / `┗━` text tree in a plain fence, per the `prose-editor` agent (Rule 5). A structure picture is a hand-drawn SVG rendered to PNG, because mermaid's auto-layout reads poorly. Diagram only what this PR does.
 - **Screenshot / rendered output** instead of describing UI in prose.
 - In Jira ADF, place the SVG with the `jira` CLI. A hosted image goes in as a `media` node with `type: "external"` through `jira edit queue`. A local file needs the human to upload it through the Jira web UI first, because the CLI has no upload path; `jira media ls -i KEY` then prints the id to position.
 - A fence that fails to parse shows the reader "Unable to render rich display" and nothing else. The `pr-body-guard` hook lints every fence before `gh pr create|edit` runs — inside a backtick markdown-string label, use a real newline, never `<br/>`.

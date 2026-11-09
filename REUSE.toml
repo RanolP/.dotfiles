@@ -39,8 +39,12 @@ SPDX-FileCopyrightText = "seochecks-ai and slopless contributors"
 SPDX-License-Identifier = "MIT"
 
 # Distilled from github.com/toss/technical-writing (CC BY-NC-SA 4.0); ShareAlike applies.
+# The prose-editor agents carry the adapted rules; the docs-write skill no longer does.
 [[annotations]]
-path = ["nix/home/configs/.agents/skills/technical-writing/SKILL.md"]
+path = [
+    "nix/home/configs/claude/agents/prose-editor.md",
+    "nix/home/configs/codex/agents/prose-editor.toml",
+]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 Viva Republica (Toss)", "2026 RanolP"]
 SPDX-License-Identifier = "CC-BY-NC-SA-4.0"
@@ -299,6 +303,7 @@ path = [
     "nix/home/configs/.agents/skills/memory-review/SKILL.md",
     "nix/home/configs/.agents/skills/dotfiles-evolve/SKILL.md",
     "nix/home/configs/.agents/skills/evidence-store/SKILL.md",
+    "nix/home/configs/.agents/skills/docs-write/SKILL.md",
     "nix/home/configs/.agents/skills/apology/SKILL.md",
     "nix/home/configs/claude/hooks/apology-leak-guard.py",
     "nix/home/configs/bin/fast-apply",
@@ -315,7 +320,6 @@ SPDX-License-Identifier = "MIT"
 
 [[annotations]]
 path = [
-    "nix/home/configs/claude/agents/prose-editor.md",
     "nix/home/configs/claude/agents/code-reviewer.md",
     "nix/home/configs/claude/agents/oracle.md",
     "nix/home/configs/claude/agents/artifact-writer.md",
@@ -334,7 +338,6 @@ path = [
     "nix/home/configs/codex/hooks/claude-hook-adapter.py",
     "nix/home/configs/codex/AGENTS.md",
     "nix/home/configs/codex/agents/code-reviewer.toml",
-    "nix/home/configs/codex/agents/prose-editor.toml",
     "nix/home/configs/codex/agents/oracle.toml",
 ]
 precedence = "aggregate"

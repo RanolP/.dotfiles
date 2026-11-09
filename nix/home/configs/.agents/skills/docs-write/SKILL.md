@@ -1,81 +1,18 @@
 ---
 name: docs-write
-description: Entry point for writing any outside-facing document — READMEs, guides, tutorials, API references, design/status docs, issue bodies, PR bodies, release notes. Use BEFORE drafting anything a reader other than the author will see. Classifies the document's purpose, routes to the matching docs-write-* purpose skill, and mandates a prose-editor review pass on every draft. Also holds the shared core rules: information architecture, sentence craft, Korean prose, labels & jargon.
+description: Pre-draft step for any outside-facing document — README, guide, tutorial, reference, design/status doc, PR or issue body, release notes, Artifact page. Use BEFORE drafting text a reader other than the author will see: fixes reader, type, claims and outline, then hands the draft to the `prose-editor` agent, which holds the prose rules.
 ---
 
-# docs-write — writing pipeline entry
+# docs-write — before the draft
 
-Every outside-facing document goes through this pipeline. Never skip a step.
-
-1. **Classify the purpose** with the table below. One dominant purpose per document — if it needs two, split into two documents and link them.
-2. **Invoke the matching purpose skill** and draft by its checklist plus the core rules below.
-3. **Review**: spawn the `prose-editor` agent on the finished draft. This step is mandatory even when the draft feels done — the reviewer is a zero-context outside reader; the author never is.
-4. **Apply the findings**, then deliver or publish.
-
-| Purpose | Reader's goal | Skill |
-|---------|---------------|-------|
-| Learning (tutorial) | "Teach me to do this, step by step" | `docs-write-tutorial` |
-| Deep explanation (concept) | "Help me understand why/how it works" | `docs-write-concept` |
-| Problem-solving (how-to) | "I have a specific task — unblock me" | `docs-write-howto` |
-| Reference | "Let me look up an exact fact" | `docs-write-reference` |
-| Status / design (issue, ADR, PR body) | "What's the state, what was decided, why" | `docs-write-status` |
-
-## Core rules (apply to every purpose)
-
-### 1. Information architecture
-
-1. **One thing per page.** A page answers one question. "Also, …" means a second page.
-2. **Never skip the overview.** Open with what this is, who it's for, and what the reader can do after.
-3. **Be predictable.** Conventional section order, names, and structure for the doc type. Surprise is friction.
-4. **Value first.** Most useful information at the top of the page and of each section. Defer caveats and background.
-5. **Headings carry the outline.** The whole doc should be understandable from headings alone; make them specific and parallel.
-6. **Explain in detail where it counts.** Slow down on error-prone steps: exact command, expected output, failure modes.
-
-### 2. Sentence craft
-
-Write each sentence to be read once.
-
-- **Compact** — cut words that carry no information. ("To use this feature, install the package first.")
-- **Concrete** — specifics over vague qualifiers. ("cuts cold-start latency from ~800ms to ~120ms", not "significantly improves performance")
-- **Consistent** — one term per concept, one format per repeated element.
-- **Clear subject, active voice** — name who does what.
-- **One idea per sentence** — split sentences that chain claims with "and"/"but".
-
-### 3. Korean prose (한국어 문서)
-
-- **Avoid 번역체 (translationese — English-shaped Korean).** Do not overuse "~되어진다", "~에 의해", "~에 대해"; write active, compact Korean instead. Good: "이 함수가 데이터를 처리한다."
-- **Cut unnecessary 한자어 (Sino-Korean vocabulary) and 외래어 (foreign loanwords).** Prefer plain native Korean, but leave settled technical terms (캐시, 토큰, 빌드) as they are.
-- **Name the subject explicitly.** An ambiguous actor invites misreading.
-- **Keep 조사 (case particles) and 어미 (verb endings) uniform.** Never mix "~합니다" and "~한다" inside one document.
-- **Keep Roman script and code identifiers in their original form.** Write `useState`, never "유즈스테이트".
-- **Write what a developer would say aloud to a colleague.** Replace metaphor and personification (`~가 산다`, `~를 진다`, `자를 댄다`) with the actor plus what it does: "`<useXxxEntry>`가 연령제한 숨김 판정도 한다", not "숨김은 `<useXxxEntry>` 안에만 산다". Turn a sentence that circles through a negated subject into what must happen for what result: "데이터 자체를 없애야 슬롯이 사라진다", not "행은 노출 판정을 스스로 하지 않는다". A sentence first thought in English and then carried over reads as 번역체 even when every word is Korean, and the reviewer snags on the sentence before the content.
-
-### 4. Labels, jargon, and compression
-
-Each rule earned by a real review:
-
-- **Never use a label before defining it.** Letter labels ("Option A/B"), coined terms ("신원 블로커"), role abstractions ("정책 평면") mean nothing to a cold reader. Introduce the alternatives first, then the decision; prefer real names over letters. A coined term that must exist gets an inline definition at first use, plus a glossary entry if used repeatedly.
-- **Describe the mechanism, don't name-drop the pattern.** "점진적으로 적용한다. 한 번에 갈아엎지 않고 하나씩 옮긴다" beats "Strangler Fig 패턴으로 간다".
-- **Replace abstract role-words with concrete duties.** "controller가 신원 확인·권한 검사·감사를 맡는다", not "controller가 정책 평면을 맡는다".
-- **Telegraphic compression is not concision.** Em-dash/middot/arrow chains and "X = Y" noun fragments make the reader decompress. Write complete sentences; get brevity from structure: one topic per bullet line, elaboration one level down as a sub-list.
-- **Don't narrate the obvious.** No meta-sentences like "현재 상태는 `지금 구조` 절에 있다" — headings already say that.
-- **Use the platform's affordances.** On GitHub: task-list checkboxes (`- [x]` / `- [ ]`) for done/remaining work.
-- **Draw a flow as block coding, a structure as SVG.** A procedure or branch is a Scratch-style indented text tree -- `⚑ 사용자 입력이 들어오면`, then `┣━ 만약 〈조건〉이면` / `┃    ┗━ 동작`, one `→ 결과` line per branch value -- and it replaces both the flowchart and a table restating the same branches. A structure picture is an SVG drawn by hand from coordinates and rendered to PNG. Mermaid's auto-layout places nodes where the reader does not expect them, so the user reads a block-coding tree faster than the same flow as a chart.
-- **Show the direction of a design, not its code.** A design explanation or old-vs-new comparison gives each side as short 개조식 bullets plus a diagram of what moved where; code appears only when a signature is itself the idea, at 1-3 lines. The one exception is a summary section: one real old/new code pair per advantage, 4-10 lines a side (the matching `git diff -U1` hunk when it is one file), with only the point lines highlighted, because an abstract label such as "슬롯 둘 + seq" conveys nothing.
-- **A planning or handoff doc holds only what to do.** Next steps, eventual work, and failed approaches with the reason each failed. Current state goes stale on the next commit, git log already holds what was done, and the code is the source of truth for structure, so "Current State", "What Was Done" and "Key Files" sections are cut.
-- **Write user-facing copy from the reader's persona.** Onboarding pages, reports and any screen an end user reads start from who that reader is and what they want: what they can ask for, what happens on their side in plain words, and one easy next action. The system's own name, internal skill names and harness jargon come out. A non-engineer gets a sentence to paste back to Claude instead of a shell command, and every message is written for its own case rather than filled into a `"{X} 항목이 실패했어요"` template.
-
-## Pre-publish checklist
-
-- [ ] Single, correct purpose — not a mix; the purpose skill's own checklist passed.
-- [ ] Overview up top; most valuable content first; headings convey the outline.
-- [ ] Sentences compact, concrete, consistent, active, one-idea-each.
-- [ ] (Korean) no 번역체, clear subjects, uniform 어미.
-- [ ] Every label/coined term defined at or before first use; glossary (if any) at the bottom, unannounced.
-- [ ] No pattern name-drops where a plain description works; no telegraphic "X = Y" fragments.
-- [ ] Every factual claim (command, type, default, version) verified against source.
-- [ ] `prose-editor` ran on the final draft and its findings were applied.
-
----
-
-*Core rules adapted from [toss/technical-writing](https://github.com/toss/technical-writing) ("개발자를 위한 글쓰기 기본기", technical-writing.dev), licensed CC BY-NC-SA 4.0, and shared under the same license.*
+1. **Name the reader** and what they will do with the doc once they finish it.
+2. **Pick ONE type**; a doc that needs two types becomes two linked docs.
+   - Tutorial — one runnable happy path from a reachable clean state, each step verifiable.
+   - Explanation — why it matters, then the mental model, then the mechanics.
+   - How-to — the exact problem, preconditions, the shortest correct path, alternatives after.
+   - Reference — uniform scannable entries covering the whole surface, verified against source.
+   - Status / design (PR body, issue, ADR) — current state, problem, options, rationale, progress checklist.
+3. **List the core claims** before any prose, each with its concrete number or identifier.
+4. **Outline headings** that alone carry the argument.
+5. **Draft** from that outline.
+6. **Spawn `prose-editor`** on the draft and apply its findings before delivering or publishing; it reads as a zero-context outside reader, which the author never is.

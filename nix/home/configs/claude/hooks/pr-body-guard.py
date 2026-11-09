@@ -14,7 +14,7 @@ Three failures from real sessions produced this hook:
   prose aimed at a model, and prose gets skipped; a guard is the only form that
   holds.
 
-So this guard does exactly three things:
+So this guard does exactly three checks, and one reminder:
 
 1. `gh pr edit` with a body: every non-boilerplate line of the REMOTE body must
    survive into the new body. Dropped lines are printed in the deny reason, so
@@ -38,6 +38,15 @@ So this guard does exactly three things:
    requires the nesting: a section of 5+ flat Hangul items with nothing nested
    under any of them is denied.
 
+4. Whenever the call is allowed and carries reader-facing text -- `gh pr
+   create|edit` with a body, `jira edit queue` staging a card-body node (every
+   form but `--delete`), or `jira comments --add|--edit` -- the allow carries
+   `additionalContext` asking for a `prose-editor` review of that text. It
+   never denies and never changes a verdict: a deny above exits first. It fires
+   once per (session, PR or card) within 3h, so applying the review's findings
+   with a second edit does not ask for a second review. This `jira` CLI has no
+   issue-create verb, so card bodies are reached only through `edit queue`.
+
 Escape hatch: prefix the command with `PR_BODY_GUARD_ALLOW_DROP=1` when the drop
 is deliberate, or `PR_BODY_GUARD_ALLOW_PROSE=1` when the prose is. The deny
 exists to make the problem visible first, not to freeze a body forever.
@@ -51,6 +60,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 
 # gh options that consume the next token as their value.
 OPTS_WITH_VALUE = {
@@ -121,6 +131,77 @@ HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]*(.*)$")
 # A section that lists one sibling per commit carries no causal structure. Under
 # 5 items a flat list still reads as a list; at 5 the fold is what was missing.
 MIN_FLAT_ITEMS = 5
+
+
+NUDGE_TTL_SECONDS = 3 * 3600
+NUDGE_STATE_DIR = os.path.expanduser("~/.claude-personal/state/pr-body-guard")
+NUDGE = (
+    "[pr-body-guard] This {what} is reader-facing prose. Before you report it "
+    "done, spawn the `prose-editor` subagent with the text, who reads it, and "
+    "what they came to do; then apply its findings with a follow-up edit or "
+    "list them in your reply."
+)
+
+
+def nudge(data, key, what, state_dir=None, now=None):
+    """Return the prose-editor reminder once per (session, key) within the TTL."""
+    now = time.time() if now is None else now
+    sdir = state_dir or NUDGE_STATE_DIR
+    path = os.path.join(sdir, "%s.json" % (data.get("session_id") or "no-session"))
+    try:
+        with open(path) as fh:
+            state = json.load(fh)
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+    last = state.get(key) or 0
+    if last and now - last <= NUDGE_TTL_SECONDS:
+        return None
+    state[key] = now
+    try:
+        os.makedirs(sdir, exist_ok=True)
+        with open(path, "w") as fh:
+            json.dump(state, fh)
+    except OSError:
+        pass  # an unwritable state dir costs a repeat reminder, never a block
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "additionalContext": NUDGE.format(what=what),
+    }}
+
+
+def allow(data, key, what):
+    """Exit as an allow, carrying the prose-editor reminder when it is due."""
+    payload = nudge(data, key, what)
+    if payload:
+        print(json.dumps(payload))
+    sys.exit(0)
+
+
+def jira_prose_target(tokens):
+    """(key, what) when this argv stages or posts Jira prose, else None.
+
+    `jira edit queue` without `--delete` stages a body node; `jira comments`
+    with `--add`/`--edit` posts a comment. Scans every `jira` token, so a pipe
+    (`echo '{...}' | jira edit queue -i K sel`) or a chain still matches."""
+    for i, t in enumerate(tokens):
+        if t.rsplit("/", 1)[-1] != "jira":
+            continue
+        rest = tokens[i + 1:]
+        issue = None
+        for j, a in enumerate(rest):
+            if a in ("-i", "--issue") and j + 1 < len(rest):
+                issue = rest[j + 1]
+                break
+            if a.startswith("--issue="):
+                issue = a.split("=", 1)[1]
+                break
+        if rest[:2] == ["edit", "queue"] and "--delete" not in rest:
+            return "jira:%s" % issue, "Jira card body"
+        if rest[:1] == ["comments"] and ("--add" in rest or "--edit" in rest):
+            return "jira-comment:%s" % issue, "Jira comment"
+    return None
 
 
 def decide(decision, reason):
@@ -503,6 +584,13 @@ def main():
     if data.get("tool_name") not in (None, "Bash"):
         sys.exit(0)
     cmd = data.get("tool_input", {}).get("command", "")
+    if "jira" in cmd:
+        try:
+            target = jira_prose_target(shlex.split(cmd))
+        except ValueError:
+            target = None
+        if target:
+            allow(data, *target)
     if "gh" not in cmd or " pr " not in cmd:
         sys.exit(0)
     cwd = data.get("cwd") or os.getcwd()
@@ -517,7 +605,10 @@ def main():
         sys.exit(0)
 
     body, source = extract_body(args, cwd)
+    nudge_key = "gh-pr:%s:%s" % (cwd, pr_selector(args) if verb == "edit" else "create")
     if body is None:
+        if source in ("stdin", "unreadable"):
+            allow(data, nudge_key, "PR body")  # a body we cannot read is still prose
         sys.exit(0)  # no body in this call: nothing of ours to check
 
     for i, block in enumerate(mermaid_blocks(body), 1):
@@ -566,11 +657,11 @@ def main():
 
     if verb != "edit" or os.environ.get("PR_BODY_GUARD_ALLOW_DROP") == "1" \
             or "PR_BODY_GUARD_ALLOW_DROP=1" in cmd:
-        sys.exit(0)
+        allow(data, nudge_key, "PR body")
 
     remote = remote_body(pr_selector(args), args, cwd)
     if not remote:
-        sys.exit(0)  # no open PR, no gh auth, offline: no opinion
+        allow(data, nudge_key, "PR body")  # no open PR, no gh auth, offline: no opinion
 
     dropped = dropped_lines(remote, body, template_lines(cwd))
     if dropped:
@@ -592,7 +683,7 @@ def main():
             "PR_BODY_GUARD_ALLOW_DROP=1 in front of the command."
             % (len(dropped), shown, more)
         ))
-    sys.exit(0)
+    allow(data, nudge_key, "PR body")
 
 
 def self_check():
@@ -765,6 +856,31 @@ def self_check():
     assert extract_body(shlex.split("--title t --body hello"), ".") == ("hello", "--body")
     assert extract_body(shlex.split("--body-file -"), ".")[0] is None
     assert pr_selector(shlex.split("--title t 4321 --body x")) == "4321"
+    # The prose-editor reminder: the Jira shapes that carry prose, and only those.
+    jt = lambda c: jira_prose_target(shlex.split(c))
+    assert jt("jira edit queue -i AB-1 'paragraph' --text hi") == ("jira:AB-1", "Jira card body")
+    assert jt("echo '{}' | jira edit queue -i AB-1 bulletList --append")[0] == "jira:AB-1"
+    assert jt("jira comments -i AB-1 --add --text hi") == ("jira-comment:AB-1", "Jira comment")
+    assert jt("jira comments -i AB-1 --edit 10042 --text hi")[0] == "jira-comment:AB-1"
+    for c in ("jira edit queue -i AB-1 codeBlock --delete", "jira edit apply",
+              "jira edit status", "jira comments -i AB-1", "jira show -i AB-1 --json",
+              "git commit -m jira"):
+        assert jt(c) is None, c
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        ev = {"session_id": "s1"}
+        out = nudge(ev, "gh-pr:/r:create", "PR body", state_dir=td, now=1000)
+        hso = out["hookSpecificOutput"]
+        assert "prose-editor" in hso["additionalContext"] and "PR body" in hso["additionalContext"]
+        # A reminder, never a verdict: an allow stays an allow.
+        assert "permissionDecision" not in hso, hso
+        # Applying the review with a second edit must not ask for a second review.
+        assert nudge(ev, "gh-pr:/r:create", "PR body", state_dir=td, now=1500) is None
+        assert nudge(ev, "jira:AB-1", "Jira card body", state_dir=td, now=1500) is not None
+        assert nudge({"session_id": "s2"}, "gh-pr:/r:create", "PR body", state_dir=td, now=1500)
+        assert nudge(ev, "gh-pr:/r:create", "PR body", state_dir=td,
+                     now=1000 + NUDGE_TTL_SECONDS + 1) is not None
     print("pr-body-guard self-check: ok")
 
 

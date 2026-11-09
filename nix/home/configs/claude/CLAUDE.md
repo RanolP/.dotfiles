@@ -20,7 +20,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 
 ## An Artifact page is written apart from the session that researched it
 - Spawn `artifact-writer` with `page_facts` (subject content only), `reader`, `purpose`, `path`; every gap, exclusion, failed lookup, coverage note, tool detail and the writer's `returned_to_chat` items go in the chat reply.
-- Then `artifact-coldread` with only the page path, `SendMessage` its findings to the same writer, and publish once `clean: true`; after 3 rounds, report the remaining findings instead.
+- Then each round spawns `artifact-coldread` (page path only) and `prose-editor` (page path, `reader`, `purpose`) in one message, `SendMessage`s both findings together to the same writer, and publishes once coldread is `clean: true` and prose-editor has no `high` finding; after 3 rounds, report the remaining findings instead.
 - (live target) Publish only a complete state to an artifact the user shares, send probes to a fresh throwaway artifact, and read the user's version numbers back before acting (`docs/src/agent-incidents.md`, 2026-07-30).
 - (keep it current) A deliverable the user reads goes into the page they have open, not a side markdown file; republish in the same turn as every fix commit, labelling which build each recording shows.
 

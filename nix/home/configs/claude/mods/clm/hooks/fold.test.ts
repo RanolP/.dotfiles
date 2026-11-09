@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, mergeInstructions, isHeld, readOpts, resetUserWorkflow, restoreFailedContinuation, sessionIssues, storeQueuedMessage, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { captureAppendedRow, chooseContinuation, clmStatus, mergeInstructions, isHeld, readOpts, resetUserWorkflow, restoreFailedContinuation, sessionIssues, storeQueuedMessage, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -162,6 +162,21 @@ test('a queued_command seen twice is stored once', () => {
   const once = storeQueuedMessage({}, 'session', message)
   const twice = storeQueuedMessage(once, 'session', message)
   expect(twice.session).toEqual([message])
+})
+
+test('a subagent hand-back or task notification queued during a turn is not carried as a user message', async () => {
+  let queued: unknown
+  const io = {
+    state: {
+      get: async () => ({ value: queued, version: 0 }),
+      set: async (_ref: unknown, value: unknown) => { queued = value; return { isSet: true } },
+    },
+    clock: { now: async () => 1 }, session: { id: async () => 's1' },
+  }
+  const content = [{ type: 'text', text: 'internal completion' }]
+  await captureAppendedRow(io, 'peer-row', 'attachment', 'queued_command', content, { origin: { kind: 'peer' }, isMeta: true })
+  await captureAppendedRow(io, 'task-row', 'attachment', 'queued_command', content, { origin: { kind: 'task-notification' }, commandMode: 'task-notification' })
+  expect(queued).toBeUndefined()
 })
 
 test('a queued message in the kept tail followed by an assistant row survives the swap', () => {

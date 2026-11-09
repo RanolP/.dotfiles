@@ -541,7 +541,7 @@ const appendedFingerprint = (role: 'user' | 'assistant', content: readonly { typ
   toolUses: content.flatMap(block => block.type === 'tool_use' && typeof block.id === 'string' ? [{ tool_use_id: block.id, tool: typeof block.name === 'string' ? block.name : '', input: {}, text: '' }] : []),
   ...(role === 'user' ? { toolResults: content.flatMap(block => block.type === 'tool_result' && typeof block.tool_use_id === 'string' ? [{ tool_use_id: block.tool_use_id, text: '', isError: false }] : []) } : {}),
 })
-const captureAppendedRow = async ($: StableAttachmentIo & Pick<EngineInterface, 'clock'>, uuid: string, type: string, name: string | undefined, content: readonly { type: string; [field: string]: unknown }[]): Promise<void> => {
+export const captureAppendedRow = async ($: StableAttachmentIo & Pick<EngineInterface, 'clock'>, uuid: string, type: string, name: string | undefined, content: readonly { type: string; [field: string]: unknown }[], metadata: { origin?: unknown; commandMode?: unknown; isMeta?: unknown } = {}): Promise<void> => {
   const session = await $.session.id()
   if (type === 'user' || type === 'assistant') {
     lastMainRow.set(session, appendedFingerprint(type, content))
@@ -550,6 +550,9 @@ const captureAppendedRow = async ($: StableAttachmentIo & Pick<EngineInterface, 
   if (type !== 'attachment' || name !== 'queued_command') return
   const text = content.flatMap(block => block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('')
   if (text === '') return
+  if (metadata.origin !== undefined) {
+    if (!isRecord(metadata.origin) || !['composer', 'bridge', 'sdk'].includes(String(metadata.origin.kind))) return
+  } else if ((metadata.commandMode !== undefined && metadata.commandMode !== 'prompt') || metadata.isMeta === true || text.startsWith('<task-notification>') || text.startsWith('<agent-message')) return
   const message: QueuedMessage = { uuid, text, at: await $.clock.now(), ...(lastMainRow.get(session) === undefined ? {} : { after: lastMainRow.get(session) }) }
   await update($, QUEUED_MESSAGES, current => storeQueuedMessage(queuedMessageStore(current), session, message))
 }
@@ -1298,8 +1301,8 @@ export const register: Register = (on, options) => {
   on('tool.describe', { tool: 'TaskUpdate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('session.append', async ($, e, next) => {
     const result = await next(e)
-    if (e.agentId === undefined && result.deny === undefined && result.message.isMeta !== true)
-      await captureAppendedRow($, result.uuid, result.message.type, result.message.name, result.message.content)
+    if (e.agentId === undefined && result.deny === undefined)
+      await captureAppendedRow($, result.uuid, result.message.type, result.message.name, result.message.content, { origin: e.origin, isMeta: result.message.isMeta })
     return result
   })
   on('prompt.attachment', { type: 'todo_reminder' }, () => ({ text: null }))

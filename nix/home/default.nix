@@ -430,6 +430,12 @@ in
         source = ./configs/claude/hooks/prompt-authoring-guard.py;
         executable = true;
       };
+      # Point a reader-facing Markdown/HTML edit at the prose-editor subagent,
+      # once per file per session, without denying the edit.
+      ".claude/hooks/prose-review-nudge.py" = {
+        source = ./configs/claude/hooks/prose-review-nudge.py;
+        executable = true;
+      };
       # The Fable-only rules load at SessionStart when the model is Fable, so a
       # non-Fable session does not carry them in CLAUDE.md.
       ".claude/hooks/architect-rules.py" = {

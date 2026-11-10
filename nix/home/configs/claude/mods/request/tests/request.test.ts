@@ -7,7 +7,7 @@ const RAISE = 'mcp__request__raise_approval_request'
 // Quotes, a variable, a pipe, Markdown emphasis and a trailing space: anything a re-quoting, trimming or rendering step would change.
 const COMMAND = `printf '%s\\n' "$HOME" *x* | grep -c "/" `
 const INPUT = {
-  command: COMMAND, cwd: '/tmp', why_only_way: 'only this reads it',
+  command: COMMAND, cwd: '/tmp', why_only_way: '이 명령만 그것을 읽는다',
   alternatives: [{ approach: 'Read tool', rejected_because: 'not a file' }], blocks: 'the report',
 }
 const APPROVALS = { command: 'approvals', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as const
@@ -102,7 +102,7 @@ async function start($: Engine, on: On, answer: string | undefined | ((n: number
 // The asked question for INPUT with `source` as the shown command: what the engine draws should it refuse the tree.
 const reviewOf = (source: string, isEscaped = false) => [
   'In /tmp, the main session asks to run:', ...(isEscaped ? ['(it holds tabs, hidden or control characters; shown JSON-escaped)'] : []),
-  `    ${source}`, '', 'Why: only this reads it', 'Not: Read tool — not a file', 'Unblocks: the report', 'Run this command once?',
+  `  │ ${source}`, '', 'Why: 이 명령만 그것을 읽는다', 'Not: Read tool — not a file', 'Unblocks: the report', 'Run this command once?',
 ].join('\n')
 
 // Raises one request and resolves once the review it opened has ended.
@@ -124,10 +124,10 @@ test('raising opens the review at once and runs the shown string byte for byte',
   // Approve first as the primary choice; Esc, not an option, keeps it pending.
   expect(labels(asked[0])).toEqual([APPROVE, 'Deny'])
   expect(drawn).toEqual([[APPROVE, 'Deny']])
-  // The command sits in the question, each line indented, with no side panel.
+  // The command sits in the question, each line behind the gutter, with no side panel.
   expect(asked[0]?.question).toBe([
-    'In /tmp, the main session asks to run:', `    ${COMMAND}`, '',
-    'Why: only this reads it', 'Not: Read tool — not a file', 'Unblocks: the report', 'Run this command once?',
+    'In /tmp, the main session asks to run:', `  │ ${COMMAND}`, '',
+    'Why: 이 명령만 그것을 읽는다', 'Not: Read tool — not a file', 'Unblocks: the report', 'Run this command once?',
   ].join('\n'))
   expect(asked[0]?.options.some(o => o.preview !== undefined)).toBe(false)
   expect(runs).toEqual([{ argv: ['bash', '-c', COMMAND], cwd: '/tmp' }])
@@ -169,7 +169,7 @@ for (const [name, answer, afk] of [['Esc', undefined, false], ['a blank answer',
     await walked
     expect(asked).toHaveLength(2)
     // Reopened from the band, the dialog still carries the review.
-    expect(asked[1]?.question).toContain(`\n    ${COMMAND}\n`)
+    expect(asked[1]?.question).toContain(`\n  │ ${COMMAND}\n`)
     expect(runs).toEqual([])
     expect(await band.find({ key: 'review' })).toBeDefined()
   })
@@ -188,7 +188,7 @@ test('a request raised while a review is open gets its own dialog and decision',
   const second = await $.tool.call({ tool: RAISE, ...INPUT, command: 'echo second' })
   expect(String(second.text)).toContain('REJECTED')
   expect(asked.map(q => q.header)).toEqual(['R1', 'R2'])
-  expect(asked[1]?.question).toContain('\n    echo second\n')
+  expect(asked[1]?.question).toContain('\n  │ echo second\n')
   release()
   expect(String((await first).text)).toContain('R1 is waiting')
   expect(runs).toEqual([])
@@ -224,11 +224,11 @@ test('Approve is not counted for a review longer than the dialog draws', async (
 test('a command the dialog would redraw is shown JSON-escaped, and prose stays on labelled lines', async ($, on) => {
   const { asked, runs, nextStatus } = await start($, on, APPROVE)
   const command = 'printf "a\tb" # \u202e\\u202e'
-  await raise($, nextStatus, { command, why_only_way: 'two\n    rm -rf /' })
+  await raise($, nextStatus, { command, why_only_way: '둘\n    rm -rf /' })
   const question = asked[0]?.question ?? ''
-  expect(question).toContain('\n    "printf \\"a\\tb\\" # \\u202e\\\\u202e"\n')
+  expect(question).toContain('\n  │ "printf \\"a\\tb\\" # \\u202e\\\\u202e"\n')
   expect(question).not.toMatch(/[\t\u202e]/)
-  expect(question).toContain('\nWhy: two rm -rf /\n')
+  expect(question).toContain('\nWhy: 둘 rm -rf /\n')
   expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
 })
 
@@ -245,8 +245,10 @@ for (const [name, command, source] of [
     expect(trees[0]).toEqual([
       { type: 'Text', text: 'In /tmp, the main session asks to run:', bold: true },
       ...(command === COMMAND ? [] : [{ type: 'Text', text: '(it holds tabs, hidden or control characters; shown JSON-escaped)' }]),
+      // The command framed in its own bordered Box, apart from the prose around it.
+      { type: 'Box', text: source },
       { type: 'Code', text: source, language: 'bash' },
-      ...caseRow('Why', 'only this reads it'), ...caseRow('Not', 'Read tool — not a file'), ...caseRow('Unblocks', 'the report'),
+      ...caseRow('Why', '이 명령만 그것을 읽는다'), ...caseRow('Not', 'Read tool — not a file'), ...caseRow('Unblocks', 'the report'),
       { type: 'engine', text: '' },
     ])
     expect(questions[0]).toBe('Run R1 once?')
@@ -265,7 +267,7 @@ test('a command with invisible characters is shown escaped, exact to the bytes',
   const source = '"git push origin ma\\u00adin\\u2060 # \\udb40\\udc41\\u061c\\u2028x\\u00a0y"'
   expect(JSON.parse(source)).toBe(command)
   expect(trees[0]?.find(x => x.type === 'Code')?.text).toBe(source)
-  expect(asked[0]?.question).toContain(`\n    ${source}\n`)
+  expect(asked[0]?.question).toContain(`\n  │ ${source}\n`)
   expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
 })
 
@@ -285,7 +287,7 @@ test('a wide character pushed past a hard break gets its own row', async () => {
 
 // Regression: a review over the engine's 12 rows around the dialog sent as a tree the engine refuses (dropping the
 // highlight), or its case or command lost from every drawing. The engine's plain dialog is the drawing's root alone.
-const LONG = 'the reason runs long enough to wrap across several rows of the dialog '.repeat(4).trim()
+const LONG = '이유가 길어서 대화 상자의 여러 줄에 걸쳐 감긴다 '.repeat(6).trim()
 const THIRTEEN = Array.from({ length: 13 }, (_, i) => `echo ${i}`).join('\n')
 for (const [name, input, hasCode] of [
   ['a long case keeps the command highlighted and moves the case into the question', { why_only_way: LONG }, true],
@@ -295,13 +297,34 @@ for (const [name, input, hasCode] of [
     const { asked, questions, trees, runs, nextStatus } = await start($, on, APPROVE)
     await raise($, nextStatus, input)
     const command = 'command' in input ? input.command : COMMAND
-    expect(trees[0]?.map(x => x.type)).toEqual(hasCode ? ['Text', 'Code', 'engine'] : [])
+    expect(trees[0]?.map(x => x.type)).toEqual(hasCode ? ['Text', 'Box', 'Code', 'engine'] : [])
     expect(questions[0]).toBe(hasCode
       ? [`Why: ${LONG}`, 'Not: Read tool — not a file', 'Unblocks: the report', 'Run R1 once?'].join('\n')
       : asked[0]?.question)
     expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
   })
 }
+
+// Regression: the frame's 2 border rows left out of the engine's 12-row count, so a 7-line command kept its case
+// above the dialog in a tree the engine refuses (14 rows by its count), dropping the framed command.
+test('the frame around the command counts toward the rows around the dialog', async ($, on) => {
+  const { trees, questions, nextStatus } = await start($, on, APPROVE)
+  await raise($, nextStatus, { command: Array.from({ length: 7 }, (_, i) => `echo ${i}`).join('\n') })
+  expect(trees[0]?.map(x => x.type)).toEqual(['Text', 'Box', 'Code', 'engine'])
+  expect(questions[0]).toStartWith('Why: ')
+})
+
+// Regression: a why_only_way the user cannot read at a glance because it was written in English, not Korean.
+test('why_only_way must be Korean; commands inside it may stay as written', async ($, on) => {
+  const { asked, nextStatus } = await start($, on, APPROVE)
+  const english = await $.tool.call({ tool: RAISE, ...INPUT, why_only_way: 'only nix build proves the hash' })
+  expect(english.isError).toBe(true)
+  expect(String(english.text)).toContain('Korean')
+  expect(asked).toEqual([])
+  const korean = await raise($, nextStatus, { why_only_way: '`nix build`만 해시를 검증한다' })
+  expect(korean.isError).toBeFalsy()
+  expect(asked).toHaveLength(1)
+})
 
 // Regression: this mod rewriting an AskUserQuestion dialog the model opened.
 test("another caller's AskUserQuestion dialog is drawn untouched", async ($, on) => {

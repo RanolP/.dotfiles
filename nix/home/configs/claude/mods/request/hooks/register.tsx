@@ -25,7 +25,7 @@ const TOOLS = [
       properties: {
         command: { type: 'string', description: 'The exact command to run, byte for byte, as bash -c will run it' },
         cwd: { type: 'string', description: 'Absolute directory to run it in' },
-        why_only_way: { type: 'string', description: 'Why this command is the only correct way to do the work; for a heavy job, add its cost and the current load' },
+        why_only_way: { type: 'string', description: 'Written in Korean (한국어), the user\'s language: why this command is the only correct way to do the work; for a heavy job, add its cost and the current load. Commands, paths and identifiers inside it stay as written' },
         alternatives: {
           type: 'array', minItems: 1,
           description: 'The other approaches considered and why each was rejected',
@@ -50,6 +50,9 @@ const log = ($: Ctx, text: string) => $.ui.log(`[request] ${text}`, { to: 'debug
 const toolError = (text: string) => ({ result: text, isError: true as const, text })
 const ok = (text: string) => ({ result: text, text })
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== ''
+// The user reads why_only_way in Korean; any Hangul syllable counts, so a
+// reason mixing a command or identifier with Korean prose passes.
+const isKorean = (v: string) => /[가-힣]/.test(v)
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 const isUndelivered = (r: ApprovalRequest): r is Outcome =>
@@ -87,9 +90,10 @@ const shownCommand = (r: ApprovalRequest) => (isEscaped(r.command)
   ? JSON.stringify(r.command).replace(HIDDEN_ALL, c => Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join(''))
   : r.command)
 
-// Each command line indented by this, so a line the command holds that looks
-// like the review's prose still reads as part of the command.
-const INDENT = '    '
+// Each command line led by this gutter, so a line the command holds that looks
+// like the review's prose still reads as part of the command. Four cells, as
+// the indent it replaced, so dialogRows counts it the same.
+const GUTTER = '  │ '
 
 const asker = (r: ApprovalRequest) => `In ${oneLine(r.cwd)}, ${r.agentId ? `subagent ${oneLine(r.agentId)}` : 'the main session'} asks to run:`
 const escapedNote = (r: ApprovalRequest) => (isEscaped(r.command) ? ['(it holds tabs, hidden or control characters; shown JSON-escaped)'] : [])
@@ -102,13 +106,13 @@ const caseRows = (r: ApprovalRequest): CaseRow[] => [
   { key: 'unblocks', label: 'Unblocks', value: oneLine(r.blocks) },
 ]
 
-// The dialog's question: where it runs and who asked, the command indented,
+// The dialog's question: where it runs and who asked, the command behind a gutter,
 // then the case for it, one labelled line each, and the question last. The
 // command stays in it so the engine's own drawing (a refused tree) shows it.
 export const reviewQuestion = (r: ApprovalRequest): string => [
   asker(r),
   ...escapedNote(r),
-  ...shownCommand(r).split('\n').map(line => `${INDENT}${line}`),
+  ...shownCommand(r).split('\n').map(line => `${GUTTER}${line}`),
   '',
   ...caseRows(r).map(c => `${c.label}: ${c.value}`),
   'Run this command once?',
@@ -347,13 +351,16 @@ const ROW_CELLS = 40
 const textCost = (texts: readonly string[]) =>
   1 + texts.reduce((n, t) => n + (t.split('\n').length - 1) + Math.floor(cells(t) / ROW_CELLS), 0)
 const codeCost = (source: string) => source.split('\n').length + Math.floor(cells(source) / ROW_CELLS)
+// The frame drawn around the command: the engine counts a Box's borderStyle
+// as 2 rows (claude 2.1.288), its top and bottom edges.
+const FRAME_ROWS = 2
 
 // What the tree draws above the dialog, and the question under it: the whole
 // review when the engine's count allows it, else the header and command with
 // the case left in the question, else nothing (the engine's plain dialog).
 type Layout = { hasCase: boolean; question: string }
 const layoutOf = (r: ApprovalRequest): Layout | undefined => {
-  const head = textCost([asker(r)]) + escapedNote(r).reduce((n, note) => n + textCost([note]), 0) + codeCost(shownCommand(r))
+  const head = textCost([asker(r)]) + escapedNote(r).reduce((n, note) => n + textCost([note]), 0) + FRAME_ROWS + codeCost(shownCommand(r))
   const whole = head + caseRows(r).reduce((n, c) => n + textCost([`${c.label}:`, ` ${c.value}`]), 0)
   if (whole <= AROUND_DIALOG_ROWS) return { hasCase: true, question: shortQuestion(r) }
   if (head <= AROUND_DIALOG_ROWS) return { hasCase: false, question: caseQuestion(r) }
@@ -493,6 +500,7 @@ export const register: Register = on => {
       return toolError('cwd must be an absolute directory path with no control, bidi or zero-width characters.')
     }
     if (!nonEmpty(why_only_way)) return toolError('why_only_way must say why this command is the only correct way.')
+    if (!isKorean(why_only_way)) return toolError('Rewrite why_only_way in Korean (한국어), keeping commands and identifiers as written, and raise the request again.')
     if (!isAlternatives(alternatives)) return toolError('alternatives must be one or more {approach, rejected_because} objects with non-empty strings.')
     if (!nonEmpty(blocks)) return toolError('blocks must name the work that waits on this command.')
     const base = {
@@ -542,7 +550,7 @@ export const register: Register = on => {
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
     if (!r) return next(e)
     const described: Record<string, string> = {
-      [APPROVE]: 'Run the command shown once with bash -c, byte for byte (an indent before its lines is the dialog\'s, not the command\'s)',
+      [APPROVE]: 'Run the command shown once with bash -c, byte for byte (the frame around it, or the "│" gutter before its lines, is the dialog\'s, not the command\'s)',
       [DENY]: `Tell the model no; type under Other to give the reason. Esc keeps it pending in the band${open.position}`,
     }
     const q = e.questions[0]
@@ -572,9 +580,10 @@ export const register: Register = on => {
     const r = (await requests($)).find(x => x.id === open.id && x.status === 'pending')
     const layout = r ? layoutOf(r) : undefined
     const tooLong = open.question.length > QUESTION_LIMIT
-    // The plain question is always the tallest layout: every tree draws a
-    // subset of its lines, unindented, over a shorter question.
-    const needs = r && e.viewport ? dialogRows(open.question, e.viewport.columns) : undefined
+    // The plain question plus the frame's edges is always the tallest layout:
+    // every tree draws a subset of its lines, the command framed rather than
+    // behind the gutter, over a shorter question.
+    const needs = r && e.viewport ? dialogRows(open.question, e.viewport.columns) + (layout ? FRAME_ROWS : 0) : undefined
     const fits = !tooLong && needs !== undefined && e.viewport !== undefined && needs <= e.viewport.rows
     open.isApprovable = fits
     if (fits && r && layout) {
@@ -584,7 +593,9 @@ export const register: Register = on => {
         <Box flexDirection="column">
           <Text key="request-asker" bold>{asker(r)}</Text>
           {escapedNote(r).map(note => <Text key="request-escaped">{note}</Text>)}
-          <Code key="request-command" language="bash" source={shownCommand(r)} wrap="wrap" />
+          <Box key="request-frame" borderStyle="round" borderColor="yellow" paddingX={1}>
+            <Code key="request-command" language="bash" source={shownCommand(r)} wrap="wrap" />
+          </Box>
           {(layout.hasCase ? caseRows(r) : []).map(c => (
             <Text key={`request-${c.key}`} wrap="wrap"><Text bold>{`${c.label}:`}</Text>{` ${c.value}`}</Text>
           ))}

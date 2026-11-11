@@ -13,6 +13,7 @@ skip_dependencies = ["Nvidia.CUDA"]
 [winget]
 packages = [
   "7zip.7zip",
+  "9PFXXSHC64H3", # Raycast (msstore; not in the winget source)
   "AntibodySoftware.WizTree",
   "Bandisoft.Bandizip",
   "Bitwarden.Bitwarden",
@@ -55,7 +56,8 @@ packages = [
 
 # Not on winget, but the vendor serves a stable latest-installer URL. The key is
 # the installed DisplayName (`winget list` Name column) used to skip it when
-# present; `args` are the installer's silent flags.
+# present; `args` are the installer's silent flags. A zip download names the
+# installer inside it with `member`; an .msi runs through msiexec.
 [direct."VoiSona Talk"]
 # 302 -> cdn.voisona.com/editor/<ver>/VoiSona_Talk_Installer_<ver>.exe (Inno Setup).
 url = "https://voisona.com/talk/download/windows/"
@@ -67,6 +69,14 @@ args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
 # Calibration is restored by xpkg/configs/littlebigmouse/install.nu.
 url = "https://github.com/mgth/LittleBigMouse/releases/download/v5.6.0/LittleBigMouse_5.6.0.exe"
 args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
+
+# The name is the MSI ProductName. A zip holding Setup.exe and the MSI; `member`
+# picks the MSI so msiexec can install it silently. www.steinberg.net/asio-win
+# redirects here; this static URL pins 1.0.9.
+[direct."Steinberg built-in ASIO Driver 64bit"]
+url = "https://download.steinberg.net/static_content/runtime-components/asio/1.0.9.26-1973a36d-45e1-3b89-b1ba-ee79d9eb03a8/Steinberg_built_in_ASIO_Driver.zip"
+member = "Steinberg built-in ASIO Driver 1.0.9/Additional Content/Installer/Steinberg_Built_In_ASIO_Driver_64bit.msi"
+args = ["/qn", "/norestart"]
 
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under

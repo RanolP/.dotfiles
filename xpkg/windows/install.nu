@@ -39,16 +39,30 @@ def install-winget [id: string, skip_deps: bool] {
     }
 }
 
-def install-direct [name: string, url: string, args: list<string>] {
+# `member`, when set, is the installer's path inside a zip download; an .msi
+# installer runs through msiexec, anything else is executed directly.
+def install-direct [name: string, url: string, args: list<string>, member?: string] {
     print $"     (ansi green)++(ansi reset) ($name) (ansi dark_gray)\(($url)\)(ansi reset)"
-    let exe = ($nu.temp-dir | path join $"xpkg-($name | str replace -a ' ' '-').exe")
-    try { http get --raw $url | save -f $exe } catch {|e|
+    let stem = ($nu.temp-dir | path join $"xpkg-($name | str replace -a ' ' '-')")
+    let download = if $member == null { $"($stem).exe" } else { $"($stem).zip" }
+    try { http get --raw $url | save -f $download } catch {|e|
         print $"     (ansi red)!!(ansi reset) ($name) (ansi red)download failed(ansi reset): ($e.msg)"
         return
     }
-    let r = (^$exe ...$args | complete)
-    rm -f $exe
-    if $r.exit_code != 0 {
+    let installer = if $member == null { $download } else {
+        mkdir $stem
+        # System32's bsdtar reads zip; a bare `tar` may resolve to Git's GNU tar, which does not.
+        ^($env.SystemRoot | path join System32 tar.exe) -xf $download -C $stem
+        $stem | path join $member
+    }
+    let r = if ($installer | str ends-with '.msi') {
+        ^msiexec /i $installer ...$args | complete
+    } else {
+        ^$installer ...$args | complete
+    }
+    rm -rf $download $stem
+    # 3010: msiexec succeeded and asks for a reboot.
+    if $r.exit_code not-in [0 3010] {
         print $"     (ansi red)!!(ansi reset) ($name) (ansi red)exit ($r.exit_code)(ansi reset)"
     }
 }
@@ -86,7 +100,7 @@ export def main [] {
         if ($entry.name in $installed_names) {
             print $"     (ansi dark_gray)==(ansi reset) ($entry.name)"
         } else {
-            install-direct $entry.name $entry.spec.url ($entry.spec.args? | default [])
+            install-direct $entry.name $entry.spec.url ($entry.spec.args? | default []) $entry.spec.member?
         }
     }
 

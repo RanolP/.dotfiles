@@ -18,7 +18,8 @@
       "{74145f27-f039-47ce-a470-a662b129930a}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/clearurls/latest.xpi" },
       "{799c0914-748b-41df-a25c-22d008f9e83f}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/web-scrobbler/latest.xpi" },
       "{e5292467-a0c9-4854-982b-6a12aaf21609}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/opened-closed-tab-counter/latest.xpi" },
-      "danabok16@gmail.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/youtube-subscription-groups/latest.xpi" }
+      "danabok16@gmail.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/youtube-subscription-groups/latest.xpi" },
+      "wappalyzer@crunchlabz.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/wappalyzer/latest.xpi" }
     }
   }
 }

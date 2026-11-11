@@ -56,6 +56,7 @@
           addons.web-scrobbler
           addons.side-view
           addons.youtube-subscription-groups
+          addons.wappalyzer
           # These six are not in nur.repos.rycee.firefox-addons, so they are
           # pinned by hand. Each `url` names an immutable AMO file id, NOT the
           # `/downloads/latest/<slug>/latest.xpi` alias: that alias moves the

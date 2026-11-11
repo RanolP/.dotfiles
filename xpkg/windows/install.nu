@@ -54,10 +54,13 @@ def install-direct [name: string, url: string, args: list<string>, member?: stri
         mkdir $stem
         # System32's bsdtar reads zip; a bare `tar` may resolve to Git's GNU tar, which does not.
         ^($env.SystemRoot | path join System32 tar.exe) -xf $download -C $stem
-        $stem | path join $member
+        # `member` uses `/`; msiexec only opens a backslash path.
+        $stem | path join $member | str replace -a '/' '\'
     }
-    let r = if ($installer | str ends-with '.msi') {
-        ^msiexec /i $installer ...$args | complete
+    let is_msi = ($installer | str ends-with '.msi')
+    let log = $"($stem).log"
+    let r = if $is_msi {
+        ^msiexec /i $installer ...$args /l*v $log | complete
     } else {
         ^$installer ...$args | complete
     }
@@ -65,6 +68,14 @@ def install-direct [name: string, url: string, args: list<string>, member?: stri
     # 3010: msiexec succeeded and asks for a reboot.
     if $r.exit_code not-in [0 3010] {
         print $"     (ansi red)!!(ansi reset) ($name) (ansi red)exit ($r.exit_code)(ansi reset)"
+        if $is_msi and ($log | path exists) {
+            # msiexec writes its verbose log as UTF-16LE.
+            let errors = (open --raw $log | decode utf-16le | lines | where ($it =~ '(?i)error \d|return value 3') | last 5)
+            for l in $errors { print $"        ($l)" }
+            print $"        full log: ($log)"
+        }
+    } else {
+        rm -f $log
     }
 }
 

@@ -19,7 +19,9 @@
       "{799c0914-748b-41df-a25c-22d008f9e83f}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/web-scrobbler/latest.xpi" },
       "{e5292467-a0c9-4854-982b-6a12aaf21609}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/opened-closed-tab-counter/latest.xpi" },
       "danabok16@gmail.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/youtube-subscription-groups/latest.xpi" },
-      "wappalyzer@crunchlabz.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/wappalyzer/latest.xpi" }
+      "wappalyzer@crunchlabz.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/wappalyzer/latest.xpi" },
+      "sponsorBlocker@ajay.app": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/sponsorblock/latest.xpi" },
+      "{5cce4ab5-3d47-41b9-af5e-8203eea05245}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/control-panel-for-twitter/latest.xpi" }
     }
   }
 }

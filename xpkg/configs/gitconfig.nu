@@ -5,7 +5,6 @@
 # Deliberately NOT mirrored here:
 #   - credential.helper : nix pins a macOS keychain path; Windows uses Git
 #                         Credential Manager by default.
-#   - core.pager / interactive.diffFilter / delta.* : delta isn't installed.
 #   - commit.gpgsign / user.signingkey : owned by
 #     xpkg/apps/common/git/setup-gpg-signing.nu, which sets them only after
 #     importing the key (enabling signing with no key breaks every commit).
@@ -25,6 +24,12 @@ git config --global merge.conflictstyle zdiff3
 git config --global rerere.enabled true
 git config --global diff.colorMoved default
 git config --global diff.algorithm histogram
+
+# delta as pager (installed through mise)
+git config --global core.pager delta
+git config --global interactive.diffFilter "delta --color-only"
+git config --global delta.navigate true
+git config --global delta.side-by-side false
 
 # global excludes (core.excludesFile) -- mirrors programs.git.ignores in git.nix
 let git_ignore = ($nu.home-dir | path join '.config' 'git' 'ignore')

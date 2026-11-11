@@ -43,6 +43,21 @@ if $nu.os-info.name == windows {
     echo $"(ansi purple)>>(ansi reset) Showing file extensions in Explorer"
     nu $'($configs)/explorer/install.nu'
 
+    echo $"(ansi purple)>>(ansi reset) Switching Windows to dark mode"
+    nu $'($configs)/theme/install.nu'
+
+    echo $"(ansi purple)>>(ansi reset) Installing user shims in ~/bin"
+    nu $'($configs)/bin/install.nu'
+
+    echo $"(ansi purple)>>(ansi reset) Setting the gpg-agent cache"
+    nu $'($configs)/gnupg/install.nu'
+
+    echo $"(ansi purple)>>(ansi reset) Installing espanso match packages"
+    nu $'($configs)/espanso/install.nu'
+
+    echo $"(ansi purple)>>(ansi reset) Force-installing the Chrome extension by policy"
+    nu $'($configs)/chrome/install.nu'
+
     echo $"(ansi purple)>>(ansi reset) Turning off microphone audio enhancements"
     nu $'($configs)/audio/install.nu'
 

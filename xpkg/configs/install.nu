@@ -39,6 +39,9 @@ if $nu.os-info.name == windows {
 
     echo $"(ansi purple)>>(ansi reset) Turning off the automatic sign-in lock"
     nu $'($configs)/lock/install.nu'
+
+    echo $"(ansi purple)>>(ansi reset) Showing file extensions in Explorer"
+    nu $'($configs)/explorer/install.nu'
 }
 
 if (installed code) {

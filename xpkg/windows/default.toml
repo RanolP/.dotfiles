@@ -59,8 +59,8 @@ packages = [
 ]
 
 # Not on winget, but the vendor serves a stable latest-installer URL. The key is
-# the installed DisplayName (`winget list` Name column) used to skip it when
-# present; `args` are the installer's silent flags. A zip download names the
+# the start of the installed DisplayName (`winget list` Name column) used to
+# skip it when present; `args` are the installer's silent flags. A zip download names the
 # installer inside it with `member`; an .msi runs through msiexec.
 [direct."VoiSona Talk"]
 # 302 -> cdn.voisona.com/editor/<ver>/VoiSona_Talk_Installer_<ver>.exe (Inno Setup).

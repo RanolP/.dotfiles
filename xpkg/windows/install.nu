@@ -119,7 +119,9 @@ export def main [] {
     # Direct (not on winget, vendor URL): skip when the DisplayName is installed.
     let installed_names = ($pkgs | get name)
     for entry in ($def.direct? | default {} | transpose name spec) {
-        if ($entry.name in $installed_names) {
+        # Prefix match: Inno Setup installers append the version to the
+        # DisplayName ("VoiSona Talk 1.3.10.0", "Little Big Mouse version 5.6.0").
+        if ($installed_names | any {|n| $n starts-with $entry.name }) {
             print $"     (ansi dark_gray)==(ansi reset) ($entry.name)"
         } else {
             install-direct $entry.name $entry.spec.url ($entry.spec.args? | default []) $entry.spec.member?

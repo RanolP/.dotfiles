@@ -73,6 +73,14 @@ for m in $mods {
 
 nu $'($local)/mcp.nu'
 
+# nix/home/default.nix puts these two under ~/.claude/shared: code-reviewer
+# reads style-rules.md, and codex-subagent copies agent-rules.md (the shared
+# AGENTS.md alone, without the Claude-only appendix) into implementer prompts.
+echo $"     (ansi blue)Copy(ansi reset) shared style-rules.md and agent-rules.md"
+do -i { mkdir $'($home)/.claude/shared' }
+cp --force $'($nix)/claude/shared/style-rules.md' $'($home)/.claude/shared/style-rules.md'
+cp --force $'($nix)/.agents/AGENTS.md' $'($home)/.claude/shared/agent-rules.md'
+
 echo $"     (ansi blue)Copy(ansi reset) hooks"
 for hook in (ls ($'($nix)/claude/hooks/*.py' | into glob)) {
     let name = ($hook.name | path basename)

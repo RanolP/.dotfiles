@@ -116,3 +116,18 @@ if (which mise | is-empty) {
 } else {
     ^mise activate nu | save -f $mise_path
 }
+
+# Starship prompt, mirroring programs.starship.enableNushellIntegration on the
+# nix hosts. config.nu `source`s starship.nu at parse time, so it must exist
+# before config.nu is read (empty when starship is absent, which leaves the
+# create_left_prompt above in place). The binary comes from `mise which`
+# because mise's PATH is only activated later, in config.nu.
+let starship_path = ($nu.default-config-dir | path join starship.nu)
+let starship_bin = (do -i { ^mise which starship } | complete)
+if $starship_bin.exit_code == 0 {
+    mkdir ($nu.home-dir | path join .config)
+    cp --force ($nu.home-dir | path join .dotfiles xpkg configs nushell starship.toml) ($nu.home-dir | path join .config starship.toml)
+    ^($starship_bin.stdout | str trim) init nu | save -f $starship_path
+} else if not ($starship_path | path exists) {
+    "" | save -f $starship_path
+}

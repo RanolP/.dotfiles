@@ -765,6 +765,10 @@ $env.config = {
 const mise_path = $nu.default-config-dir | path join .mise.nu
 source $mise_path
 
+# env.nu writes this file (empty when starship is absent); it sets the prompt.
+const starship_path = $nu.default-config-dir | path join starship.nu
+source $starship_path
+
 # rebuild: apply the local dotfiles (xpkg packages + configs) from any directory.
 # The Windows counterpart to `darwin-rebuild switch` / `home-manager switch` on
 # nix hosts. Absolute path so it works from anywhere; install.nu self-elevates.

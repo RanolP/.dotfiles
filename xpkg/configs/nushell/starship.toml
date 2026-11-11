@@ -1,0 +1,17 @@
+# Windows copy of the starship settings in nix/home/programs/starship.nix
+# (format, fill, cmd_duration, time); deployed to ~/.config/starship.toml by
+# xpkg/configs/nushell/env.nu. Keep the two in step.
+format = "$directory$git_branch$git_commit$git_state$git_status$nodejs$python$rust$golang$kotlin$java$swift$fill$cmd_duration$time$line_break$character"
+
+[fill]
+symbol = " "
+
+[cmd_duration]
+min_time = 5000
+format = "[took $duration]($style) "
+style = "yellow"
+
+[time]
+disabled = false
+format = "[🕐 $time]($style)"
+style = "cyan"

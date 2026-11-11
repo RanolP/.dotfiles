@@ -42,6 +42,16 @@
               sha256 = "sha256-0yOtvHL24eJizmzXAC956Tx9eNJaWDPl/OAhmFv2KJk=";
             };
           })
+          # Official JetBrains Kotlin LSP; per-platform VSIX, so pin the arch.
+          (pkgs.vscode-utils.buildVscodeMarketplaceExtension {
+            mktplcRef = {
+              publisher = "JetBrains";
+              name = "kotlin-server";
+              version = "0.0.86";
+              arch = "darwin-arm64";
+              sha256 = "sha256-ItQ/7pDIZoUzg7IGO0MYj1X9aFcdcJJ7jAcLhNGviCs=";
+            };
+          })
         ];
       keybindings = [
         {

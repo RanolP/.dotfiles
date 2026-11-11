@@ -6,7 +6,8 @@ If the commit would be signed (commit.gpgsign true, or an explicit -S/--gpg-sign
 and not --no-gpg-sign) and a non-interactive test-sign fails (key locked), the
 commit is denied with instructions to unlock via the user's own pinentry
 (`! echo | gpg -s`). Everything else -- no commit, unsigned commit, key already
-unlocked, gpg missing, parse failure -- falls through (exit 0, no opinion).
+unlocked, gpg missing, parse failure, Windows (GUI pinentry) -- falls through
+(exit 0, no opinion).
 
 Runs on every Bash call, so it does zero subprocess work unless the command
 actually contains a `git commit`. Uses stdlib shlex (linear, no ReDoS) rather
@@ -116,6 +117,11 @@ def main():
         toks = shlex.split(cmd)
     except ValueError:
         sys.exit(0)  # unbalanced quotes -> can't reason, no opinion
+
+    # Windows gpg asks through pinentry-w32, a GUI dialog that never touches
+    # the TTY, so a locked key there just pops the dialog for the user.
+    if sys.platform == "win32":
+        sys.exit(0)
 
     args = find_commit_args(toks)
     if args is None:

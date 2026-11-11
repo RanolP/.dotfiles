@@ -45,6 +45,9 @@ if $nu.os-info.name == windows {
 
     echo $"(ansi purple)>>(ansi reset) Restoring the Little Big Mouse calibration"
     nu $'($configs)/littlebigmouse/install.nu'
+
+    echo $"(ansi purple)>>(ansi reset) Pointing Prism Launcher at the mise JDK"
+    nu $'($configs)/prismlauncher/install.nu'
 }
 
 if (installed code) {

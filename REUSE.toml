@@ -418,7 +418,7 @@ SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"
 
 [[annotations]]
-path = ["xpkg/configs/render.nu", "xpkg/configs/pi/install.nu", "xpkg/configs/opencode/install.nu", "xpkg/configs/claude/mcp.nu", "xpkg/configs/keyboard/install.nu", "xpkg/configs/lock/install.nu", "xpkg/configs/explorer/install.nu", "xpkg/configs/audio/install.nu", "xpkg/configs/littlebigmouse/install.nu", "xpkg/configs/prismlauncher/install.nu", "xpkg/utils/@windows/bootstrap.nu"]
+path = ["xpkg/configs/render.nu", "xpkg/configs/pi/install.nu", "xpkg/configs/opencode/install.nu", "xpkg/configs/claude/mcp.nu", "xpkg/configs/keyboard/install.nu", "xpkg/configs/lock/install.nu", "xpkg/configs/explorer/install.nu", "xpkg/configs/audio/install.nu", "xpkg/configs/firefox/install.nu", "xpkg/configs/firefox/user.js", "xpkg/configs/littlebigmouse/install.nu", "xpkg/configs/prismlauncher/install.nu", "xpkg/utils/@windows/bootstrap.nu"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"
 SPDX-License-Identifier = "MIT"

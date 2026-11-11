@@ -51,7 +51,12 @@ type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value:
 type SessionReader = { session: { id: () => Promise<string> } }
 type StoreReader = SessionReader & {
   env: { get: (name: string) => Promise<string | undefined> }
-  fs: { exists: (path: string) => Promise<boolean>; read: (path: string) => Promise<string>; write: (path: string, text: string) => Promise<void> }
+  fs: {
+    exists: (path: string) => Promise<boolean>
+    list: (path: string) => Promise<{ name: string; kind: string; size: number; mtimeMs: number; isLink: boolean }[]>
+    read: (path: string) => Promise<string>
+    write: (path: string, text: string) => Promise<void>
+  }
   store: { get: (key: string) => Promise<unknown>; set: (key: string, value: unknown) => Promise<void>; delete: (key: string) => Promise<void>; keys: () => Promise<string[]> }
   ui: { log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void }
 }
@@ -161,7 +166,9 @@ const SESSION_STORE_PREFIXES = new Set([
 ])
 const SESSION_STATE_MAX_CHARS = 4_194_304
 const SESSION_STATE_MIGRATION_KEY = 'migrated:session-files:v1'
+const sessionStateCache = new Map<string, { size: number; mtimeMs: number; chars: number; state: Record<string, unknown> }>()
 const sessionStateWrites = new Map<string, Promise<void>>()
+const foldChecks = new Map<string, Promise<void>>()
 let sessionStateMigration: Promise<void> | undefined
 let sessionStateMigrationFailed = false
 
@@ -176,19 +183,41 @@ async function sessionStatePath($: HomeReader, session: string): Promise<string>
   return `${await sessionBasePath($, session)}.state.json`
 }
 
+async function sessionStateEntry($: StoreReader, path: string) {
+  const separator = path.lastIndexOf('/')
+  const directory = separator < 0 ? '.' : path.slice(0, separator)
+  const name = path.slice(separator + 1)
+  try { return (await $.fs.list(directory)).find(entry => entry.kind === 'file' && entry.name === name) }
+  catch { return undefined }
+}
+
 async function readSessionState($: StoreReader, session: string, enforceLimit = true): Promise<Record<string, unknown>> {
   const path = await sessionStatePath($, session)
-  if (!(await $.fs.exists(path))) return {}
+  if (!(await $.fs.exists(path))) {
+    sessionStateCache.delete(path)
+    return {}
+  }
+  const entry = await sessionStateEntry($, path)
+  const cached = sessionStateCache.get(path)
+  if (entry && cached && cached.size === entry.size && cached.mtimeMs === entry.mtimeMs) {
+    if (enforceLimit && cached.chars > SESSION_STATE_MAX_CHARS) throw new Error(`clm: session state exceeds ${SESSION_STATE_MAX_CHARS} characters`)
+    return { ...cached.state }
+  }
   const text = await $.fs.read(path)
   if (enforceLimit && text.length > SESSION_STATE_MAX_CHARS) throw new Error(`clm: session state exceeds ${SESSION_STATE_MAX_CHARS} characters`)
   let value: unknown
   try { value = JSON.parse(text) }
   catch (error) { return recoverSessionState($, session, path, text, `invalid JSON (${String(error).slice(0, 300)})`) }
   if (!isRecord(value)) return recoverSessionState($, session, path, text, 'state file is not an object')
-  return value
+  if (entry) {
+    sessionStateCache.clear()
+    sessionStateCache.set(path, { size: entry.size, mtimeMs: entry.mtimeMs, chars: text.length, state: value })
+  }
+  return { ...value }
 }
 
 async function recoverSessionState($: StoreReader, session: string, path: string, text: string, problem: string): Promise<Record<string, unknown>> {
+  sessionStateCache.delete(path)
   const backup = `${await sessionBasePath($, session)}.state.corrupt-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.json`
   await logEvent($, 'session-state-migration', { reason: `malformed session state for ${session}: ${problem}; preserving at ${backup}` })
   try {
@@ -212,7 +241,7 @@ async function sessionStoreGet($: StoreReader, key: string): Promise<unknown> {
   const session = sessionStoreOwner(key)
   if (!session) return $.store.get(key)
   await ensureSessionStateMigration($)
-  return serializeSessionState(session, async () => (await readSessionState($, session))[key])
+  return serializeSessionState(session, async () => structuredClone((await readSessionState($, session))[key]))
 }
 
 async function writeSessionState($: StoreWriter, session: string, state: Record<string, unknown>, droppedKey?: string): Promise<void> {
@@ -221,7 +250,14 @@ async function writeSessionState($: StoreWriter, session: string, state: Record<
     await logEvent($, 'session-state-migration', { reason: `session state write for ${session} exceeded ${SESSION_STATE_MAX_CHARS} characters; dropped ${droppedKey ?? 'updated state'}` })
     return
   }
-  await $.fs.write(await sessionStatePath($, session), text)
+  const path = await sessionStatePath($, session)
+  await $.fs.write(path, text)
+  const entry = await sessionStateEntry($, path)
+  if (entry) {
+    sessionStateCache.clear()
+    sessionStateCache.set(path, { size: entry.size, mtimeMs: entry.mtimeMs, chars: text.length, state: { ...state } })
+  }
+  else sessionStateCache.delete(path)
 }
 
 async function sessionStoreSet($: StoreWriter, key: string, value: unknown): Promise<void> {
@@ -230,7 +266,7 @@ async function sessionStoreSet($: StoreWriter, key: string, value: unknown): Pro
   await ensureSessionStateMigration($)
   await serializeSessionState(session, async () => {
     const state = await readSessionState($, session)
-    state[key] = value
+    state[key] = structuredClone(value)
     await writeSessionState($, session, state, key)
   })
 }
@@ -1242,11 +1278,18 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     if (e.agentId === undefined) {
       void (async () => {
-        // Read before the opts lookup: a check landing after a swap finished
-        // would fold the pre-swap rows again, and clm's own task-panel calls
-        // run inside that swap.
-        if (!foldJobIdle(transcriptKey(await sid($)))) return
-        await maybeClearFoldJob(foldJobIo($), await liveOpts($, userOptions), false)
+        const key = transcriptKey(await sid($))
+        if (foldChecks.has(key)) return
+        const check = (async () => {
+          // Read before the opts lookup: a check landing after a swap finished
+          // would fold the pre-swap rows again, and clm's own task-panel calls
+          // run inside that swap.
+          if (!foldJobIdle(key)) return
+          await maybeClearFoldJob(foldJobIo($), await liveOpts($, userOptions), false)
+        })()
+        foldChecks.set(key, check)
+        try { await check }
+        finally { if (foldChecks.get(key) === check) foldChecks.delete(key) }
       })().catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
     }
     return next(e)

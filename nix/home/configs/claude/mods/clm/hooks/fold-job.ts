@@ -485,8 +485,9 @@ export async function maybeClear(io: FoldJobIo, opts: Opts, canSwap = true): Pro
   }
   if (current && current.state !== 'idle') return
   const meta = await io.readMeta()
-  const rows = await rowsWithQueuedMessages(io, liveRows(await io.sessionMessages(), meta.boundary))
   const used = await io.usageReading()
+  if (used !== undefined && meta.firstObserved !== undefined && used < opts.budget - opts.reserve) return
+  const rows = await rowsWithQueuedMessages(io, liveRows(await io.sessionMessages(), meta.boundary))
   if (used !== undefined && meta.firstObserved === undefined) {
     calibrateFirstReading(meta, rows, used)
     await io.writeMeta(meta)

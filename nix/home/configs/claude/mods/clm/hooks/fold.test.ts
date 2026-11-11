@@ -1310,6 +1310,57 @@ test('a compact with no job and a silent model folds mechanically at the deadlin
   expect(seen.engineCompactions).toBe(0)
 })
 
+// Regression caught: concurrent tool calls each materialized the full transcript before either fold check created a job.
+test('two concurrent tool calls share one in-flight background fold check', OPTS, async ($, on) => {
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>()
+  const seen = bottoms(on, { rows: [M('user', 'protected request'), M('assistant', 'working')], replies: [], sessionMessagesBlock: () => gate })
+  on('tool.call', () => ({ result: { success: true } }))
+
+  const first = $.tool.call({ tool: 'Bash', command: 'first' } as ToolCallInput)
+  for (let i = 0; i < 50 && seen.sessionMessageReads === 0; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  const second = $.tool.call({ tool: 'Bash', command: 'second' } as ToolCallInput)
+  await Promise.all([first, second])
+  for (let i = 0; i < 50 && seen.sessionMessageReads < 2; i++) await new Promise(resolve => setTimeout(resolve, 2))
+
+  try { expect(seen.sessionMessageReads).toBe(1) }
+  finally { release() }
+})
+
+// Regression caught: every below-threshold tool call materialized the full transcript before rejecting the fold.
+test('a below-threshold background fold check does not read session messages', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [M('user', 'protected request'), M('assistant', BIG)], replies: [],
+    usage: { startedAt: 0, context: { window: 200_000, tokens: 100 }, rateLimits: [] },
+  })
+  seen.store['ledger:s1'] = { seq: 0, fails: 0, firstObserved: 100 }
+  on('tool.call', () => ({ result: { success: true } }))
+
+  await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
+  for (let i = 0; i < 50 && seen.usageReads < 2; i++) await new Promise(resolve => setTimeout(resolve, 2))
+
+  expect(seen.usageReads).toBeGreaterThanOrEqual(2)
+  expect(seen.sessionMessageReads).toBe(0)
+})
+
+// Regression caught: skipping an uncalibrated reading delayed prefix calibration until the fold threshold.
+test('an uncalibrated background fold check reads messages and records its first observation', OPTS, async ($, on) => {
+  const seen = bottoms(on, {
+    rows: [M('user', 'protected request'), M('assistant', BIG)], replies: [],
+    usage: { startedAt: 0, context: { window: 200_000, tokens: 100 }, rateLimits: [] },
+  })
+  on('tool.call', () => ({ result: { success: true } }))
+
+  await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
+  for (let i = 0; i < 50; i++) {
+    const meta = seen.store['ledger:s1']
+    if (isMetaValue(meta) && meta.firstObserved !== undefined) break
+    await new Promise(resolve => setTimeout(resolve, 2))
+  }
+
+  expect(seen.sessionMessageReads).toBe(1)
+  expect(metaIn(seen).firstObserved).toBe(100)
+})
+
 // Regression caught: queueTarget was checked only after turn completion, so long turns entered compact without a summary job.
 test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(14_000)), M('user', 'active B'), M('assistant', 'working')]

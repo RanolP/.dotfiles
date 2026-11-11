@@ -53,8 +53,8 @@ test('the clm noun tracks only this session\'s issues', OPTS, async ($, on) => {
   expect(error instanceof Error ? error.message : String(error)).toContain('does not belong')
 })
 
-// Regression: clm status omitted the pending resume or changed state while reading it.
-test('the clm status noun reports its read-only session view', async () => {
+// Regression: repeated session reads reparsed the multi-megabyte state file, and a cache without metadata validation hid external writes.
+test('the clm status noun caches unchanged session state and sees an external file change', async () => {
   const workflow: ClmWorkflow = {
     resumeRequest: { text: 'continue the audit' }, lastSubmittedTurn: null, activeTurnId: 'turn-1', promptSeq: 0, focusAppliedSeq: 0,
   }
@@ -67,6 +67,9 @@ test('the clm status noun reports its read-only session view', async () => {
     { ts: '2026-10-06T00:00:04.000Z', seq: 5, issue: 'status-s-5', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'finished item', status: 'done' },
   ].map(event => JSON.stringify(event)).join('\n') + '\n'
   const store: Record<string, unknown> = {}
+  const statePath = '/home/t/.claude-work/plans/clm-status-session.state.json'
+  const stateFile = { text: JSON.stringify({ 'ledger:status-session': { seq: 2, fails: 0, lastFoldAt: 1_791_926_400_000 } }), mtimeMs: 1 }
+  let stateReads = 0
   const engine = {
     state: {
       get: async (ref: { plugin: string; key: string }) => ({ value: ref.plugin === 'clm' && ref.key === 'workflow' ? workflow : undefined }),
@@ -80,18 +83,23 @@ test('the clm status noun reports its read-only session view', async () => {
     session: { id: async () => 'status-session' },
     env: { get: async () => '/home/t' },
     fs: {
-      exists: async (path: string) => path === '/home/t/.claude-work/tracker/events' || path === eventFile || path === '/home/t/.claude-work/plans/clm-status-session.state.json',
+      exists: async (path: string) => path === '/home/t/.claude-work/tracker/events' || path === eventFile || path === statePath,
       list: async (path: string) => path === '/home/t/.claude-work/tracker/events'
         ? [{ name: 'status-session.jsonl', kind: 'file' as const, size: events.length, mtimeMs: 1, isLink: false }]
-        : [],
-      read: async (path: string) => path === eventFile ? events : path === '/home/t/.claude-work/plans/clm-status-session.state.json'
-        ? JSON.stringify({ 'ledger:status-session': { seq: 2, fails: 0, lastFoldAt: 1_791_926_400_000 } }) : '',
+        : path === '/home/t/.claude-work/plans'
+          ? [{ name: 'clm-status-session.state.json', kind: 'file' as const, size: stateFile.text.length, mtimeMs: stateFile.mtimeMs, isLink: false }]
+          : [],
+      read: async (path: string) => {
+        if (path === eventFile) return events
+        if (path === statePath) { stateReads++; return stateFile.text }
+        return ''
+      },
       write: async () => undefined,
     },
     ui: { log: () => undefined },
   } satisfies Parameters<typeof clmStatus>[0]
 
-  expect(await clmStatus(engine)).toEqual({
+  const expected = {
     focus: null,
     stackDepth: 0,
     pending: [],
@@ -100,7 +108,15 @@ test('the clm status noun reports its read-only session view', async () => {
     lastFoldAt: 1_791_926_400_000,
     ledgerPath: '/home/t/.claude-work/plans/clm-status-session.md',
     openIssues: 3,
-  })
+  }
+  expect(await clmStatus(engine)).toEqual(expected)
+  expect(await clmStatus(engine)).toEqual(expected)
+  expect(stateReads).toBe(1)
+
+  stateFile.text = JSON.stringify({ 'ledger:status-session': { seq: 2, fails: 0, lastFoldAt: 1_791_926_400_001 } })
+  stateFile.mtimeMs++
+  expect(await clmStatus(engine)).toEqual({ ...expected, lastFoldAt: 1_791_926_400_001 })
+  expect(stateReads).toBe(2)
 })
 
 // Regression caught: haiku fenced its JSON reply in ```json, and no session ever got a focus event.

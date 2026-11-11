@@ -16,8 +16,13 @@
           addons.bitwarden
           addons.ublock-origin
           addons.darkreader
-          addons.tampermonkey
-          # These five are not in nur.repos.rycee.firefox-addons, so they are
+          addons.violentmonkey
+          addons.refined-github
+          addons.clearurls
+          addons.web-scrobbler
+          addons.side-view
+          addons.youtube-subscription-groups
+          # These six are not in nur.repos.rycee.firefox-addons, so they are
           # pinned by hand. Each `url` names an immutable AMO file id, NOT the
           # `/downloads/latest/<slug>/latest.xpi` alias: that alias moves the
           # moment the author publishes, so the pinned hash stops matching the
@@ -68,6 +73,14 @@
             addonId = "@testpilot-containers";
             url = "https://addons.mozilla.org/firefox/downloads/file/4867303/multi_account_containers-8.3.8.xpi";
             sha256 = "sha256-MGopSEU2PxWnR46WILQ/keoXYQiHJ4COIye//xbBREc=";
+            meta = { };
+          })
+          (addons.buildFirefoxXpiAddon {
+            pname = "opened-closed-tab-counter";
+            version = "2026.9.4";
+            addonId = "{e5292467-a0c9-4854-982b-6a12aaf21609}";
+            url = "https://addons.mozilla.org/firefox/downloads/file/5005318/opened_closed_tab_counter-2026.9.4.xpi";
+            sha256 = "sha256-4/+BnAujlZ4SYcx5VdKbON6xjTMskjd0Ph/pLwos7fs=";
             meta = { };
           })
         ];

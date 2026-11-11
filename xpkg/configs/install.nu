@@ -43,6 +43,9 @@ if $nu.os-info.name == windows {
     echo $"(ansi purple)>>(ansi reset) Showing file extensions in Explorer"
     nu $'($configs)/explorer/install.nu'
 
+    echo $"(ansi purple)>>(ansi reset) Turning off microphone audio enhancements"
+    nu $'($configs)/audio/install.nu'
+
     echo $"(ansi purple)>>(ansi reset) Restoring the Little Big Mouse calibration"
     nu $'($configs)/littlebigmouse/install.nu'
 

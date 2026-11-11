@@ -12,5 +12,16 @@
     "editor.fontLigatures": true,
     
     "terminal.integrated.defaultProfile.windows": "Nushell",
-    "terminal.integrated.fontFamily": "'IosevkaTerm Nerd Font'"
+    "terminal.integrated.fontFamily": "'IosevkaTerm Nerd Font'",
+
+    "update.mode": "none",
+    "extensions.autoUpdate": "off",
+    "extensions.autoCheckUpdates": false,
+    "editor.fontSize": 14,
+    "editor.minimap.enabled": true,
+    "editor.unicodeHighlight.nonBasicASCII": false,
+    "scm.defaultViewMode": "tree",
+    "git.autofetch": "all",
+    "git.autofetchPeriod": 60,
+    "diffEditor.hideUnchangedRegions.enabled": true
 }

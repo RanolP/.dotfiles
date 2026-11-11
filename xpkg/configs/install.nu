@@ -64,6 +64,9 @@ if $nu.os-info.name == windows {
     echo $"(ansi purple)>>(ansi reset) Setting Firefox fonts"
     nu $'($configs)/firefox/install.nu'
 
+    echo $"(ansi purple)>>(ansi reset) Configuring Windows Terminal \(Nord, Iosevka, nu\)"
+    nu $'($configs)/terminal/install.nu'
+
     echo $"(ansi purple)>>(ansi reset) Restoring the Little Big Mouse calibration"
     nu $'($configs)/littlebigmouse/install.nu'
 

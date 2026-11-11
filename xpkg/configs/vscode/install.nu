@@ -17,7 +17,22 @@ let target = if $nu.os-info.name == macos {
 }
 # @TODO
 # It seems does not work now (seealso: https://github.com/microsoft/vscode/issues/194856)
-do -i { ln -s -f $'($env.FILE_PWD)/settings.json' $target }
+# On Windows, msys `ln -s` silently makes a COPY (which also replaces an
+# existing real link), so use New-Item, which needs the elevated shell
+# configs/install.nu relaunches into; fall back to a copy when not elevated.
+def link-file [src: string, dst: string] {
+    if $nu.os-info.name == windows {
+        let r = (do -i { ^powershell -NoProfile -Command $"New-Item -ItemType SymbolicLink -Force -Path '($dst)' -Value '($src)' -ErrorAction Stop | Out-Null" } | complete)
+        if $r.exit_code != 0 {
+            print -e $"(ansi yellow)!!(ansi reset) symlink needs elevation, copying ($dst)"
+            cp -f $src $dst
+        }
+    } else {
+        do -i { ln -s -f $src $dst }
+    }
+}
+link-file $'($env.FILE_PWD)/settings.json' $target
+link-file $'($env.FILE_PWD)/keybindings.json' ($target | path dirname | path join keybindings.json)
 
 let installed = (code --list-extensions | from ssv -n | get column0)
 let extensionList = (open $'($env.FILE_PWD)/extensions.toml' | values | flatten | parse --regex '^(?<name>[^@]+)(?:@(?<version>.+))?$')

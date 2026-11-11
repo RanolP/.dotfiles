@@ -1,0 +1,8 @@
+[
+    // nix binds cmd+d and cmd+shift+d; ctrl+d is EOF in a shell, so only the shift variant is kept.
+    {
+        "key": "ctrl+shift+d",
+        "command": "workbench.action.terminal.split",
+        "when": "terminalFocus"
+    }
+]

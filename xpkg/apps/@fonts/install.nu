@@ -32,6 +32,9 @@ for $fontname in ($file | columns) {
         | each {|path| cp -f $path $extracted }
         | ignore
         rm -rf $"($dir)/unzipped"
+        if $font.family? != null {
+            ^uv run -q --with fonttools python $"($env.FILE_PWD)/rename-family.py" $font.family ...(ls $extracted | get name)
+        }
     } else {
         echo $"    (ansi black)Already downloaded(ansi reset)"
     }
@@ -39,11 +42,26 @@ for $fontname in ($file | columns) {
     if $nu.os-info.name == windows {
         mkdir $user_fonts
         for $source in (ls $extracted | get name) {
-            let target = ($user_fonts | path join ($source | path basename))
-            # A font an app has loaded is locked, so an installed file stays.
+            let file = ($source | path parse)
+            let hash = (open --raw $source | hash sha256)
+            # Windows keeps every registered font file open for the whole
+            # session, so a changed font cannot overwrite its old file. It goes
+            # in beside it under a hash-suffixed name instead; the old file is
+            # removed on a later run, once a sign-out has released it.
+            let plain = ($user_fonts | path join $"($file.stem).($file.extension)")
+            let target = if (not ($plain | path exists)) or ((open --raw $plain | hash sha256) == $hash) {
+                $plain
+            } else {
+                $user_fonts | path join $"($file.stem).($hash | str substring 0..7).($file.extension)"
+            }
             if not ($target | path exists) {
                 cp $source $target
             }
+            ls $user_fonts
+            | get name
+            | where {|old| ($old | path basename | str starts-with $"($file.stem).") and $old != $target }
+            | each {|old| do -i { rm $old } }
+            | ignore
             let entry = $"(($source | path parse).stem) \(TrueType\)"
             ^reg add 'HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v $entry /t REG_SZ /d $target /f | ignore
         }

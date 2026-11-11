@@ -14,6 +14,8 @@ extract = "(PretendardVariable.ttf$|Pretendard-[^.]+\\.otf$)"
 [apple-sd-gothic-neo]
 url = "https://github.com/fonts-archive/AppleSDGothicNeo/archive/336231350326bce2393013b8f1aa74f9af0eb23e.zip"
 extract = "^AppleSDGothicNeo-[^.]+\\.ttf$"
+# Its files name each weight as a separate family; rename-family.py fixes that.
+family = "Apple SD Gothic Neo"
 
 [silver]
 url = "https://poppyworks.itch.io/silver"

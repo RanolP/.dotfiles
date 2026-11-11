@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rea": {
+      "command": "rea",
+      "args": ["mcp"]
+    }
+  }
+}

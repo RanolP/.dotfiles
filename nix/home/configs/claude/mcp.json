@@ -15,10 +15,6 @@
     "parallel": {
       "type": "http",
       "url": "https://mcp.parallel.ai/mcp?login"
-    },
-    "rea": {
-      "command": "rea",
-      "args": ["mcp"]
     }
   }
 }

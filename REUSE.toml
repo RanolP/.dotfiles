@@ -310,6 +310,7 @@ path = [
     "nix/home/configs/bin/fast-apply",
     "nix/home/configs/bin/copy-sync-check",
     "nix/home/configs/claude/mcp.json",
+    "nix/home/configs/claude/mcp.rea.json",
     "nix/home/configs/claude/profile-wiring.sh",
     "scripts/profile-wiring-test.sh",
     "scripts/copy-sync-check-test.sh",

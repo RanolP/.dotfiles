@@ -180,12 +180,16 @@ in
       # variadic, so appending the overlay merges its servers in; absent file =
       # the public set alone, which every other server is fine with.
       PRIVATE_MCP="$HOME/.claude-personal/mcp.private.json"
+      set -- "$@" --mcp-config ${./../configs/claude/mcp.json}
       if [ -r "$PRIVATE_MCP" ]; then
-        SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@" \
-          --mcp-config ${./../configs/claude/mcp.json} "$PRIVATE_MCP"
+        set -- "$@" "$PRIVATE_MCP"
       fi
-      SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@" \
-        --mcp-config ${./../configs/claude/mcp.json}
+      # rea is opt-in: its ~270 tools bloat every session's tool list.
+      # Enable it with `CLAUDE_REA=1 claude`.
+      if [ "$CLAUDE_REA" = 1 ]; then
+        set -- "$@" ${./../configs/claude/mcp.rea.json}
+      fi
+      SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"
     '';
   };
 

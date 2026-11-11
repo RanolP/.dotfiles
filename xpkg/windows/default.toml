@@ -61,6 +61,13 @@ packages = [
 url = "https://voisona.com/talk/download/windows/"
 args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
 
+[direct."Little Big Mouse"]
+# winget's mgth.LittleBigMouse stops at 5.2.3.0; the GitHub release asset name
+# carries the version, so this pins it (Inno Setup, LittleBigMouse.Setup/LittleBigMouse.iss).
+# Calibration is restored by xpkg/configs/littlebigmouse/install.nu.
+url = "https://github.com/mgth/LittleBigMouse/releases/download/v5.6.0/LittleBigMouse_5.6.0.exe"
+args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
+
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under
 # their own [profiles.<hostname>] as needed (e.g. Corsair.iCUE.4,

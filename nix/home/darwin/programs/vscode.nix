@@ -51,6 +51,10 @@
               arch = "darwin-arm64";
               sha256 = "sha256-ItQ/7pDIZoUzg7IGO0MYj1X9aFcdcJJ7jAcLhNGviCs=";
             };
+            # The store copy is read-only and the launcher is already executable; skip the extension's chmod (EPERM).
+            postPatch = ''
+              substituteInPlace out/dist/extension.js --replace-fail '(0,external_fs_.chmodSync)(t,493)' 'void 0'
+            '';
           })
         ];
       keybindings = [

@@ -9,7 +9,13 @@
       "search@kagi.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/kagi-search-for-firefox/latest.xpi" },
       "{4bda55a4-25fc-4958-aca3-4b3261605398}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/maxfocus-link-preview/latest.xpi" },
       "simple-translate@sienori": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/simple-translate/latest.xpi" },
-      "@testpilot-containers": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/multi-account-containers/latest.xpi" }
+      "@testpilot-containers": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/multi-account-containers/latest.xpi" },
+      "side-view@mozilla.org": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/side-view/latest.xpi" },
+      "{a4c4eda4-fb84-4a84-b4a1-f7c1cbf2a1ad}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/refined-github-/latest.xpi" },
+      "{74145f27-f039-47ce-a470-a662b129930a}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/clearurls/latest.xpi" },
+      "{799c0914-748b-41df-a25c-22d008f9e83f}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/web-scrobbler/latest.xpi" },
+      "{e5292467-a0c9-4854-982b-6a12aaf21609}": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/opened-closed-tab-counter/latest.xpi" },
+      "danabok16@gmail.com": { "installation_mode": "normal_installed", "install_url": "https://addons.mozilla.org/firefox/downloads/latest/youtube-subscription-groups/latest.xpi" }
     }
   }
 }

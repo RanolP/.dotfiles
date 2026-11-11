@@ -31,8 +31,10 @@ packages = [
   "gerardog.gsudo",
   "Git.Git",
   "GitHub.cli",
+  "Google.Chrome",
   "Google.GoogleDrive",
   "Google.QuickShare",
+  "Gyan.FFmpeg",
   "jdx.mise",
   "JetBrains.Toolbox",
   "Kakao.KakaoTalk",
@@ -89,6 +91,5 @@ args = ["/qn", "/norestart"]
 [profiles.RanolP-Desktop]
 packages = [
   "BlenderFoundation.Blender",
-  "Gyan.FFmpeg",
   "Logitech.GHUB",
 ]

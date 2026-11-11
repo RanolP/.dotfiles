@@ -30,7 +30,7 @@ let old_nu_guid = '{6e75a3c1-4b0e-5f4a-9d1e-2c7b8a5e0f31}'
 let before = (open --raw $target)
 let s = ($before | from json)
 
-let font_size = 16
+let font_size = 12
 let defaults = ($s.profiles.defaults | upsert colorScheme Nord | upsert font {face: 'IosevkaTerm Nerd Font', size: $font_size})
 let list = ($s.profiles.list | where guid != $old_nu_guid)
 let schemes = (($s.schemes? | default []) | where name != Nord | append $nord)

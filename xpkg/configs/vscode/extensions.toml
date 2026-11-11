@@ -20,3 +20,8 @@ base = ['ms-vscode-remote.remote-wsl']
 time-tracking = ['WakaTime.vscode-wakatime']
 
 code-quality = ['dbaeumer.vscode-eslint', 'esbenp.prettier-vscode']
+
+# github.copilot / github.copilot-chat are built into current VS Code (copilot-chat 0.73.0), so not listed.
+github = ['github.vscode-pull-request-github']
+
+markdown = ['shd101wyy.markdown-preview-enhanced']

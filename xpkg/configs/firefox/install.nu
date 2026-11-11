@@ -37,3 +37,16 @@ for profile in $profiles {
     }
     cp -f ($env.FILE_PWD | path join user.js) ($dir | path join user.js)
 }
+
+# Add-ons: Firefox enterprise policy, read from <install dir>/distribution/policies.json
+# (the Windows counterpart of nix/home/darwin/programs/firefox.nix extensions.packages).
+# Program Files is admin-only, so when the copy is denied print the gsudo command instead.
+let dist = ($env.ProgramFiles | path join "Firefox Developer Edition" distribution)
+let policies = ($env.FILE_PWD | path join policies.json)
+if (open $policies | get policies.ExtensionSettings | is-empty) { error make {msg: "policies.json has no ExtensionSettings"} }
+try {
+    mkdir $dist
+    cp -f $policies ($dist | path join policies.json)
+} catch {
+    print -e $"(ansi yellow)!!(ansi reset) ($dist) needs admin; run: (ansi cyan)gsudo nu ($env.FILE_PWD | path join install.nu)(ansi reset)"
+}

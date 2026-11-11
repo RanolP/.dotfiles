@@ -93,9 +93,8 @@ for agent in (ls ($'($nix)/claude/agents/*.md' | into glob)) {
     do -i { cp --force $agent.name $'($home)/.claude/agents/($name)' }
 }
 
-# Local skills only: each is a directory under the shared .agents/skills tree.
-# The flake-input skills (skill-creator, humanize-*, ...) come from the
-# nix store and aren't available without nix, so Windows gets the local set.
+# Local skills: each is a directory under the shared .agents/skills tree.
+# The vendored ones (skill-creator, notion-cli, ...) are fetched below.
 echo $"     (ansi blue)Copy(ansi reset) skills"
 for skill in (ls ($'($nix)/.agents/skills/*' | into glob) | where type == dir) {
     let name = ($skill.name | path basename)
@@ -108,6 +107,69 @@ for skill in (ls ($'($nix)/.agents/skills/*' | into glob) | where type == dir) {
 # not a valid character in a Windows file name.
 do -i { rm -rf $'($home)/.claude/skills/시말서' }
 do -i { cp --recursive $'($nix)/.agents/skills/apology' $'($home)/.claude/skills/시말서' }
+
+# Vendored skills: nix/home/default.nix fetches each with pkgs.fetchFromGitHub
+# at a pinned rev (there is no flake input behind them). The pin is read from
+# that file so a rev bump there re-downloads here. The cache is keyed by rev, so
+# an unchanged rev skips the download.
+let cache_root = $'($local)/.skills-cache'
+let nix_src = (open --raw $'($nix)/../default.nix')
+let pins = ($nix_src | parse --regex 'fetchFromGitHub\s*\{\s*owner\s*=\s*"(?<owner>[^"]+)";\s*repo\s*=\s*"(?<repo>[^"]+)";\s*rev\s*=\s*"(?<rev>[^"]+)"')
+def fetch-repo [owner: string, repo: string] {
+    let pin = ($pins | where owner == $owner and repo == $repo | first)
+    let dir = $'($cache_root)/($owner)-($repo)-($pin.rev)'
+    let tree = $'($dir)/tree'
+    if ($'($dir)/ok' | path exists) {
+        print $"       (ansi black)Cache hit(ansi reset) ($owner)/($repo)@($pin.rev | str substring 0..7)"
+    } else {
+        print $"       Download ($owner)/($repo)@($pin.rev | str substring 0..7)"
+        rm -rf $dir
+        mkdir $dir
+        ^curl -fsSLo $'($dir)/src.zip' $'https://codeload.github.com/($owner)/($repo)/zip/($pin.rev)'
+        ^7z x $'($dir)/src.zip' $'-o($tree)' -y | ignore
+        '' | save -f $'($dir)/ok'
+    }
+    # The archive holds one top directory, <repo>-<rev>.
+    ls $tree | where type == dir | first | get name | str replace --all '\' '/'
+}
+def put-skill [name: string, src: string] {
+    let dest = $'($home)/.claude/skills/($name)'
+    do -i { rm -rf $dest }
+    cp --recursive $src $dest
+    $dest
+}
+def must-contain [file: string, needle: string] {
+    if not ((open --raw $file) | str contains $needle) { error make { msg: $'($file): patch left no "($needle)"' } }
+}
+print $"     (ansi blue)Fetch(ansi reset) vendored skills"
+let anthropics = (fetch-repo anthropics skills)
+put-skill skill-creator $'($anthropics)/skills/skill-creator'
+let notion = (fetch-repo makenotion skills)
+put-skill notion-cli $'($notion)/skills/notion-cli'
+let typesafe = (fetch-repo typesafe-ai skills)
+put-skill typesafe-ai $'($typesafe)/skills/typesafe-ai'
+
+# nix: sed 's|${CLAUDE_PLUGIN_ROOT}|<store>/plugin|g' on the plugin's search
+# SKILL.md. The store path becomes the cached checkout's plugin directory.
+let supermemory = (fetch-repo supermemoryai claude-supermemory)
+let sm_dest = (put-skill supermemory-search $'($supermemory)/plugin/skills/supermemory-search')
+let sm_file = $'($sm_dest)/SKILL.md'
+(open --raw $sm_file | str replace --all '${CLAUDE_PLUGIN_ROOT}' $'($supermemory)/plugin') | save -f $sm_file
+must-contain $sm_file $'($supermemory)/plugin'
+
+# nix: sed on SKILL.md so the CLI runs as the mise-pinned binary, not npx.
+let mwg = (fetch-repo GoogleChrome modern-web-guidance)
+let mwg_dest = (put-skill modern-web-guidance $'($mwg)/skills/modern-web-guidance')
+let mwg_file = $'($mwg_dest)/SKILL.md'
+let replacement = ["## Using the CLI" "" '- `modern-web-guidance` is a pinned binary on PATH (mise); run it directly by that name.']
+let patched = (open --raw $mwg_file | str replace --all 'npx -y modern-web-guidance@latest ' 'modern-web-guidance ' | str replace --all ' directly with `npx` using' ' using' | lines)
+# sed `/^## Using npx/,/^- If the command hangs/c` swaps that whole range for the text.
+let start = ($patched | enumerate | where {|r| $r.item =~ '^## Using npx' } | get index | first)
+let end = ($patched | enumerate | where {|r| $r.index >= $start and $r.item =~ '^- If the command hangs' } | get index | first)
+(($patched | take $start | append $replacement | append ($patched | skip ($end + 1)) | str join "\n") + "\n") | save -f $mwg_file
+if (open --raw $mwg_file) =~ 'npx|pnpx|@latest' { error make { msg: 'modern-web-guidance: unpatched launcher left in SKILL.md' } }
+must-contain $mwg_file "\nmodern-web-guidance search "
+must-contain $mwg_file "\nmodern-web-guidance retrieve "
 
 # Home-manager drops a link once its source leaves the repo; a copy stays
 # behind. Remove each copy whose source git history shows as deleted and the

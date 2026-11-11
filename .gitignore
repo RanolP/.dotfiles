@@ -25,6 +25,9 @@ docs/book
 # local fonts
 xpkg/apps/@fonts/.fonts
 
+# vendored Claude skills cache (xpkg/configs/claude/install.nu)
+xpkg/configs/claude/.skills-cache
+
 # python bytecode (claude hooks)
 __pycache__/
 *.pyc

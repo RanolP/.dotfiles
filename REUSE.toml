@@ -310,7 +310,6 @@ path = [
     "nix/home/configs/bin/fast-apply",
     "nix/home/configs/bin/copy-sync-check",
     "nix/home/configs/claude/mcp.json",
-    "nix/home/configs/claude/mcp.rea.json",
     "nix/home/configs/claude/profile-wiring.sh",
     "scripts/profile-wiring-test.sh",
     "scripts/copy-sync-check-test.sh",
@@ -327,6 +326,7 @@ path = [
     "nix/home/configs/claude/agents/artifact-writer.md",
     "nix/home/configs/claude/agents/artifact-coldread.md",
     "nix/home/configs/claude/agents/planner.md",
+    "nix/home/configs/claude/agents/reverse-engineer.md",
     "nix/home/configs/claude/shared/style-rules.md",
 ]
 precedence = "aggregate"

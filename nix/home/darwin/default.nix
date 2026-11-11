@@ -184,11 +184,6 @@ in
       if [ -r "$PRIVATE_MCP" ]; then
         set -- "$@" "$PRIVATE_MCP"
       fi
-      # rea is opt-in: its ~270 tools bloat every session's tool list.
-      # Enable it with `CLAUDE_REA=1 claude`.
-      if [ "$CLAUDE_REA" = 1 ]; then
-        set -- "$@" ${./../configs/claude/mcp.rea.json}
-      fi
       SHELL=/bin/zsh exec "$HOME/.local/share/mise/shims/claude" "$@"
     '';
   };

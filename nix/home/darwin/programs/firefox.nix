@@ -8,6 +8,40 @@
     profiles.dev-edition-default = {
       id = 0;
       isDefault = true;
+      # Same prefs as xpkg/configs/firefox/user.js.
+      settings = {
+        # "Open previous windows and tabs"
+        "browser.startup.page" = 3;
+        # "Vertical tabs"
+        "sidebar.revamp" = true;
+        "sidebar.verticalTabs" = true;
+        # "Show search suggestion"
+        "browser.search.suggest.enabled" = true;
+        "browser.urlbar.suggest.searches" = true;
+        # "Password and autofill = Bitwarden"
+        "signon.rememberSignons" = false;
+        "signon.autofillForms" = false;
+        "extensions.formautofill.addresses.enabled" = false;
+        "extensions.formautofill.creditCards.enabled" = false;
+      };
+      # `policies` is dropped when package = null, so search goes through
+      # Home Manager's search.json. Kagi is declared as a plain engine because
+      # `default` takes a built-in id or a name defined under `engines`.
+      search = {
+        force = true;
+        default = "Kagi";
+        engines = {
+          Kagi.urls = [
+            { template = "https://kagi.com/search?q={searchTerms}"; }
+            {
+              template = "https://kagisuggest.com/api/autosuggest?q={searchTerms}";
+              type = "application/x-suggestions+json";
+            }
+          ];
+          bing.metaData.hidden = true;
+          ddg.metaData.hidden = true;
+        };
+      };
       extensions.packages =
         let
           addons = pkgs.nur.repos.rycee.firefox-addons;

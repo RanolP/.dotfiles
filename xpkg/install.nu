@@ -16,5 +16,10 @@ nu ~/.dotfiles/xpkg/windows/install.nu
 # The configs step runs in a child process that inherits this PATH.
 if $nu.os-info.name == windows { refresh-path }
 
+if $nu.os-info.name == windows {
+    echo $"(ansi green)==(ansi reset) Fonts"
+    nu ~/.dotfiles/xpkg/apps/@fonts/install.nu
+}
+
 echo $"(ansi green)==(ansi reset) Configs"
 nu ~/.dotfiles/xpkg/configs/install.nu

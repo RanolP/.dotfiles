@@ -6,8 +6,13 @@
 # No "optional"/prompts. The installer reads `winget list` once, skips whatever
 # is already installed, installs the rest, and only WARNS about winget packages
 # that are installed but not declared here -- it never uninstalls (no zap).
+# The one exception is `remove`: ids listed there are uninstalled when present.
 
 skip_dependencies = ["Nvidia.CUDA"]
+
+remove = [
+  "Bandisoft.Bandizip",
+]
 
 # Installed on every Windows profile.
 [winget]
@@ -15,7 +20,6 @@ packages = [
   "7zip.7zip",
   "9PFXXSHC64H3", # Raycast (msstore; not in the winget source)
   "AntibodySoftware.WizTree",
-  "Bandisoft.Bandizip",
   "Bitwarden.Bitwarden",
   "Canva.Affinity",
   "CrystalDewWorld.CrystalDiskInfo.ShizukuEdition",

@@ -4,8 +4,9 @@
 # Declarative & nix-style: a common [winget].packages set plus per-profile
 # ([profiles.<hostname>]) additions. Reads `winget list` once (bulk), skips
 # whatever is already installed, installs the rest, and only WARNS about
-# winget-source packages installed but not declared -- it never uninstalls (no
-# zap). The install progress bar is left on for real installs.
+# winget-source packages installed but not declared -- it uninstalls only the
+# ids listed under `remove` (no zap). The install progress bar is left on for
+# real installs.
 
 # Parse `winget list` into {name, id, source} records. Column-offset based: piped
 # output is not truncated, and the header row fixes each column's start.
@@ -91,6 +92,16 @@ export def main [] {
             print $"     (ansi dark_gray)==(ansi reset) ($id)"
         } else {
             install-winget $id ($id in $skip)
+        }
+    }
+
+    # Removed: listed under `remove` and still installed.
+    for id in ($def.remove? | default [] | where ($it in $installed_ids)) {
+        print $"     (ansi red)--(ansi reset) ($id)"
+        let r = (^winget uninstall -eh --disable-interactivity --accept-source-agreements --id $id | complete)
+        if $r.exit_code != 0 {
+            print $"     (ansi red)!!(ansi reset) ($id) (ansi red)exit ($r.exit_code)(ansi reset)"
+            for l in ($"($r.stdout)($r.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
         }
     }
 

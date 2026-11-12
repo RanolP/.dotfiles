@@ -1,15 +1,21 @@
-// Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noSummaryDropLoop noReinjection noLoss --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
-// Red on current, an open decision (see unhandledStaysInContext): the same command with --invariant unhandledStaysInContext (seed 0x1 hits it within 5000 samples)
+// Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noSummaryDropLoop noReinjection noLoss unhandledStaysInContext --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
+// Red on the code before the fixes: the same command with --main head (unhandledStaysInContext, noReinjection) or --main prefix (noReinjection)
 // Regenerate the conformance traces (hooks/fold-conformance.test.ts): nice -n 15 sh nix/home/configs/claude/mods/clm/spec/fold-job-traces.sh
 //
 // The clm background fold job (hooks/fold-job.ts) as a state machine: a turn end starts a summary job, a compaction
 // waits up to its 7 s deadline for it, applyFoldPlan persists the swap step by step, and user messages typed while
 // the model works ride the queued-message store until a fold retires them. Sizes are one symbolic level: whether the
-// newest turn plus the ledger row fits tailTarget. Instances at the bottom bind the current code and the code at
-// 520a61f (before 5884744).
+// newest turn plus the ledger row fits tailTarget. Instances at the bottom bind the current code, the code at
+// 9928335 (before the carry and retire fixes) and the code at 520a61f (before 5884744).
 module foldJob {
   // true: fold-job.ts at 5884744; false: at 520a61f.
   const FIXED: bool
+  // true: a carried message stays in the store and its folded row stays until a reply follows it (fold.ts
+  // buildCleared, fold-job.ts applyFoldPlan); false (9928335): the swap retired it and the next swap removed its row.
+  const KEEP_UNHANDLED: bool
+  // true: a retire first lands in fold-job.ts's in-memory retired set, which no write can fail, and every read of the
+  // queue skips it; false (9928335): a failed write left the message in the queue the next fold reads.
+  const RETIRE_IN_MEMORY: bool
   // Whether io.markQueuedMessagesFolded itself may throw (register.ts:603, a host state update).
   const RETIRE_MAY_FAIL: bool
   const MSGS: Set[int]
@@ -21,9 +27,12 @@ module foldJob {
     handled: bool,    // an assistant row follows it, so buildCleared does not carry it (fold.ts:261-262)
     carried: int,     // times a swap emitted it as a `folded` row after the ledger row (fold.ts:262-269)
     engine: bool,     // a handOff to the engine summarizer covered it (fold-job.ts:699-705)
-    foldedRow: bool,  // its `folded` row is in the conversation; the next swap removes it (fold.ts:270-271)
+    foldedRow: bool,  // its `folded` row is in the conversation
     typedAt: int,     // clock of its typeMsg
     repliedAt: int,   // clock of the first assistantReply after it, 0 while none
+    retired: bool,    // in fold-job.ts's in-memory retired set (RETIRE_IN_MEMORY)
+    left: bool,       // a swap folded it away together with its reply
+    reinjected: bool, // a swap read it from the queue after it left or the engine summary covered it
   }
   // phase: idle | bg (split summary) | single | engine | ready | swapping
   // snap: queued messages in the rows the job planned over; csnap: those in the rows a waiting compaction read.
@@ -43,7 +52,7 @@ module foldJob {
 
   pure val idleJob: Job = { phase: "idle", attempt: 0, fits: true, snap: Set(), csnap: Set(), snapAt: 0, csnapAt: 0, mechanical: false }
   pure val noSwap: Swap = { active: false, pc: 0, dropped: Set() }
-  pure val freshMsg: Msg = { typed: false, inStore: false, inContext: false, handled: false, carried: 0, engine: false, foldedRow: false, typedAt: 0, repliedAt: 0 }
+  pure val freshMsg: Msg = { typed: false, inStore: false, inContext: false, handled: false, carried: 0, engine: false, foldedRow: false, typedAt: 0, repliedAt: 0, retired: false, left: false, reinjected: false }
 
   // Persist order in applyFoldPlan. 5884744 retires queued messages in their own persistStep before the
   // persistCompactResult block (fold-job.ts:590-591); 520a61f retired them last inside that block, so any
@@ -58,10 +67,13 @@ module foldJob {
   // turn plus the ledger row to fit tailTarget.
   pure def routeToSplit(fixed: bool, twoTurns: bool, fits: bool): bool = twoTurns and (not(fixed) or fits)
 
-  pure def stored(ms: int -> Msg): Set[int] = ms.keys().filter(m => ms.get(m).inStore)
+  // The queue a fold reads: the store less the in-memory retired set (fold-job.ts rowsWithQueuedMessages).
+  pure def stored(ms: int -> Msg): Set[int] = ms.keys().filter(m => ms.get(m).inStore and not(ms.get(m).retired))
 
   // A cut is a prefix of the rows, which hold the queued messages in typing order (withQueuedMessages anchors each
-  // after the row before it, fold.ts:94-118), so the dropped queued messages are a typing-order prefix of those read.
+  // after the row before it and after the messages it placed there before, fold.ts withQueuedMessages; a carried
+  // folded row sits right after the ledger row and was typed before every message still queued), so the dropped
+  // queued messages are a typing-order prefix of those read.
   pure def isTypingPrefix(ms: int -> Msg, read: Set[int], dropped: Set[int]): bool =
     dropped.forall(m => read.exclude(dropped).forall(k => ms.get(m).typedAt < ms.get(k).typedAt))
 
@@ -72,20 +84,33 @@ module foldJob {
     kept.fold(readAt + 1, (b, k) => if (ms.get(k).typedAt < b) ms.get(k).typedAt else b)
   }
 
-  // buildCleared (fold.ts:258-276): every folded row already in the conversation leaves (head and tail filter
-  // isQueuedMessage, a retired one is no queued source to carry); a dropped message with no assistant row after it
-  // among the folded rows is carried as a new folded row, one with such a row leaves context.
-  pure def applyDrop(ms: int -> Msg, dropped: Set[int], bound: int): int -> Msg =
+  // buildCleared (fold.ts): a dropped message with no assistant row after it among the folded rows is carried as a
+  // folded row after the ledger row, one with such a row leaves context. KEEP_UNHANDLED: a folded row the cut keeps
+  // stays, one it drops is carried again or leaves by the same rule; 9928335 removed every folded row (head and tail
+  // filtered isQueuedMessage, and the retired message was no queued source to carry). A read message that already left
+  // or that the engine summary covered is a fresh source row whose reply is gone: it comes back.
+  pure def applyDrop(ms: int -> Msg, read: Set[int], dropped: Set[int], bound: int): int -> Msg =
     ms.keys().mapBy(m => {
       val r0 = ms.get(m)
-      val r = if (r0.foldedRow) { ...r0, inContext: false, foldedRow: false } else r0
+      val back = read.contains(m) and (r0.left or r0.engine)
+      val r1 = if (back) { ...r0, reinjected: true, inContext: true } else r0
+      val r = if (r1.foldedRow and not(KEEP_UNHANDLED)) { ...r1, inContext: false, foldedRow: false } else r1
       if (not(dropped.contains(m))) r
-      else if (r.repliedAt > 0 and r.repliedAt < bound) { ...r, inContext: false }
+      else if (not(back) and r.repliedAt > 0 and r.repliedAt < bound) { ...r, inContext: false, foldedRow: false, left: true }
       else { ...r, carried: r.carried + 1, inContext: true, foldedRow: true }
     })
 
-  pure def retire(ms: int -> Msg, which: Set[int]): int -> Msg =
-    ms.keys().mapBy(m => if (which.contains(m)) { ...ms.get(m), inStore: false } else ms.get(m))
+  // A retire takes `which` off the queue the next fold reads; a write that lands also takes every message the
+  // in-memory set holds out of the store, since each write passes that set along (fold-job.ts retireQueued).
+  pure def retire(ms: int -> Msg, which: Set[int], ok: bool): int -> Msg =
+    ms.keys().mapBy(m => {
+      val r = ms.get(m)
+      val marked = which.contains(m) or (RETIRE_IN_MEMORY and r.retired)
+      { ...r, retired: r.retired or (RETIRE_IN_MEMORY and which.contains(m)), inStore: r.inStore and not(ok and marked) }
+    })
+  // What applyFoldPlan retires: the dropped messages, less those it carries when KEEP_UNHANDLED.
+  pure def retiring(ms: int -> Msg, dropped: Set[int]): Set[int] =
+    if (KEEP_UNHANDLED) dropped.filter(m => not(ms.get(m).foldedRow)) else dropped
 
   // ---- user and model ----
 
@@ -163,8 +188,10 @@ module foldJob {
   // src: fold-job.ts:776-789, applyFoldPlan fold-job.ts:536-593 (buildCleared builds the result before persisting)
   action startSwap(read: Set[int], readAt: int, mechanical: bool): bool = all {
     val live = read.intersect(stored(msgs))
-    nondet dropped = live.powerset().filter(d => isTypingPrefix(msgs, live, d)).oneOf()
-    val swapped = applyDrop(msgs, dropped, cutBound(msgs, live, dropped, readAt))
+    // Every cut lands on a turn start (fold.ts planClear, the split's turn), and a carried folded row sits right after
+    // the ledger row ahead of every turn start, so a swap that reads one drops it again.
+    nondet dropped = live.powerset().filter(d => isTypingPrefix(msgs, live, d) and live.filter(m => msgs.get(m).foldedRow).subseteq(d)).oneOf()
+    val swapped = applyDrop(msgs, live, dropped, cutBound(msgs, live, dropped, readAt))
     all {
       msgs' = swapped,
       swap' = { active: true, pc: 0, dropped: dropped },
@@ -190,14 +217,15 @@ module foldJob {
   }
 
   // No plan (job ended empty, or the transcript changed under a ready plan): the engine summarizer compacts and every
-  // stored queued message is retired. src: fold-job.ts:756, 765-770, handOff fold-job.ts:699-704
+  // queued message is retired; a failed retire write is swallowed and the engine summary is still adopted.
+  // src: fold-job.ts compactOrHandOff, handOff
   action handOff(retireOk: bool): bool = all {
     compactWaiting or job.phase == "ready", not(swap.active),
     job.phase == "idle" or job.phase == "ready",
     retireOk or RETIRE_MAY_FAIL,
     // The engine summary replaces the conversation, folded rows included; it is assumed to keep what it summarized.
-    val covered = msgs.keys().mapBy(m => { ...msgs.get(m), engine: msgs.get(m).engine or msgs.get(m).inStore, foldedRow: false })
-    msgs' = if (retireOk) retire(covered, stored(msgs)) else covered,
+    val covered = msgs.keys().mapBy(m => { ...msgs.get(m), engine: msgs.get(m).engine or m.in(stored(msgs)), foldedRow: false })
+    msgs' = retire(covered, stored(msgs), retireOk),
     job' = idleJob, compactWaiting' = false, clock' = clock,
     swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen.union(Set("handOff")),
   }
@@ -213,7 +241,7 @@ module foldJob {
     all {
       step != "done",
       step != "retire" or ok or RETIRE_MAY_FAIL,
-      msgs' = if (step == "retire" and ok) retire(msgs, swap.dropped) else msgs,
+      msgs' = if (step == "retire") retire(msgs, retiring(msgs, swap.dropped), ok) else msgs,
       swap' = { ...swap, pc: if (ok or (step == "retire" and FIXED)) swap.pc + 1 else DONE },
       seen' = if (ok) seen else seen.union(Set("writeFailed")),
     },
@@ -259,19 +287,19 @@ module foldJob {
   // with no plan, the next turn end retried it, and compaction folded mechanically (165 drops from 11-01).
   val noSummaryDropLoop = not(endedNoPlanOnOverflow)
 
-  // P2, regression 5884744: a failing state write skipped markQueuedMessagesFolded, so every later fold carried the
-  // same queued message again. A message is emitted as a folded row at most once.
-  val noReinjection = MSGS.forall(m => msgs.get(m).carried <= 1)
+  // P2, regressions 5884744 and the retire write failing: a message that left context with its reply, or that the
+  // engine summary covered, is never read from the queue again, so no fold puts it back into the conversation. The
+  // replay also checks the conversation never holds two copies of one message.
+  val noReinjection = MSGS.forall(m => not(msgs.get(m).reinjected))
 
   // P3 (store half), intent of 87832d0 / 721ff6f: a queued message leaves the store only after it was handled,
-  // carried at least once, or covered by the engine summarizer. Being carried once does not keep it in context; that
-  // half is unhandledStaysInContext, open.
+  // carried at least once, or covered by the engine summarizer.
   val noLoss = MSGS.forall(m => {
     val r = msgs.get(m)
     (r.typed and not(r.inStore)) implies (r.handled or r.carried >= 1 or r.engine)
   })
-  // Violated on `current`: a carried folded row is removed by the next swap before any reply (fold.ts:270-271), so an
-  // unhandled message leaves context. Open: whether the next fold keeps carried rows is the user's decision.
+  // P3 (context half): an unhandled message stays in the conversation. Violated at 9928335: the swap retired a carried
+  // message and the next swap removed its folded row before any reply.
   val unhandledStaysInContext = MSGS.forall(m => {
     val r = msgs.get(m)
     (r.typed and not(r.handled)) implies r.inContext
@@ -289,6 +317,6 @@ module foldJob {
   val wHandOff = seen.contains("handOff")
 }
 
-module current { import foldJob(FIXED = true, RETIRE_MAY_FAIL = false, MSGS = Set(1, 2)).* }
-module currentRetireFails { import foldJob(FIXED = true, RETIRE_MAY_FAIL = true, MSGS = Set(1, 2)).* }
-module prefix { import foldJob(FIXED = false, RETIRE_MAY_FAIL = false, MSGS = Set(1, 2)).* }
+module current { import foldJob(FIXED = true, KEEP_UNHANDLED = true, RETIRE_IN_MEMORY = true, RETIRE_MAY_FAIL = true, MSGS = Set(1, 2)).* }
+module head { import foldJob(FIXED = true, KEEP_UNHANDLED = false, RETIRE_IN_MEMORY = false, RETIRE_MAY_FAIL = true, MSGS = Set(1, 2)).* }
+module prefix { import foldJob(FIXED = false, KEEP_UNHANDLED = false, RETIRE_IN_MEMORY = false, RETIRE_MAY_FAIL = false, MSGS = Set(1, 2)).* }

@@ -89,7 +89,8 @@ export const queuedMessageSourceRow = (message: QueuedMessage): SessionMessage =
 export const queuedMessageSourceOf = (message: SessionMessage): QueuedMessage | undefined => queuedMessageSources.get(message)
 export const withQueuedMessages = (rows: readonly SessionMessage[], queued: readonly QueuedMessage[], sentAt: SentAt): SessionMessage[] => {
   const pending = queued.filter(message => {
-    const existing = rows.find(row => queuedMessageSourceOf(row)?.uuid === message.uuid || row.text === queuedMessageText(message))
+    // A carried message stays queued until a reply follows it, so its folded row is the copy already in the rows.
+    const existing = rows.find(row => queuedMessageSourceOf(row)?.uuid === message.uuid || row.text === queuedMessageText(message) || row.text === queuedMessageText(message, true))
     if (existing !== undefined) queuedMessageSources.set(existing, message)
     return existing === undefined
   }).map(message => {
@@ -98,11 +99,16 @@ export const withQueuedMessages = (rows: readonly SessionMessage[], queued: read
     return row
   })
   const combined = [...rows]
+  // Messages sharing an anchor go after the ones this call already placed there, so they keep typing order.
+  const placed = new Set<SessionMessage>()
   for (const message of pending) {
     const source = queuedMessageSourceOf(message)
     const anchor = source?.after === undefined ? -1 : combined.findLastIndex(row => fingerprint(row) === source.after)
     if (anchor >= 0) {
-      combined.splice(Math.max(protectedIndex(combined) + 1, anchor + 1), 0, message)
+      let index = Math.max(protectedIndex(combined) + 1, anchor + 1)
+      while (index < combined.length && placed.has(combined[index]!)) index++
+      combined.splice(index, 0, message)
+      placed.add(message)
       continue
     }
     const queuedAt = source?.at ?? Number.POSITIVE_INFINITY
@@ -113,6 +119,7 @@ export const withQueuedMessages = (rows: readonly SessionMessage[], queued: read
     const hasStamped = combined.some(row => !Number.isNaN(new Date(sentAt(row) ?? '').getTime()))
     const index = after < 0 ? (hasStamped ? protectedIndex(combined) + 1 : combined.length) : Math.max(protectedIndex(combined) + 1, after + 1)
     combined.splice(index, 0, message)
+    placed.add(message)
   }
   return combined
 }
@@ -129,8 +136,9 @@ export const protectedIndex = (msgs: readonly SessionMessage[]): number => {
 // they are folded with the range after the request; system rows stay put.
 export const headRows = (msgs: readonly SessionMessage[], first: number): SessionMessage[] =>
   msgs.slice(0, first + 1).filter((m, i) => i === first || isSystemRow(m) || isLedgerRow(m))
+// A carried folded row is a system row that still has its queued source; it folds like the message it carries.
 export const foldedRows = (msgs: readonly SessionMessage[], first: number, keepFrom: number): SessionMessage[] =>
-  [...msgs.slice(0, first), ...msgs.slice(first + 1, keepFrom)].filter(m => !isLedgerRow(m) && !isSystemRow(m))
+  [...msgs.slice(0, first), ...msgs.slice(first + 1, keepFrom)].filter(m => !isLedgerRow(m) && (!isSystemRow(m) || queuedMessageSourceOf(m) !== undefined))
 export const visibleTokens = (msgs: readonly SessionMessage[]) => msgs.reduce((n, m) => n + (isSystemRow(m) ? 0 : estTokens(m)), 0)
 
 // `$.session.messages()` returns the stored transcript, older chains before a
@@ -255,22 +263,28 @@ const applyCuts = (m: SessionMessage, cuts: Record<string, number>, replace: Rec
 export const keepsHeadGroup = (msgs: readonly SessionMessage[], first: number): boolean =>
   first === 0 && msgs[0] !== undefined && isPrompt(msgs[0]) && msgs[0].handle !== undefined
 
-export function buildCleared(plan: Pick<ClearPlan, 'head' | 'dropped' | 'tail' | 'cuts' | 'replace'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
-  const kept = keepHead ? plan.head.find(isPrompt) : undefined
-  const folded = [...plan.head, ...plan.dropped]
+// The queued messages a fold carries: those in the folded rows with no assistant row after them.
+export const carriedQueuedMessages = (head: readonly SessionMessage[], dropped: readonly SessionMessage[]): QueuedMessage[] => {
+  const folded = [...head, ...dropped]
   const newestAssistant = folded.findLastIndex(message => message.role === 'assistant')
-  const queued = folded.slice(newestAssistant + 1).flatMap(message => {
+  return folded.slice(newestAssistant + 1).flatMap(message => {
     const source = queuedMessageSourceOf(message)
     return source ? [source] : []
-  }).map((message): SessionMessage => ({
+  })
+}
+
+export function buildCleared(plan: Pick<ClearPlan, 'head' | 'dropped' | 'tail' | 'cuts' | 'replace'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
+  const kept = keepHead ? plan.head.find(isPrompt) : undefined
+  const queued = carriedQueuedMessages(plan.head, plan.dropped).map((message): SessionMessage => ({
     role: 'user',
     text: queuedMessageText(message, true),
     toolUses: [],
   }))
   const head = plan.head.filter(m => !isCompactSummary(m) && !isLedgerRow(m) && !isCarriedAttachment(m) && !isQueuedMessage(m) && queuedMessageSourceOf(m) === undefined)
-  const tail = plan.tail.filter(m => !isCarriedAttachment(m) && !isQueuedMessage(m)).map((message): SessionMessage => {
+  // A folded row with no queued source is a retired message's; one with a source is still unanswered and stays.
+  const tail = plan.tail.filter(m => !isCarriedAttachment(m) && (!isQueuedMessage(m) || queuedMessageSourceOf(m) !== undefined)).map((message): SessionMessage => {
     const source = queuedMessageSourceOf(message)
-    return source === undefined ? message : { role: 'user', text: queuedMessageText(source), toolUses: [] }
+    return source === undefined ? message : { role: 'user', text: queuedMessageText(source, isQueuedMessage(message)), toolUses: [] }
   })
   return [...head, ...attachments, ledgerRow, ...queued, ...tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts, plan.replace ?? {}))))
 }

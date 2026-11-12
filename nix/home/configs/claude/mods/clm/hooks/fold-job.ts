@@ -1,6 +1,6 @@
 import type { SessionMessage, SessionCompactResult } from 'claude-code'
 import {
-  buildCleared, estTokens, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, keepsHeadGroup, kst, ledgerRowText, liveRows, planClear,
+  buildCleared, carriedQueuedMessages, estTokens, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, isSystemRow, keepsHeadGroup, kst, ledgerRowText, liveRows, planClear,
   protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type ClearPlan, type QueuedMessage,
 } from './fold'
 import { CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
@@ -138,13 +138,38 @@ async function persistCompactResult(
 }
 const changeHash = (line: string): string => fnv1a(line).toString(16)
 const isPromptStart = (message: SessionMessage) => isPrompt(message) && !isHarnessText(message.text)
-const rowsWithQueuedMessages = async (io: Pick<FoldJobIo, 'queuedMessages' | 'sentAt'>, rows: readonly SessionMessage[]): Promise<SessionMessage[]> => {
-  const queued = await io.queuedMessages()
+// Queued messages a fold or handoff retired, per transcript key. A retire lands here first, where no write can fail,
+// so a store write that fails (a state file over the host's size limit) cannot bring a retired message back into the
+// next fold's rows. Each retire write passes the whole set, so one that lands clears what an earlier one left. Lost on
+// restart: a process that dies before any retire write lands reads the message as queued again.
+const retiredQueued = new Map<string, Map<string, QueuedMessage>>()
+const queuedMessages = async (io: Pick<FoldJobIo, 'queuedMessages'>, key: string): Promise<QueuedMessage[]> => {
+  const retired = retiredQueued.get(key)
+  return (await io.queuedMessages()).filter(message => !retired?.has(message.uuid))
+}
+async function retireQueued(io: FoldJobIo, key: string, messages: readonly QueuedMessage[]): Promise<void> {
+  const retired = retiredQueued.get(key) ?? new Map<string, QueuedMessage>()
+  for (const message of messages) retired.set(message.uuid, message)
+  retiredQueued.set(key, retired)
+  const all = [...retired.values()]
+  await persistStep<void>(io, undefined, async () => {
+    await io.markQueuedMessagesFolded(all)
+    for (const message of all) retired.delete(message.uuid)
+  })
+}
+/** The uuids of the queued messages retired in memory whose store write has not landed yet. */
+export const retiredQueuedUuids = (key: string): string[] => [...(retiredQueued.get(key)?.keys() ?? [])]
+const rowsWithQueuedMessages = async (io: Pick<FoldJobIo, 'queuedMessages' | 'sentAt'>, key: string, rows: readonly SessionMessage[]): Promise<SessionMessage[]> => {
+  const queued = await queuedMessages(io, key)
   return queued.length === 0 ? [...rows] : withQueuedMessages(rows, queued, await io.sentAt())
 }
 
 export const foldJobIdle = (key: string): boolean => (foldJobs.get(key)?.state ?? 'idle') === 'idle'
 
+// The fingerprints compactOrHandOff compares with foldedRows over the rows it swaps, so the same filter: a carried
+// folded row is a system row that still has its queued source and folds like the message it carries.
+const dropFpsOf = (dropped: readonly SessionMessage[]): string[] =>
+  dropped.filter(message => !isLedgerRow(message) && (!isSystemRow(message) || queuedMessageSourceOf(message) !== undefined)).map(fingerprint)
 const notShrunk = (before: readonly SessionMessage[], after: readonly SessionMessage[]): NotShrunk | undefined =>
   sum(after) < sum(before) ? undefined : { notShrunk: `the clm fold did not shrink the context (${sum(before)} -> ${sum(after)} est. tokens)` }
 
@@ -168,6 +193,7 @@ export function foldJobDropFps(key: string): string[] | undefined {
 
 export function clearFoldJob(key: string): void {
   foldJobs.set(key, { state: 'idle' })
+  retiredQueued.delete(key)
 }
 
 export function setRewindFoldJob(key: string, plan: RewindPlan, fingerprints: string[]): void {
@@ -317,7 +343,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, asks: folded.asks, seq: folded.seq,
       ...(folded.plan.tail[0] ? { keepFp: fingerprint(folded.plan.tail[0]) } : {}),
       keepFrom: rows.length - folded.plan.tail.length,
-      dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
+      dropFps: dropFpsOf(folded.plan.dropped),
       cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauseOps: folded.clauseOps,
       promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
       ...(steps.length ? { steps } : {}),
@@ -334,7 +360,7 @@ function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryM
   return {
     notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, asks: folded.asks, seq: folded.seq,
     ...(keptRow ? { keepFp: fingerprint(keptRow) } : {}), keepFrom,
-    dropFps: folded.plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
+    dropFps: dropFpsOf(folded.plan.dropped),
     cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauseOps: folded.clauseOps,
     promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
     ...(steps.length ? { steps } : {}),
@@ -414,7 +440,7 @@ async function prepareMechanicalFold(io: FoldJobIo, opts: Opts, rows: readonly S
   return {
     notes: notesAfterFold, fullNotes, ops: [], seq: meta.seq + 1,
     ...(plan.tail[0] ? { keepFp: fingerprint(plan.tail[0]) } : {}), keepFrom,
-    dropFps: plan.dropped.filter(message => !isLedgerRow(message) && !isSystemRow(message)).map(fingerprint),
+    dropFps: dropFpsOf(plan.dropped),
     cuts: plan.cuts, keptTurns: plan.keptTurns, fallback: true, ...(topicSnapshot?.topics ? { topics: topicSnapshot.topics } : {}),
   }
 }
@@ -500,7 +526,7 @@ export async function maybeClear(io: FoldJobIo, opts: Opts, canSwap = true): Pro
   const meta = await io.readMeta()
   const used = await io.usageReading()
   if (used !== undefined && meta.firstObserved !== undefined && used < opts.budget - opts.reserve) return
-  const rows = await rowsWithQueuedMessages(io, liveRows(await io.sessionMessages(), meta.boundary))
+  const rows = await rowsWithQueuedMessages(io, key, liveRows(await io.sessionMessages(), meta.boundary))
   if (used !== undefined && meta.firstObserved === undefined) {
     calibrateFirstReading(meta, rows, used)
     await io.writeMeta(meta)
@@ -576,11 +602,14 @@ async function applyFoldPlan(
   }
   const replacementPlan = finalizeStepReplacements(tail, proposed.replace, preservedCollapsed)
   const dropped = foldedRows(workingRows, first, use.keepFrom)
+  const head = headRows(workingRows, first)
+  // A carried message stays queued: the next fold reads its folded row and carries it again until a reply follows it.
+  const carried = new Set(carriedQueuedMessages(head, dropped).map(message => message.uuid))
   const foldedQueued = dropped.flatMap(message => {
     const queued = queuedMessageSourceOf(message)
-    return queued ? [queued] : []
+    return queued && !carried.has(queued.uuid) ? [queued] : []
   })
-  const messages = buildCleared({ head: headRows(workingRows, first), dropped, tail, cuts: use.cuts, replace: replacementPlan.replace }, ledgerRow, attachments, headKept)
+  const messages = buildCleared({ head, dropped, tail, cuts: use.cuts, replace: replacementPlan.replace }, ledgerRow, attachments, headKept)
   const declined = notShrunk(workingRows, messages)
   if (declined) return declined
   const tokensBefore = sum(workingRows)
@@ -589,7 +618,7 @@ async function applyFoldPlan(
   const result = { messages, tokensBefore, tokensAfter }
   // Retired on its own: a state-store write failing below (a store over the
   // size limit) once skipped this, and every later fold re-emitted the message.
-  await persistStep<void>(io, undefined, () => io.markQueuedMessagesFolded(foldedQueued))
+  await retireQueued(io, key, foldedQueued)
   return persistCompactResult(io, result, async () => {
     await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
     if (use.clauseOps?.length) await io.serialize(here.session, async () => {
@@ -700,8 +729,8 @@ export async function handOff(io: FoldJobIo, key: string, handoff: () => Promise
   try { io.log(`clm: ${why}; the engine summarizer compacts instead`, { to: 'debug' }) } catch { /* logging never blocks compaction */ }
   await persistStep<void>(io, undefined, () => io.backfillClauses(key))
   const result = await handoff()
-  const queued = await io.queuedMessages()
-  await io.markQueuedMessagesFolded(queued)
+  // A retire that throws must not skip adopting the engine summary below.
+  await retireQueued(io, key, await persistStep<QueuedMessage[]>(io, [], () => queuedMessages(io, key)))
   const store = readClauseStore(await persistStep(io, undefined, () => io.storeGet(clauseStoreKey(key)))) ?? emptyClauseStore()
   const issues = snapshot(typeof io.readAll === 'function' ? await persistStep<TrackerEvent[]>(io, [], () => io.readAll()) : [])
   const clauses = renderClauses(store, () => true, 40, ['instruction'], assumptionStatuses(store, issues))
@@ -735,8 +764,10 @@ async function compactOrHandOff(
   const compactStartedAt = await io.now()
   const key = transcriptKey(await io.sessionId())
   const entryState: CompactEntryState = foldJobs.get(key)?.state ?? 'none'
+  // Observe first: it repairs meta.seq after a fold that failed to persist, which this fold numbers past.
+  await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))
   const meta = await persistStep(io, { seq: 0, fails: 0 }, () => io.readMeta())
-  const workingRows = await rowsWithQueuedMessages(io, liveRows(all, meta.boundary))
+  const workingRows = await rowsWithQueuedMessages(io, key, liveRows(all, meta.boundary))
   const first = protectedIndex(workingRows)
   const decline = (outcome: string, why: string) => compactResult(io, compactStartedAt, trigger, entryState, outcome, handOff(io, key, handoff, why))
   const ensureShrunk = (result: Promise<SwapResult>) => result.then(done => 'notShrunk' in done ? handOff(io, key, handoff, done.notShrunk) : done)
@@ -745,7 +776,6 @@ async function compactOrHandOff(
     const declined = trigger === 'plugin' || done.skip !== undefined ? undefined : notShrunk(workingRows, done.messages ?? [])
     return declined ? handOff(io, key, handoff, declined.notShrunk) : done
   }))
-  await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))
   const existing = foldJobs.get(key)
   if (existing?.state === 'swapping') return joined(existing.promise)
   if (trigger === 'plugin' && (!existing || existing.state === 'idle')) return decline('plugin-handoff', 'a plugin compaction found no clm plan')
@@ -769,7 +799,7 @@ async function compactOrHandOff(
     catch (err) { await logPersistenceFailure(io, err) }
     return decline('handoff-changed', 'the transcript changed before the clm swap')
   }
-  const use = { ...plan, keepFrom }
+  const use = { ...plan, keepFrom, seq: Math.max(plan.seq, meta.seq + 1) }
   let waitMs: number | undefined
   try { waitMs = Math.max(0, (await io.now()) - compactStartedAt) }
   catch (err) { try { io.log(`clm: compaction timing failed (${String(err).slice(0, 160)})`, { to: 'debug' }) } catch { /* timing never blocks compaction */ } }

@@ -1,5 +1,5 @@
 import type { SessionMessage } from 'claude-code'
-import { fingerprint, liveRows, protectedIndex, stripReminders, type Boundary } from './fold'
+import { fingerprint, isLedgerRow, ledgerRowSeq, liveRows, protectedIndex, stripReminders, type Boundary } from './fold'
 import { EMPTY_LEDGER, notesOf } from './ledger'
 import { isRecord, type Payload } from './tracker'
 import { instructionIndexKey, issueAddressKey } from './resident'
@@ -158,6 +158,15 @@ export async function observeTranscript(io: RewindIo, key: string, all: readonly
   if (!Array.isArray(stored) || !stored.every(ref => typeof ref === 'string')) return
   const removed = removedRows(stored, current)
   if (!removed.length) return
+  // A fold writes transcript-rows before meta, so a live ledger row numbered past meta.seq
+  // that the stored rows lack is a fold that swapped these rows out and failed to persist
+  // it; a rewind brings back only older ledger rows. Restoring a snapshot here dropped two
+  // folds' ledger and left the next fold over budget, so put meta.seq on that row instead.
+  const unrecorded = rows.filter(row => isLedgerRow(row) && Number(ledgerRowSeq(row.text)) > meta.seq && !stored.includes(fingerprint(row)))
+  if (unrecorded.length) {
+    await io.writeMeta({ ...meta, seq: Math.max(...unrecorded.map(row => Number(ledgerRowSeq(row.text)))) })
+    return
+  }
 
   const removedSet = new Set(removed)
   const history = await readLedgerSnapshots(io, key)

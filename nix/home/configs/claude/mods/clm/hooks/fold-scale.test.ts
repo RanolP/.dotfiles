@@ -186,3 +186,42 @@ test('a fold on a state at the measured eb5734aa size never sends the host a wri
   await new Promise(resolve => setTimeout(resolve, 50))
   expect({ refusals }).toEqual({ refusals: 0 })
 })
+
+// Regression caught: a fold whose every state write failed kept ledger #4 in context while meta.seq
+// stayed 3 and transcript-rows kept the pre-fold rows, so the next turn read the folded-away ledger #3
+// as a rewind, restored snapshot 2 (meta.seq 4 -> 2) and swapped nothing, leaving 63,395 tokens of rows.
+test('a fold whose state writes all fail is not read as a rewind, and the next fold numbers past it', { options: OPTIONS }, async ($, on) => {
+  const s: State = { rows: [M('user', text('prompt', 'q0', 400)), M('assistant', text('reply', 'b0', 200))], replies: [], sessionId: 's3' }
+  const seen = bottoms(on, s)
+  let n = 0
+  s.splitReplies = []
+  s.splitBlock = async () => {
+    const turns = [...seen.splitPrompts.at(-1)!.matchAll(/<turn number="(\d+)" tokens="(\d+)">/g)].map(m => Number(m[2]))
+    let split = turns.length
+    for (let k = 2; k <= turns.length; k++) if (turns.slice(k - 1).reduce((t, x) => t + x, 0) <= OPTIONS.tailTarget * 0.6) { split = k; break }
+    s.splitReplies!.push(JSON.stringify({ split, ops: ops(n) }))
+  }
+  s.mergeBlock = async () => { s.replies.push(JSON.stringify({ ops: ops(n) })) }
+  let failing = false
+  s.fsWriteBlock = async path => { if (failing && path.endsWith('.state.json')) throw new Error(`$.fs.write ${path} refused`) }
+  const folds: { fold: number; ledger: string | undefined; fits: boolean }[] = []
+  let consumed = ''
+  for (n = 1; n <= 5; n++) {
+    for (let i = 0; total(s.rows) < FOLD_AT; i++) s.rows.push(...turn(SIZES[(turnNo + i) % SIZES.length]!))
+    s.usage = { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: OVERHEAD + total(s.rows) } }
+    await $.turn.complete(TURN)
+    let pending = ''
+    for (const deadline = performance.now() + 1500; performance.now() < deadline;) {
+      pending = JSON.stringify(seen.store['pending:s3'] ?? '')
+      if (pending !== '""' && pending !== consumed) break
+      await new Promise(resolve => setTimeout(resolve, 1))
+    }
+    consumed = pending
+    failing = n === 3
+    s.rows = [...compactedMessages(await $.session.compact(compactInput('plugin', handled(s.rows))))]
+    failing = false
+    folds.push({ fold: n, ledger: s.rows.find(m => /^\[clm ledger #/.test(m.text))?.text.match(/^\[clm ledger #\d+/)?.[0], fits: total(s.rows) < FOLD_AT })
+  }
+  expect(folds).toEqual([1, 2, 3, 4, 5].map(fold => ({ fold, ledger: `[clm ledger #${fold}`, fits: true })))
+  expect(seen.logs.filter(line => line.includes('restored ledger snapshot'))).toEqual([])
+})

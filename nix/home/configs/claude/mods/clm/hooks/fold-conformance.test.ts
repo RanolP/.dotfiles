@@ -5,20 +5,21 @@
 // applyFoldPlan, and when a queued message leaves the store or is carried as a folded row. This file replays the
 // model's sampled runs (spec/fold-job-traces.ts) against the real fold-job.ts and register.ts through a fake FoldJobIo
 // whose model calls, state writes and engine handoff wait on gates the trace opens one step at a time. After every
-// step it compares queue membership with inStore, emitted folded rows with carried, whether the conversation still
-// shows the message with inContext, the job and pending write with phase and swap.pc, the split-merge calls the code
-// made with attempt, and the compaction's fallback with mechanical.
+// step it compares queue membership with inStore, fold-job.ts's in-memory retired set with retired, emitted folded rows
+// with carried, whether the conversation still shows the message with inContext, the job and pending write with phase
+// and swap.pc, the split-merge calls the code made with attempt, and the compaction's fallback with mechanical, and
+// checks that the conversation never holds two copies of one message.
 //
 // Sizes stay abstract in the model, so the harness picks them: a turn end routes to the split only when the model's
 // turnEnd(two, fits) says so (tailTarget huge, else 0), a split overflow is a fold whose tailTokens exceed tailTarget,
 // and each plan's cut is chosen so the dropped queued messages and their handled flags are the ones the model's
-// consuming swap names. Only a cut the rows cannot express ends a trace's replay early, and only for the reasons in
-// `unrealizable`; any other disagreement fails the trace.
+// consuming swap names. Every trace replays to its end; a cut the rows cannot express fails the trace like any other
+// disagreement.
 import { expect, test } from 'claude-code/testing'
 import type { SessionCompactResult, SessionMessage } from 'claude-code'
-import { clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, transcriptKey, type FoldJobIo } from './fold-job'
+import { clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
 import { captureAppendedRow } from './register'
-import { estTokens, foldedRows, headRows, isHarnessText, isPrompt, liveRows, planClear, protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type QueuedMessage } from './fold'
+import { estTokens, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, liveRows, planClear, protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type QueuedMessage } from './fold'
 import { EMPTY_LEDGER, notesOf, SPLIT_MERGE_SYSTEM } from './ledger'
 import type { Fold, Meta, Opts } from './fold-runtime'
 import type { RewindIo } from './rewind'
@@ -29,34 +30,28 @@ const STEPS = ['retire', 'ledger', 'snapshot', 'meta', 'done'] // foldJob.steps(
 const DONE = 4
 const MSGS = ['1', '2']
 const msgText = (m: string) => `queued message ${m}`
+const isFoldedRowOf = (m: string) => (row: SessionMessage) => row.text.includes(' folded>') && row.text.includes(msgText(m))
+// The messages whose folded row a cut keeps in its tail: buildCleared re-emits only the ones it drops (as carried).
+const keptFolded = (tail: readonly SessionMessage[]) => MSGS.filter(m => tail.some(isFoldedRowOf(m)))
 const opts = (tailTarget: number): Opts => ({ budget: 2000, tailTarget, queueTarget: 1, ledgerTarget: 300, reserve: 100, model: 'sonnet', reviewModel: 'sonnet' })
 // queueTurns (fold-job.ts:177-187) over the rows the job reads: prompt starts after the protected row.
 const promptStarts = (w: World) => {
-  const rows = withQueuedMessages(w.session, w.queued(), w.sentAt)
+  const rows = withQueuedMessages(w.session, w.readable(), w.sentAt)
   return rows.slice(protectedIndex(rows) + 1).filter(row => isPrompt(row) && !isHarnessText(row.text)).length
 }
 const settle = async () => { for (let i = 0; i < 3000; i++) await Promise.resolve() }
 
 type Gate = { kind: string; mustFold?: boolean; prepared?: boolean; rows?: readonly SessionMessage[]; meta?: Meta; resolve(value: unknown): void; reject(error: unknown): void }
-class Unrealizable extends Error {}
-// The model drops a typing-order prefix of the queued messages and carries by buildCleared's rule, so a cut matches
-// whenever the rows hold them in typing order. Two reasons may still end a replay early: the rows hold them out of
-// typing order (withQueuedMessages splices two messages that share an anchor in reverse), or, should that order
-// differ only in the dropped part, the model's prefix is not one in row order. Anything else is a disagreement.
-const TRUNCATION_REASONS = ['rows hold the queued messages out of typing order', 'the model drops a subset that is not a row-order prefix']
-// Ceiling on early stops at SEED=0x2a TRACES=80; a regeneration that raises it is a new disagreement to look at.
-const MAX_TRUNCATED = 4
-function unrealizable(rows: readonly SessionMessage[], need: { dropped: string[]; carried: string[] }, trace: readonly State[], upto: number, where: string): Error {
+// The model drops a typing-order prefix of the queued messages, every folded row among them, and carries by
+// buildCleared's rule, so a cut matches whenever the rows hold the messages in typing order with the folded rows first.
+// No cut matching is a disagreement; the detail shows the rows' order against the typing order.
+function noCut(rows: readonly SessionMessage[], need: { dropped: string[]; carried: string[] }, trace: readonly State[], upto: number, where: string): Error {
   const order = rows.flatMap(row => {
     const source = queuedMessageSourceOf(row)
     return source ? [source.uuid.slice(1)] : []
   })
   const typed = trace.slice(0, upto).flatMap(s => s.a === 'typeMsg' ? [String(s.p.m)] : []).filter(m => order.includes(m))
-  const prefix = JSON.stringify(order.slice(0, need.dropped.length).sort()) === JSON.stringify(need.dropped)
-  const detail = `${where} drops ${JSON.stringify(need)}, rows hold ${order.join(',') || 'none'}`
-  if (JSON.stringify(order) !== JSON.stringify(typed)) return new Unrealizable(`${TRUNCATION_REASONS[0]}: ${detail}`)
-  if (!prefix) return new Unrealizable(`${TRUNCATION_REASONS[1]}: ${detail}`)
-  return new Error(`the code's carry differs from the model's: ${detail}`)
+  return new Error(`the code's carry differs from the model's: ${where} drops ${JSON.stringify(need)}, rows hold ${order.join(',') || 'none'} (typed ${typed.join(',') || 'none'})`)
 }
 const PERSIST = new Set(['retire', 'ledger', 'snapshot', 'meta'])
 
@@ -74,7 +69,9 @@ function world(id: string) {
   let gates: Gate[] = []
   let afterFn: (() => void) | undefined
   let retiringForHandOff = false
+  let handOffRetireFails = false
   let splitCalls = 0
+  let kept: string[] = []
   // Appended rows carry send times on the clock queued messages read, so withQueuedMessages can place a message
   // whose anchor row a compaction removed (fold.ts:107-115). Keyed by text: a swap rebuilds the row objects.
   const stamps = new Map<string, string>()
@@ -113,6 +110,7 @@ function world(id: string) {
     // register.ts markQueuedMessagesFolded, which is not exported: drop the folded uuids from this session's store.
     markQueuedMessagesFolded: async (folded: readonly QueuedMessage[]) => {
       if (!retiringForHandOff) await gate('retire')
+      else if (handOffRetireFails) throw new Error('conformance: handOff retire write refused')
       const uuids = new Set(folded.map(message => message.uuid))
       const all = (queueState as Record<string, QueuedMessage[]> | undefined) ?? {}
       queueState = { ...all, [sid]: queued().filter(message => !uuids.has(message.uuid)) }
@@ -166,6 +164,8 @@ function world(id: string) {
     get splitCalls() { return splitCalls },
     resetSplitCalls() { splitCalls = 0 },
     queued,
+    // The queue a fold reads (fold-job.ts queuedMessages): the store less the in-memory retired set.
+    readable: () => queued().filter(message => !retiredQueuedUuids(key).includes(message.uuid)),
     take(kind: string): Gate | undefined {
       const found = gates.find(g => g.kind === kind)
       if (found) gates = gates.filter(g => g !== found)
@@ -180,6 +180,10 @@ function world(id: string) {
       fn()
     },
     set retiringForHandOff(value: boolean) { retiringForHandOff = value },
+    set handOffRetireFails(value: boolean) { handOffRetireFails = value },
+    // Messages whose folded row the planned cut keeps in its tail, set when the harness picks the cut.
+    get keptFolded() { return kept },
+    set keptFolded(value: string[]) { kept = value },
     nextId: () => ++rowId,
     appendRow,
     // Bulk history ahead of every queued message, so each fold shrinks the rows without answering one. Its send time
@@ -227,7 +231,7 @@ function plannedFold(rows: readonly SessionMessage[], meta: Meta, keepFrom: numb
 }
 
 // The job plan for the model state at step k: its cut realizes the swap that later consumes the ready job.
-function planFor(trace: readonly State[], k: number, g: Gate): Fold {
+function planFor(trace: readonly State[], k: number, g: Gate, w: World): Fold {
   const rows = g.rows!
   const meta = g.meta!
   let j = k + 1
@@ -237,10 +241,14 @@ function planFor(trace: readonly State[], k: number, g: Gate): Fold {
   const first = protectedIndex(rows)
   if (consumer?.a !== 'swapReady') return plannedFold(rows, meta, rows.length - 1, 0)
   const need = want(consumer.s.dropped, trace[j - 1]!.m, consumer.m)
-  for (let keepFrom = first + 2; keepFrom < rows.length; keepFrom++) {
-    if (same(cutEffect(headRows(rows, first), foldedRows(rows, first, keepFrom)), need)) return plannedFold(rows, meta, keepFrom, 0)
+  // From first + 1: a carried folded row right after the ledger row is a cut of its own. A cut that folds no row hands off.
+  for (let keepFrom = first + 1; keepFrom < rows.length; keepFrom++) {
+    if (foldedRows(rows, first, keepFrom).length > 0 && same(cutEffect(headRows(rows, first), foldedRows(rows, first, keepFrom)), need)) {
+      w.keptFolded = keptFolded(rows.slice(keepFrom))
+      return plannedFold(rows, meta, keepFrom, 0)
+    }
   }
-  throw unrealizable(rows, need, trace, j, `no cut of the job's rows for step ${j}`)
+  throw noCut(rows, need, trace, j, `no cut of the job's rows for step ${j}`)
 }
 
 type Compaction = { promise: Promise<SessionCompactResult>; settled: boolean; result?: SessionCompactResult; error?: unknown; startLen: number; all: SessionMessage[]; meta: Meta; queued: QueuedMessage[]; opts: Opts; attached: string[] }
@@ -259,7 +267,6 @@ function modelPhase(s: State): string[] {
 }
 
 export const coverage = new Map<string, number>()
-const truncated: string[] = []
 const cover = (label: string) => coverage.set(label, (coverage.get(label) ?? 0) + 1)
 
 async function replay(id: string, trace: readonly State[]): Promise<void> {
@@ -274,7 +281,7 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
   await w.appendRow(M('assistant', 'hello'))
   const startCompaction = (tailTarget: number) => {
     const c: Compaction = {
-      promise: Promise.resolve(), settled: false, startLen: w.session.length, all: [...w.session], meta: { ...w.meta }, queued: w.queued(), opts: opts(tailTarget),
+      promise: Promise.resolve(), settled: false, startLen: w.session.length, all: [...w.session], meta: { ...w.meta }, queued: w.readable(), opts: opts(tailTarget),
       attached: [...attached],
     } as Compaction
     c.promise = handleSessionCompact(w.io, c.opts, c.all, 'auto', () => new Promise<SessionCompactResult>((resolve, reject) => {
@@ -295,145 +302,151 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
     const before = trace[k - 1]!
     const after = trace[k]!
     const at = `trace ${id} step ${k} ${after.a}${JSON.stringify(after.p)}`
-    try {
-      switch (after.a) {
-        case 'typeMsg': {
-          const m = String(after.p.m)
-          await captureAppendedRow(w.$, `q${m}`, 'attachment', 'queued_command', [{ type: 'text', text: msgText(m) }], { origin: { kind: 'composer' } })
-          attached.add(m)
-          cover(before.j.phase !== 'idle' ? 'typeMsg during a fold' : 'typeMsg')
-          break
-        }
-        case 'assistantReply':
-          await w.appendRow(M('assistant', `reply ${w.nextId()}`))
-          cover('assistantReply')
-          break
-        case 'turnEnd': {
-          // fits picks tailTarget; two picks how many turns (prompt starts after the protected row) the code reads.
-          let tailTarget = after.p.fits ? 1e9 : 0
-          w.insertBulk()
-          if (after.p.two) {
-            await w.appendRow(M('user', `prompt ${w.nextId()}`))
-            await w.appendRow(M('user', `prompt ${w.nextId()}`))
-          } else {
-            if (promptStarts(w) === 0) await w.appendRow(M('user', `prompt ${w.nextId()}`))
-            // Rows that already hold two turns cannot be one; fits then only matters for a split, which this is not.
-            if (promptStarts(w) > 1) tailTarget = 0
-            else cover(`turnEnd(two=false, fits=${after.p.fits}) on one turn`)
-          }
-          w.resetSplitCalls()
-          await maybeClear(w.io, opts(tailTarget), false)
-          cover(`turnEnd -> ${after.j.phase}`)
-          break
-        }
-        case 'bgAttempt': {
-          const o = String(after.p.o)
-          const g = w.take('split')
-          expect(g, `${at}: the split call is pending`).toBeDefined()
-          if (o === 'noReply') g!.resolve({ isAnswered: false, text: '', reason: 'conformance noReply' })
-          else {
-            g!.resolve({ isAnswered: true, text: JSON.stringify({ split: 2, ops: [] }), reason: '' })
-            await settle()
-            const fold = w.take('fold')
-            expect(fold?.prepared, `${at}: the prepared split fold is pending`).toBe(true)
-            if (o === 'skip') fold!.resolve('conformance skip')
-            else if (o === 'overflow') fold!.resolve(plannedFold(fold!.rows!, fold!.meta!, fold!.rows!.length - 1, 1e9 + 1))
-            else fold!.resolve(planFor(trace, k, fold!))
-          }
-          cover(`bgAttempt(${o}) at attempt ${before.j.attempt}`)
-          break
-        }
-        case 'finishFold': {
-          const g = w.take('fold')
-          expect(g && !g.prepared, `${at}: a ${before.j.phase} fold is pending`).toBe(true)
-          g!.resolve(after.p.ok ? planFor(trace, k, g!) : `conformance finishFold(false)`)
-          cover(`finishFold(${after.p.ok}) in ${before.j.phase}`)
-          break
-        }
-        case 'requestCompact':
-          if (before.j.phase === 'idle') w.insertBulk()
-          await w.appendRow(M('user', `prompt ${w.nextId()}`))
-          startCompaction(1e9)
-          cover(`requestCompact in ${before.j.phase}`)
-          break
-        case 'deadline': {
-          // prepareMechanicalFold plans with planClear over the rows the compaction read; choose tailTarget so its cut
-          // drops exactly the model's d with the model's handled flags.
-          const c = compaction!
-          const rows = withQueuedMessages(liveRows(c.all, c.meta.boundary), c.queued, w.sentAt)
-          const first = protectedIndex(rows)
-          const ledgerTokens = estTokens({ role: 'user', text: notesOf(w.files[LEDGER_FILE] ?? EMPTY_LEDGER), toolUses: [] }) + 60
-          const need = want(after.s.dropped, before.m, after.m)
-          const target = rows.flatMap((row, i) => i > first && isPrompt(row) ? [i] : []).map(start => {
-            const t = sum(headRows(rows, first)) + ledgerTokens + sum(rows.slice(start))
-            const plan = planClear(rows, t, ledgerTokens)
-            return plan && rows.length - plan.tail.length === start && same(cutEffect(plan.head, plan.dropped), need) ? t : undefined
-          }).find(t => t !== undefined)
-          if (target === undefined) throw unrealizable(rows, need, trace, k, 'no planClear cut')
-          c.opts.tailTarget = target
-          w.abandonJob()
-          w.fireDeadline()
-          cover(`deadline in ${before.j.phase}`)
-          break
-        }
-        case 'swapReady':
-          if (!before.w) startCompaction(1e9)
-          cover(`swapReady ${before.w ? 'awaited by a compaction' : 'at a new compaction'}${MSGS.some(m => after.m[m]!.carried > before.m[m]!.carried) ? ', carrying' : ''}`)
-          break
-        case 'handOff': {
-          if (!before.w) {
-            startCompaction(1e9)
-            await settle()
-          }
-          const g = w.take('handoff')
-          expect(g, `${at}: the engine handoff is pending`).toBeDefined()
-          w.retiringForHandOff = true
-          // Stand-in for the host summarizer, which reads the whole conversation: it keeps every queued message there.
-          const summarized = MSGS.filter(m => inContext(m) || w.queued().some(message => message.uuid === `q${m}`)).map(msgText)
-          g!.resolve({ messages: [M('user', [`engine summary ${w.nextId()}`, ...summarized].join('\n'))] })
-          await settle()
-          w.retiringForHandOff = false
-          expect(compaction?.settled, `${at}: the handed-off compaction returned`).toBe(true)
-          adopt()
-          cover(`handOff from ${before.j.phase}${before.w ? ' awaited' : ''}`)
-          break
-        }
-        case 'persist': {
-          const expected = STEPS[before.s.pc]!
-          const g = w.gates.find(gate => PERSIST.has(gate.kind))
-          expect(g?.kind, `${at}: the pending applyFoldPlan write`).toBe(expected)
-          w.take(g!.kind)
-          if (after.p.w) g!.resolve(undefined)
-          else g!.reject(new Error('conformance: state store write refused'))
-          cover(`persist(${after.p.w}) at ${expected}`)
-          break
-        }
-        case 'finishSwap': {
-          expect(compaction?.settled, `${at}: the swap returned`).toBe(true)
-          const messages = compaction!.result?.messages ?? []
-          for (const m of MSGS) {
-            const emitted = messages.filter(row => row.text.includes(' folded>') && row.text.includes(msgText(m))).length
-            carried[m]! += emitted
-            if (emitted > 0) cover('finishSwap carrying an unhandled message')
-          }
-          const outcome = w.events.findLast(e => e.event === 'session-compact')?.fields.outcome
-          expect(outcome, `${at}: compaction outcome for mechanical=${before.j.mechanical}`).toBe(before.j.mechanical ? 'swap-mechanical' : 'swap')
-          adopt()
-          cover(`finishSwap${before.j.mechanical ? ' mechanical' : ''}`)
-          break
-        }
-        default:
-          throw new Error(`${at}: unknown action`)
+    switch (after.a) {
+      case 'typeMsg': {
+        const m = String(after.p.m)
+        await captureAppendedRow(w.$, `q${m}`, 'attachment', 'queued_command', [{ type: 'text', text: msgText(m) }], { origin: { kind: 'composer' } })
+        attached.add(m)
+        cover(before.j.phase !== 'idle' ? 'typeMsg during a fold' : 'typeMsg')
+        break
       }
-    } catch (error) {
-      if (!(error instanceof Unrealizable)) throw error
-      truncated.push(`trace ${id} stops before step ${k} ${after.a}: ${error.message}`)
-      return
+      case 'assistantReply':
+        await w.appendRow(M('assistant', `reply ${w.nextId()}`))
+        cover('assistantReply')
+        break
+      case 'turnEnd': {
+        // fits picks tailTarget; two picks how many turns (prompt starts after the protected row) the code reads.
+        let tailTarget = after.p.fits ? 1e9 : 0
+        w.insertBulk()
+        if (after.p.two) {
+          await w.appendRow(M('user', `prompt ${w.nextId()}`))
+          await w.appendRow(M('user', `prompt ${w.nextId()}`))
+        } else {
+          if (promptStarts(w) === 0) await w.appendRow(M('user', `prompt ${w.nextId()}`))
+          // Rows that already hold two turns cannot be one; fits then only matters for a split, which this is not.
+          if (promptStarts(w) > 1) tailTarget = 0
+          else cover(`turnEnd(two=false, fits=${after.p.fits}) on one turn`)
+        }
+        w.resetSplitCalls()
+        await maybeClear(w.io, opts(tailTarget), false)
+        cover(`turnEnd -> ${after.j.phase}`)
+        break
+      }
+      case 'bgAttempt': {
+        const o = String(after.p.o)
+        const g = w.take('split')
+        expect(g, `${at}: the split call is pending`).toBeDefined()
+        if (o === 'noReply') g!.resolve({ isAnswered: false, text: '', reason: 'conformance noReply' })
+        else {
+          g!.resolve({ isAnswered: true, text: JSON.stringify({ split: 2, ops: [] }), reason: '' })
+          await settle()
+          const fold = w.take('fold')
+          expect(fold?.prepared, `${at}: the prepared split fold is pending`).toBe(true)
+          if (o === 'skip') fold!.resolve('conformance skip')
+          else if (o === 'overflow') fold!.resolve(plannedFold(fold!.rows!, fold!.meta!, fold!.rows!.length - 1, 1e9 + 1))
+          else fold!.resolve(planFor(trace, k, fold!, w))
+        }
+        cover(`bgAttempt(${o}) at attempt ${before.j.attempt}`)
+        break
+      }
+      case 'finishFold': {
+        const g = w.take('fold')
+        expect(g && !g.prepared, `${at}: a ${before.j.phase} fold is pending`).toBe(true)
+        g!.resolve(after.p.ok ? planFor(trace, k, g!, w) : `conformance finishFold(false)`)
+        cover(`finishFold(${after.p.ok}) in ${before.j.phase}`)
+        break
+      }
+      case 'requestCompact':
+        if (before.j.phase === 'idle') w.insertBulk()
+        await w.appendRow(M('user', `prompt ${w.nextId()}`))
+        startCompaction(1e9)
+        cover(`requestCompact in ${before.j.phase}`)
+        break
+      case 'deadline': {
+        // prepareMechanicalFold plans with planClear over the rows the compaction read; choose tailTarget so its cut
+        // drops exactly the model's d with the model's handled flags.
+        const c = compaction!
+        const rows = withQueuedMessages(liveRows(c.all, c.meta.boundary), c.queued, w.sentAt)
+        const first = protectedIndex(rows)
+        const ledgerTokens = estTokens({ role: 'user', text: notesOf(w.files[LEDGER_FILE] ?? EMPTY_LEDGER), toolUses: [] }) + 60
+        const need = want(after.s.dropped, before.m, after.m)
+        const found = rows.flatMap((row, i) => i > first && isPrompt(row) ? [i] : []).map(start => {
+          const t = sum(headRows(rows, first)) + ledgerTokens + sum(rows.slice(start))
+          const plan = planClear(rows, t, ledgerTokens)
+          return plan && rows.length - plan.tail.length === start && same(cutEffect(plan.head, plan.dropped), need) ? { t, tail: plan.tail } : undefined
+        }).find(t => t !== undefined)
+        if (found === undefined) throw noCut(rows, need, trace, k, 'no planClear cut')
+        w.keptFolded = keptFolded(found.tail)
+        c.opts.tailTarget = found.t
+        w.abandonJob()
+        w.fireDeadline()
+        cover(`deadline in ${before.j.phase}`)
+        break
+      }
+      case 'swapReady':
+        if (!before.w) startCompaction(1e9)
+        cover(`swapReady ${before.w ? 'awaited by a compaction' : 'at a new compaction'}${MSGS.some(m => after.m[m]!.carried > before.m[m]!.carried) ? ', carrying' : ''}`)
+        break
+      case 'handOff': {
+        if (!before.w) {
+          startCompaction(1e9)
+          await settle()
+        }
+        const g = w.take('handoff')
+        expect(g, `${at}: the engine handoff is pending`).toBeDefined()
+        w.retiringForHandOff = true
+    w.handOffRetireFails = !after.p.r
+        // Stand-in for the host summarizer, which reads the conversation the compaction started on: it keeps every
+        // queued message there. One typed after that start keeps its own attachment instead.
+        const c = compaction!
+        const summarized = MSGS.filter(m => c.attached.includes(m) || c.all.some(row => row.text.includes(msgText(m))) || c.queued.some(message => message.uuid === `q${m}`)).map(msgText)
+        g!.resolve({ messages: [M('user', [`engine summary ${w.nextId()}`, ...summarized].join('\n'))] })
+        await settle()
+        w.retiringForHandOff = false
+        expect(compaction?.settled, `${at}: the handed-off compaction returned`).toBe(true)
+        adopt()
+        cover(`handOff from ${before.j.phase}${before.w ? ' awaited' : ''}`)
+    cover(`handOff(retireOk=${after.p.r})`)
+        break
+      }
+      case 'persist': {
+        const expected = STEPS[before.s.pc]!
+        const g = w.gates.find(gate => PERSIST.has(gate.kind))
+        expect(g?.kind, `${at}: the pending applyFoldPlan write`).toBe(expected)
+        w.take(g!.kind)
+        if (after.p.w) g!.resolve(undefined)
+        else g!.reject(new Error('conformance: state store write refused'))
+        cover(`persist(${after.p.w}) at ${expected}`)
+        break
+      }
+      case 'finishSwap': {
+        expect(compaction?.settled, `${at}: the swap returned`).toBe(true)
+        const messages = compaction!.result?.messages ?? []
+        for (const m of MSGS) {
+          const emitted = messages.filter(isFoldedRowOf(m)).length - (w.keptFolded.includes(m) ? 1 : 0)
+          carried[m]! += emitted
+          if (emitted > 0) cover('finishSwap carrying an unhandled message')
+        }
+        const outcome = w.events.findLast(e => e.event === 'session-compact')?.fields.outcome
+        expect(outcome, `${at}: compaction outcome for mechanical=${before.j.mechanical}`).toBe(before.j.mechanical ? 'swap-mechanical' : 'swap')
+        adopt()
+        cover(`finishSwap${before.j.mechanical ? ' mechanical' : ''}`)
+        break
+      }
+      default:
+        throw new Error(`${at}: unknown action`)
     }
     await settle()
     // The comparison.
     for (const m of MSGS) {
       expect(w.queued().some(message => message.uuid === `q${m}`), `${at}: message ${m} in the queued store`).toBe(after.m[m]!.inStore)
+      // P2's other half: the conversation never holds two copies of one message.
+      // A mechanical ledger's quote of a request is outside the model (see P3 below), so ledger rows do not count.
+      const copies = w.session.filter(row => !isLedgerRow(row) && row.text.includes(msgText(m)))
+      expect(copies.length + (attached.has(m) ? 1 : 0), `${at}: copies of message ${m} in the conversation (attached=${attached.has(m)}): ${copies.map(row => row.text.slice(0, 60)).join(' | ')}`).toBeLessThanOrEqual(1)
+      // The in-memory retired set holds what a failed write left in the store; a write that lands clears it. The code
+      // adds to it before the retire write the model's persist step takes, so not while that write is pending.
+      if (!w.gates.some(g => g.kind === 'retire')) expect(retiredQueuedUuids(w.key).includes(`q${m}`), `${at}: message ${m} in the retired set`).toBe(after.m[m]!.retired && after.m[m]!.inStore)
       if (!after.s.active) {
         expect(carried[m], `${at}: folded rows emitted for message ${m}`).toBe(after.m[m]!.carried)
         // P3's concern: an unhandled message the engine summary did not cover. Where a handled one's text survives (a
@@ -441,7 +454,7 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
         if (after.m[m]!.typed && !after.m[m]!.handled && !after.m[m]!.engine) expect(inContext(m), `${at}: message ${m} in the conversation`).toBe(after.m[m]!.inContext)
       }
     }
-    expect(modelPhase(after), `${at}: code phase vs model ${after.j.phase} (waiting=${after.w}, swap pc=${after.s.active ? after.s.pc : '-'})`).toContain(codePhase(w))
+    expect(modelPhase(after), `${at}: code phase vs model ${after.j.phase} (waiting=${after.w}, swap pc=${after.s.active ? after.s.pc : '-'}) ${JSON.stringify(w.events.slice(-3))}`).toContain(codePhase(w))
     // Attempt n of the split is the code's (n + 1)th split-merge call; the job that leaves bg makes no further one.
     if (after.j.phase === 'bg') expect(w.splitCalls, `${at}: split-merge calls for attempt ${after.j.attempt}`).toBe(after.j.attempt + 1)
     else if (after.a === 'bgAttempt') expect(w.splitCalls, `${at}: split-merge calls after the job left bg`).toBe(before.j.attempt + 1)
@@ -462,18 +475,11 @@ test('fold job conformance: the replayed traces cover every model action', () =>
     'finishFold(true) in single', 'finishFold(false) in single', 'finishFold(true) in engine', 'finishFold(false) in engine',
     'requestCompact in idle', 'deadline in engine',
     'swapReady at a new compaction', 'swapReady awaited by a compaction', 'handOff from idle awaited', 'handOff from ready',
-    'persist(true) at retire', 'persist(true) at ledger', 'persist(true) at snapshot', 'persist(true) at meta',
+    'persist(true) at retire', 'persist(false) at retire', 'handOff(retireOk=true)', 'handOff(retireOk=false)', 'persist(true) at ledger', 'persist(true) at snapshot', 'persist(true) at meta',
     'persist(false) at ledger', 'persist(false) at snapshot', 'persist(false) at meta', 'finishSwap', 'finishSwap mechanical',
     'finishSwap carrying an unhandled message', 'turnEnd(two=false, fits=true) on one turn',
   ]
   const report = [...coverage].sort().map(([label, n]) => `${label}: ${n}`).join('\n')
-  console.log(`replayed steps per action:\n${report}\ntruncated:\n${truncated.join('\n') || '(none)'}`)
+  console.log(`replayed steps per action:\n${report}`)
   expect(required.filter(label => !coverage.has(label))).toEqual([])
-  expect(truncated.length, 'traces stopped early').toBeLessThanOrEqual(MAX_TRUNCATED)
 })
-
-// P3 context clause, red on the model: a message carried as a folded row is removed by the next swap before any reply
-// (fold.ts:270-271). Counterexample: typeMsg 1, typeMsg 2, requestCompact, deadline dropping {1} (carried), persist
-// to finishSwap, requestCompact, deadline dropping {2}: message 1 is typed, unhandled, out of the store and out of
-// context. Whether the next fold keeps carried rows is the user's decision, so no test checks it until then (the
-// claude-code/testing kit has no test.todo). Reproduce: quint run spec/fold-job.qnt --main current --invariant unhandledStaysInContext --max-steps 40 --max-samples 5000 --seed 0x1

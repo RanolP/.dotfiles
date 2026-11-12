@@ -263,8 +263,9 @@ module foldJob {
   // same queued message again. A message is emitted as a folded row at most once.
   val noReinjection = MSGS.forall(m => msgs.get(m).carried <= 1)
 
-  // P3, intent of 87832d0 / 721ff6f: a queued message leaves the store only after it was handled, carried, or
-  // covered by the engine summarizer, and an unhandled one never leaves the model's context.
+  // P3 (store half), intent of 87832d0 / 721ff6f: a queued message leaves the store only after it was handled,
+  // carried at least once, or covered by the engine summarizer. Being carried once does not keep it in context; that
+  // half is unhandledStaysInContext, open.
   val noLoss = MSGS.forall(m => {
     val r = msgs.get(m)
     (r.typed and not(r.inStore)) implies (r.handled or r.carried >= 1 or r.engine)

@@ -5,6 +5,7 @@
     "./vendor/choco-pi/packages/choco-pi-hooks",
     "./vendor/choco-pi/packages/choco-pi-web-search",
     "./vendor/choco-pi/packages/choco-pi-web-access",
-    "./vendor/choco-pi/extensions"
+    "./vendor/choco-pi/extensions",
+    "npm:pi-cursor-agent@0.4.4"
   ]
 }

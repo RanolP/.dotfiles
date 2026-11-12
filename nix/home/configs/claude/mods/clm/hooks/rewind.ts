@@ -14,11 +14,14 @@ export type RewindMeta = {
 export type RewindPlan = {
   notes: string; fullNotes: string; ops: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: RewindTopic[]
-  rewindOnly?: boolean; coveredRows?: string[]
+  rewindOnly?: boolean
 }
 
+// `coveredRows` is retired: nothing read it, and each snapshot copied every row covered so far, so it grew with the
+// square of the fold count and took session eb5734aa's state past its 4 MiB write limit (2026-11-11). Older states still
+// carry it; reads accept it and the next save strips it.
 export type LedgerSnapshot = {
-  seq: number; ledgerFp: string; coveredRows: string[]; ledger: string; topics?: RewindTopic[]; instructions?: unknown; addresses?: unknown
+  seq: number; ledgerFp: string; coveredRows?: string[]; ledger: string; topics?: RewindTopic[]; instructions?: unknown; addresses?: unknown
   clauses?: unknown; clauseBacklog?: unknown
 }
 export type RewindIo = {
@@ -55,7 +58,7 @@ function isTopicList(value: unknown): value is RewindTopic[] {
 
 function isLedgerSnapshot(value: unknown): value is LedgerSnapshot {
   return isRecord(value) && typeof value.seq === 'number' && Number.isInteger(value.seq)
-    && typeof value.ledgerFp === 'string' && Array.isArray(value.coveredRows) && value.coveredRows.every(ref => typeof ref === 'string')
+    && typeof value.ledgerFp === 'string' && (value.coveredRows === undefined || Array.isArray(value.coveredRows))
     && typeof value.ledger === 'string' && (value.topics === undefined || isTopicList(value.topics))
 }
 
@@ -65,7 +68,7 @@ export async function readLedgerSnapshots(io: RewindIo, key: string): Promise<Le
 }
 
 export async function saveLedgerSnapshot(
-  io: RewindIo, key: string, seq: number, ledgerFp: string, ledger: string, topics: RewindTopic[] | undefined, coveredRows: readonly string[],
+  io: RewindIo, key: string, seq: number, ledgerFp: string, ledger: string, topics: RewindTopic[] | undefined,
 ): Promise<void> {
   const history = await readLedgerSnapshots(io, key)
   const instructions = await io.storeGet(instructionIndexKey(key))
@@ -73,14 +76,16 @@ export async function saveLedgerSnapshot(
   const clauses = await io.storeGet(clauseStoreKey(key))
   const clauseBacklog = await io.storeGet(clauseBacklogKey(key))
   const next: LedgerSnapshot = {
-    seq, ledgerFp, ledger, coveredRows: [...new Set(coveredRows)],
+    seq, ledgerFp, ledger,
     ...(topics ? { topics } : {}),
     ...(instructions === undefined ? {} : { instructions }),
     ...(addresses === undefined ? {} : { addresses }),
     ...(clauses === undefined ? {} : { clauses }),
     ...(clauseBacklog === undefined ? {} : { clauseBacklog }),
   }
-  await io.storeSet(ledgerSnapshotsKey(key), [...history, next].slice(-32))
+  // Stripping the retired field from older snapshots shrinks a state that is already over the write limit.
+  const kept = history.map(({ coveredRows: _retired, ...snapshot }) => snapshot)
+  await io.storeSet(ledgerSnapshotsKey(key), [...kept, next].slice(-32))
 }
 
 async function restoreLedgerSnapshot(io: RewindIo, key: string, snapshot: LedgerSnapshot | undefined): Promise<void> {
@@ -141,7 +146,6 @@ export async function rewindOnlyPlan(
     ...(keptRow ? { keepFp: fingerprint(keptRow) } : {}), keepFrom: first + 1, dropFps: [],
     cuts: {}, keptTurns: 0, fallback: false, rewindOnly: true,
     ...(snapshot?.topics ? { topics: snapshot.topics } : {}),
-    coveredRows: snapshot?.coveredRows ?? [],
   }
 }
 

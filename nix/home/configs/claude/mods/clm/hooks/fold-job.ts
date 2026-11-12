@@ -25,7 +25,7 @@ type Pending = {
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: TopicState[]
   clauseOps?: FoldClauseOp[]
   steps?: FoldStep[]
-  rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]; coveredRows?: string[]
+  rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]
 }
 type PendingJob =
   | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[] }
@@ -253,6 +253,10 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
   const clauses = readClauseStore(await io.storeGet(clauseStoreKey(key))) ?? emptyClauseStore()
   const known = new Set([...view.issues, ...view.dropped].map(issue => issue.id))
   const sentAt = await io.sentAt()
+  // fold() stores overhead = reading - estimate, so a later fold over the same rows and reading would calibrate
+  // against itself (ratio 1); each attempt and the single-fold fallback start from the calibration the job began with.
+  const { fails, ratio, overhead, lastObserved, estimatorVersion } = meta
+  const restoreCalibration = () => Object.assign(meta, { fails, ratio, overhead, lastObserved, estimatorVersion })
   let retryRule = ''
   for (let attempt = 0; attempt < 2; attempt++) {
     const response = await io.complete({ model: opts.model, system: SPLIT_MERGE_SYSTEM, prompt: splitPrompt(previous, turns, retryRule, sentAt, clauses), maxTokens: 8192, timeoutMs: 120_000 })
@@ -286,6 +290,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       continue
     }
     const prepared: PreparedFold = { plan, mergeReply: answer.mergeReply }
+    restoreCalibration()
     const folded = await io.fold(opts, rows, meta, false, undefined, true, prepared, key)
     if (typeof folded === 'string') {
       await logFoldOutcome(io, `background fold skipped (${folded})`)
@@ -294,11 +299,13 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       return undefined
     }
     if (folded.tailTokens > opts.tailTarget) {
-      retryRule = `The previous split=${answer.split} produced ${folded.tailTokens} tokens for the new ledger plus B, above tailTarget=${opts.tailTarget}; choose an earlier whole-topic boundary or shorter summaries.`
+      retryRule = `The previous split=${answer.split} produced ${folded.tailTokens} tokens for the new ledger plus B, above tailTarget=${opts.tailTarget}; choose a later split, which keeps fewer turns in B, or shorter summaries.`
+      // Dropping here left no plan, so the next turn end retried the same overflow and compaction folded mechanically.
       if (attempt === 1) {
-        await logFoldOutcome(io, `background fold dropped (${retryRule})`)
-        io.log(`clm: split summary dropped (${retryRule}); the next turn end may retry`, { to: 'debug' })
-        return undefined
+        await logFoldOutcome(io, `background split overflowed; single fold instead (${retryRule})`)
+        io.log(`clm: split summary overflowed (${retryRule}); folding by token budget instead`, { to: 'debug' })
+        restoreCalibration()
+        return prepareSingleFold(io, opts, rows, meta, key, saveMeta)
       }
       continue
     }
@@ -426,9 +433,15 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
       ...(ratio === undefined ? {} : { ratio }), ...(overhead === undefined ? {} : { overhead }), ...(lastObserved === undefined ? {} : { lastObserved }),
     })
   }
+  // B always ends with the newest turn, and the overflow check counts the new ledger row plus B, so once that turn leaves
+  // no room for the row every split overflows and the job would spend two split calls for nothing; the single fold keeps
+  // that turn whole and summarizes everything before it. The current row is the floor for the new one: a merge only adds,
+  // and even an empty ledger renders past a small ledgerTarget because its plan and instruction sections stay whole.
+  const newest = turns.at(-1)?.rows.filter(message => !isSystemRow(message)) ?? []
+  const ledgerRow: SessionMessage = rows.findLast(isLedgerRow) ?? { role: 'user', text: ledgerRowText(meta.seq + 1, '', '', EMPTY_LEDGER, opts.ledgerTarget), toolUses: [] }
   const work = !turnEnd
     ? prepareEngineFold(io, opts, rows, meta, key, saveMeta)
-    : turns.length >= 2
+    : turns.length >= 2 && sum(newest) + estTokens(ledgerRow) <= opts.tailTarget
       ? prepareBackgroundFold(io, opts, rows, meta, first, turns, key, saveMeta)
       : prepareSingleFold(io, opts, rows, meta, key, saveMeta)
   const job: Extract<FoldJob, { state: 'summarizing' }> = { state: 'summarizing', promise: work, fingerprints: rows.map(fingerprint) }
@@ -574,6 +587,9 @@ async function applyFoldPlan(
   const tokensAfter = sum(messages)
   const offset = messages.findIndex(message => message.text === text)
   const result = { messages, tokensBefore, tokensAfter }
+  // Retired on its own: a state-store write failing below (a store over the
+  // size limit) once skipped this, and every later fold re-emitted the message.
+  await persistStep<void>(io, undefined, () => io.markQueuedMessagesFolded(foldedQueued))
   return persistCompactResult(io, result, async () => {
     await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
     if (use.clauseOps?.length) await io.serialize(here.session, async () => {
@@ -583,10 +599,7 @@ async function applyFoldPlan(
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     else await io.storeDelete(topicKey)
-    const previousSnapshot = (await readLedgerSnapshots(rewind, key)).at(-1)
-    await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(ledgerRow), fileLedger, use.topics, [
-      ...(use.coveredRows ?? previousSnapshot?.coveredRows ?? []), ...use.dropFps,
-    ])
+    await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(ledgerRow), fileLedger, use.topics)
     await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))
     await pruneWithheld(io, escaped ? workingRows : messages, fileLedger)
     const foldedAt = await io.now()
@@ -597,7 +610,6 @@ async function applyFoldPlan(
       lastSkip: undefined, boundary: { fp: fingerprint(ledgerRow), offset },
     })
     await io.markStableAttachmentsCarried(use.seq, attachments, headKept)
-    await io.markQueuedMessagesFolded(foldedQueued)
     await io.logEvent('clear', {
       tokensBefore, tokensAfter, keptTurns: use.keptTurns, ratio: meta.ratio ?? 1,
       durationMs: swapMs, ...(use.summaryMs === undefined ? {} : { summaryMs: use.summaryMs }),
@@ -633,7 +645,7 @@ async function applyRewindPlan(io: FoldJobIo, rows: readonly SessionMessage[], m
     await io.writeFile(await io.ledgerPath(), fullLedger + '\n')
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
-    await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(row), fullLedger, use.topics, use.coveredRows ?? [])
+    await saveLedgerSnapshot(rewind, key, use.seq, fingerprint(row), fullLedger, use.topics)
     await io.writeMeta({ ...meta, seq: use.seq, lastClear: kst(), boundary: { fp: fingerprint(row), offset } })
     await io.markStableAttachmentsCarried(use.seq, attachments, headKept)
     await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))

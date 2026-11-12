@@ -17,7 +17,7 @@ import { applyClauses, emptyClauseStore, parseClause } from './clauses'
 import { recallAddress } from './address'
 import { plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps } from './stepfold'
 import type { Opts } from './fold-runtime'
-import type { RewindIo, RewindPlan } from './rewind'
+import { readLedgerSnapshots, saveLedgerSnapshot, type RewindIo, type RewindPlan } from './rewind'
 import type { StableAttachmentType } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog, modDetectionHarness } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
@@ -201,6 +201,73 @@ test('a tail-kept queued message survives a second fold: still present when it s
   const second = buildCleared({ head: [start], dropped: [], tail: [wrapper, M('assistant', 'newer reply')], cuts: {} }, M('user', '[clm ledger #2 · now]'))
   expect(second.some(row => row.text === wrapper.text)).toBe(true)
   expect(foldedRows(second, protectedIndex(second), second.length).some(row => row.text === wrapper.text)).toBe(true)
+})
+
+// Regression caught: session eb5734aa's state store went over its size limit, every fold's persist step threw before
+// retiring queued messages, and four messages typed at 11:27 KST were re-emitted as unhandled at every fold until 18:22.
+test('a queued message folded once is not re-emitted by the next fold even when that fold failed to persist its state', async () => {
+  let queued: QueuedMessage[] = []
+  const io = {
+    sessionId: async () => 'queued-retire', now: async () => 0, usageReading: async () => undefined,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
+    storeGet: async () => undefined, storeSet: async () => { throw new Error('state store write refused: over the size limit') }, storeDelete: async () => undefined,
+    serialize: async (_session: string, run: () => Promise<unknown>) => run(),
+    pendingKey: async () => 'pending:queued-retire', topicsKey: async () => 'topics:queued-retire', ledgerPath: async () => '/state/clm-q.md', basePath: async () => '/state/clm-q',
+    readFile: async () => undefined, writeFile: async () => undefined,
+    readRewindIo: () => ({ storeGet: async () => undefined, storeSet: async () => { throw new Error('state store write refused: over the size limit') } }),
+    captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
+    append: async () => [], updateHeld: async () => undefined, readAll: async () => [],
+    trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
+    residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
+    stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }), markStableAttachmentsCarried: async () => undefined,
+    queuedMessages: async () => [...queued],
+    markQueuedMessagesFolded: async (folded: readonly QueuedMessage[]) => { queued = queued.filter(message => !folded.some(item => item.uuid === message.uuid)) },
+    sentAt: async () => () => undefined,
+    fileExists: async () => false, fileList: async () => [], run: async () => ({ exitCode: 0, stderr: '' }),
+    logEvent: async () => undefined, log: () => undefined,
+  } as unknown as FoldJobIo
+  const key = transcriptKey(await io.sessionId())
+  const fold = async (rows: SessionMessage[], keepText: string, seq: number) => {
+    const working = withQueuedMessages(rows, queued, () => undefined)
+    const first = protectedIndex(working)
+    const keepFrom = working.findIndex(row => row.text === keepText)
+    const keepRow = working[keepFrom]
+    if (keepRow === undefined) throw new Error(`no row reads ${JSON.stringify(keepText)}`)
+    const plan = { ...readyPlan, notes: '## 목표\n- keep going', fullNotes: '## 목표\n- keep going', seq, keepFrom, keepFp: fingerprint(keepRow), dropFps: foldedRows(working, first, keepFrom).map(fingerprint), keptTurns: 1 }
+    clearFoldJob(key)
+    setRewindFoldJob(key, plan, working.map(fingerprint))
+    try { return compactedMessages(await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => ({ messages: [M('user', 'ENGINE SUMMARY')] }))) }
+    finally { clearFoldJob(key) }
+  }
+  const oldReply = M('assistant', 'old '.repeat(3000))
+  queued = [{ uuid: 'typed-mid-turn', text: 'redo the old thing', at: Date.parse('2026-11-11T02:27:08Z'), after: fingerprint(oldReply) }]
+  const first = await fold(handled([M('user', 'start'), M('user', 'old turn'), oldReply, M('user', 'next turn'), M('assistant', 'reply')]), 'next turn', 1)
+  expect(first.filter(row => row.text.includes('redo the old thing'))).toHaveLength(1)
+  const second = await fold(handled([...first, M('user', 'turn 3'), M('assistant', 'x '.repeat(6000)), M('user', 'turn 4'), M('assistant', 'done')]), 'turn 4', 2)
+  expect(second.filter(row => row.text.includes('redo the old thing'))).toHaveLength(0)
+})
+
+// Regression caught: every snapshot copied all rows covered so far, so session eb5734aa's 32 snapshots reached 2.8 MB of row
+// fingerprints, its state went over the 4 MiB write limit, and every later fold's state writes were dropped.
+test('saving a ledger snapshot strips the retired covered rows, so an oversized history shrinks and stays readable', async () => {
+  const stored: Record<string, unknown> = {}
+  const io: RewindIo = {
+    storeGet: async key => stored[key], storeSet: async (key, value) => { stored[key] = value }, storeDelete: async key => { delete stored[key] },
+    writeFile: async () => undefined, ledgerPath: async () => LEDGER_FILE, topicsKey: async key => `topics:${key}`, pendingKey: async key => `pending:${key}`,
+    readMeta: async () => ({ seq: 31, fails: 0 }), writeMeta: async () => undefined, readyFoldDropFps: () => undefined, clearReadyFold: async () => undefined,
+    setRewindReady: () => undefined, logEvent: async () => undefined, log: () => undefined,
+  }
+  const fp = (i: number) => `assistant|toolu_${i}|${'x'.repeat(80)}`
+  stored['ledger-snapshots:s1:main'] = Array.from({ length: 31 }, (_, s) => ({
+    seq: s + 1, ledgerFp: `ledger-${s + 1}`, ledger: `## 목표\n- fold ${s + 1}`, coveredRows: Array.from({ length: 50 * (s + 1) }, (_, i) => fp(i)),
+  }))
+  expect(await readLedgerSnapshots(io, 's1:main')).toHaveLength(31)
+  await saveLedgerSnapshot(io, 's1:main', 32, 'ledger-32', '## 목표\n- fold 32', undefined)
+  const snapshots = await readLedgerSnapshots(io, 's1:main')
+  expect(snapshots.map(snapshot => snapshot.ledgerFp)).toEqual(Array.from({ length: 32 }, (_, s) => `ledger-${s + 1}`))
+  expect(snapshots.at(-2)?.ledger).toBe('## 목표\n- fold 31')
+  expect(snapshots.filter(snapshot => 'coveredRows' in snapshot)).toEqual([])
+  expect(new TextEncoder().encode(JSON.stringify(stored['ledger-snapshots:s1:main'])).length).toBeLessThan(64 * 1024)
 })
 
 // Regression caught: adding queued-message carry moved or rewrote a stable attachment ahead of the ledger.
@@ -1259,7 +1326,7 @@ test('a compact whose background summary never finishes folds mechanically at th
   expect(result[1]?.text).toMatch(/^\[clm ledger #1 · /)
   expect(result[1]?.text).toContain(instruction)
   expect(storedLedger(seen)).toContain(JSON.stringify(instruction))
-  expect((seen.store['ledger-snapshots:s1:main'] as { coveredRows: string[] }[])[0]?.coveredRows).toContain(fingerprint(rows[3]!))
+  expect(seen.store['ledger-snapshots:s1:main']).toHaveLength(1)
 })
 
 // Regression caught: a background plan finishing after the mechanical swap rolled meta back, stayed parked as stale pending, and blocked the next pre-summary.
@@ -1287,7 +1354,7 @@ test('a background plan completed after a mechanical fold is discarded as stale'
   expect(metaIn(seen).boundary).toBeDefined()
   expect(seen.store['pending:s1']).toBeUndefined()
   expect(seen.engineCompactions).toBe(0)
-  s.rows = [...s.rows, M('user', 'next C'), M('assistant', 'C'.repeat(2000))]
+  s.rows = [...s.rows, M('user', 'next C'), M('assistant', 'C'.repeat(2000)), M('user', 'next D'), M('assistant', 'D done')]
   await $.turn.complete(TURN)
   for (let i = 0; i < 50 && seen.splitPrompts.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 2))
   expect(seen.splitPrompts.length).toBeGreaterThan(1)
@@ -1397,16 +1464,72 @@ test('a background plan whose A rows changed is discarded and the engine summary
   expect(seen.engineCompactions).toBe(1)
 })
 
-// Regression caught: a split between topics or a tail that cannot fit still produced a destructive plan.
-test('a mid-topic split or tail overflow is rejected, retried once, then dropped', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
-  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(12000)), M('user', 'active B'), M('assistant', 'z'.repeat(6000))]
-  const s: State = { rows, replies: [], splitReplies: [splitAnswer(1.5), splitAnswer(2)] }
+// Regression caught: a split between topics or a tail that cannot fit still produced a destructive plan; and a second
+// overflow dropped the plan, so the next turn end retried the same overflow and compaction folded mechanically.
+test('a mid-topic split or tail overflow is rejected, retried once, then folded by token budget', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(12000)), M('user', 'B work'), M('assistant', 'z'.repeat(6000)), M('user', 'active C'), M('assistant', 'C done')]
+  const s: State = { rows, replies: ['{"ops":[]}'], splitReplies: [splitAnswer(1.5), splitAnswer(2)] }
   const seen = bottoms(on, s)
   await $.turn.complete(TURN)
-  for (let i = 0; i < 50 && !seen.logs.some(line => line.includes('split summary dropped')); i++) await new Promise(resolve => setTimeout(resolve, 2))
+  await waitForPending(seen)
   expect(seen.splitPrompts).toHaveLength(2)
-  expect(seen.store['pending:s1']).toBeUndefined()
-  expect(seen.logs.some(line => line.includes('split summary dropped'))).toBe(true)
+  expect(seen.prompts).toHaveLength(1)
+  expect(seen.logs.some(line => line.includes('split summary overflowed'))).toBe(true)
+  const pending = seen.store['pending:s1']
+  expect(isRecord(pending) ? pending.fallback : 'no pending plan').toBe(false)
+  const out = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(out.slice(2).map(row => row.text)).toEqual(['active C', 'C done'])
+})
+
+// Regression caught: each discarded split attempt stored overhead = reading - estimate on the shared meta, so the next
+// attempt and the single fold recalibrated against themselves, planned with ratio 1 and persisted it.
+test('discarded split attempts leave the single fold the calibration the job started with', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(12000)), M('user', 'B work'), M('assistant', 'z'.repeat(6000)), M('user', 'active C'), M('assistant', 'C done')]
+  const overhead = 1000
+  const reading = overhead + rows.reduce((total, row) => total + est(row), 0) * 2
+  const s: State = { rows, replies: ['{"ops":[]}'], splitReplies: [splitAnswer(2), splitAnswer(2)], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: reading } } }
+  const seen = bottoms(on, s)
+  seen.store['ledger:s1'] = { seq: 0, fails: 0, overhead, firstObserved: 100_000, estimatorVersion: TOKEN_ESTIMATOR_VERSION }
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  expect(seen.logs.some(line => line.includes('split summary overflowed'))).toBe(true)
+  expect(metaIn(seen).ratio).toBeGreaterThan(1.5)
+})
+
+// Regression caught: when the newest turn alone exceeded tailTarget no whole-turn split could fit, so every background
+// job spent two split calls and dropped its plan, and each auto compaction met a doomed job and folded mechanically.
+test('a newest turn larger than tailTarget prepares a summarized plan instead of dropping every split', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(12000)), M('user', 'active B'), M('assistant', 'z'.repeat(6000))]
+  const s: State = { rows, replies: ['{"ops":[]}'] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  expect(seen.splitPrompts).toHaveLength(0)
+  expect(seen.prompts).toHaveLength(1)
+  const pending = seen.store['pending:s1']
+  expect(isRecord(pending) ? pending.fallback : 'no pending plan').toBe(false)
+  const out = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
+  expect(out[1]?.text).toMatch(/^\[clm ledger #1 · /)
+  expect(out.slice(2).map(row => row.text)).toEqual(['active B', 'z'.repeat(6000)])
+  for (let i = 0; i < 50 && !logEvents(seen).some(event => event.event === 'session-compact'); i++) await new Promise(resolve => setTimeout(resolve, 5))
+  expect(logEvents(seen).find(event => event.event === 'session-compact')?.outcome).toBe('swap')
+})
+
+// Regression caught: the newest-turn guard ignored the ledger row that the overflow check counts, so a newest turn
+// under tailTarget but over tailTarget - ledgerTarget still spent two doomed split calls.
+test('a newest turn that fits tailTarget only without the ledger row skips the split calls', { options: { budget: 5000, tailTarget: 300, queueTarget: 1, ledgerTarget: 100, reserve: 100 } }, async ($, on) => {
+  const newest = [M('user', 'active B'), M('assistant', 'z'.repeat(600))]
+  const newestTokens = newest.reduce((total, row) => total + est(row), 0)
+  expect(newestTokens).toBeGreaterThan(200)
+  expect(newestTokens).toBeLessThanOrEqual(300)
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(12000)), ...newest]
+  const s: State = { rows, replies: ['{"ops":[]}'], splitReplies: [splitAnswer(2), splitAnswer(2)] }
+  const seen = bottoms(on, s)
+  await $.turn.complete(TURN)
+  await waitForPending(seen)
+  expect(seen.splitPrompts).toHaveLength(0)
+  expect(seen.prompts).toHaveLength(1)
 })
 
 // Regression caught: a session opened by an isMeta peer message kept its whole first turn in the head and re-emitted it after every fold.

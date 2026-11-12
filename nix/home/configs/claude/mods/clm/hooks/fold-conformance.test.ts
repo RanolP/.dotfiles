@@ -17,7 +17,7 @@
 // disagreement.
 import { expect, test } from 'claude-code/testing'
 import type { SessionCompactResult, SessionMessage } from 'claude-code'
-import { clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
+import { clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, resetRetiredQueued, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
 import { captureAppendedRow } from './register'
 import { estTokens, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, liveRows, planClear, protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type QueuedMessage } from './fold'
 import { EMPTY_LEDGER, notesOf, SPLIT_MERGE_SYSTEM } from './ledger'
@@ -59,6 +59,7 @@ function world(id: string) {
   const sid = `conformance-${id}`
   const key = transcriptKey(sid)
   clearFoldJob(key)
+  resetRetiredQueued(key)
   const files: Record<string, string> = {}
   const store = new Map<string, unknown>()
   const events: { event: string; fields: Record<string, unknown> }[] = []

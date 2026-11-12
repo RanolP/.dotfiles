@@ -11,7 +11,7 @@ import type { ClmWorkflow } from '../types'
 import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { buildCleared, estTokens, fingerprint, foldedRows, isLedgerRow, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION, withQueuedMessages, type QueuedMessage } from './fold'
-import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, setRewindFoldJob, transcriptKey } from './fold-job'
+import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, resetRetiredQueued, setRewindFoldJob, transcriptKey } from './fold-job'
 import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
 import { applyClauses, emptyClauseStore, parseClause } from './clauses'
 import { recallAddress } from './address'
@@ -735,6 +735,83 @@ test('a queued message placed by maybeClear lands at the same index when handleS
   clearFoldJob('queued-plan:main')
   expect(handoffs).toBe(0)
   expect(compactedMessages(result).some(message => message.text.includes('clm ledger #1'))).toBe(true)
+})
+
+// Regression caught: clearFoldJob, which a rewind calls through clearReadyFold, also wiped the in-memory retired set, so
+// a handled queued message whose retire write failed came back into the next fold's rows.
+test('a queued message whose retire write failed stays retired after a rewind clears the ready fold', OPTS, async () => {
+  const anchor = M('assistant', 'working')
+  const rows = [M('user', 'start'), anchor, M('assistant', BIG), M('assistant', 'keep')]
+  const queued: QueuedMessage = { uuid: 'retire-fails-1', text: 'retire me once', at: 2000, after: fingerprint(anchor) }
+  const stored = new Map<string, unknown>()
+  const rewind: RewindIo = {
+    storeGet: async key => stored.get(key), storeSet: async (key, value) => { stored.set(key, value) },
+    storeDelete: async key => { stored.delete(key) }, writeFile: async () => undefined,
+    ledgerPath: async () => LEDGER_FILE, topicsKey: async key => `topics:${key}`, pendingKey: async key => `pending:${key}`,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined,
+    readyFoldDropFps: () => undefined, clearReadyFold: async () => undefined, setRewindReady: () => undefined,
+    logEvent: async () => undefined, log: () => undefined,
+  }
+  const seen: string[][] = []
+  const io = {
+    sessionId: async () => 'retire-fails', sessionMessages: async () => rows,
+    stableAttachments: async (headKept: boolean) => ({ rows: [], headKept }), markStableAttachmentsCarried: async () => undefined,
+    queuedMessages: async () => [queued], markQueuedMessagesFolded: async () => { throw new Error('queued store over the size limit') },
+    sessionCompact: async () => ({ messages: rows }), now: async () => 3000,
+    after: (_ms: number, fn: () => void) => ({ cancel: () => undefined, fn }), usageReading: async () => undefined,
+    sentAt: async () => () => undefined,
+    readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined,
+    readLedger: async () => undefined, ledgerPath: async () => LEDGER_FILE, basePath: async () => '/state/retire-fails',
+    readFile: async () => undefined, writeFile: async () => undefined, appendFile: async () => undefined,
+    lessonsPath: async () => '', fileExists: async () => false, fileList: async () => [], run: async () => ({ exitCode: 0, stderr: '' }),
+    storeGet: async (key: string) => stored.get(key), storeSet: async (key: string, value: unknown) => { stored.set(key, value) }, storeDelete: async (key: string) => { stored.delete(key) },
+    serialize: async <T>(_session: string, run: () => Promise<T>) => run(), pendingKey: async () => 'pending:retire-fails', topicsKey: async () => 'topics:retire-fails',
+    captureOrigin: async () => ({ session: 'retire-fails', repo: 'example.invalid/repo', cwd: '/work/repo' }),
+    readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set<string>() }),
+    updateHeld: async () => undefined, backfillClauses: async () => undefined,
+    residentLedger: async (_key: string, _issues: readonly Issue[], _state: { stack: string[]; pending: string[] }, _events: readonly never[], preview?: { notes: string }) => preview?.notes ?? '',
+    append: async () => [], projectPanel: async () => undefined, readRewindIo: () => rewind, observeTranscript: async () => undefined,
+    fold: async (_opts: Opts, working: readonly SessionMessage[]) => {
+      seen.push(working.map(row => row.text))
+      const first = protectedIndex(working)
+      const keepFrom = working.length - 1
+      return {
+        plan: { head: [working[first]], dropped: foldedRows(working, first, keepFrom), tail: working.slice(keepFrom), keptTurns: 1, cuts: {} },
+        notes: '## goal\n- keep', fullNotes: '## goal\n- keep', ops: [], asks: [], seq: 1, fallback: false,
+        promoted: [], hold: [], settled: [], tailTokens: 1,
+      }
+    },
+    complete: async () => ({ isAnswered: false, text: '', reason: 'unused' }), logEvent: async () => undefined, log: () => undefined,
+  } satisfies FoldJobIo
+  const key = 'retire-fails:main'
+  clearFoldJob(key)
+  resetRetiredQueued(key)
+  try {
+    await maybeClear(io, { ...OPTS.options, queueTarget: 1 }, false)
+    expect(seen[0]).toContain('retire me once')
+    await handleSessionCompact(io, OPTS.options, rows, 'manual', async () => { throw new Error('the clm swap should apply') })
+    clearFoldJob(key)
+    await maybeClear(io, { ...OPTS.options, queueTarget: 1 }, false)
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).not.toContain('retire me once')
+  } finally { clearFoldJob(key); resetRetiredQueued(key) }
+})
+
+// Regression caught: the rewind-only swap (dropped empty, every row after the first prompt in the tail) dropped a
+// carried, unanswered message's folded row, because buildCleared's tail filter treated every folded row as retired.
+test('a rewind-only swap keeps a carried, unanswered message\'s folded row in the tail exactly once', () => {
+  const text = 'still waiting on this'
+  const message: QueuedMessage = { uuid: 'carried-1', text, at: Date.parse('2026-11-06T06:54:51Z') }
+  const typed = withQueuedMessages([M('user', 'start'), M('assistant', 'working')], [message], () => undefined)
+  const folded = buildCleared({ head: typed.slice(0, 1), dropped: typed.slice(1), tail: [], cuts: {} }, M('user', '[clm ledger #1 · now]'))
+  // The message is still queued, so the next read matches its folded row instead of adding a second copy.
+  const rows = withQueuedMessages(folded, [message], () => undefined)
+  const first = protectedIndex(rows)
+  const swapped = buildCleared({
+    head: rows.slice(0, first + 1).filter(row => !isLedgerRow(row)), dropped: [],
+    tail: rows.slice(first + 1).filter(row => !isLedgerRow(row)), cuts: {},
+  }, M('user', '[clm ledger #1 · now]'))
+  expect(swapped.filter(row => row.text.includes(`\n${text}\n</clm-queued-message>`))).toHaveLength(1)
 })
 
 // Regression caught: session-owned transcript indexes kept increasing the engine-wide store.

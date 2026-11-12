@@ -159,6 +159,8 @@ async function retireQueued(io: FoldJobIo, key: string, messages: readonly Queue
 }
 /** The uuids of the queued messages retired in memory whose store write has not landed yet. */
 export const retiredQueuedUuids = (key: string): string[] => [...(retiredQueued.get(key)?.keys() ?? [])]
+/** For tests that reuse a transcript key. A rewind (clearFoldJob) keeps the set: its retire write may still be failing. */
+export const resetRetiredQueued = (key: string): void => { retiredQueued.delete(key) }
 const rowsWithQueuedMessages = async (io: Pick<FoldJobIo, 'queuedMessages' | 'sentAt'>, key: string, rows: readonly SessionMessage[]): Promise<SessionMessage[]> => {
   const queued = await queuedMessages(io, key)
   return queued.length === 0 ? [...rows] : withQueuedMessages(rows, queued, await io.sentAt())
@@ -193,7 +195,6 @@ export function foldJobDropFps(key: string): string[] | undefined {
 
 export function clearFoldJob(key: string): void {
   foldJobs.set(key, { state: 'idle' })
-  retiredQueued.delete(key)
 }
 
 export function setRewindFoldJob(key: string, plan: RewindPlan, fingerprints: string[]): void {

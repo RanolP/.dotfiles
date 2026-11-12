@@ -1,8 +1,8 @@
 import { test, expect } from 'claude-code/testing'
 import type { SessionMessage } from 'claude-code'
 
-import { estTokens, fingerprint, type QueuedMessage } from './fold'
-import { M, bottoms, compactInput, compactedMessages, handled, logEvents, TURN } from './clm-test-support'
+import { estTokens } from './fold'
+import { M, bottoms, compactInput, compactedMessages, handled, TURN } from './clm-test-support'
 import type { State } from './clm-test-support'
 
 // Shape measured on 2026-11-12 from real session eb5734aa (its transcript, its clm
@@ -71,127 +71,75 @@ const turn = (tokens: number): SessionMessage[] => {
 const total = (rows: readonly SessionMessage[]) => rows.reduce((n, m) => n + estTokens(m), 0)
 
 // Regressions caught, each seen red with its fix reverted (2026-11-12):
-// - snapshots copying coveredRows: state passes the linear byte bound at fold 32;
-// - the size guard counting chars: the eb5734aa-sized test sees the host refuse 4 writes;
-// - a split that overflows tailTarget being dropped: no fold plan is written on fold 3,
-//   whose summarizer keeps every turn after the first;
-// - queued messages retired after the state writes: A is still queued after fold 5,
-//   whose compact has every state write fail.
+// - snapshots copying coveredRows: state passes the linear byte bound at fold 24;
+// - the size guard counting chars: the eb5734aa-sized test sees the host refuse 4 writes.
+// The split overflow and queued-message regressions found with this chain are ordering, which
+// spec/fold-job.qnt owns and fold-conformance.test.ts replays.
 type Fold = { n: number; bad: boolean; oversized: boolean }
 
 // The kit stops a test after 5 s, so the folds run as a chain of tests that hand the
 // session (rows, state files, store, queue, clock) from one to the next.
 const FOLDS = 42
 const PER_TEST = 6
-const FAIL_AT = 5
-const MID_FOLD_AT = 9
-const A: QueuedMessage = { uuid: 'qa', text: `queued-A ${text('queued', 'qa', 600)}`, at: 0 }
-const B: QueuedMessage = { uuid: 'qb', text: `queued-B ${text('queued', 'qb', 600)}`, at: 0 }
 const carry = {
   rows: [M('user', text('prompt', 'p0', 400)), M('assistant', text('reply', 'a0', 200))] as SessionMessage[],
-  files: {} as Record<string, string>, engineStore: {} as Record<string, unknown>, now: 0,
-  queue: {} as Record<string, QueuedMessage[]>, queueVersion: 0, consumed: '',
-  retiredAt: {} as Record<string, number>, summarized: [] as string[], refusals: 0,
+  files: {} as Record<string, string>, engineStore: {} as Record<string, unknown>, now: 0, consumed: '', refusals: 0,
 }
 // One goal per fold, as eb5734aa's store held 45 clauses after 32 folds (36,838 B).
 const ops = (n: number) => [{ clause: `goal('I-focus', 'topic${n}').`, kind: 'goal', text: `topic${n}: ${text('summary', `s${n}`, 200)}`, evidence: [] }]
-const hits = (rows: readonly SessionMessage[], marker: string) => rows.filter(m => m.text.includes(marker)).length
 
 for (let first = 1; first <= FOLDS; first += PER_TEST) {
   const last = Math.min(FOLDS, first + PER_TEST - 1)
-  test(`fold scale ${first}-${last}: state stays linear in UTF-8 bytes, no summary dropped, queued messages carried once`, SCALE, async ($, on) => {
+  test(`fold scale ${first}-${last}: state stays linear in UTF-8 bytes`, SCALE, async ($, on) => {
     const s: State = { rows: carry.rows, replies: [] }
     const seen = bottoms(on, s)
     Object.assign(seen.files, carry.files)
     Object.assign(seen.engineStore, carry.engineStore)
     if (carry.now) seen.clock.advance(carry.now - seen.clock.now())
     const setUsage = () => { s.usage = { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: OVERHEAD + total(s.rows) } } }
-    // Queued messages live in plugin state; this store stands in for the host's.
-    on('state.get', async (_$: any, e: any, next: any) => e.plugin === 'clm' && e.key === 'queuedMessages'
-      ? { value: carry.queueVersion ? { value: structuredClone(carry.queue), version: carry.queueVersion } : { version: 0 } }
-      : next(e))
-    on('state.set', async (_$: any, e: any, next: any) => {
-      if (e.plugin !== 'clm' || e.key !== 'queuedMessages') return next(e)
-      carry.queue = structuredClone(e.value)
-      return { value: { isSet: true, version: ++carry.queueVersion } }
-    })
-    const queued = () => carry.queue['s1'] ?? []
-    const enqueue = (message: QueuedMessage) => { carry.queue = { ...carry.queue, s1: [...queued(), message] }; carry.queueVersion++ }
-
     // The summarizer: a split whose kept turns fit well under tailTarget, except on bad folds
     // where it keeps everything after turn 1 on both attempts, so the split overflows.
     let current: Fold = { n: 0, bad: false, oversized: false }
     s.splitReplies = []
     s.splitBlock = async () => {
       const prompt = seen.splitPrompts.at(-1)!
-      carry.summarized.push(prompt)
       const turns = [...prompt.matchAll(/<turn number="(\d+)" tokens="(\d+)">/g)].map(m => Number(m[2]))
       let split = turns.length
       for (let k = 2; k <= turns.length; k++) if (turns.slice(k - 1).reduce((t, x) => t + x, 0) <= OPTIONS.tailTarget * 0.6) { split = k; break }
       s.splitReplies!.push(JSON.stringify({ split: current.bad ? 2 : split, ops: ops(current.n) }))
     }
     s.mergeBlock = async () => {
-      carry.summarized.push(seen.prompts.at(-1)!)
       s.replies.push(JSON.stringify({ ops: ops(current.n) }))
     }
 
-    // The host refuses a state write above 4 MiB in UTF-8 bytes; during FAIL_AT's compact
-    // every state write fails, as it did once eb5734aa's state passed that limit.
-    let failing = false
+    // The host refuses a state write above 4 MiB in UTF-8 bytes.
     s.fsWriteBlock = async (path, body) => {
       if (!path.endsWith('.state.json')) return
-      if (failing) throw new Error(`$.fs.write ${path} refused (injected)`)
       if (utf8(body) > MIB4) { carry.refusals++; throw new Error(`$.fs.write ${path} refused (${utf8(body)} bytes)`) }
     }
 
     for (let n = first; n <= last; n++) {
       current = { n, bad: n % 7 === 3, oversized: n % 6 === 0 }
-      const fill = current.oversized ? FOLD_AT - 40_000 : FOLD_AT
+      // An oversized fold stops short by less than its 40k turn, so that turn takes the rows past FOLD_AT.
+      const fill = current.oversized ? FOLD_AT - 38_000 : FOLD_AT
       for (let i = 0; total(s.rows) < fill; i++) s.rows.push(...turn(SIZES[(turnNo + i) % SIZES.length]!))
       if (current.oversized) s.rows.push(...turn(40_000))
-      if (n === FAIL_AT) {
-        const anchor = s.rows.findIndex((m, i) => i > 2 && m.role === 'assistant' && m.text !== '')
-        enqueue({ ...A, at: seen.clock.now(), after: fingerprint(s.rows[anchor]!) })
-      }
       setUsage()
       await $.turn.complete(TURN)
-      // A fold that leaves no plan shows up here; the fixed code writes one within about 100 ms.
+      // Wait for the turn end's plan, so the compact swaps it instead of folding at the deadline.
       let pending = ''
       for (const deadline = performance.now() + 1500; performance.now() < deadline;) {
         pending = JSON.stringify(seen.store['pending:s1'] ?? '')
         if (pending !== '""' && pending !== carry.consumed) break
         await new Promise(resolve => setTimeout(resolve, 1))
       }
-      const plan: any = seen.store['pending:s1']
-      const written = pending !== carry.consumed && plan !== undefined
-      expect({ fold: n, pendingWritten: written, recent: written ? '' : String(JSON.stringify(logEvents(seen).at(-1))).slice(0, 300) }).toEqual({ fold: n, pendingWritten: true, recent: '' })
       carry.consumed = pending
-      expect({ fold: n, fallback: plan.fallback }).toEqual({ fold: n, fallback: false })
-      if (n === MID_FOLD_AT) enqueue({ ...B, at: seen.clock.now(), after: fingerprint(s.rows.at(-1)!) })
-      failing = n === FAIL_AT
       const out = compactedMessages(await $.session.compact(compactInput('plugin', handled(s.rows))))
-      failing = false
       s.rows = [...out]
       setUsage()
 
-      // The session-compact event is written after the result settles.
-      for (let i = 0; i < 200 && logEvents(seen).filter((x: any) => x.event === 'session-compact').length < n; i++) await new Promise(resolve => setTimeout(resolve, 1))
-      const events = logEvents(seen)
-      const compacts = events.filter((x: any) => x.event === 'session-compact')
-      const clears = events.filter((x: any) => x.event === 'clear')
-      expect({ fold: n, outcome: compacts.at(-1)?.outcome, ledger: out.some(m => /^\[clm ledger #/.test(m.text)), engine: seen.engineCompactions })
-        .toEqual({ fold: n, outcome: 'swap', ledger: true, engine: 0 })
-      if (n !== FAIL_AT) expect({ fold: n, reason: clears.at(-1)?.reason }).toEqual({ fold: n, reason: 'clm' })
-      expect({ fold: n, gaveUp: seen.logs.filter(l => /split summary dropped|gave up|summary failed/.test(l)) }).toEqual({ fold: n, gaveUp: [] })
-
-      for (const message of [A, B]) {
-        const count = hits(out, message.text.slice(0, 12))
-        if (carry.retiredAt[message.uuid] !== undefined) expect({ fold: n, message: message.uuid, count }).toEqual({ fold: n, message: message.uuid, count: 0 })
-        expect({ fold: n, message: message.uuid, atMostOnce: count <= 1 }).toEqual({ fold: n, message: message.uuid, atMostOnce: true })
-        if (carry.retiredAt[message.uuid] === undefined && !queued().some(q => q.uuid === message.uuid) && n >= (message === A ? FAIL_AT : MID_FOLD_AT)) carry.retiredAt[message.uuid] = n
-      }
-      if (n === FAIL_AT) expect({ fold: n, queuedA: queued().some(q => q.uuid === 'qa') }).toEqual({ fold: n, queuedA: false })
-      if (n === MID_FOLD_AT) expect({ fold: n, carriedB: hits(out, 'queued-B') }).toEqual({ fold: n, carriedB: 1 })
+      // The state below is only the ledger's growth when the compact folded with a ledger row.
+      expect({ fold: n, ledger: out.some(m => /^\[clm ledger #/.test(m.text)) }).toEqual({ fold: n, ledger: true })
 
       // Bound: 64 KiB + 80 KiB per fold, and 3 MiB overall. With this generator the fixed code
       // grew 75.4 KB per fold once the 32-snapshot cap held (folds 32-42; 1.46 MB at fold 32,
@@ -205,10 +153,7 @@ for (let first = 1; first <= FOLDS; first += PER_TEST) {
     carry.files = { ...seen.files }
     carry.engineStore = { ...seen.engineStore }
     carry.now = seen.clock.now()
-    if (last === FOLDS) {
-      expect({ refusals: carry.refusals }).toEqual({ refusals: 0 })
-      expect({ B: carry.summarized.some(p => p.includes('queued-B')), retired: carry.retiredAt['qb'] !== undefined }).toEqual({ B: true, retired: true })
-    }
+    if (last === FOLDS) expect({ refusals: carry.refusals }).toEqual({ refusals: 0 })
   })
 }
 

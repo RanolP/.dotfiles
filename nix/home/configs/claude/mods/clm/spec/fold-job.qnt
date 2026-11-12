@@ -1,4 +1,5 @@
 // Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noSummaryDropLoop noReinjection noLoss --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
+// Regenerate the conformance traces (hooks/fold-conformance.test.ts): nice -n 15 sh nix/home/configs/claude/mods/clm/spec/fold-job-traces.sh
 //
 // The clm background fold job (hooks/fold-job.ts) as a state machine: a turn end starts a summary job, a compaction
 // waits up to its 7 s deadline for it, applyFoldPlan persists the swap step by step, and user messages typed while

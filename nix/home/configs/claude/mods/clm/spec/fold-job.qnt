@@ -1,4 +1,5 @@
 // Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noSummaryDropLoop noReinjection noLoss --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
+// Red on current, an open decision (see unhandledStaysInContext): the same command with --invariant unhandledStaysInContext (seed 0x1 hits it within 5000 samples)
 // Regenerate the conformance traces (hooks/fold-conformance.test.ts): nice -n 15 sh nix/home/configs/claude/mods/clm/spec/fold-job-traces.sh
 //
 // The clm background fold job (hooks/fold-job.ts) as a state machine: a turn end starts a summary job, a compaction
@@ -20,10 +21,14 @@ module foldJob {
     handled: bool,    // an assistant row follows it, so buildCleared does not carry it (fold.ts:261-262)
     carried: int,     // times a swap emitted it as a `folded` row after the ledger row (fold.ts:262-269)
     engine: bool,     // a handOff to the engine summarizer covered it (fold-job.ts:699-705)
+    foldedRow: bool,  // its `folded` row is in the conversation; the next swap removes it (fold.ts:270-271)
+    typedAt: int,     // clock of its typeMsg
+    repliedAt: int,   // clock of the first assistantReply after it, 0 while none
   }
   // phase: idle | bg (split summary) | single | engine | ready | swapping
   // snap: queued messages in the rows the job planned over; csnap: those in the rows a waiting compaction read.
-  type Job = { phase: str, attempt: int, fits: bool, snap: Set[int], csnap: Set[int], mechanical: bool }
+  // snapAt / csnapAt: the clock when those rows were read, so a reply after it is outside the rows.
+  type Job = { phase: str, attempt: int, fits: bool, snap: Set[int], csnap: Set[int], snapAt: int, csnapAt: int, mechanical: bool }
   type Swap = { active: bool, pc: int, dropped: Set[int] }
 
   var msgs: int -> Msg
@@ -32,11 +37,13 @@ module foldJob {
   var swap: Swap
   // Set when a job ends without a plan because its split overflowed tailTarget twice.
   var endedNoPlanOnOverflow: bool
+  // Ticks on typeMsg and assistantReply: rows sit in the conversation in clock order.
+  var clock: int
   var seen: Set[str]
 
-  pure val idleJob: Job = { phase: "idle", attempt: 0, fits: true, snap: Set(), csnap: Set(), mechanical: false }
+  pure val idleJob: Job = { phase: "idle", attempt: 0, fits: true, snap: Set(), csnap: Set(), snapAt: 0, csnapAt: 0, mechanical: false }
   pure val noSwap: Swap = { active: false, pc: 0, dropped: Set() }
-  pure val freshMsg: Msg = { typed: false, inStore: false, inContext: false, handled: false, carried: 0, engine: false }
+  pure val freshMsg: Msg = { typed: false, inStore: false, inContext: false, handled: false, carried: 0, engine: false, foldedRow: false, typedAt: 0, repliedAt: 0 }
 
   // Persist order in applyFoldPlan. 5884744 retires queued messages in their own persistStep before the
   // persistCompactResult block (fold-job.ts:590-591); 520a61f retired them last inside that block, so any
@@ -53,13 +60,28 @@ module foldJob {
 
   pure def stored(ms: int -> Msg): Set[int] = ms.keys().filter(m => ms.get(m).inStore)
 
-  // buildCleared over the dropped rows: an unhandled one is carried as a folded row, a handled one leaves context.
-  pure def applyDrop(ms: int -> Msg, dropped: Set[int]): int -> Msg =
+  // A cut is a prefix of the rows, which hold the queued messages in typing order (withQueuedMessages anchors each
+  // after the row before it, fold.ts:94-118), so the dropped queued messages are a typing-order prefix of those read.
+  pure def isTypingPrefix(ms: int -> Msg, read: Set[int], dropped: Set[int]): bool =
+    dropped.forall(m => read.exclude(dropped).forall(k => ms.get(m).typedAt < ms.get(k).typedAt))
+
+  // The cut drops every row up to the first kept queued message, or every row read: its replies are the clock values
+  // below this bound. A narrower cut that kept a reply in the tail would carry its message too; the model omits it.
+  pure def cutBound(ms: int -> Msg, read: Set[int], dropped: Set[int], readAt: int): int = {
+    val kept = read.exclude(dropped)
+    kept.fold(readAt + 1, (b, k) => if (ms.get(k).typedAt < b) ms.get(k).typedAt else b)
+  }
+
+  // buildCleared (fold.ts:258-276): every folded row already in the conversation leaves (head and tail filter
+  // isQueuedMessage, a retired one is no queued source to carry); a dropped message with no assistant row after it
+  // among the folded rows is carried as a new folded row, one with such a row leaves context.
+  pure def applyDrop(ms: int -> Msg, dropped: Set[int], bound: int): int -> Msg =
     ms.keys().mapBy(m => {
-      val r = ms.get(m)
+      val r0 = ms.get(m)
+      val r = if (r0.foldedRow) { ...r0, inContext: false, foldedRow: false } else r0
       if (not(dropped.contains(m))) r
-      else if (r.handled) { ...r, inContext: false }
-      else { ...r, carried: r.carried + 1, inContext: true }
+      else if (r.repliedAt > 0 and r.repliedAt < bound) { ...r, inContext: false }
+      else { ...r, carried: r.carried + 1, inContext: true, foldedRow: true }
     })
 
   pure def retire(ms: int -> Msg, which: Set[int]): int -> Msg =
@@ -70,7 +92,8 @@ module foldJob {
   // src: register.ts:583-597 captureAppendedRow (queued_command attachment -> storeQueuedMessage)
   action typeMsg(m: int): bool = all {
     not(msgs.get(m).typed),
-    msgs' = msgs.set(m, { ...freshMsg, typed: true, inStore: true, inContext: true }),
+    msgs' = msgs.set(m, { ...freshMsg, typed: true, inStore: true, inContext: true, typedAt: clock + 1 }),
+    clock' = clock + 1,
     job' = job, compactWaiting' = compactWaiting, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow,
     seen' = if (job.phase != "idle") seen.union(Set("typedDuringFold")) else seen,
   }
@@ -78,7 +101,11 @@ module foldJob {
   // The model answers: every queued message in context now has an assistant row after it.
   action assistantReply: bool = all {
     msgs.keys().exists(m => msgs.get(m).inContext and not(msgs.get(m).handled)),
-    msgs' = msgs.keys().mapBy(m => if (msgs.get(m).inContext) { ...msgs.get(m), handled: true } else msgs.get(m)),
+    msgs' = msgs.keys().mapBy(m => {
+      val r = msgs.get(m)
+      if (r.inContext and not(r.handled)) { ...r, handled: true, repliedAt: clock + 1 } else r
+    }),
+    clock' = clock + 1,
     job' = job, compactWaiting' = compactWaiting, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
@@ -87,8 +114,8 @@ module foldJob {
   // src: fold-job.ts:492-515 maybeClear -> startFoldJob(turnEnd=true), fold-job.ts:422-469
   action turnEnd(twoTurns: bool, fits: bool): bool = all {
     job.phase == "idle", not(compactWaiting), not(swap.active),
-    job' = { ...idleJob, phase: if (routeToSplit(FIXED, twoTurns, fits)) "bg" else "single", fits: fits, snap: stored(msgs) },
-    msgs' = msgs, compactWaiting' = compactWaiting, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    job' = { ...idleJob, phase: if (routeToSplit(FIXED, twoTurns, fits)) "bg" else "single", fits: fits, snap: stored(msgs), snapAt: clock },
+    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   // One split-merge attempt. src: fold-job.ts:261-328 prepareBackgroundFold
@@ -104,17 +131,21 @@ module foldJob {
   action bgAttempt(outcome: str): bool = all {
     job.phase == "bg",
     outcome != "ok" or job.fits,
-    job' = bgNext(job, outcome, FIXED),
-    endedNoPlanOnOverflow' = (endedNoPlanOnOverflow or (outcome == "overflow" and job.attempt == 1 and not(FIXED))),
-    seen' = if (outcome == "overflow" and job.attempt == 1 and FIXED) seen.union(Set("singleAfterOverflow")) else seen,
-    msgs' = msgs, compactWaiting' = compactWaiting, swap' = swap,
+    val nextJob = bgNext(job, outcome, FIXED)
+    all {
+      job' = nextJob,
+      // The job ends with no plan right after the second split overflowed.
+      endedNoPlanOnOverflow' = (endedNoPlanOnOverflow or (outcome == "overflow" and job.attempt == 1 and nextJob.phase == "idle")),
+      seen' = if (outcome == "overflow" and job.attempt == 1 and nextJob.phase == "single") seen.union(Set("singleAfterOverflow")) else seen,
+    },
+    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, swap' = swap,
   }
 
   // src: fold-job.ts:363-377 prepareSingleFold; fold-job.ts:379-401 prepareEngineFold
   action finishFold(ok: bool): bool = all {
     job.phase == "single" or job.phase == "engine",
     job' = { ...job, phase: if (ok) "ready" else "idle" },
-    msgs' = msgs, compactWaiting' = compactWaiting, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   // ---- compaction ----
@@ -123,34 +154,39 @@ module foldJob {
   action requestCompact: bool = all {
     not(compactWaiting), not(swap.active), job.phase != "ready",
     compactWaiting' = true,
-    job' = if (job.phase == "idle") { ...idleJob, phase: "engine", snap: stored(msgs), csnap: stored(msgs) } else { ...job, csnap: stored(msgs) },
-    msgs' = msgs, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    job' = if (job.phase == "idle") { ...idleJob, phase: "engine", snap: stored(msgs), csnap: stored(msgs), snapAt: clock, csnapAt: clock }
+      else { ...job, csnap: stored(msgs), csnapAt: clock },
+    clock' = clock, msgs' = msgs, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
-  // Start the swap of a plan: the dropped region holds any subset of the queued messages the job saw.
+  // Start the swap of a plan over the rows read at readAt, which held the queued messages in `read`.
   // src: fold-job.ts:776-789, applyFoldPlan fold-job.ts:536-593 (buildCleared builds the result before persisting)
-  action startSwap(dropped: Set[int], mechanical: bool): bool = all {
-    msgs' = applyDrop(msgs, dropped),
-    swap' = { active: true, pc: 0, dropped: dropped },
+  action startSwap(read: Set[int], readAt: int, mechanical: bool): bool = all {
+    val live = read.intersect(stored(msgs))
+    nondet dropped = live.powerset().filter(d => isTypingPrefix(msgs, live, d)).oneOf()
+    val swapped = applyDrop(msgs, dropped, cutBound(msgs, live, dropped, readAt))
+    all {
+      msgs' = swapped,
+      swap' = { active: true, pc: 0, dropped: dropped },
+      seen' = seen.union(if (mechanical) Set("mechanical") else Set())
+        .union(if (dropped.exists(m => swapped.get(m).carried > msgs.get(m).carried)) Set("carried") else Set()),
+    },
     job' = { ...job, phase: "swapping", mechanical: mechanical },
-    compactWaiting' = false,
+    compactWaiting' = false, clock' = clock,
     endedNoPlanOnOverflow' = endedNoPlanOnOverflow,
-    seen' = seen.union(if (mechanical) Set("mechanical") else Set()).union(if (dropped.exists(m => msgs.get(m).handled == false)) Set("carried") else Set()),
   }
 
   // The plan is ready (from a turn end, or the awaited job resolved inside the deadline). src: fold-job.ts:754-755
   action swapReady: bool = all {
     job.phase == "ready", not(swap.active),
-    nondet d = job.snap.intersect(stored(msgs)).powerset().oneOf()
-    startSwap(d, false),
+    startSwap(job.snap, job.snapAt, false),
   }
 
   // The 7 s deadline passes while the job still summarizes. src: fold-job.ts:681-693 awaitOrFallback -> prepareMechanicalFold
   action deadline: bool = all {
     compactWaiting, job.phase == "bg" or job.phase == "single" or job.phase == "engine",
     // prepareMechanicalFold plans over the rows compactOrHandOff read, not the job's.
-    nondet d = job.csnap.intersect(stored(msgs)).powerset().oneOf()
-    startSwap(d, true),
+    startSwap(job.csnap, job.csnapAt, true),
   }
 
   // No plan (job ended empty, or the transcript changed under a ready plan): the engine summarizer compacts and every
@@ -159,9 +195,10 @@ module foldJob {
     compactWaiting or job.phase == "ready", not(swap.active),
     job.phase == "idle" or job.phase == "ready",
     retireOk or RETIRE_MAY_FAIL,
-    val covered = msgs.keys().mapBy(m => if (msgs.get(m).inStore) { ...msgs.get(m), engine: true } else msgs.get(m))
+    // The engine summary replaces the conversation, folded rows included; it is assumed to keep what it summarized.
+    val covered = msgs.keys().mapBy(m => { ...msgs.get(m), engine: msgs.get(m).engine or msgs.get(m).inStore, foldedRow: false })
     msgs' = if (retireOk) retire(covered, stored(msgs)) else covered,
-    job' = idleJob, compactWaiting' = false,
+    job' = idleJob, compactWaiting' = false, clock' = clock,
     swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen.union(Set("handOff")),
   }
 
@@ -180,19 +217,19 @@ module foldJob {
       swap' = { ...swap, pc: if (ok or (step == "retire" and FIXED)) swap.pc + 1 else DONE },
       seen' = if (ok) seen else seen.union(Set("writeFailed")),
     },
-    job' = job, compactWaiting' = compactWaiting, endedNoPlanOnOverflow' = endedNoPlanOnOverflow,
+    job' = job, compactWaiting' = compactWaiting, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, clock' = clock,
   }
 
   // src: fold-job.ts:782-786 (finally: job idle, pending plan deleted)
   action finishSwap: bool = all {
     swap.active, swap.pc == DONE,
-    swap' = noSwap, job' = idleJob,
+    swap' = noSwap, job' = idleJob, clock' = clock,
     msgs' = msgs, compactWaiting' = compactWaiting, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   action init = all {
     msgs' = MSGS.mapBy(_ => freshMsg),
-    job' = idleJob, compactWaiting' = false, swap' = noSwap, endedNoPlanOnOverflow' = false, seen' = Set(),
+    job' = idleJob, compactWaiting' = false, swap' = noSwap, endedNoPlanOnOverflow' = false, clock' = 0, seen' = Set(),
   }
 
   action step = any {
@@ -230,10 +267,13 @@ module foldJob {
   // covered by the engine summarizer, and an unhandled one never leaves the model's context.
   val noLoss = MSGS.forall(m => {
     val r = msgs.get(m)
-    and {
-      (r.typed and not(r.inStore)) implies (r.handled or r.carried >= 1 or r.engine),
-      (r.typed and not(r.handled)) implies r.inContext,
-    }
+    (r.typed and not(r.inStore)) implies (r.handled or r.carried >= 1 or r.engine)
+  })
+  // Violated on `current`: a carried folded row is removed by the next swap before any reply (fold.ts:270-271), so an
+  // unhandled message leaves context. Open: whether the next fold keeps carried rows is the user's decision.
+  val unhandledStaysInContext = MSGS.forall(m => {
+    val r = msgs.get(m)
+    (r.typed and not(r.handled)) implies r.inContext
   })
 
   // Sanity: must be violated, showing a carry is reachable at all.

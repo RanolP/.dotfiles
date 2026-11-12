@@ -164,13 +164,15 @@ const SESSION_STORE_PREFIXES = new Set([
   'address-index', 'agent-task-roots', 'agent-task-step-claims', 'clause-backlog', 'clauses', 'headAttachments', 'held', 'instruction-index', 'issue-addresses',
   'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows',
 ])
-const SESSION_STATE_MAX_CHARS = 4_194_304
+const SESSION_STATE_MAX_BYTES = 4_194_304
 const SESSION_STATE_MIGRATION_KEY = 'migrated:session-files:v1'
-const sessionStateCache = new Map<string, { size: number; mtimeMs: number; chars: number; state: Record<string, unknown> }>()
+const sessionStateCache = new Map<string, { size: number; mtimeMs: number; bytes: number; state: Record<string, unknown> }>()
 const sessionStateWrites = new Map<string, Promise<void>>()
 const foldChecks = new Map<string, Promise<void>>()
 let sessionStateMigration: Promise<void> | undefined
 let sessionStateMigrationFailed = false
+
+const utf8ByteLength = (text: string) => new TextEncoder().encode(text).length
 
 function sessionStoreOwner(key: string): string | undefined {
   const separator = key.indexOf(':')
@@ -200,18 +202,19 @@ async function readSessionState($: StoreReader, session: string, enforceLimit = 
   const entry = await sessionStateEntry($, path)
   const cached = sessionStateCache.get(path)
   if (entry && cached && cached.size === entry.size && cached.mtimeMs === entry.mtimeMs) {
-    if (enforceLimit && cached.chars > SESSION_STATE_MAX_CHARS) throw new Error(`clm: session state exceeds ${SESSION_STATE_MAX_CHARS} characters`)
+    if (enforceLimit && cached.bytes > SESSION_STATE_MAX_BYTES) throw new Error(`clm: session state exceeds ${SESSION_STATE_MAX_BYTES} bytes`)
     return { ...cached.state }
   }
   const text = await $.fs.read(path)
-  if (enforceLimit && text.length > SESSION_STATE_MAX_CHARS) throw new Error(`clm: session state exceeds ${SESSION_STATE_MAX_CHARS} characters`)
+  const bytes = utf8ByteLength(text)
+  if (enforceLimit && bytes > SESSION_STATE_MAX_BYTES) throw new Error(`clm: session state exceeds ${SESSION_STATE_MAX_BYTES} bytes`)
   let value: unknown
   try { value = JSON.parse(text) }
   catch (error) { return recoverSessionState($, session, path, text, `invalid JSON (${String(error).slice(0, 300)})`) }
   if (!isRecord(value)) return recoverSessionState($, session, path, text, 'state file is not an object')
   if (entry) {
     sessionStateCache.clear()
-    sessionStateCache.set(path, { size: entry.size, mtimeMs: entry.mtimeMs, chars: text.length, state: value })
+    sessionStateCache.set(path, { size: entry.size, mtimeMs: entry.mtimeMs, bytes, state: value })
   }
   return { ...value }
 }
@@ -246,8 +249,9 @@ async function sessionStoreGet($: StoreReader, key: string): Promise<unknown> {
 
 async function writeSessionState($: StoreWriter, session: string, state: Record<string, unknown>, droppedKey?: string): Promise<void> {
   const text = JSON.stringify(state)
-  if (text.length > SESSION_STATE_MAX_CHARS) {
-    await logEvent($, 'session-state-migration', { reason: `session state write for ${session} exceeded ${SESSION_STATE_MAX_CHARS} characters; dropped ${droppedKey ?? 'updated state'}` })
+  const bytes = utf8ByteLength(text)
+  if (bytes > SESSION_STATE_MAX_BYTES) {
+    await logEvent($, 'session-state-migration', { reason: `session state write for ${session} exceeded ${SESSION_STATE_MAX_BYTES} bytes; dropped ${droppedKey ?? 'updated state'}` })
     return
   }
   const path = await sessionStatePath($, session)
@@ -255,7 +259,7 @@ async function writeSessionState($: StoreWriter, session: string, state: Record<
   const entry = await sessionStateEntry($, path)
   if (entry) {
     sessionStateCache.clear()
-    sessionStateCache.set(path, { size: entry.size, mtimeMs: entry.mtimeMs, chars: text.length, state: { ...state } })
+    sessionStateCache.set(path, { size: entry.size, mtimeMs: entry.mtimeMs, bytes, state: { ...state } })
   }
   else sessionStateCache.delete(path)
 }
@@ -304,9 +308,9 @@ async function migrateSessionStore($: StoreWriter, report: (reason: string) => P
         const state = await readSessionState($, session, false)
         let text = JSON.stringify(state)
         const dropped: string[] = []
-        if (text.length > SESSION_STATE_MAX_CHARS) {
+        if (utf8ByteLength(text) > SESSION_STATE_MAX_BYTES) {
           dropped.push(...keys.filter(key => !Object.prototype.hasOwnProperty.call(state, key)))
-          await report(`session state for ${session} already exceeds ${SESSION_STATE_MAX_CHARS} characters; dropped ${dropped.length} legacy key(s)`)
+          await report(`session state for ${session} already exceeds ${SESSION_STATE_MAX_BYTES} bytes; dropped ${dropped.length} legacy key(s)`)
         }
         else {
           for (const key of keys) {
@@ -315,7 +319,7 @@ async function migrateSessionStore($: StoreWriter, report: (reason: string) => P
             if (value === undefined) continue
             const candidate = { ...state, [key]: value }
             const candidateText = JSON.stringify(candidate)
-            if (candidateText.length > SESSION_STATE_MAX_CHARS) {
+            if (utf8ByteLength(candidateText) > SESSION_STATE_MAX_BYTES) {
               dropped.push(key)
               continue
             }
@@ -323,8 +327,8 @@ async function migrateSessionStore($: StoreWriter, report: (reason: string) => P
             text = candidateText
           }
         }
-        if (dropped.length && text.length <= SESSION_STATE_MAX_CHARS) {
-          await report(`session state for ${session} exceeded ${SESSION_STATE_MAX_CHARS} characters; dropped ${dropped.length} legacy key(s): ${dropped.slice(0, 12).join(', ')}`)
+        if (dropped.length && utf8ByteLength(text) <= SESSION_STATE_MAX_BYTES) {
+          await report(`session state for ${session} exceeded ${SESSION_STATE_MAX_BYTES} bytes; dropped ${dropped.length} legacy key(s): ${dropped.slice(0, 12).join(', ')}`)
         }
         await $.fs.write(await sessionStatePath($, session), text)
         for (const key of keys) await $.store.delete(key)

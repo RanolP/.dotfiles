@@ -119,6 +119,28 @@ test('the clm status noun caches unchanged session state and sees an external fi
   expect(stateReads).toBe(2)
 })
 
+// Regression caught: the host rejects state files by UTF-8 bytes, while Korean text uses three bytes per character.
+test('session state takes the over-cap path when UTF-8 bytes exceed the host limit', OPTS, async ($, on) => {
+  const maxStateBytes = 4_194_304
+  const koreanText = '가'.repeat(Math.floor(maxStateBytes / 3) + 1)
+  const seen = bottoms(on, {
+    rows: [],
+    replies: [],
+    fsWriteBlock: async (path, text) => {
+      const bytes = new TextEncoder().encode(text).length
+      if (path.endsWith('.state.json') && bytes > maxStateBytes)
+        throw new Error(`$.fs.write: ${path} refused: ${bytes} bytes is over the ${maxStateBytes}-byte limit`)
+    },
+  })
+
+  expect(koreanText.length < maxStateBytes).toBe(true)
+  expect(new TextEncoder().encode(koreanText).length > maxStateBytes).toBe(true)
+  await $.prompt.submit(promptInput(koreanText))
+
+  expect(seen.logs.some(line => line.includes('prompt state update failed'))).toBe(false)
+  expect((seen.files['/home/t/.claude-work/plans/clm-s1.state.json'] ?? '').includes('address-index:s1:main')).toBe(false)
+})
+
 // Regression caught: haiku fenced its JSON reply in ```json, and no session ever got a focus event.
 test('a fenced intent reply still sets the main focus', OPTS, async ($, on) => {
   const seen = bottoms(on, { rows: [], replies: [], intentReplies: ['```json\n' + intentReply({ intent: 'handoff', title: 'Main task' }) + '\n```'] })

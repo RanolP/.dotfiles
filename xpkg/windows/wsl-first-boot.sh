@@ -23,4 +23,9 @@ systemd=true
 
 [user]
 default=$user
+
+[automount]
+enabled = true
+options = "metadata"
+mountFsTab = true
 WSLCONF

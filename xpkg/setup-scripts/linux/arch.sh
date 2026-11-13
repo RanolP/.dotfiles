@@ -28,6 +28,26 @@ phase_system() {
     pacman -S --needed --noconfirm git nix </dev/null
   fi
 
+  # `metadata` lets chmod on /mnt/c stick. An existing distro never re-runs
+  # wsl-first-boot.sh, so the block is ensured here; other sections are kept.
+  if [ -e /proc/sys/fs/binfmt_misc/WSLInterop ]; then
+    local wslconf=/etc/wsl.conf
+    local automount=$'[automount]\nenabled = true\noptions = "metadata"\nmountFsTab = true'
+    local current
+    current=$(awk '/^\[/{in_s=($0=="[automount]")} in_s && NF' "$wslconf" 2>/dev/null || true)
+    if [ "$current" = "$automount" ]; then
+      ok "$wslconf [automount]"
+    else
+      changed "$wslconf [automount] (applies after: wsl --terminate ${WSL_DISTRO_NAME:-<distro>})"
+      touch "$wslconf"
+      # Drop any old [automount] section and trailing blank lines, then append.
+      awk '/^\[/{in_s=($0=="[automount]")} !in_s{ if (NF) { for (; b > 0; b--) print ""; print } else b++ }' \
+        "$wslconf" >"$wslconf.tmp"
+      { if [ -s "$wslconf.tmp" ]; then printf '\n'; fi; printf '%s\n' "$automount"; } >>"$wslconf.tmp"
+      mv "$wslconf.tmp" "$wslconf"
+    fi
+  fi
+
   [ -d /run/systemd/system ] || die "systemd is not running (WSL: set [boot] systemd=true in /etc/wsl.conf, then wsl --terminate)"
 
   if systemctl is-enabled --quiet nix-daemon.socket && systemctl is-active --quiet nix-daemon.socket; then

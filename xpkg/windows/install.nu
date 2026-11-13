@@ -94,7 +94,7 @@ def install-wsl [name: string, user: string] {
         return
     }
     # Strip CR so a CRLF checkout cannot break the script.
-    let script = (open --raw ($env.FILE_PWD | path join wsl-first-boot.sh) | str replace -a "\r\n" "\n")
+    let script = (open --raw ~/.dotfiles/xpkg/windows/wsl-first-boot.sh | str replace -a "\r\n" "\n")
     let s = ($script | ^wsl.exe -d $name -u root -- bash -s -- $user | complete)
     if $s.exit_code != 0 {
         print $"     (ansi red)!!(ansi reset) wsl ($name) first-boot (ansi red)exit ($s.exit_code)(ansi reset)"

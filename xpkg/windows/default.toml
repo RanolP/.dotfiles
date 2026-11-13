@@ -94,13 +94,14 @@ args = ["/qn", "/norestart"]
 # NVIDIA Game Ready DCH display driver for RanolP-Desktop's RTX 4070 Ti; there is
 # no winget package. `direct` has no per-profile table, so this runs on every
 # Windows host: move it under a profile mechanism before adding a GPU-less host.
-# The key is the Korean-localized ARP DisplayName ("NVIDIA 그래픽 드라이버 610.88");
-# an English install reads "NVIDIA Graphics Driver", so there is no locale-free
-# prefix (bare "NVIDIA" would also match CUDA and Nsight). `version` makes an
+# The key is the ARP DisplayName this installer registers under `-s`
+# ("NVIDIA Graphics Driver 621.24"), even on this Korean Windows whose earlier
+# install read "NVIDIA 그래픽 드라이버 610.88"; bare "NVIDIA" would also match
+# CUDA and Nsight. `version` makes an
 # installed entry that is older count as missing. To upgrade: pick the new
 # version at nvidia.com/Download, then bump `version` and the version in `url`.
 # `-s -noreboot` are the NVIDIA installer's silent flags; reboot afterwards.
-[direct."NVIDIA 그래픽 드라이버"]
+[direct."NVIDIA Graphics Driver"]
 version = "621.24"
 url = "https://us.download.nvidia.com/Windows/621.24/621.24-desktop-win10-win11-64bit-international-dch-whql.exe"
 args = ["-s", "-noreboot"]

@@ -41,29 +41,44 @@ for $fontname in ($file | columns) {
 
     if $nu.os-info.name == windows {
         mkdir $user_fonts
+        let reg_key = 'Software\Microsoft\Windows NT\CurrentVersion\Fonts'
+        # One in-process read of the Fonts key; `reg add` runs only for an entry
+        # that is missing or points elsewhere.
+        let registered = (registry query --hkcu $reg_key | reduce --fold {} {|it, acc| $acc | upsert $it.name $it.value })
+        let installed = (ls $user_fonts | get name)
         for $source in (ls $extracted | get name) {
             let file = ($source | path parse)
-            let hash = (open --raw $source | hash sha256)
             # Windows keeps every registered font file open for the whole
             # session, so a changed font cannot overwrite its old file. It goes
             # in beside it under a hash-suffixed name instead; the old file is
             # removed on a later run, once a sign-out has released it.
             let plain = ($user_fonts | path join $"($file.stem).($file.extension)")
-            let target = if (not ($plain | path exists)) or ((open --raw $plain | hash sha256) == $hash) {
+            # Same size and an installed copy at least as new as the source means
+            # unchanged; only a size match with an older copy is worth a hash.
+            let target = if not ($plain | path exists) {
                 $plain
             } else {
-                $user_fonts | path join $"($file.stem).($hash | str substring 0..7).($file.extension)"
+                let src = (ls -l $source | first)
+                let dst = (ls -l $plain | first)
+                if $src.size == $dst.size and $dst.modified >= $src.modified {
+                    $plain
+                } else if $src.size == $dst.size and ((open --raw $plain | hash sha256) == (open --raw $source | hash sha256)) {
+                    $plain
+                } else {
+                    $user_fonts | path join $"($file.stem).((open --raw $source | hash sha256) | str substring 0..7).($file.extension)"
+                }
             }
             if not ($target | path exists) {
                 cp $source $target
             }
-            ls $user_fonts
-            | get name
+            $installed
             | where {|old| ($old | path basename | str starts-with $"($file.stem).") and $old != $target }
             | each {|old| do -i { rm $old } }
             | ignore
             let entry = $"(($source | path parse).stem) \(TrueType\)"
-            ^reg add 'HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts' /v $entry /t REG_SZ /d $target /f | ignore
+            if ($registered | get -o $entry) != $target {
+                ^reg add $'HKCU\($reg_key)' /v $entry /t REG_SZ /d $target /f | ignore
+            }
         }
     }
 }

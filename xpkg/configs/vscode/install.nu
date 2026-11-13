@@ -21,6 +21,12 @@ let target = if $nu.os-info.name == macos {
 # existing real link), so use New-Item, which needs the elevated shell
 # configs/install.nu relaunches into; fall back to a copy when not elevated.
 def link-file [src: string, dst: string] {
+    # Already a link to src: skip the PowerShell launch (~0.8 s each).
+    let cur = (do -i { ls -l --directory $dst } | default [])
+    let norm = {|p: string| $p | str replace --all '/' '\' | str lowercase }
+    if ($cur | is-not-empty) and $cur.0.type == symlink and (do $norm $cur.0.target) == (do $norm $src) {
+        return
+    }
     if $nu.os-info.name == windows {
         let r = (do -i { ^powershell -NoProfile -Command $"New-Item -ItemType SymbolicLink -Force -Path '($dst)' -Value '($src)' -ErrorAction Stop | Out-Null" } | complete)
         if $r.exit_code != 0 {

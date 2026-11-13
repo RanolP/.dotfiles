@@ -25,11 +25,17 @@ if ($endpoints | is-empty) {
     return
 }
 
+const sysfx = '{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5'
 for fx in $endpoints {
+    # Already 1: skip the PowerShell launch (~0.8 s per endpoint).
+    let cur = (^reg query $'HKLM\($fx)' /v $sysfx | complete)
+    if $cur.exit_code == 0 and ($cur.stdout =~ 'REG_DWORD\s+0x1\s') {
+        continue
+    }
     ^powershell -NoProfile -Command $"
         $ErrorActionPreference = 'Stop'
         $key = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey\('($fx)', 'ReadWriteSubTree', 'SetValue'\)
-        $key.SetValue\('{1da5d803-d492-4edd-8c23-e0c0ffee7f0e},5', 1, 'DWord'\)
+        $key.SetValue\('($sysfx)', 1, 'DWord'\)
         $key.Close\(\)
     "
 }

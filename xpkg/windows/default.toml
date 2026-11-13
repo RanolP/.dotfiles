@@ -111,7 +111,7 @@ args = ["-s", "-noreboot"]
 # Not on winget. The URL pins the version NVIDIA's download page linked on
 # 2026-11-13; the App updates itself after that, so no `version` here.
 # `-s` is the silent flag Chocolatey's nvidia-app package uses.
-[direct."NVIDIA app"]
+[direct."NVIDIA App"]
 url = "https://us.download.nvidia.com/nvapp/client/11.0.9.585/x64/NVIDIA_app_v11.0.9.585_x64.exe"
 args = ["-s"]
 

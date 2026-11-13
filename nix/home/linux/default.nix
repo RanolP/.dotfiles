@@ -3,7 +3,6 @@
   home.homeDirectory = "/home/ranolp";
 
   home.packages = with pkgs; [
-    keybase
 
     # Claude Code's named auth profiles (~/.claude-<profile>, picked by
     # nushell's `ccc`) need their config mirrored from ~/.claude and their
@@ -70,6 +69,9 @@
   '';
 
   services.syncthing.enable = true;
+  # The CLI restarts keybase.service through systemd; without the unit its
+  # fallback fork exits 5 and every command fails.
+  services.keybase.enable = true;
 
   programs.nushell.shellAliases = {
     rebuild = "home-manager switch --flake /home/ranolp/.dotfiles/nix#ranolp-archwsl -b before-hm";

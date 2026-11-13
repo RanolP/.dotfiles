@@ -93,12 +93,20 @@ def install-wsl [name: string, user: string] {
         for l in ($"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
         return
     }
+    # On a machine without Virtual Machine Platform, `--install` only turns the
+    # feature on and exits 0 with "Changes will not be effective until the
+    # system is rebooted"; the distro does not exist yet.
+    if ($name not-in (installed-wsl)) {
+        print $"     (ansi yellow)[!](ansi reset) wsl ($name) (ansi yellow)not installed yet -- reboot Windows, then run `rebuild` again(ansi reset)"
+        for l in ($"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+        return
+    }
     # Strip CR so a CRLF checkout cannot break the script.
     let script = (open --raw ~/.dotfiles/xpkg/windows/wsl-first-boot.sh | str replace -a "\r\n" "\n")
     let s = ($script | ^wsl.exe -d $name -u root -- bash -s -- $user | complete)
     if $s.exit_code != 0 {
         print $"     (ansi red)!!(ansi reset) wsl ($name) first-boot (ansi red)exit ($s.exit_code)(ansi reset)"
-        for l in ($"($s.stdout)($s.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+        for l in ($"($s.stdout)($s.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
         return
     }
     # Not through `complete`, so the TTY reaches passwd.

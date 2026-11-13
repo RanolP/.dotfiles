@@ -68,6 +68,8 @@
     fi
   '';
 
+  services.syncthing.enable = true;
+
   programs.nushell.shellAliases = {
     rebuild = "home-manager switch --flake /home/ranolp/.dotfiles/nix#ranolp-archwsl -b before-hm";
   };

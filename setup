@@ -1,0 +1,22 @@
+#!/bin/sh
+# curl -fsSL https://dotfiles.ranolp.dev/setup | sh
+# Everything lives in main, called on the last line, so sh has read the whole
+# script before the inner `curl | bash` can touch the shared stdin.
+main() {
+    os=$(uname -s)
+    id=
+    if [ "$os" = Linux ] && [ -r /etc/os-release ]; then
+        id=$(. /etc/os-release && printf '%s' "$ID")
+    fi
+    case "$id" in
+    arch)
+        curl -fsSL https://dotfiles.ranolp.dev/xpkg/setup-scripts/linux/arch.sh | bash
+        ;;
+    *)
+        echo "Unsupported environment: $os${id:+ ($id)}. Only Arch Linux is supported." >&2
+        exit 1
+        ;;
+    esac
+}
+
+main "$@"

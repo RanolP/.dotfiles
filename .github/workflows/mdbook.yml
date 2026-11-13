@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - docs/**
+      - setup
+      - xpkg/setup-scripts/**
+      - .github/workflows/mdbook.yml
   workflow_dispatch:
 
 permissions:
@@ -28,7 +31,12 @@ jobs:
             | tar -xz --directory /usr/local/bin
 
       - name: Build
-        run: cd docs && mdbook build
+        run: |
+          cd docs && mdbook build
+          cd ..
+          cp setup docs/book/setup
+          mkdir -p docs/book/xpkg
+          cp -r xpkg/setup-scripts docs/book/xpkg/setup-scripts
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5

@@ -21,8 +21,16 @@ let settings = if $nu.os-info.name == windows {
     job spawn { run-unit {name: settings, script: $configs, args: [--system]} | job send 0 }
 }
 
+# Each group's failure is recorded, not thrown, so a failing Packages step
+# cannot abort before the settings output is printed; the exit code reports it.
+mut failed = []
+
 print $"(ansi green)==(ansi reset) Packages"
-nu ~/.dotfiles/xpkg/windows/install.nu
+let packages_ok = try { nu ~/.dotfiles/xpkg/windows/install.nu; true } catch {|e|
+    print -e $"(ansi red)!!(ansi reset) packages failed: ($e.msg)"
+    false
+}
+if not $packages_ok { $failed = ($failed | append packages) }
 
 # The configs step runs in a child process that inherits this PATH.
 if $nu.os-info.name == windows { refresh-path }
@@ -31,10 +39,19 @@ if $settings != null {
     let r = (job recv)
     print $"(ansi green)==(ansi reset) Settings \(ran alongside Packages, ($r.secs | math round --precision 1)s\)"
     print ($r.output | str trim --right)
-    if $r.exit_code != 0 { print -e $"(ansi red)!!(ansi reset) settings exit ($r.exit_code)" }
+    if $r.exit_code != 0 {
+        print -e $"(ansi red)!!(ansi reset) settings exit ($r.exit_code)"
+        $failed = ($failed | append settings)
+    }
 }
 
 print $"(ansi green)==(ansi reset) Configs and Fonts"
-do -i { nu $configs --rebuild }
+# Not captured: mise install and the unit blocks stream as they finish.
+let configs_ok = try { nu $configs --rebuild; true } catch { false }
+if not $configs_ok { $failed = ($failed | append configs) }
 
 print $"(ansi green)==(ansi reset) rebuild done in (((date now) - $started) / 1sec | math round --precision 1)s"
+if ($failed | is-not-empty) {
+    print -e $"(ansi red)!!(ansi reset) failed: ($failed | str join ', ')"
+    exit 1
+}

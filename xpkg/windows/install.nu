@@ -5,8 +5,8 @@
 # ([profiles.<hostname>]) additions. Reads `winget list` once (bulk), skips
 # whatever is already installed, installs the rest, and only WARNS about
 # winget-source packages installed but not declared -- it uninstalls only the
-# ids listed under `remove` (no zap). The install progress bar is left on for
-# real installs.
+# ids listed under `remove` (no zap). Each install's output is captured and
+# printed as one result line when it finishes.
 
 # Parse `winget list` into {name, id, source} records. Column-offset based: piped
 # output is not truncated, and the header row fixes each column's start.

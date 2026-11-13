@@ -40,6 +40,7 @@ packages = [
   "Kakao.KakaoTalk",
   "Keybase.Keybase",
   "M2Team.NanaZip",
+  "Microsoft.VisualStudio.BuildTools", # MSVC + Windows 11 SDK, see [winget.override]
   "Microsoft.VisualStudioCode",
   "Microsoft.WSL",
   "Microsoft.WindowsTerminal",
@@ -59,6 +60,12 @@ packages = [
   "VideoLAN.VLC",
   "voidtools.Everything",
 ]
+
+# Installer args winget passes with --override, for packages whose default
+# install is not what is wanted. Applied on install only; an installed
+# package is skipped, so a changed list needs a manual modify.
+[winget.override]
+"Microsoft.VisualStudio.BuildTools" = "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.26100"
 
 # Not on winget, but the vendor serves a stable latest-installer URL. The key is
 # the start of the installed DisplayName (`winget list` Name column) used to

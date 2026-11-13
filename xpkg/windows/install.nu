@@ -29,9 +29,10 @@ def installed-packages [] {
     } | where ($it.id | is-not-empty)
 }
 
-def install-winget [id: string, skip_deps: bool] {
+def install-winget [id: string, skip_deps: bool, override?: string] {
     mut args = ["install" "-eh" "--disable-interactivity" "--accept-package-agreements" "--accept-source-agreements" "--id" $id]
     if $skip_deps { $args = ($args | append "--skip-dependencies") }
+    if $override != null { $args = ($args | append ["--override" $override]) }
     print $"     (ansi green)++(ansi reset) ($id)"
     let r = (^winget ...$args | complete)
     if $r.exit_code != 0 {
@@ -137,7 +138,7 @@ export def main [] {
         if ($id in $installed_ids) {
             print $"     (ansi dark_gray)==(ansi reset) ($id)"
         } else {
-            install-winget $id ($id in $skip)
+            install-winget $id ($id in $skip) ($def.winget?.override? | default {} | get -o $id)
         }
     }
 

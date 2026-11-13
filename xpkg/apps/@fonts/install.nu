@@ -33,7 +33,8 @@ for $fontname in ($file | columns) {
         | ignore
         rm -rf $"($dir)/unzipped"
         if $font.family? != null {
-            ^uv run -q --with fonttools python $"($env.FILE_PWD)/rename-family.py" $font.family ...(ls $extracted | get name)
+            # The elevated install process has no mise dirs on PATH.
+            ^(^mise which uv | str trim) run -q --with fonttools python $"($env.FILE_PWD)/rename-family.py" $font.family ...(ls $extracted | get name)
         }
     } else {
         echo $"    (ansi black)Already downloaded(ansi reset)"
@@ -44,7 +45,7 @@ for $fontname in ($file | columns) {
         let reg_key = 'Software\Microsoft\Windows NT\CurrentVersion\Fonts'
         # One in-process read of the Fonts key; `reg add` runs only for an entry
         # that is missing or points elsewhere.
-        let registered = (registry query --hkcu $reg_key | reduce --fold {} {|it, acc| $acc | upsert $it.name $it.value })
+        let registered = ((try { registry query --hkcu $reg_key } catch { [] }) | reduce --fold {} {|it, acc| $acc | upsert $it.name $it.value })
         let installed = (ls $user_fonts | get name)
         for $source in (ls $extracted | get name) {
             let file = ($source | path parse)

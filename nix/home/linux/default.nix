@@ -74,8 +74,12 @@
   # fallback fork exits 5 and every command fails.
   services.keybase.enable = true;
 
-  # env.linux.nu sets the same value for nushell.
+  # env.linux.nu sets the same value for nushell. The shared ~/.profile does
+  # not load hm-session-vars.sh on its own; this line merges into it.
   home.sessionVariables.BROWSER = "wsl-open";
+  home.file.".profile".text = ''
+    . "$HOME/.nix-profile/etc/profile.d/hm-session-vars.sh"
+  '';
 
   # Nothing else installs mise-global.toml's pins here, so a bumped or newly
   # declared tool stays "(missing)" until this runs. A failed tool (e.g. an npm

@@ -54,7 +54,7 @@ The packages step reads `winget list` once, skips everything already installed, 
 | `[winget.override]` | `"<id>" = "<installer args>"` for an id whose default install is not what is wanted | `winget install ... --override "<args>"` |
 | `skip_dependencies` | ids installed with `--skip-dependencies` | |
 | `remove` | ids to uninstall when present | `winget uninstall` |
-| `[direct."<name>"]` | software not on winget: `url`, silent `args`, optional zip `member`; `<name>` is the start of its installed DisplayName | download, then run the installer or `msiexec` |
+| `[direct."<name>"]` | software not on winget: `url`, silent `args`, optional zip `member`, optional `version`; `<name>` is the start of its installed DisplayName, and with `version` an installed entry below it (compared per dotted component) counts as missing | download, then run the installer or `msiexec` |
 | `[wsl.<distro>]` | a `wsl --list --online` distro name and its `user`; optional `sparse = true`, `home-manager = true` | `wsl --install <distro> --no-launch`, then first-boot setup; `sparse` runs `wsl --manage <distro> --set-sparse true --allow-unsafe` on an existing distro; `home-manager` runs `xpkg/setup-scripts/linux/arch.sh` in the distro on every rebuild |
 
 A winget package installed but not declared is reported as a warning only.

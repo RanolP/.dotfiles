@@ -24,9 +24,24 @@ def installed-packages [] {
             let name = ($line | str substring 0..<$id_start | str trim)
             let id = ($line | str substring $id_start..<$ver_start | str trim)
             let src = (if $src_start > 0 and ($line | str length) > $src_start { $line | str substring $src_start.. | str trim } else { "" })
-            {name: $name, id: $id, source: $src}
+            let version = ($line | str substring $ver_start.. | split row ' ' | where $it != '' | get -o 0 | default '')
+            {name: $name, id: $id, version: $version, source: $src}
         }
     } | where ($it.id | is-not-empty)
+}
+
+# Numeric dotted-version compare, per component ("621.9" < "621.24"); a missing
+# component counts as 0. Non-numeric parts (e.g. a "<" prefix) read as 0.
+def version-lt [a: string, b: string] {
+    let x = ($a | split row '.' | each {|p| try { $p | into int } catch { 0 } })
+    let y = ($b | split row '.' | each {|p| try { $p | into int } catch { 0 } })
+    let n = ([($x | length) ($y | length)] | math max)
+    for i in 0..<$n {
+        let p = ($x | get -o $i | default 0)
+        let q = ($y | get -o $i | default 0)
+        if $p != $q { return ($p < $q) }
+    }
+    false
 }
 
 # Windows Installer runs one install at a time, so installs stay serial and a
@@ -233,12 +248,17 @@ export def main [] {
         }
     }
 
-    # Direct (not on winget, vendor URL): skip when the DisplayName is installed.
-    let installed_names = ($pkgs | get name)
+    # Direct (not on winget, vendor URL): skip when the DisplayName is installed
+    # (and, when the entry sets `version`, at least that version).
     let direct = ($def.direct? | default {} | transpose name spec)
     # Prefix match: Inno Setup installers append the version to the
     # DisplayName ("VoiSona Talk 1.3.10.0", "Little Big Mouse version 5.6.0").
-    let is_installed = {|e| $installed_names | any {|n| $n starts-with $e.name } }
+    let is_installed = {|e|
+        let have = ($pkgs | where {|p| $p.name starts-with $e.name })
+        if $e.spec.version? == null { $have | is-not-empty } else {
+            $have | any {|p| not (version-lt $p.version $e.spec.version) }
+        }
+    }
     let missing = ($direct | where {|e| not (do $is_installed $e) })
     # Downloads run in parallel; installs below stay serial, in declaration order.
     let downloads = ($missing | par-each --keep-order {|e| download-direct $e.name $e.spec.url $e.spec.member? })

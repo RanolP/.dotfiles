@@ -28,6 +28,15 @@
     '')
   ];
 
+  # Lets Linux GUI apps (WSLg) use the fonts installed on the Windows side.
+  xdg.configFile."fontconfig/fonts.conf".text = ''
+    <?xml version="1.0"?>
+    <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+    <fontconfig>
+      <dir>/mnt/c/Windows/Fonts</dir>
+    </fontconfig>
+  '';
+
   # A GUI prompt through WSLg, so a signed commit from an agent's non-TTY shell
   # can still ask for the passphrase. pinentry-qt falls back to curses when
   # there is no display. Arch has no fontconfig config nix's Qt can read

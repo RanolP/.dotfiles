@@ -3,6 +3,7 @@
   home.homeDirectory = "/home/ranolp";
 
   home.packages = with pkgs; [
+    wsl-open # xdg-open stand-in: hands files and URLs to the Windows default app
 
     # Claude Code's named auth profiles (~/.claude-<profile>, picked by
     # nushell's `ccc`) need their config mirrored from ~/.claude and their
@@ -72,6 +73,16 @@
   # The CLI restarts keybase.service through systemd; without the unit its
   # fallback fork exits 5 and every command fails.
   services.keybase.enable = true;
+
+  # env.linux.nu sets the same value for nushell.
+  home.sessionVariables.BROWSER = "wsl-open";
+
+  # Nothing else installs mise-global.toml's pins here, so a bumped or newly
+  # declared tool stays "(missing)" until this runs. A failed tool (e.g. an npm
+  # trust-policy refusal) is reported but does not abort the switch.
+  home.activation.miseInstall = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+    run ${pkgs.mise}/bin/mise install --yes || echo "mise install failed; run 'mise install' to see why" >&2
+  '';
 
   programs.nushell.shellAliases = {
     rebuild = "home-manager switch --flake /home/ranolp/.dotfiles/nix#ranolp-archwsl -b before-hm";

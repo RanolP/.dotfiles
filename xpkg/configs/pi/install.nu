@@ -13,20 +13,45 @@ let vendor = $'($agent)/vendor/choco-pi'
 mkdir $'($agent)/vendor'
 
 print $"     (ansi blue)Copy(ansi reset) vendor/choco-pi"
-rm -rf $vendor
-cp --recursive $'($nix)/pi/choco-pi' $vendor
+# Mirror (deleting files the source dropped) but leave node_modules alone, so
+# an unchanged lockfile needs no reinstall. robocopy: exit < 8 is success.
+let src = ($'($nix)/pi/choco-pi' | path expand)
+let dst = ($vendor | path expand)
+let copy = (^robocopy $src $dst /MIR /XD node_modules /NFL /NDL /NJH /NJS /NP | complete)
+if $copy.exit_code >= 8 {
+    print $copy.stdout
+    error make { msg: $"robocopy into ($vendor) exited ($copy.exit_code)" }
+}
 
 for dir in [packages/choco-pi-web-access extensions] {
+    let target = $'($vendor)/($dir)'
+    # pnpm's own node_modules/.pnpm/lock.yaml is a normalised rewrite of
+    # pnpm-lock.yaml, so it never matches byte for byte; stamp our own hash of
+    # the install inputs inside node_modules instead.
+    let stamp = $'($target)/node_modules/.xpkg-install-hash'
+    let hash = (
+        [pnpm-lock.yaml package.json pnpm-workspace.yaml]
+        | each {|f|
+            let p = $'($target)/($f)'
+            if ($p | path exists) { open --raw $p | hash sha256 } else { "" }
+        }
+        | str join ":"
+    )
+    if ($stamp | path exists) and ((open --raw $stamp | str trim) == $hash) {
+        print $"     (ansi blue)Skip(ansi reset) vendor/choco-pi/($dir) dependencies, lockfile unchanged"
+        continue
+    }
     print $"     (ansi blue)Install(ansi reset) vendor/choco-pi/($dir) dependencies"
     # The elevated install process has no mise dirs on PATH. `mise which`
     # rather than `mise exec`, which would first install every missing tool.
     let pnpm = (^mise which pnpm | str trim)
-    let result = (do { cd $'($vendor)/($dir)'; ^$pnpm install --frozen-lockfile --ignore-scripts } | complete)
+    let result = (do { cd $target; ^$pnpm install --frozen-lockfile --ignore-scripts } | complete)
     print $result.stdout
     if ($result.stderr | is-not-empty) { print -e $result.stderr }
     if $result.exit_code != 0 {
-        error make { msg: $"pnpm install in ($vendor)/($dir) exited ($result.exit_code)" }
+        error make { msg: $"pnpm install in ($target) exited ($result.exit_code)" }
     }
+    $hash | save -f $stamp
 }
 
 # Pi rewrites settings.json at runtime, so keep every key it wrote and put

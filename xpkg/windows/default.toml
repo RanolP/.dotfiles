@@ -97,9 +97,14 @@ args = ["/qn", "/norestart"]
 # `sparse = true` makes an existing distro's ext4.vhdx sparse so it gives freed
 # space back to Windows. WSL 2.7 disabled this ("potential data corruption"),
 # so it is applied with `--allow-unsafe`.
+# `home-manager = true` runs xpkg/setup-scripts/linux/arch.sh in the distro on
+# every rebuild: `system` as root (pacman git+nix, nix-daemon, flakes), then
+# `home` as the user (clone ~/.dotfiles if missing, home-manager switch
+# --flake ~/.dotfiles/nix#ranolp-archwsl). Both phases are idempotent.
 [wsl.archlinux]
 user = "ranolp"
 sparse = true
+home-manager = true
 
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under

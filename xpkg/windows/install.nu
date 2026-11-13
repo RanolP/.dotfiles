@@ -119,6 +119,7 @@ def installed-wsl [] {
     ^wsl.exe -l -q | decode utf-16le | str replace -a "\r" "" | str replace -a (char nul) "" | lines | where ($it | is-not-empty)
 }
 
+# Returns true once the distro exists and its first boot succeeded.
 def install-wsl [name: string, user: string] {
     print $"     (ansi green)++(ansi reset) wsl ($name)"
     let r = (^wsl.exe --install $name --no-launch | complete)
@@ -126,7 +127,7 @@ def install-wsl [name: string, user: string] {
         print $"     (ansi red)!!(ansi reset) wsl ($name) (ansi red)exit ($r.exit_code)(ansi reset)"
         # wsl.exe prints UTF-16LE; stripping NULs leaves it readable.
         for l in ($"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
-        return
+        return false
     }
     # On a machine without Virtual Machine Platform, `--install` only turns the
     # feature on and exits 0 with "Changes will not be effective until the
@@ -134,7 +135,7 @@ def install-wsl [name: string, user: string] {
     if ($name not-in (installed-wsl)) {
         print $"     (ansi yellow)[!](ansi reset) wsl ($name) (ansi yellow)not installed yet -- reboot Windows, then run `rebuild` again(ansi reset)"
         for l in ($"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
-        return
+        return false
     }
     # Strip CR so a CRLF checkout cannot break the script.
     let script = (open --raw ~/.dotfiles/xpkg/windows/wsl-first-boot.sh | str replace -a "\r\n" "\n")
@@ -142,11 +143,34 @@ def install-wsl [name: string, user: string] {
     if $s.exit_code != 0 {
         print $"     (ansi red)!!(ansi reset) wsl ($name) first-boot (ansi red)exit ($s.exit_code)(ansi reset)"
         for l in ($"($s.stdout)($s.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
-        return
+        return false
     }
     # Not through `complete`, so the TTY reaches passwd.
     ^wsl.exe -d $name -u root -- passwd $user
     ^wsl.exe --terminate $name
+    true
+}
+
+# Install nix and apply the home-manager flake inside a distro: the `system`
+# phase of xpkg/setup-scripts/linux/arch.sh as root, then `home` as the
+# default user. Both phases are idempotent, so this runs on every rebuild.
+def setup-wsl-home [name: string] {
+    # Strip CR so a CRLF checkout cannot break the script.
+    let script = (open --raw ~/.dotfiles/xpkg/setup-scripts/linux/arch.sh | str replace -a "\r\n" "\n")
+    for phase in [system home] {
+        let s = if $phase == system {
+            $script | ^wsl.exe -d $name -u root -- bash -s -- system | complete
+        } else {
+            $script | ^wsl.exe -d $name -- bash -s -- home | complete
+        }
+        # The script's own `==`/`++`/`!!` status lines.
+        for l in ($"($s.stdout)($s.stderr)" | lines | where $it =~ '^\s*(==|\+\+|!!) ') { print $"   ($l)" }
+        if $s.exit_code != 0 {
+            print $"     (ansi red)!!(ansi reset) wsl ($name) home-manager ($phase) (ansi red)exit ($s.exit_code)(ansi reset)"
+            for l in ($"($s.stdout)($s.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+            return
+        }
+    }
 }
 
 # Make an existing distro's ext4.vhdx sparse. WSL 2.7 refuses plain
@@ -243,10 +267,11 @@ export def main [] {
             if ($entry.name in $have) {
                 print $"     (ansi dark_gray)==(ansi reset) wsl ($entry.name)"
                 if ($entry.spec.sparse? | default false) { set-wsl-sparse $entry.name }
+                if ($entry.spec.home-manager? | default false) { setup-wsl-home $entry.name }
             } else if $reboot_pending {
                 print $"     (ansi yellow)[!](ansi reset) wsl ($entry.name) (ansi yellow)waiting on a Windows reboot -- reboot, then run `rebuild` again(ansi reset)"
-            } else {
-                install-wsl $entry.name $entry.spec.user
+            } else if (install-wsl $entry.name $entry.spec.user) {
+                if ($entry.spec.home-manager? | default false) { setup-wsl-home $entry.name }
             }
         }
     }

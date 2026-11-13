@@ -29,28 +29,62 @@ def installed-packages [] {
     } | where ($it.id | is-not-empty)
 }
 
+# Windows Installer runs one install at a time, so installs stay serial and a
+# busy-signal exit code is retried: `run` is a closure returning a `complete`
+# record, re-run while its exit_code is `busy_code` (up to `tries` runs).
+def retry-busy [label: string, busy_code: int, run: closure, --tries: int = 10, --delay: duration = 15sec] {
+    mut r = (do $run)
+    mut n = 1
+    while $r.exit_code == $busy_code and $n < $tries {
+        print $"        (ansi dark_gray)($label) busy \(exit ($busy_code)\), retry ($n)/($tries - 1) in ($delay)(ansi reset)"
+        sleep $delay
+        $r = (do $run)
+        $n += 1
+    }
+    $r
+}
+
+# APPINSTALLER_CLI_ERROR_INSTALL_INSTALL_IN_PROGRESS (0x8A150102)
+const WINGET_BUSY = -1978334974
+# ERROR_INSTALL_ALREADY_RUNNING
+const MSI_BUSY = 1618
+
+# True when Component Based Servicing has a pending reboot (readable non-elevated).
+def reboot-pending [] {
+    (^reg.exe query 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending' | complete | get exit_code) == 0
+}
+
 def install-winget [id: string, skip_deps: bool, override?: string] {
     mut args = ["install" "-eh" "--disable-interactivity" "--accept-package-agreements" "--accept-source-agreements" "--id" $id]
     if $skip_deps { $args = ($args | append "--skip-dependencies") }
     if $override != null { $args = ($args | append ["--override" $override]) }
     print $"     (ansi green)++(ansi reset) ($id)"
-    let r = (^winget ...$args | complete)
+    let final_args = $args
+    let r = (retry-busy $id $WINGET_BUSY {|| ^winget ...$final_args | complete })
     if $r.exit_code != 0 {
         print $"     (ansi red)!!(ansi reset) ($id) (ansi red)exit ($r.exit_code)(ansi reset)"
         for l in ($"($r.stdout)($r.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
     }
 }
 
-# `member`, when set, is the installer's path inside a zip download; an .msi
-# installer runs through msiexec, anything else is executed directly.
-def install-direct [name: string, url: string, args: list<string>, member?: string] {
-    print $"     (ansi green)++(ansi reset) ($name) (ansi dark_gray)\(($url)\)(ansi reset)"
-    let stem = ($nu.temp-dir | path join $"xpkg-($name | str replace -a ' ' '-')")
-    let download = if $member == null { $"($stem).exe" } else { $"($stem).zip" }
-    try { http get --raw $url | save -f $download } catch {|e|
-        print $"     (ansi red)!!(ansi reset) ($name) (ansi red)download failed(ansi reset): ($e.msg)"
-        return
+def direct-stem [name: string] { $nu.temp-dir | path join $"xpkg-($name | str replace -a ' ' '-')" }
+
+# Download one [direct.*] installer; returns {name, path, error} and never throws,
+# so it can run inside par-each.
+def download-direct [name: string, url: string, member?: string] {
+    let stem = (direct-stem $name)
+    let path = if $member == null { $"($stem).exe" } else { $"($stem).zip" }
+    try { http get --raw $url | save -f $path; {name: $name, path: $path, error: null} } catch {|e|
+        {name: $name, path: null, error: $e.msg}
     }
+}
+
+# `member`, when set, is the installer's path inside a zip download; an .msi
+# installer runs through msiexec, anything else is executed directly. `download`
+# is the file download-direct already fetched.
+def install-direct [name: string, url: string, download: string, args: list<string>, member?: string] {
+    print $"     (ansi green)++(ansi reset) ($name) (ansi dark_gray)\(($url)\)(ansi reset)"
+    let stem = (direct-stem $name)
     let installer = if $member == null { $download } else {
         mkdir $stem
         # System32's bsdtar reads zip; a bare `tar` may resolve to Git's GNU tar, which does not.
@@ -61,7 +95,7 @@ def install-direct [name: string, url: string, args: list<string>, member?: stri
     let is_msi = ($installer | str ends-with '.msi')
     let log = $"($stem).log"
     let r = if $is_msi {
-        ^msiexec /i $installer ...$args /l*v $log | complete
+        retry-busy $name $MSI_BUSY {|| ^msiexec /i $installer ...$args /l*v $log | complete }
     } else {
         ^$installer ...$args | complete
     }
@@ -154,13 +188,24 @@ export def main [] {
 
     # Direct (not on winget, vendor URL): skip when the DisplayName is installed.
     let installed_names = ($pkgs | get name)
-    for entry in ($def.direct? | default {} | transpose name spec) {
-        # Prefix match: Inno Setup installers append the version to the
-        # DisplayName ("VoiSona Talk 1.3.10.0", "Little Big Mouse version 5.6.0").
-        if ($installed_names | any {|n| $n starts-with $entry.name }) {
+    let direct = ($def.direct? | default {} | transpose name spec)
+    # Prefix match: Inno Setup installers append the version to the
+    # DisplayName ("VoiSona Talk 1.3.10.0", "Little Big Mouse version 5.6.0").
+    let is_installed = {|e| $installed_names | any {|n| $n starts-with $e.name } }
+    let missing = ($direct | where {|e| not (do $is_installed $e) })
+    # Downloads run in parallel; installs below stay serial, in declaration order.
+    let downloads = ($missing | par-each --keep-order {|e| download-direct $e.name $e.spec.url $e.spec.member? })
+    for entry in $direct {
+        if (do $is_installed $entry) {
             print $"     (ansi dark_gray)==(ansi reset) ($entry.name)"
         } else {
-            install-direct $entry.name $entry.spec.url ($entry.spec.args? | default []) $entry.spec.member?
+            let d = ($downloads | where name == $entry.name | first)
+            if $d.error != null {
+                print $"     (ansi green)++(ansi reset) ($entry.name) (ansi dark_gray)\(($entry.spec.url)\)(ansi reset)"
+                print $"     (ansi red)!!(ansi reset) ($entry.name) (ansi red)download failed(ansi reset): ($d.error)"
+            } else {
+                install-direct $entry.name $entry.spec.url $d.path ($entry.spec.args? | default []) $entry.spec.member?
+            }
         }
     }
 
@@ -169,9 +214,13 @@ export def main [] {
     let wsl_entries = ($def.wsl? | default {} | transpose name spec)
     if not ($wsl_entries | is-empty) {
         let have = (installed-wsl)
+        # Tradeoff: an unrelated pending reboot also defers the distro, which a reboot clears.
+        let reboot_pending = (reboot-pending)
         for entry in $wsl_entries {
             if ($entry.name in $have) {
                 print $"     (ansi dark_gray)==(ansi reset) wsl ($entry.name)"
+            } else if $reboot_pending {
+                print $"     (ansi yellow)[!](ansi reset) wsl ($entry.name) (ansi yellow)waiting on a Windows reboot -- reboot, then run `rebuild` again(ansi reset)"
             } else {
                 install-wsl $entry.name $entry.spec.user
             }

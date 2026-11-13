@@ -1,4 +1,4 @@
-{ ... }:
+{ pkgs, ... }:
 {
   programs.git = {
     enable = true;
@@ -20,10 +20,18 @@
       # `helper = osxkeychain`, which would otherwise run first.
       # Absolute path also covers nix-homebrew, which runs brew with a scrubbed
       # PATH and a helper-less git-minimal.
-      credential.helper = [
-        ""
-        "/Library/Developer/CommandLineTools/usr/libexec/git-core/git-credential-osxkeychain"
-      ];
+      # On Linux, git asks gh for the token that `gh auth login` stored.
+      credential.helper =
+        if pkgs.stdenv.hostPlatform.isDarwin then
+          [
+            ""
+            "/Library/Developer/CommandLineTools/usr/libexec/git-core/git-credential-osxkeychain"
+          ]
+        else
+          [
+            ""
+            "!gh auth git-credential"
+          ];
       # Workaround for a fortify false positive that kills nixpkgs git on macOS.
       # git's `dirent_prec_psx.d_name` is `char[NAME_MAX+1]` used as a flexible
       # array: precompose_utf8_readdir() xreallocs the struct for a longer name,

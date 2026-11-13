@@ -55,7 +55,7 @@ The packages step reads `winget list` once, skips everything already installed, 
 | `skip_dependencies` | ids installed with `--skip-dependencies` | |
 | `remove` | ids to uninstall when present | `winget uninstall` |
 | `[direct."<name>"]` | software not on winget: `url`, silent `args`, optional zip `member`; `<name>` is the start of its installed DisplayName | download, then run the installer or `msiexec` |
-| `[wsl.<distro>]` | a `wsl --list --online` distro name and its `user` | `wsl --install <distro> --no-launch`, then first-boot setup |
+| `[wsl.<distro>]` | a `wsl --list --online` distro name and its `user`; optional `sparse = true` | `wsl --install <distro> --no-launch`, then first-boot setup; `sparse` runs `wsl --manage <distro> --set-sparse true --allow-unsafe` on an existing distro |
 
 A winget package installed but not declared is reported as a warning only.
 
@@ -75,4 +75,4 @@ For each `[wsl.<distro>]` missing from `wsl -l -q`, while the registry key `HKLM
 4. `passwd <user>` asks the user for a password in the terminal.
 5. `wsl --terminate <distro>` so `wsl.conf` takes effect.
 
-A distro that already exists is skipped entirely, so the first-boot script never re-runs on it. Inside the distro, the `ranolp-archwsl` home-manager config takes over.
+A distro that already exists is skipped, so the first-boot script never re-runs on it, except for `sparse = true`: when `fsutil sparse queryflag` on `<BasePath>\ext4.vhdx` (`BasePath` from the distro's `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss` key) says the file is not sparse, `rebuild` runs `wsl --terminate <distro>` then `wsl --manage <distro> --set-sparse true --allow-unsafe` and prints a `!!` line on failure. `--allow-unsafe` is required because Microsoft disabled sparse VHD in WSL 2.7 citing potential data corruption, so the key is opt-in. An already-sparse distro prints `==`. Inside the distro, the `ranolp-archwsl` home-manager config takes over.

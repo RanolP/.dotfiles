@@ -94,8 +94,12 @@ args = ["/qn", "/norestart"]
 # WSL distributions (`wsl --list --online` names). A missing one is installed
 # with `wsl --install <name> --no-launch`, then booted once as root to create
 # `user` (wheel, sudo), make it the default and write /etc/wsl.conf.
+# `sparse = true` makes an existing distro's ext4.vhdx sparse so it gives freed
+# space back to Windows. WSL 2.7 disabled this ("potential data corruption"),
+# so it is applied with `--allow-unsafe`.
 [wsl.archlinux]
 user = "ranolp"
+sparse = true
 
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under

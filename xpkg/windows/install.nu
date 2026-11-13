@@ -149,6 +149,29 @@ def install-wsl [name: string, user: string] {
     ^wsl.exe --terminate $name
 }
 
+# Make an existing distro's ext4.vhdx sparse. WSL 2.7 refuses plain
+# `--set-sparse` (potential data corruption), so `--allow-unsafe` is passed.
+def set-wsl-sparse [name: string] {
+    let ps = 'Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss | Get-ItemProperty | Where-Object DistributionName -eq $args[0] | ForEach-Object BasePath'
+    let base = (^powershell.exe -NoProfile -Command $"& { ($ps) }" $name | str trim | str replace '\\?\' '')
+    let vhdx = ($base | path join ext4.vhdx)
+    if ($base | is-empty) or not ($vhdx | path exists) {
+        print $"     (ansi red)!!(ansi reset) wsl ($name) sparse (ansi red)vhdx not found(ansi reset)"
+        return
+    }
+    if not ((^fsutil.exe sparse queryflag $vhdx | complete | get stdout) | str contains "NOT set as sparse") {
+        print $"     (ansi dark_gray)==(ansi reset) wsl ($name) sparse"
+        return
+    }
+    print $"     (ansi green)++(ansi reset) wsl ($name) sparse"
+    ^wsl.exe --terminate $name
+    let r = (^wsl.exe --manage $name --set-sparse true --allow-unsafe | complete)
+    if $r.exit_code != 0 {
+        print $"     (ansi red)!!(ansi reset) wsl ($name) sparse (ansi red)exit ($r.exit_code)(ansi reset)"
+        for l in ($"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+    }
+}
+
 export def main [] {
     if $nu.os-info.name != windows {
         print $"    (ansi red)Unsupported OS(ansi reset): xpkg is Windows-only; use nix on macOS/Linux"
@@ -219,6 +242,7 @@ export def main [] {
         for entry in $wsl_entries {
             if ($entry.name in $have) {
                 print $"     (ansi dark_gray)==(ansi reset) wsl ($entry.name)"
+                if ($entry.spec.sparse? | default false) { set-wsl-sparse $entry.name }
             } else if $reboot_pending {
                 print $"     (ansi yellow)[!](ansi reset) wsl ($entry.name) (ansi yellow)waiting on a Windows reboot -- reboot, then run `rebuild` again(ansi reset)"
             } else {

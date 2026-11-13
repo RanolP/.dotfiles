@@ -84,6 +84,12 @@ url = "https://download.steinberg.net/static_content/runtime-components/asio/1.0
 member = "Steinberg built-in ASIO Driver 1.0.9/Additional Content/Installer/Steinberg_Built_In_ASIO_Driver_64bit.msi"
 args = ["/qn", "/norestart"]
 
+# WSL distributions (`wsl --list --online` names). A missing one is installed
+# with `wsl --install <name> --no-launch`, then booted once as root to create
+# `user` (wheel, sudo), make it the default and write /etc/wsl.conf.
+[wsl.archlinux]
+user = "ranolp"
+
 # Per-machine additions (profile = hostname). Seeded from what this machine
 # actually has installed; add other machines' peripherals/vendor tools under
 # their own [profiles.<hostname>] as needed (e.g. Corsair.iCUE.4,

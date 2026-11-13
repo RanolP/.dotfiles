@@ -25,11 +25,11 @@ Requirements:
 curl dotfiles.ranolp.dev/setup | iex
 ```
 
-### Windows ArchWSL (WIP)
+### Windows Arch Linux WSL (WIP)
 
 Requirements:
 
-- ArchWSL Bash
+- Arch Linux WSL Bash (installed by xpkg: `[wsl.archlinux]` in `xpkg/windows/default.toml`)
 - curl executable
 
 ```bash

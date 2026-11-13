@@ -79,6 +79,33 @@ def install-direct [name: string, url: string, args: list<string>, member?: stri
     }
 }
 
+# Names from `wsl -l -q`; the output is UTF-16LE.
+def installed-wsl [] {
+    ^wsl.exe -l -q | decode utf-16le | str replace -a "\r" "" | str replace -a (char nul) "" | lines | where ($it | is-not-empty)
+}
+
+def install-wsl [name: string, user: string] {
+    print $"     (ansi green)++(ansi reset) wsl ($name)"
+    let r = (^wsl.exe --install $name --no-launch | complete)
+    if $r.exit_code != 0 {
+        print $"     (ansi red)!!(ansi reset) wsl ($name) (ansi red)exit ($r.exit_code)(ansi reset)"
+        # wsl.exe prints UTF-16LE; stripping NULs leaves it readable.
+        for l in ($"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+        return
+    }
+    # Strip CR so a CRLF checkout cannot break the script.
+    let script = (open --raw ($env.FILE_PWD | path join wsl-first-boot.sh) | str replace -a "\r\n" "\n")
+    let s = ($script | ^wsl.exe -d $name -u root -- bash -s -- $user | complete)
+    if $s.exit_code != 0 {
+        print $"     (ansi red)!!(ansi reset) wsl ($name) first-boot (ansi red)exit ($s.exit_code)(ansi reset)"
+        for l in ($"($s.stdout)($s.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
+        return
+    }
+    # Not through `complete`, so the TTY reaches passwd.
+    ^wsl.exe -d $name -u root -- passwd $user
+    ^wsl.exe --terminate $name
+}
+
 export def main [] {
     if $nu.os-info.name != windows {
         print $"    (ansi red)Unsupported OS(ansi reset): xpkg is Windows-only; use nix on macOS/Linux"
@@ -125,6 +152,20 @@ export def main [] {
             print $"     (ansi dark_gray)==(ansi reset) ($entry.name)"
         } else {
             install-direct $entry.name $entry.spec.url ($entry.spec.args? | default []) $entry.spec.member?
+        }
+    }
+
+    # WSL distros: skip when `wsl -l -q` lists the name; else install, run the
+    # first-boot script as root, set the password interactively, then restart.
+    let wsl_entries = ($def.wsl? | default {} | transpose name spec)
+    if not ($wsl_entries | is-empty) {
+        let have = (installed-wsl)
+        for entry in $wsl_entries {
+            if ($entry.name in $have) {
+                print $"     (ansi dark_gray)==(ansi reset) wsl ($entry.name)"
+            } else {
+                install-wsl $entry.name $entry.spec.user
+            }
         }
     }
 

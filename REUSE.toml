@@ -367,6 +367,7 @@ path = [
     "docs/src/fast-apply.md",
     "docs/src/herdr.md",
     "docs/src/agent-incidents.md",
+    "docs/src/xpkg.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

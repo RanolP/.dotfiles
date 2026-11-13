@@ -2,6 +2,7 @@
 
 - [Introduction](./introduction.md)
 - [Nix](./nix.md)
+- [xpkg](./xpkg.md)
 - [Homebrew](./homebrew.md)
 - [Nushell](./nushell.md)
 - [Zsh](./zsh.md)

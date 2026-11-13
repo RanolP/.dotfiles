@@ -34,7 +34,7 @@ echo $"(ansi purple)>>(ansi reset) Updating .gitconfig"
 nu $'($configs)/gitconfig.nu'
 
 if $nu.os-info.name == windows {
-    echo $"(ansi purple)>>(ansi reset) Setting the Korean 103-key keyboard type"
+    echo $"(ansi purple)>>(ansi reset) Setting the Korean 101-key type 1 keyboard"
     nu $'($configs)/keyboard/install.nu'
 
     echo $"(ansi purple)>>(ansi reset) Turning off the automatic sign-in lock"

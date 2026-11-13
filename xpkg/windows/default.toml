@@ -106,6 +106,15 @@ version = "621.24"
 url = "https://us.download.nvidia.com/Windows/621.24/621.24-desktop-win10-win11-64bit-international-dch-whql.exe"
 args = ["-s", "-noreboot"]
 
+# NVIDIA App keeps the driver current between rebuilds; the driver entry above is
+# only the floor, and a newer App-installed driver still counts as installed.
+# Not on winget. The URL pins the version NVIDIA's download page linked on
+# 2026-11-13; the App updates itself after that, so no `version` here.
+# `-s` is the silent flag Chocolatey's nvidia-app package uses.
+[direct."NVIDIA app"]
+url = "https://us.download.nvidia.com/nvapp/client/11.0.9.585/x64/NVIDIA_app_v11.0.9.585_x64.exe"
+args = ["-s"]
+
 # WSL distributions (`wsl --list --online` names). A missing one is installed
 # with `wsl --install <name> --no-launch`, then booted once as root to create
 # `user` (wheel, sudo), make it the default and write /etc/wsl.conf.

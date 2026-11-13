@@ -1,9 +1,8 @@
-{ pkgs, ... }:
+{ lib, pkgs, ... }:
 {
   home.homeDirectory = "/home/ranolp";
 
   home.packages = with pkgs; [
-    pinentry-curses
 
     # Claude Code's named auth profiles (~/.claude-<profile>, picked by
     # nushell's `ccc`) need their config mirrored from ~/.claude and their
@@ -28,7 +27,46 @@
     '')
   ];
 
-  home.file.".gnupg/gpg-agent.conf".onChange = "${pkgs.gnupg}/bin/gpgconf --kill gpg-agent";
+  # A GUI prompt through WSLg, so a signed commit from an agent's non-TTY shell
+  # can still ask for the passphrase. pinentry-qt falls back to curses when
+  # there is no display. Arch has no fontconfig config nix's Qt can read
+  # ("Fontconfig error: Cannot load default config file"), so the wrapper hands
+  # it one with real fonts.
+  home.file.".gnupg/gpg-agent.conf" = {
+    source = lib.mkForce (
+      pkgs.writeText "gpg-agent.conf" ''
+        ${builtins.readFile ../configs/gnupg/gpg-agent.conf}
+        pinentry-program ${pkgs.writeShellScript "pinentry-qt-fonts" ''
+          export FONTCONFIG_FILE=${
+            pkgs.makeFontsConf {
+              fontDirectories = [
+                pkgs.dejavu_fonts
+                pkgs.noto-fonts-cjk-sans
+              ];
+            }
+          }
+          # WSLg hands Qt a 1x surface even on a 4K Windows display.
+          export QT_SCALE_FACTOR=2
+          exec ${pkgs.pinentry-qt}/bin/pinentry-qt "$@"
+        ''}
+      ''
+    );
+    onChange = "${pkgs.gnupg}/bin/gpgconf --kill gpg-agent";
+  };
+
+  # chsh needs root, which home-manager lacks, so WSL keeps bash as the login
+  # shell and bash hands the top-level interactive session to nushell. A bash
+  # started from inside nu (SHLVL > 1) or by Claude Code stays bash.
+  home.file.".bash_profile".text = ''
+    [[ -f ~/.profile ]] && . ~/.profile
+    [[ -f ~/.bashrc ]] && . ~/.bashrc
+  '';
+  home.file.".bashrc".text = ''
+    [[ $- != *i* ]] && return
+    if [[ -z $CLAUDECODE && $SHLVL -le 1 && -t 0 && -x ~/.nix-profile/bin/nu ]]; then
+      exec ~/.nix-profile/bin/nu --login
+    fi
+  '';
 
   programs.nushell.shellAliases = {
     rebuild = "home-manager switch --flake /home/ranolp/.dotfiles/nix#ranolp-archwsl -b before-hm";

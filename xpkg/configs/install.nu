@@ -2,13 +2,7 @@
 source ~/.dotfiles/xpkg/utils/normalize.nu
 use ~/.dotfiles/xpkg/configs/render.nu [nushell-config mise-config]
 use ~/.dotfiles/xpkg/utils/@windows/bootstrap.nu [relaunch-elevated]
-
-if ($nu.os-info.name == windows) and (not (is-admin)) {
-    relaunch-elevated ~/.dotfiles/xpkg/configs/install.nu
-    return
-}
-
-let configs = $env.FILE_PWD
+use ~/.dotfiles/xpkg/utils/parallel.nu [run-units]
 
 # The elevated process `sudo` relaunches into gets the registry PATH, which has
 # no mise install dirs (they only enter PATH through `mise activate` in an
@@ -18,89 +12,93 @@ def installed [tool: string] {
     (not (which $tool | is-empty)) or ((do -i { ^mise which $tool } | complete).exit_code == 0)
 }
 
-echo $"(ansi purple)>>(ansi reset) Generating nushell configs \(Windows overlay + shared nix\)"
-nushell-config $nu.env-path $nu.config-path
-
-echo $"(ansi purple)>>(ansi reset) Merging mise config \(shared nix + Windows overlay\)"
-mise-config ($nu.home-dir | path join '.config' 'mise' 'config.toml')
-
-# Writing the config installs nothing; tools the overlay adds (pnpm for the Pi
-# step below) stay missing until this runs. One tool failing should not skip
-# every config after it.
-echo $"(ansi purple)>>(ansi reset) Installing mise tools"
-try { ^mise install } catch {|e| print -e $"(ansi red)!!(ansi reset) mise install failed: ($e.msg)" }
-
-echo $"(ansi purple)>>(ansi reset) Updating .gitconfig"
-nu $'($configs)/gitconfig.nu'
-
-if $nu.os-info.name == windows {
-    echo $"(ansi purple)>>(ansi reset) Setting the Korean 101-key type 1 keyboard"
-    nu $'($configs)/keyboard/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Turning off the automatic sign-in lock"
-    nu $'($configs)/lock/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Showing file extensions in Explorer"
-    nu $'($configs)/explorer/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Switching Windows to dark mode"
-    nu $'($configs)/theme/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Installing user shims in ~/bin"
-    nu $'($configs)/bin/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Setting the gpg-agent cache"
-    nu $'($configs)/gnupg/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Installing espanso match packages"
-    nu $'($configs)/espanso/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Force-installing the Chrome extension by policy"
-    nu $'($configs)/chrome/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Turning off microphone audio enhancements"
-    nu $'($configs)/audio/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Setting Firefox fonts"
-    nu $'($configs)/firefox/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Configuring Windows Terminal \(Nord, Iosevka, nu\)"
-    nu $'($configs)/terminal/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Restoring the Little Big Mouse calibration"
-    nu $'($configs)/littlebigmouse/install.nu'
-
-    echo $"(ansi purple)>>(ansi reset) Pointing Prism Launcher at the mise JDK"
-    nu $'($configs)/prismlauncher/install.nu'
+# Units that only write the registry or powercfg and need nothing a package
+# install provides. `rebuild` runs them alongside Packages through `--system`.
+def system-units [configs: path] {
+    if $nu.os-info.name != windows { return [] }
+    [
+        {name: keyboard, script: $'($configs)/keyboard/install.nu'}
+        {name: lock, script: $'($configs)/lock/install.nu'}
+        {name: explorer, script: $'($configs)/explorer/install.nu'}
+        {name: theme, script: $'($configs)/theme/install.nu'}
+        {name: chrome, script: $'($configs)/chrome/install.nu'}
+        {name: audio, script: $'($configs)/audio/install.nu'}
+        {name: littlebigmouse, script: $'($configs)/littlebigmouse/install.nu'}
+        {name: bin, script: $'($configs)/bin/install.nu'}
+    ]
 }
 
-if (installed code) {
-    echo $"(ansi purple)>>(ansi reset) Symlinking VS Code settings"
-    nu $'($configs)/vscode/install.nu'
+# Units that need packages or mise tools in place. gitconfig stays one unit:
+# concurrent `git config` writers collide on .gitconfig.lock.
+def tool-units [configs: path] {
+    let windows = ($nu.os-info.name == windows)
+    [
+        {name: gitconfig, script: $'($configs)/gitconfig.nu', when: true}
+        {name: gnupg, script: $'($configs)/gnupg/install.nu', when: $windows}
+        {name: espanso, script: $'($configs)/espanso/install.nu', when: $windows}
+        {name: firefox, script: $'($configs)/firefox/install.nu', when: $windows}
+        {name: terminal, script: $'($configs)/terminal/install.nu', when: $windows}
+        {name: prismlauncher, script: $'($configs)/prismlauncher/install.nu', when: $windows}
+        {name: vscode, script: $'($configs)/vscode/install.nu', when: (installed code)}
+        {name: claude, script: $'($configs)/claude/install.nu', when: (installed claude)}
+        {name: codex, script: $'($configs)/codex/install.nu', when: (installed codex)}
+        {name: pi, script: $'($configs)/pi/install.nu', when: (installed pi)}
+        {name: opencode, script: $'($configs)/opencode/install.nu', when: (installed opencode)}
+    ]
+    | where when
+    | reject when
 }
 
-if (installed claude) {
-    echo $"(ansi purple)>>(ansi reset) Installing Claude Code configs"
-    nu $'($configs)/claude/install.nu'
-}
+# Run alone, this applies every config. `rebuild` (xpkg/install.nu) splits it:
+# `--system` runs the registry-only units while Packages installs, then
+# `--rebuild` runs the rest with Fonts joining the same parallel group.
+def main [
+    --system   # only the registry/powercfg units
+    --rebuild  # skip the --system units and add Fonts to the parallel group
+] {
+    if ($nu.os-info.name == windows) and (not (is-admin)) {
+        relaunch-elevated ~/.dotfiles/xpkg/configs/install.nu
+        return
+    }
 
-if (installed codex) {
-    echo $"(ansi purple)>>(ansi reset) Installing Codex configs"
-    nu $'($configs)/codex/install.nu'
-}
+    let configs = $env.FILE_PWD
 
-if (installed pi) {
-    echo $"(ansi purple)>>(ansi reset) Installing Pi configs"
-    nu $'($configs)/pi/install.nu'
-}
+    if $system {
+        if (run-units (system-units $configs) | any { $in.exit_code != 0 }) { exit 1 }
+        return
+    }
 
-if (installed opencode) {
-    echo $"(ansi purple)>>(ansi reset) Installing opencode configs"
-    nu $'($configs)/opencode/install.nu'
-}
+    print $"(ansi purple)>>(ansi reset) Generating nushell configs \(Windows overlay + shared nix\)"
+    nushell-config $nu.env-path $nu.config-path
 
-if ($nu.os-info.kernel_version | str contains 'WSL2') {
-    echo $"(ansi purple)>>(ansi reset) Integrating Windows fonts for WSL2"
-    do -i { sudo mkdir /etc/fonts/ }
-    do -i { sudo ln -s -f $'($configs)/fonts/local.conf' '/etc/fonts/local.conf' }
+    print $"(ansi purple)>>(ansi reset) Merging mise config \(shared nix + Windows overlay\)"
+    mise-config ($nu.home-dir | path join '.config' 'mise' 'config.toml')
+
+    # Writing the config installs nothing; tools the overlay adds (pnpm for the
+    # Pi unit, java for Prism Launcher, uv for Fonts) stay missing until this
+    # runs. One tool failing should not skip every config after it.
+    print $"(ansi purple)>>(ansi reset) Installing mise tools"
+    try { ^mise install } catch {|e| print -e $"(ansi red)!!(ansi reset) mise install failed: ($e.msg)" }
+
+    let fonts = if $rebuild and ($nu.os-info.name == windows) {
+        [{name: fonts, script: ('~/.dotfiles/xpkg/apps/@fonts/install.nu' | path expand)}]
+    } else { [] }
+    let units = (
+        (if $rebuild { [] } else { system-units $configs })
+        ++ (tool-units $configs)
+        ++ $fonts
+    )
+    print $"(ansi purple)>>(ansi reset) Applying ($units | length) units in parallel"
+    let failed = (run-units $units | where exit_code != 0)
+
+    if ($nu.os-info.kernel_version | str contains 'WSL2') {
+        print $"(ansi purple)>>(ansi reset) Integrating Windows fonts for WSL2"
+        do -i { sudo mkdir /etc/fonts/ }
+        do -i { sudo ln -s -f $'($configs)/fonts/local.conf' '/etc/fonts/local.conf' }
+    }
+
+    if ($failed | is-not-empty) {
+        print -e $"(ansi red)!!(ansi reset) failed: ($failed | get name | str join ', ')"
+        exit 1
+    }
 }

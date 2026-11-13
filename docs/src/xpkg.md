@@ -27,13 +27,21 @@ The user downloads and installs X by running `rebuild`. The agent never runs `wi
 
 ## What `rebuild` does on Windows
 
-`xpkg/install.nu` relaunches itself elevated through gsudo when it is not admin, then runs three steps in order:
+`xpkg/install.nu` relaunches itself elevated through gsudo once when it is not admin; every later step inherits that elevation. It then runs its units concurrently wherever one does not need another's result:
 
-1. **Packages** -- `xpkg/windows/install.nu` applies `xpkg/windows/default.toml`.
-2. **Fonts** -- `xpkg/apps/@fonts/install.nu` downloads every font in `fonts.toml` and installs it for the current user.
-3. **Configs** -- `xpkg/configs/install.nu` renders the nushell and mise configs from the shared `nix/home/configs` sources, runs `mise install`, and runs each per-app config script under `xpkg/configs/`.
+1. **Settings, in the background** -- `xpkg/configs/install.nu --system` starts as a background job and runs the units that only write the registry or powercfg, all at the same time: keyboard, lock, explorer, theme, chrome, audio, littlebigmouse, bin.
+2. **Packages, in the foreground** -- `xpkg/windows/install.nu` applies `xpkg/windows/default.toml` while the settings run. It keeps the terminal and streams live, because winget progress and the WSL `passwd` prompt need it.
+3. **Refresh `PATH`** from the registry, so tools a package just installed are found by the later steps.
+4. **Settings output** -- the captured output of step 1 prints under `== Settings`.
+5. **Configs and Fonts** -- `xpkg/configs/install.nu --rebuild` renders the nushell and mise configs from the shared `nix/home/configs` sources and runs `mise install`, one after the other. Then it runs every remaining unit at the same time: gitconfig, gnupg, espanso, firefox, terminal, prismlauncher, vscode, claude, codex, opencode, pi, and Fonts (`xpkg/apps/@fonts/install.nu`, which downloads every font in `fonts.toml` and installs it for the current user). vscode, claude, codex, pi and opencode run only when that tool is installed.
 
-Between steps 1 and 2 it refreshes `PATH` from the registry, so tools a package just installed are found by the later steps.
+gitconfig stays one unit, because concurrent `git config` writers collide on `.gitconfig.lock`. prismlauncher needs the JDK, pi needs pnpm, and Fonts needs uv on a cache miss; all three come from `mise install`, which is why that step finishes first.
+
+Each unit is a `nu <script>` child whose stdout and stderr are captured together (`xpkg/utils/parallel.nu`). When a unit finishes, one block prints: `ok <name>  1.2s` in green or `!! <name>  exit N` in red, then the unit's output indented 6 spaces. Blocks appear in finishing order and never interleave. Colours the unit script prints itself survive the capture; an external tool it runs sees a pipe instead of a terminal and may print without colour. The last line is `== rebuild done in <N>s`, the wall time of the elevated run.
+
+Run on its own, `xpkg/configs/install.nu` relaunches itself elevated when needed and applies every config, the settings units included, in one parallel group after `mise install`. It does not install fonts.
+
+Inside Packages, winget and msiexec installs stay serial, because Windows Installer allows one MSI install at a time. An install that exits with 0x8A150102 (winget) or 1618 (msiexec), both meaning another install is running, is retried up to 10 times, 15 s apart. `[direct.*]` installers download in parallel, then install one at a time.
 
 ## `xpkg/windows/default.toml`
 
@@ -63,6 +71,8 @@ For each `[wsl.<distro>]` missing from `wsl -l -q`:
 
 1. `wsl --install <distro> --no-launch`.
 2. If the distro still does not exist, the machine lacked the Virtual Machine Platform feature: `wsl --install` only turned it on and exited 0. `rebuild` prints `reboot Windows, then run rebuild again` and stops for that distro.
+
+While the registry key `Component Based Servicing\RebootPending` exists, a missing distro is skipped with a "reboot, then rebuild" notice.
 3. `xpkg/windows/wsl-first-boot.sh` runs as root: it initialises the pacman keyring, installs sudo, creates `user` in `wheel`, and writes `/etc/wsl.conf` with systemd on and `user` as the default.
 4. `passwd <user>` asks the user for a password in the terminal.
 5. `wsl --terminate <distro>` so `wsl.conf` takes effect.

@@ -46,6 +46,7 @@
       # whose own config never got the setting. Drop this once git declares
       # d_name FLEX_ARRAY. Does not cover names with invalid UTF-8.
       core.precomposeunicode = true;
+      core.eol = "lf";
       init.defaultBranch = "main";
       push.autoSetupRemote = true;
       pull.rebase = true;

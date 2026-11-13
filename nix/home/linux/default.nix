@@ -3,6 +3,7 @@
   home.homeDirectory = "/home/ranolp";
 
   home.packages = with pkgs; [
+    keybase
 
     # Claude Code's named auth profiles (~/.claude-<profile>, picked by
     # nushell's `ccc`) need their config mirrored from ~/.claude and their

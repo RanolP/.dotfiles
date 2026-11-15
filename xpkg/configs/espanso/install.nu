@@ -6,6 +6,7 @@
 if $nu.os-info.name != windows {
     return
 }
+use ~/.dotfiles/xpkg/utils/@windows/bootstrap.nu [run-unelevated]
 
 let rev = 'b871faf98997bd0f49ef6170297ea0f34ea765d3'
 let espanso = if (which espanso | is-empty) {
@@ -51,6 +52,15 @@ for name in [typsi nannosym] {
     }
 }
 
-if $changed and (^$espanso status | complete).exit_code == 0 {
-    ^$espanso restart | ignore
+# Leave espanso running after every rebuild. `espanso start`/`restart` spawn
+# the daemon as our child holding the unit's output pipe, which hung the unit
+# and let an aborted rebuild take espanso down with it. Start-Process detaches
+# it, and run-unelevated keeps it out of the rebuild's admin token.
+let running = { ps | where name == 'espansod.exe' | is-not-empty }
+if $changed and (do $running) {
+    ^$espanso stop | complete | ignore
+}
+if not (do $running) {
+    let exe = ($env.LOCALAPPDATA | path join 'Programs' 'Espanso' 'espansod.exe')
+    run-unelevated powershell -NoProfile -Command $"Start-Process -FilePath '($exe)' -ArgumentList launcher" | complete | ignore
 }

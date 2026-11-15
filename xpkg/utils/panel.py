@@ -330,8 +330,8 @@ def kill_tree(proc: subprocess.Popen) -> None:
 
 
 def plain_summary(app: Panel) -> str:
-    """What stays on the normal screen once the panel closes: failures,
-    notices and one summary line; no per-unit progress."""
+    """What the panel prints under its last frame, which already shows the
+    counts and seconds: failures, notices and the log path when one failed."""
     s = app.state
     lines = []
     for group, u in s.failed():
@@ -340,10 +340,7 @@ def plain_summary(app: Panel) -> str:
         tail = [clean(line) for line in u.output.splitlines() if clean(line).strip()][-4:]
         lines += [f"      {line}" for line in tail]
     lines += s.notices
-    c = s.counts()
-    total = (app.finished or time.time()) - app.started
-    lines.append(f"√ {c['done']} done  × {c['failed']} failed  {total:.1f}s")
-    if c["failed"]:
+    if s.failed():
         lines.append(f"log: {app.log_path}")
     return "\n".join(lines)
 
@@ -429,7 +426,8 @@ def main(argv: list[str]) -> int:
         if app.proc is not None and app.proc.poll() is None:
             kill_tree(app.proc)
     sys.stdout.reconfigure(errors="replace")
-    print(plain_summary(app))
+    if summary := plain_summary(app):
+        print(summary)
     return code
 
 

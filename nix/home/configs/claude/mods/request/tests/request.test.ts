@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, RenderViewport } from 'claude-code'
-import { dialogRows } from '../hooks/register'
+import { RUN_WRAPPER, dialogRows } from '../hooks/register'
 
 const RAISE = 'mcp__request__raise_approval_request'
 // Quotes, a variable, a pipe, Markdown emphasis and a trailing space: anything a re-quoting, trimming or rendering step would change.
@@ -135,7 +135,7 @@ test('raising opens the review at once and runs the shown string byte for byte',
     'Why: 이 명령만 그것을 읽는다', 'Not: Read tool — not a file', 'Unblocks: the report', 'Run this command once?',
   ].join('\n'))
   expect(asked[0]?.options.some(o => o.preview !== undefined)).toBe(false)
-  expect(runs).toEqual([{ argv: ['bash', '-c', COMMAND], cwd: '/tmp' }])
+  expect(runs).toEqual([{ argv: ['bash', '-c', RUN_WRAPPER, 'request', COMMAND], cwd: '/tmp' }])
   expect(text).toContain('Exit code: 3')
   expect(text).toContain('stdout:\nout')
   expect(text).toContain('stderr:\nerr')
@@ -234,7 +234,7 @@ test('a command the dialog would redraw is shown JSON-escaped, and prose stays o
   expect(question).toContain('\n  │ "printf \\"a\\tb\\" # \\u202e\\\\u202e"\n')
   expect(question).not.toMatch(/[\t\u202e]/)
   expect(question).toContain('\nWhy: 둘 rm -rf /\n')
-  expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
+  expect(runs).toEqual([{ argv: ['bash', '-c', RUN_WRAPPER, 'request', command], cwd: '/tmp' }])
 })
 
 // Regression: the review drawn as plain question text instead of the command highlighted as bash and the case as
@@ -258,7 +258,7 @@ for (const [name, command, source] of [
     ])
     expect(questions[0]).toBe('Run R1 once?')
     expect(asked[0]?.question).toBe(reviewOf(source, command !== COMMAND))
-    expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
+    expect(runs).toEqual([{ argv: ['bash', '-c', RUN_WRAPPER, 'request', command], cwd: '/tmp' }])
   })
 }
 
@@ -273,7 +273,7 @@ test('a command with invisible characters is shown escaped, exact to the bytes',
   expect(JSON.parse(source)).toBe(command)
   expect(trees[0]?.find(x => x.type === 'Code')?.text).toBe(source)
   expect(asked[0]?.question).toContain(`\n  │ ${source}\n`)
-  expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
+  expect(runs).toEqual([{ argv: ['bash', '-c', RUN_WRAPPER, 'request', command], cwd: '/tmp' }])
 })
 
 // Regression: the row count missing the row a kept space starts when a word fills its row exactly (Text wraps
@@ -306,7 +306,7 @@ for (const [name, input, hasCode] of [
     expect(questions[0]).toBe(hasCode
       ? [`Why: ${LONG}`, 'Not: Read tool — not a file', 'Unblocks: the report', 'Run R1 once?'].join('\n')
       : asked[0]?.question)
-    expect(runs).toEqual([{ argv: ['bash', '-c', command], cwd: '/tmp' }])
+    expect(runs).toEqual([{ argv: ['bash', '-c', RUN_WRAPPER, 'request', command], cwd: '/tmp' }])
   })
 }
 
@@ -442,5 +442,5 @@ test('an approved command runs Git Bash on Windows, found from git.exe on PATH',
     files: ['D:\\Git\\cmd\\git.exe', 'D:\\Git\\bin\\bash.exe'], // the engine hands fs.exists the path with its `..` resolved
   })
   await raise($, nextStatus)
-  expect(runs).toEqual([{ argv: [gitBash, '-c', COMMAND], cwd: '/tmp' }])
+  expect(runs).toEqual([{ argv: [gitBash, '-c', RUN_WRAPPER, 'request', COMMAND], cwd: '/tmp' }])
 })

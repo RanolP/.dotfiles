@@ -154,10 +154,20 @@ const gitBashPath = async ($: Ctx): Promise<string> => {
 }
 const shellFor = async ($: Ctx): Promise<string> => (await $.env.get('OS')) === 'Windows_NT' ? gitBashPath($) : 'bash'
 
+// $.process.run resolves only once both pipes close, so a background child that inherited them (a daemon the command
+// started) held the result until the timeout. The command, its own argument ($1, byte for byte), runs in a child bash
+// with stdin from /dev/null and output to temp files, replayed onto the pipes once it exits; on Git Bash neither an
+// MSYS nor a native (`cmd //c start /b`) background child keeps the pipe handles through that redirect.
+export const RUN_WRAPPER = [
+  'o=$(mktemp) && e=$(mktemp) || exit 125',
+  '"$BASH" -c "$1" </dev/null >"$o" 2>"$e"; s=$?',
+  'cat "$o"; cat "$e" >&2; rm -f "$o" "$e"; exit $s',
+].join('\n')
+
 const execute = async ($: Ctx, r: ApprovalRequest): Promise<ExecResult> => {
   const started = Date.now()
   try {
-    const out = await $.process.run([await shellFor($), '-c', r.command], { cwd: r.cwd, timeoutMs: TIMEOUT_MS })
+    const out = await $.process.run([await shellFor($), '-c', RUN_WRAPPER, 'request', r.command], { cwd: r.cwd, timeoutMs: TIMEOUT_MS })
     const cut = (s: string, isTruncated: boolean) => `${cap(s)}${isTruncated ? '\n[... output past 4 MiB dropped by the host ...]' : ''}`
     return {
       exitCode: out.exitCode,

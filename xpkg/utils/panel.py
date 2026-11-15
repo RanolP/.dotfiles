@@ -175,10 +175,11 @@ def render_notices(state: State) -> list[Text]:
 
 def render_timeline(state: State, width: int, now: float) -> tuple[list[Text], Text | None, int | None]:
     """One bar row per started unit, the axis row, and the index of the
-    first running row (None when nothing runs)."""
+    first running row (None when nothing runs). Finished units come first in
+    the order they finished, then running units in the order they started."""
     units = sorted(
         ((g, u) for g, u in state.all_units() if u.start is not None),
-        key=lambda gu: gu[1].start,
+        key=lambda gu: (gu[1].end is None, gu[1].end or gu[1].start),
     )
     if not units:
         return [Text("nothing has started yet", style=DIM)], None, None
@@ -449,6 +450,18 @@ def selftest() -> None:
     assert [r.plain for r in window(rows, 5, active=10, header=9)] == ["9", "10", "11", "12", "13"]
     assert [r.plain for r in window(rows, 5, active=18, header=2)] == ["2", "15", "16", "17", "18"]
     assert [r.plain for r in window(rows, 5)] == ["15", "16", "17", "18", "19"]
+
+    # (d) Timeline rows follow completion order, not start order: a unit that
+    # started first but finished last sits below one that finished earlier,
+    # and a still-running unit stays at the bottom.
+    s = State()
+    for unit, start in [("slow", 1.0), ("fast", 2.0), ("busy", 3.0)]:
+        s.apply({"ev": "unit_start", "group": "G", "unit": unit, "t": start})
+    s.apply({"ev": "unit_end", "group": "G", "unit": "fast", "exit_code": 0, "t": 4.0})
+    s.apply({"ev": "unit_end", "group": "G", "unit": "slow", "exit_code": 0, "t": 5.0})
+    bars, _, active = render_timeline(s, 60, 6.0)
+    assert [b.plain.split()[0] for b in bars] == ["fast", "slow", "busy"], [b.plain for b in bars]
+    assert active == 2, active
     print("selftest ok")
 
 

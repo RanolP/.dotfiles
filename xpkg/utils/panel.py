@@ -204,7 +204,9 @@ def render_timeline(state: State, width: int, frame: int, now: float) -> tuple[l
     span = max(t1 - t0, 1.0)
     bar_width = max(width - 4 - LABEL_WIDTH - SECS_WIDTH, 10)
     step = tick_step(span, bar_width)
-    slots = math.ceil(span / step)
+    # At least four slots, so a short run keeps a fixed 1s width instead of
+    # stretching one second across the row.
+    slots = max(math.ceil(span / step), 4)
     slot = max(bar_width // slots, 2)
     rows: list[Text] = []
     active = None

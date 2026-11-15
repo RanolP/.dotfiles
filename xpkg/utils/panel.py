@@ -136,15 +136,27 @@ def secs(u: Unit | Group, now: float) -> str:
     return f"{(u.end or now) - u.start:.1f}s"
 
 
+def completion_order(u: Unit) -> tuple[int, float]:
+    """Sort key: finished units in the order they finished, then running units
+    in the order they started, then waiting units (a stable sort keeps their
+    declared order)."""
+    if u.end is not None:
+        return 0, u.end
+    if u.start is not None:
+        return 1, u.start
+    return 2, 0.0
+
+
 def render_tree(state: State, frame: int, now: float) -> tuple[list[Text], int | None, int | None]:
     """The Units rows, plus the index of the first running or waiting unit row
-    and of its group header (both None once every unit has finished)."""
+    and of its group header (both None once every unit has finished). Units
+    inside a group follow `completion_order`."""
     rows: list[Text] = []
     active = header = None
     for g in state.groups.values():
         g_row = len(rows)
         rows.append(Text.assemble(marker(g.status, frame), (g.name, f"bold {CYAN}"), (f"  {secs(g, now)}", DIM)))
-        units = list(g.units.values())
+        units = sorted(g.units.values(), key=completion_order)
         for i, u in enumerate(units):
             if active is None and u.status in ("running", "waiting"):
                 active, header = len(rows), g_row
@@ -175,11 +187,10 @@ def render_notices(state: State) -> list[Text]:
 
 def render_timeline(state: State, width: int, now: float) -> tuple[list[Text], Text | None, int | None]:
     """One bar row per started unit, the axis row, and the index of the
-    first running row (None when nothing runs). Finished units come first in
-    the order they finished, then running units in the order they started."""
+    first running row (None when nothing runs), in `completion_order`."""
     units = sorted(
         ((g, u) for g, u in state.all_units() if u.start is not None),
-        key=lambda gu: (gu[1].end is None, gu[1].end or gu[1].start),
+        key=lambda gu: completion_order(gu[1]),
     )
     if not units:
         return [Text("nothing has started yet", style=DIM)], None, None
@@ -462,6 +473,12 @@ def selftest() -> None:
     bars, _, active = render_timeline(s, 60, 6.0)
     assert [b.plain.split()[0] for b in bars] == ["fast", "slow", "busy"], [b.plain for b in bars]
     assert active == 2, active
+    # The Units tree uses the same order inside a group, with waiting units
+    # last, and its active row is the first unfinished one.
+    s.apply({"ev": "unit_wait", "group": "G", "unit": "queued"})
+    tree, active, header = render_tree(s, 0, 6.0)
+    assert [r.plain.split("] ")[1].split()[0] for r in tree[1:]] == ["fast", "slow", "busy", "queued"], [r.plain for r in tree]
+    assert (active, header) == (3, 0), (active, header)
     print("selftest ok")
 
 

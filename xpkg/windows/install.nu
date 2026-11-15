@@ -7,6 +7,19 @@
 # winget-source packages installed but not declared -- it uninstalls only the
 # ids listed under `remove` (no zap). Each install's output is captured and
 # printed as one result line when it finishes.
+use ~/.dotfiles/xpkg/utils/events.nu [emit now]
+
+# Each install, uninstall and WSL step is one unit of the Packages group in
+# the `rebuild` panel; both are no-ops unless XPKG_EVENTS is set.
+def item-start [unit: string] { emit {ev: unit_start, group: Packages, unit: $unit} }
+def item-end [unit: string, started: float, exit_code: int, output: string] {
+    emit {ev: unit_end, group: Packages, unit: $unit, exit_code: $exit_code, secs: ((now) - $started), output: $output}
+}
+
+# The last few non-blank lines of a `complete` record, NULs stripped (wsl.exe).
+def tail-output [r: record] {
+    $"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 4 | str join "\n"
+}
 
 # Parse `winget list` into {name, id, source} records. Column-offset based: piped
 # output is not truncated, and the header row fixes each column's start.
@@ -74,8 +87,11 @@ def install-winget [id: string, skip_deps: bool, override?: string] {
     if $skip_deps { $args = ($args | append "--skip-dependencies") }
     if $override != null { $args = ($args | append ["--override" $override]) }
     print $"     (ansi green)++(ansi reset) ($id)"
+    let t = (now)
+    item-start $id
     let final_args = $args
     let r = (retry-busy $id $WINGET_BUSY {|| ^winget ...$final_args | complete })
+    item-end $id $t $r.exit_code (tail-output $r)
     if $r.exit_code != 0 {
         print $"     (ansi red)!!(ansi reset) ($id) (ansi red)exit ($r.exit_code)(ansi reset)"
         for l in ($"($r.stdout)($r.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
@@ -99,6 +115,8 @@ def download-direct [name: string, url: string, member?: string] {
 # is the file download-direct already fetched.
 def install-direct [name: string, url: string, download: string, args: list<string>, member?: string] {
     print $"     (ansi green)++(ansi reset) ($name) (ansi dark_gray)\(($url)\)(ansi reset)"
+    let t = (now)
+    item-start $name
     let stem = (direct-stem $name)
     let installer = if $member == null { $download } else {
         mkdir $stem
@@ -116,6 +134,9 @@ def install-direct [name: string, url: string, download: string, args: list<stri
     }
     rm -rf $download $stem
     # 3010: msiexec succeeded and asks for a reboot.
+    let ok = ($r.exit_code in [0 3010])
+    let note = if $r.exit_code == 3010 { $"++ ($name) installed; applies after a reboot\n" } else { "" }
+    item-end $name $t (if $ok { 0 } else { $r.exit_code }) $"($note)(tail-output $r)"
     if $r.exit_code not-in [0 3010] {
         print $"     (ansi red)!!(ansi reset) ($name) (ansi red)exit ($r.exit_code)(ansi reset)"
         if $is_msi and ($log | path exists) {
@@ -169,6 +190,7 @@ def install-wsl [name: string, user: string] {
 # Install nix and apply the home-manager flake inside a distro: the `system`
 # phase of xpkg/setup-scripts/linux/arch.sh as root, then `home` as the
 # default user. Both phases are idempotent, so this runs on every rebuild.
+# Returns {exit_code, output}: the failing phase's, or exit 0.
 def setup-wsl-home [name: string] {
     # Strip CR so a CRLF checkout cannot break the script.
     let script = (open --raw ~/.dotfiles/xpkg/setup-scripts/linux/arch.sh | str replace -a "\r\n" "\n")
@@ -183,9 +205,18 @@ def setup-wsl-home [name: string] {
         if $s.exit_code != 0 {
             print $"     (ansi red)!!(ansi reset) wsl ($name) home-manager ($phase) (ansi red)exit ($s.exit_code)(ansi reset)"
             for l in ($"($s.stdout)($s.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
-            return
+            return {exit_code: $s.exit_code, output: (tail-output $s)}
         }
     }
+    {exit_code: 0, output: ""}
+}
+
+# setup-wsl-home as one Packages unit.
+def wsl-home-item [name: string] {
+    let t = (now)
+    item-start $"wsl ($name) home-manager"
+    let r = (setup-wsl-home $name)
+    item-end $"wsl ($name) home-manager" $t $r.exit_code $r.output
 }
 
 # Make an existing distro's ext4.vhdx sparse. WSL 2.7 refuses plain
@@ -226,8 +257,12 @@ export def main [] {
 
     print $"(ansi green)==(ansi reset) profile (ansi cyan)($host)(ansi reset): ($declared | length) declared \(($common | length) common + ($profile | length) profile\)"
 
+    let t = (now)
+    item-start 'winget list'
     let pkgs = (installed-packages)
     let installed_ids = ($pkgs | get id)
+    item-end 'winget list' $t 0 $"($pkgs | length) installed"
+    for id in ($declared | where ($it not-in $installed_ids)) { emit {ev: unit_wait, group: Packages, unit: $id} }
 
     # Install declared-but-missing; skip declared-and-present.
     for id in $declared {
@@ -241,7 +276,10 @@ export def main [] {
     # Removed: listed under `remove` and still installed.
     for id in ($def.remove? | default [] | where ($it in $installed_ids)) {
         print $"     (ansi red)--(ansi reset) ($id)"
+        let t = (now)
+        item-start $"remove ($id)"
         let r = (^winget uninstall -eh --disable-interactivity --accept-source-agreements --id $id | complete)
+        item-end $"remove ($id)" $t $r.exit_code (tail-output $r)
         if $r.exit_code != 0 {
             print $"     (ansi red)!!(ansi reset) ($id) (ansi red)exit ($r.exit_code)(ansi reset)"
             for l in ($"($r.stdout)($r.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
@@ -260,6 +298,7 @@ export def main [] {
         }
     }
     let missing = ($direct | where {|e| not (do $is_installed $e) })
+    for e in $missing { emit {ev: unit_wait, group: Packages, unit: $e.name} }
     # Downloads run in parallel; installs below stay serial, in declaration order.
     let downloads = ($missing | par-each --keep-order {|e| download-direct $e.name $e.spec.url $e.spec.member? })
     for entry in $direct {
@@ -270,6 +309,7 @@ export def main [] {
             if $d.error != null {
                 print $"     (ansi green)++(ansi reset) ($entry.name) (ansi dark_gray)\(($entry.spec.url)\)(ansi reset)"
                 print $"     (ansi red)!!(ansi reset) ($entry.name) (ansi red)download failed(ansi reset): ($d.error)"
+                item-end $entry.name (now) 1 $"download failed: ($d.error)"
             } else {
                 install-direct $entry.name $entry.spec.url $d.path ($entry.spec.args? | default []) $entry.spec.member?
             }
@@ -287,11 +327,16 @@ export def main [] {
             if ($entry.name in $have) {
                 print $"     (ansi dark_gray)==(ansi reset) wsl ($entry.name)"
                 if ($entry.spec.sparse? | default false) { set-wsl-sparse $entry.name }
-                if ($entry.spec.home-manager? | default false) { setup-wsl-home $entry.name }
+                if ($entry.spec.home-manager? | default false) { wsl-home-item $entry.name }
             } else if $reboot_pending {
                 print $"     (ansi yellow)[!](ansi reset) wsl ($entry.name) (ansi yellow)waiting on a Windows reboot -- reboot, then run `rebuild` again(ansi reset)"
-            } else if (install-wsl $entry.name $entry.spec.user) {
-                if ($entry.spec.home-manager? | default false) { setup-wsl-home $entry.name }
+                item-end $"wsl ($entry.name)" (now) 0 $"[!] wsl ($entry.name) waiting on a Windows reboot -- reboot, then run `rebuild` again"
+            } else {
+                let t = (now)
+                item-start $"wsl ($entry.name)"
+                let ok = (install-wsl $entry.name $entry.spec.user)
+                item-end $"wsl ($entry.name)" $t (if $ok { 0 } else { 1 }) ""
+                if $ok and ($entry.spec.home-manager? | default false) { wsl-home-item $entry.name }
             }
         }
     }

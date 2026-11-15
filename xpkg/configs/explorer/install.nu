@@ -10,3 +10,7 @@ if $nu.os-info.name != windows {
 
 # Show hidden files and folders (not protected OS files: ShowSuperHidden stays).
 ^reg add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' /v Hidden /t REG_DWORD /d 1 /f | ignore
+
+# Hide desktop icons: HideIcons is the desktop right-click View > "Show desktop
+# icons" toggle. Takes effect after Explorer restarts or the next sign-in.
+^reg add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' /v HideIcons /t REG_DWORD /d 1 /f | ignore

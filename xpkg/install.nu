@@ -6,6 +6,7 @@
 use ~/.dotfiles/xpkg/utils/@windows/bootstrap.nu [relaunch-elevated refresh-path]
 use ~/.dotfiles/xpkg/utils/parallel.nu [run-unit]
 use ~/.dotfiles/xpkg/utils/events.nu [emit]
+use ~/.dotfiles/xpkg/utils/@windows/wsl.nu [installed-wsl]
 
 # uv's path, from PATH or mise (the elevated relaunch gets the registry PATH,
 # which has no mise install dirs); null when neither has it.
@@ -16,11 +17,13 @@ def find-uv [] {
 }
 
 # True when a [wsl.<distro>] is not installed yet: its first boot asks for a
-# password on the terminal, which the panel would hide.
+# password on the terminal, which the panel would hide. A failing wsl.exe
+# counts as pending, so the plain path runs.
 def wsl-first-boot-pending [] {
     let declared = (open ~/.dotfiles/xpkg/windows/default.toml | get -o wsl | default {} | columns)
     if ($declared | is-empty) { return false }
-    let have = (^wsl.exe -l -q | decode utf-16le | str replace -a "\r" "" | str replace -a (char nul) "" | lines | where ($it | is-not-empty))
+    let have = (installed-wsl)
+    if $have == null { return true }
     $declared | any { $in not-in $have }
 }
 
@@ -39,12 +42,15 @@ if ($nu.os-info.name == windows) and ($env.XPKG_NO_PANEL? | is-empty) and (is-te
         let events = ($dir | path join events.jsonl)
         let script = ('~/.dotfiles/xpkg/install.nu' | path expand)
         let panel = ('~/.dotfiles/xpkg/utils/panel.py' | path expand)
-        # A non-zero exit from the panel (the child's exit code) ends this
-        # script with that same code.
-        with-env {XPKG_NO_PANEL: '1'} {
-            ^$uv run --quiet --with textual==8.2.8 python $panel $events -- nu $script
-        }
-        exit 0
+        # The panel creates events.log right before it starts the child. With
+        # no log, uv or the panel failed first (offline with textual not
+        # cached, a crash at startup), so the plain path below still runs.
+        # Otherwise the panel's exit code is the child's.
+        let code = (with-env {XPKG_NO_PANEL: '1'} {
+            try { ^$uv run --quiet --with textual==8.2.8 python $panel $events -- nu $script; 0 } catch {|e| $e.exit_code? | default 1 }
+        })
+        if ($dir | path join events.log | path exists) { exit $code }
+        print -e $"(ansi red)!!(ansi reset) panel did not start \(exit ($code)\); running plain"
     }
 }
 

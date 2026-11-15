@@ -253,10 +253,18 @@ class Panel(App):
         self.events.parent.mkdir(parents=True, exist_ok=True)
         self.events.touch()
         env = dict(os.environ, XPKG_EVENTS=str(self.events))
+        # xpkg/install.nu reads an existing log as "the child started", and
+        # without one falls back to the plain path, so the log exists only
+        # once Popen has succeeded.
         self.log_file = open(self.log_path, "wb")
-        self.proc = subprocess.Popen(
-            self.command, stdin=subprocess.DEVNULL, stdout=self.log_file, stderr=subprocess.STDOUT, env=env
-        )
+        try:
+            self.proc = subprocess.Popen(
+                self.command, stdin=subprocess.DEVNULL, stdout=self.log_file, stderr=subprocess.STDOUT, env=env
+            )
+        except OSError:
+            self.log_file.close()
+            self.log_path.unlink(missing_ok=True)
+            raise
         self.tick()
         self.set_interval(0.25, self.tick)
 
@@ -346,14 +354,58 @@ def plain_summary(app: Panel) -> str:
     return "\n".join(lines)
 
 
+def selftest() -> None:
+    import io
+    import tempfile
+
+    # (a) A unit whose process died without a unit_end must not stay
+    # "running" forever once its group has ended.
+    s = State()
+    s.apply({"ev": "group_start", "group": "G", "t": 1.0})
+    s.apply({"ev": "unit_start", "group": "G", "unit": "u", "t": 1.0})
+    s.apply({"ev": "group_end", "group": "G", "ok": False, "t": 2.0})
+    assert s.groups["G"].units["u"].status == "failed", s.groups["G"].units["u"]
+    assert s.summary_line().endswith("× 1 failed"), s.summary_line()
+
+    # (b) A line the child is still writing when the panel reads must be kept
+    # until its newline arrives, then applied exactly once, not dropped or
+    # parsed as two broken halves.
+    with tempfile.TemporaryDirectory() as d:
+        events = Path(d) / "events.jsonl"
+        app = Panel(events, [])
+        app.log_file = io.BytesIO()
+        applied: list[dict] = []
+        apply = app.state.apply
+        app.state.apply = lambda ev: (applied.append(ev), apply(ev))
+        line = json.dumps({"ev": "unit_end", "group": "G", "unit": "u", "exit_code": 0, "secs": 1, "t": 5.0}) + "\n"
+        events.write_text(line[:20])
+        app.read_events()
+        assert applied == [], applied
+        with open(events, "a") as f:
+            f.write(line[20:])
+        app.read_events()
+        app.read_events()
+        assert len(applied) == 1 and applied[0]["unit"] == "u", applied
+        assert app.log_file.getvalue() == b"", app.log_file.getvalue()
+    print("selftest ok")
+
+
 def main(argv: list[str]) -> int:
+    if argv[1:] == ["--selftest"]:
+        selftest()
+        return 0
     if len(argv) < 3 or "--" not in argv:
         print(__doc__, file=sys.stderr)
         return 2
     sep = argv.index("--")
     events, command = Path(argv[1]).resolve(), argv[sep + 1 :]
     app = Panel(events, command)
-    code = app.run()
+    try:
+        code = app.run()
+    finally:
+        # A panel crash must not leave rebuild running on unseen.
+        if app.proc is not None and app.proc.poll() is None:
+            kill_tree(app.proc)
     sys.stdout.reconfigure(errors="replace")
     print(plain_summary(app))
     return code if isinstance(code, int) else 1

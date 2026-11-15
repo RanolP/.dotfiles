@@ -8,6 +8,7 @@
 # ids listed under `remove` (no zap). Each install's output is captured and
 # printed as one result line when it finishes.
 use ~/.dotfiles/xpkg/utils/events.nu [emit now]
+use ~/.dotfiles/xpkg/utils/@windows/wsl.nu [installed-wsl]
 
 # Each install, uninstall and WSL step is one unit of the Packages group in
 # the `rebuild` panel; both are no-ops unless XPKG_EVENTS is set.
@@ -150,10 +151,6 @@ def install-direct [name: string, url: string, download: string, args: list<stri
     }
 }
 
-# Names from `wsl -l -q`; the output is UTF-16LE.
-def installed-wsl [] {
-    ^wsl.exe -l -q | decode utf-16le | str replace -a "\r" "" | str replace -a (char nul) "" | lines | where ($it | is-not-empty)
-}
 
 # Returns true once the distro exists and its first boot succeeded.
 def install-wsl [name: string, user: string] {
@@ -168,7 +165,7 @@ def install-wsl [name: string, user: string] {
     # On a machine without Virtual Machine Platform, `--install` only turns the
     # feature on and exits 0 with "Changes will not be effective until the
     # system is rebooted"; the distro does not exist yet.
-    if ($name not-in (installed-wsl)) {
+    if ($name not-in (installed-wsl | default [])) {
         print $"     (ansi yellow)[!](ansi reset) wsl ($name) (ansi yellow)not installed yet -- reboot Windows, then run `rebuild` again(ansi reset)"
         for l in ($"($r.stdout)($r.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
         return false
@@ -320,7 +317,8 @@ export def main [] {
     # first-boot script as root, set the password interactively, then restart.
     let wsl_entries = ($def.wsl? | default {} | transpose name spec)
     if not ($wsl_entries | is-empty) {
-        let have = (installed-wsl)
+        # A failing wsl.exe lists none, so each distro goes down the install path.
+        let have = (installed-wsl | default [])
         # Tradeoff: an unrelated pending reboot also defers the distro, which a reboot clears.
         let reboot_pending = (reboot-pending)
         for entry in $wsl_entries {

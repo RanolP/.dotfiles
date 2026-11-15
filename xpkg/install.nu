@@ -44,11 +44,11 @@ if ($nu.os-info.name == windows) and ($env.XPKG_NO_PANEL? | is-empty) and (is-te
         let script = ('~/.dotfiles/xpkg/install.nu' | path expand)
         let panel = ('~/.dotfiles/xpkg/utils/panel.py' | path expand)
         # The panel creates events.log right before it starts the child. With
-        # no log, uv or the panel failed first (offline with textual not
+        # no log, uv or the panel failed first (offline with rich not
         # cached, a crash at startup), so the plain path below still runs.
         # Otherwise the panel's exit code is the child's.
         let code = (with-env {XPKG_NO_PANEL: '1'} {
-            try { ^$uv run --quiet --with textual==8.2.8 python $panel $events -- nu $script; 0 } catch {|e| $e.exit_code? | default 1 }
+            try { ^$uv run --quiet --with rich==15.0.0 python $panel $events -- nu $script; 0 } catch {|e| $e.exit_code? | default 1 }
         })
         if ($dir | path join events.log | path exists) { exit $code }
         print -e $"(ansi red)!!(ansi reset) panel did not start \(exit ($code)\); running plain"

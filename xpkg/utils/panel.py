@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Fullscreen progress panel for `rebuild` on Windows.
+"""Progress panel for `rebuild` on Windows, drawn in place under the prompt.
 
-    uv run --with textual python xpkg/utils/panel.py <events-file> -- <command...>
+    uv run --with rich python xpkg/utils/panel.py <events-file> -- <command...>
 
 Starts <command> as a child with stdout and stderr in a .log beside the
 events file (events.jsonl -> events.log) and XPKG_EVENTS=<events-file> in its
 environment, tails the JSON lines the child appends there
 (xpkg/utils/events.nu), and draws a timeline of every unit that never
-scrolls. When the child exits the panel closes on its own, prints only the
-failures, reboot notices and a summary line
-to the normal screen, and exits with the child's code. Ctrl+C kills the
-child's process tree and exits 130.
+scrolls the terminal. When the child exits the panel erases itself, prints
+only the failures, reboot notices and a summary line, and exits with the
+child's code. Ctrl+C kills the child's process tree and exits 130.
 """
 
 from __future__ import annotations
@@ -24,11 +23,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rich.console import Console
+from rich.live import Live
 from rich.text import Text
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Vertical
-from textual.widgets import Static
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 SPINNER = "|/-\\"
@@ -232,44 +229,24 @@ def render_summary(state: State) -> Text:
     )
 
 
-class Panel(App):
-    CSS = f"""
-    /* Nothing scrolls: every box gets a fixed share of the screen and
-       window() picks the rows that fit it. */
-    * {{ overflow: hidden hidden; scrollbar-size: 0 0; }}
-    Screen {{ background: #121212; color: #d0d0d0; layout: vertical; }}
-    #header {{ height: 1; background: #1c1c1c; padding: 0 1; }}
-    #footer {{ height: 2; background: #1c1c1c; padding: 0 1; }}
-    #body {{ height: 1fr; padding: 0 1; }}
-    .box {{ border: round {DIM}; border-title-color: {CYAN}; padding: 0 1; }}
-    #timeline {{ height: 1fr; }}
-    """
-    BINDINGS = [
-        Binding("ctrl+c", "abort", "abort", show=False, priority=True),
-    ]
+class Panel:
+    """Draws the header, timeline and summary in place under the prompt
+    (rich Live, not a fullscreen app) and removes them when the run ends."""
 
     def __init__(self, events: Path, command: list[str]) -> None:
-        super().__init__()
         self.events = events
         self.log_path = events.with_suffix(".log")
         self.command = command
         self.state = State()
         self.proc: subprocess.Popen | None = None
-        self.child_code: int | None = None
         self.offset = 0
         self.partial = b""
         self.frame = 0
         self.started = time.time()
         self.finished: float | None = None
+        self.console = Console(highlight=False)
 
-    def compose(self) -> ComposeResult:
-        yield Static(id="header")
-        with Vertical(id="body"):
-            yield Static(id="timeline", classes="box")
-        yield Static(id="footer")
-
-    def on_mount(self) -> None:
-        self.query_one("#timeline").border_title = "Timeline"
+    def start(self) -> None:
         self.events.parent.mkdir(parents=True, exist_ok=True)
         self.events.touch()
         env = dict(os.environ, XPKG_EVENTS=str(self.events))
@@ -285,8 +262,26 @@ class Panel(App):
             self.log_file.close()
             self.log_path.unlink(missing_ok=True)
             raise
-        self.tick()
-        self.set_interval(0.25, self.tick)
+
+    def run(self) -> int:
+        """Draws until the child exits and returns its code; Ctrl+C kills
+        the child's tree and returns 130."""
+        self.start()
+        try:
+            with Live(self.render(), console=self.console, auto_refresh=False, transient=True) as live:
+                while self.proc.poll() is None:
+                    self.read_events()
+                    self.frame += 1
+                    live.update(self.render(), refresh=True)
+                    time.sleep(0.25)
+        except KeyboardInterrupt:
+            kill_tree(self.proc)
+            return 130
+        finally:
+            self.finished = time.time()
+            self.read_events()
+            self.log_file.close()
+        return self.proc.returncode
 
     def read_events(self) -> None:
         try:
@@ -304,56 +299,18 @@ class Panel(App):
                 except (ValueError, KeyError) as e:
                     self.log_file.write(f"panel: bad event {line!r}: {e}\n".encode())
 
-    def tick(self) -> None:
-        self.read_events()
-        if self.child_code is None and self.proc is not None and self.proc.poll() is not None:
-            self.child_code = self.proc.returncode
-            self.finished = time.time()
-            self.read_events()
-            # The panel closes with the run; main() then prints the plain
-            # lines to the normal screen.
-            self.exit(self.child_code)
-            return
-        self.frame += 1
-        self.redraw()
-
-    def redraw(self) -> None:
+    def render(self) -> Text:
         now = time.time()
-        width = self.size.width or 100
+        width, height = self.console.size
         elapsed = f"{(self.finished or now) - self.started:.1f}s"
         title = "xpkg rebuild"
-        self.query_one("#header", Static).update(
-            Text.assemble((title, f"bold {CYAN}"), " " * max(width - 2 - len(title) - len(elapsed), 1), (elapsed, "bold"))
-        )
-        tl_width, tl_height = self.inner("#timeline")
-        bars, axis, active = render_timeline(self.state, tl_width, self.frame, now)
-        self.show("#timeline", bars[:1] if axis is None else window(bars, tl_height - 1, active) + [axis])
-        hint = Text(f"\nlog {self.log_path}  ctrl+c aborts", style=DIM)
-        self.query_one("#footer", Static).update(fit([render_summary(self.state), hint[1:]], width - 2))
-
-    def inner(self, selector: str) -> tuple[int, int]:
-        """A box's content (width, height); before the first layout, a guess
-        from the screen size."""
-        size = self.query_one(selector).content_size
-        if size.width and size.height:
-            return size.width, size.height
-        return max(self.size.width // 2 - 4, 20), max(self.size.height // 3, 3)
-
-    def show(self, selector: str, rows: list[Text]) -> None:
-        self.query_one(selector, Static).update(fit(rows, self.inner(selector)[0]))
-
-    def on_resize(self) -> None:
-        # Box sizes are known only after the layout pass the resize triggers.
-        self.call_after_refresh(self.redraw)
-
-    def action_abort(self) -> None:
-        if self.proc is not None and self.proc.poll() is None:
-            kill_tree(self.proc)
-        self.exit(130)
-
-    def on_unmount(self) -> None:
-        if hasattr(self, "log_file"):
-            self.log_file.close()
+        header = Text.assemble((title, f"bold {CYAN}"), " " * max(width - len(title) - len(elapsed), 1), (elapsed, "bold"))
+        bars, axis, active = render_timeline(self.state, width, self.frame, now)
+        # Header, axis and summary take three lines; one more keeps the live
+        # region from touching the terminal's last row, which would scroll it.
+        body = bars[:1] if axis is None else window(bars, height - 4, active) + [axis]
+        summary = Text.assemble(render_summary(self.state), (f"  ctrl+c aborts  log {self.log_path}", DIM))
+        return fit([header, *body, summary], width)
 
 
 def kill_tree(proc: subprocess.Popen) -> None:
@@ -467,7 +424,7 @@ def main(argv: list[str]) -> int:
             kill_tree(app.proc)
     sys.stdout.reconfigure(errors="replace")
     print(plain_summary(app))
-    return code if isinstance(code, int) else 1
+    return code
 
 
 if __name__ == "__main__":

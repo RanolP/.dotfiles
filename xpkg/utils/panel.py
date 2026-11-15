@@ -3,12 +3,14 @@
 
     uv run --with textual python xpkg/utils/panel.py <events-file> -- <command...>
 
-Starts <command> as a child with stdout and stderr in <events-file>.log and
-XPKG_EVENTS=<events-file> in its environment, tails the JSON lines the child
-appends there (xpkg/utils/events.nu), and draws a group -> unit tree, the
-failures, the reboot notices and a timeline. Once the child exits the panel
-stays until `q`, then prints a plain summary and exits with the child's code.
-Ctrl+C kills the child's process tree and exits 130.
+Starts <command> as a child with stdout and stderr in a .log beside the
+events file (events.jsonl -> events.log) and XPKG_EVENTS=<events-file> in its
+environment, tails the JSON lines the child appends there
+(xpkg/utils/events.nu), and draws a group -> unit tree, the failures, the
+reboot notices and a timeline, none of which scrolls. When the child exits the
+panel closes on its own, prints only the failures, notices and a summary line
+to the normal screen, and exits with the child's code. Ctrl+C kills the
+child's process tree and exits 130.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Static
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -134,65 +136,97 @@ def secs(u: Unit | Group, now: float) -> str:
     return f"{(u.end or now) - u.start:.1f}s"
 
 
-def render_tree(state: State, frame: int, now: float) -> Text:
-    out = Text()
+def render_tree(state: State, frame: int, now: float) -> tuple[list[Text], int | None, int | None]:
+    """The Units rows, plus the index of the first running or waiting unit row
+    and of its group header (both None once every unit has finished)."""
+    rows: list[Text] = []
+    active = header = None
     for g in state.groups.values():
-        out.append_text(marker(g.status, frame))
-        out.append(g.name, style=f"bold {CYAN}")
-        out.append(f"  {secs(g, now)}\n", style=DIM)
+        g_row = len(rows)
+        rows.append(Text.assemble(marker(g.status, frame), (g.name, f"bold {CYAN}"), (f"  {secs(g, now)}", DIM)))
         units = list(g.units.values())
         for i, u in enumerate(units):
-            out.append("  └─ " if i == len(units) - 1 else "  ├─ ", style=DIM)
-            out.append_text(marker(u.status, frame))
-            out.append(f"{u.name:<{LABEL_WIDTH}}", style=STATUS_COLOR[u.status] if u.status != "done" else "")
-            out.append(f" {secs(u, now)}\n", style=DIM)
-    if not state.groups:
-        out.append("waiting for the first event…", style=DIM)
-    return out
+            if active is None and u.status in ("running", "waiting"):
+                active, header = len(rows), g_row
+            rows.append(Text.assemble(
+                ("  └─ " if i == len(units) - 1 else "  ├─ ", DIM),
+                marker(u.status, frame),
+                (f"{u.name:<{LABEL_WIDTH}}", STATUS_COLOR[u.status] if u.status != "done" else ""),
+                (f" {secs(u, now)}", DIM),
+            ))
+    if not rows:
+        rows.append(Text("waiting for the first event…", style=DIM))
+    return rows, active, header
 
 
-def render_failures(state: State) -> Text:
-    out = Text()
+def render_failures(state: State) -> list[Text]:
+    rows: list[Text] = []
     for group, u in state.failed():
         code = "no exit code" if u.exit_code is None else f"exit {u.exit_code}"
-        out.append(f"× {u.name}", style=f"bold {RED}")
-        out.append(f"  {group}  {code}\n", style=DIM)
+        rows.append(Text.assemble((f"× {u.name}", f"bold {RED}"), (f"  {group}  {code}", DIM)))
         tail = [clean(line) for line in u.output.splitlines() if clean(line).strip()][-4:]
-        for line in tail:
-            out.append(f"    {line}\n", style=DIM)
-    if not out.plain:
-        out.append("none", style=DIM)
-    return out
+        rows += [Text(f"    {line}", style=DIM) for line in tail]
+    return rows or [Text("none", style=DIM)]
 
 
-def render_notices(state: State) -> Text:
-    if not state.notices:
-        return Text("none", style=DIM)
-    return Text("\n".join(state.notices), style=YELLOW)
+def render_notices(state: State) -> list[Text]:
+    return [Text(n, style=YELLOW) for n in state.notices] or [Text("none", style=DIM)]
 
 
-def render_timeline(state: State, width: int, now: float) -> Text:
+def render_timeline(state: State, width: int, now: float) -> tuple[list[Text], Text | None, int | None]:
+    """One bar row per started unit, the axis row, and the index of the
+    first running row (None when nothing runs)."""
     units = sorted(
         ((g, u) for g, u in state.all_units() if u.start is not None),
         key=lambda gu: gu[1].start,
     )
     if not units:
-        return Text("nothing has started yet", style=DIM)
+        return [Text("nothing has started yet", style=DIM)], None, None
     t0 = min(u.start for _, u in units)
     t1 = max((u.end or now) for _, u in units)
     span = max(t1 - t0, 1.0)
-    bar_width = max(width - LABEL_WIDTH - 2, 10)
-    out = Text()
-    for _, u in units:
-        a = int((u.start - t0) / span * bar_width)
-        b = max(a + 1, round(((u.end or now) - t0) / span * bar_width))
-        out.append(f"{u.name[:LABEL_WIDTH - 1]:<{LABEL_WIDTH}}", style=DIM)
-        out.append(" " * a)
-        out.append("█" * (b - a), style=STATUS_COLOR[u.status])
-        out.append("\n")
+    bar_width = max(width - LABEL_WIDTH, 10)
+    rows: list[Text] = []
+    active = None
+    for i, (_, u) in enumerate(units):
+        if active is None and u.status == "running":
+            active = i
+        b = min(max(1, round(((u.end or now) - t0) / span * bar_width)), bar_width)
+        a = min(int((u.start - t0) / span * bar_width), b - 1)
+        rows.append(Text.assemble(
+            (f"{u.name[:LABEL_WIDTH - 1]:<{LABEL_WIDTH}}", DIM), " " * a, ("█" * (b - a), STATUS_COLOR[u.status])
+        ))
     end_label = f"{span:.0f}s"
-    axis = "0s".ljust(bar_width - len(end_label)) + end_label
-    out.append(" " * LABEL_WIDTH + axis, style=DIM)
+    axis = Text(" " * LABEL_WIDTH + "0s".ljust(bar_width - len(end_label)) + end_label, style=DIM)
+    return rows, axis, active
+
+
+def window(rows: list[Text], height: int, active: int | None = None, header: int | None = None) -> list[Text]:
+    """The rows that fit in `height`, so no box ever needs a scrollbar. With
+    `active`, finished rows above it slide out the top and the active row
+    sits near the top under its pinned group `header`; without it the tail
+    shows (everything finished, or a newest-last list)."""
+    height = max(height, 1)
+    if len(rows) <= height:
+        return rows
+    if active is None:
+        return rows[-height:]
+    start = active - 1 if header == active - 1 else active
+    start = max(0, min(start, len(rows) - height))
+    if header is not None and header < start:
+        return [rows[header]] + rows[start : start + height - 1]
+    return rows[start : start + height]
+
+
+def fit(rows: list[Text], width: int) -> Text:
+    """Rows joined into one Text, each cut to `width` so nothing wraps."""
+    out = Text(no_wrap=True, overflow="ellipsis")
+    for i, row in enumerate(rows):
+        row = row.copy()
+        row.truncate(max(width, 1), overflow="ellipsis")
+        if i:
+            out.append("\n")
+        out.append_text(row)
     return out
 
 
@@ -208,17 +242,22 @@ def render_summary(state: State) -> Text:
 
 class Panel(App):
     CSS = f"""
-    Screen {{ background: #121212; color: #d0d0d0; }}
-    #header {{ dock: top; height: 1; background: #1c1c1c; padding: 0 1; }}
-    #footer {{ dock: bottom; height: 2; background: #1c1c1c; padding: 0 1; }}
-    #body {{ padding: 0 1; }}
-    #top {{ height: auto; }}
-    .box {{ border: round {DIM}; border-title-color: {CYAN}; height: auto; padding: 0 1; }}
-    #tree {{ width: 1fr; }}
-    #side {{ width: 1fr; height: auto; }}
+    /* Nothing scrolls: every box gets a fixed share of the screen and
+       window() picks the rows that fit it. */
+    * {{ overflow: hidden hidden; scrollbar-size: 0 0; }}
+    Screen {{ background: #121212; color: #d0d0d0; layout: vertical; }}
+    #header {{ height: 1; background: #1c1c1c; padding: 0 1; }}
+    #footer {{ height: 2; background: #1c1c1c; padding: 0 1; }}
+    #body {{ height: 1fr; padding: 0 1; }}
+    #top {{ height: 3fr; }}
+    .box {{ border: round {DIM}; border-title-color: {CYAN}; padding: 0 1; }}
+    #tree {{ width: 1fr; height: 1fr; }}
+    #side {{ width: 1fr; height: 1fr; }}
+    #failures {{ height: 2fr; }}
+    #notices {{ height: 1fr; }}
+    #timeline {{ height: 2fr; }}
     """
     BINDINGS = [
-        Binding("q", "close", "close", show=False),
         Binding("ctrl+c", "abort", "abort", show=False, priority=True),
     ]
 
@@ -238,7 +277,7 @@ class Panel(App):
 
     def compose(self) -> ComposeResult:
         yield Static(id="header")
-        with VerticalScroll(id="body"):
+        with Vertical(id="body"):
             with Horizontal(id="top"):
                 yield Static(id="tree", classes="box")
                 with Vertical(id="side"):
@@ -290,6 +329,10 @@ class Panel(App):
             self.child_code = self.proc.returncode
             self.finished = time.time()
             self.read_events()
+            # The panel closes with the run; main() then prints the plain
+            # lines to the normal screen.
+            self.exit(self.child_code)
+            return
         self.frame += 1
         self.redraw()
 
@@ -301,23 +344,30 @@ class Panel(App):
         self.query_one("#header", Static).update(
             Text.assemble((title, f"bold {CYAN}"), " " * max(width - 2 - len(title) - len(elapsed), 1), (elapsed, "bold"))
         )
-        self.query_one("#tree", Static).update(render_tree(self.state, self.frame, now))
-        self.query_one("#failures", Static).update(render_failures(self.state))
-        self.query_one("#notices", Static).update(render_notices(self.state))
-        self.query_one("#timeline", Static).update(render_timeline(self.state, width - 6, now))
-        footer = render_summary(self.state)
-        if self.child_code is None:
-            hint = Text(f"\nrunning; log {self.log_path}  ctrl+c aborts", style=DIM)
-        else:
-            style = GREEN if self.child_code == 0 else RED
-            hint = Text.assemble("\n", (f"finished, exit {self.child_code}", style), ("  q to close", "bold"))
-        self.query_one("#footer", Static).update(Text.assemble(footer, hint))
+        tree, active, header = render_tree(self.state, self.frame, now)
+        self.show("#tree", window(tree, self.inner("#tree")[1], active, header))
+        self.show("#failures", window(render_failures(self.state), self.inner("#failures")[1]))
+        self.show("#notices", window(render_notices(self.state), self.inner("#notices")[1]))
+        tl_width, tl_height = self.inner("#timeline")
+        bars, axis, active = render_timeline(self.state, tl_width, now)
+        self.show("#timeline", bars[:1] if axis is None else window(bars, tl_height - 1, active) + [axis])
+        hint = Text(f"\nlog {self.log_path}  ctrl+c aborts", style=DIM)
+        self.query_one("#footer", Static).update(fit([render_summary(self.state), hint[1:]], width - 2))
 
-    def action_close(self) -> None:
-        if self.child_code is not None:
-            self.exit(self.child_code)
-        else:
-            self.notify("still running; ctrl+c aborts", timeout=2)
+    def inner(self, selector: str) -> tuple[int, int]:
+        """A box's content (width, height); before the first layout, a guess
+        from the screen size."""
+        size = self.query_one(selector).content_size
+        if size.width and size.height:
+            return size.width, size.height
+        return max(self.size.width // 2 - 4, 20), max(self.size.height // 3, 3)
+
+    def show(self, selector: str, rows: list[Text]) -> None:
+        self.query_one(selector, Static).update(fit(rows, self.inner(selector)[0]))
+
+    def on_resize(self) -> None:
+        # Box sizes are known only after the layout pass the resize triggers.
+        self.call_after_refresh(self.redraw)
 
     def action_abort(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
@@ -340,17 +390,21 @@ def kill_tree(proc: subprocess.Popen) -> None:
 
 
 def plain_summary(app: Panel) -> str:
+    """What stays on the normal screen once the panel closes: failures,
+    notices and one summary line; no per-unit progress."""
     s = app.state
-    lines = [s.summary_line()]
+    lines = []
     for group, u in s.failed():
         code = "no exit code" if u.exit_code is None else f"exit {u.exit_code}"
-        lines.append(f"  × {group}/{u.name}  {code}")
+        lines.append(f"!! {group}/{u.name} {code}")
         tail = [clean(line) for line in u.output.splitlines() if clean(line).strip()][-4:]
         lines += [f"      {line}" for line in tail]
-    if s.notices:
-        lines.append("notices:")
-        lines += [f"  {n}" for n in s.notices]
-    lines.append(f"log: {app.log_path}")
+    lines += s.notices
+    c = s.counts()
+    total = (app.finished or time.time()) - app.started
+    lines.append(f"√ {c['done']} done  × {c['failed']} failed  {total:.1f}s")
+    if c["failed"]:
+        lines.append(f"log: {app.log_path}")
     return "\n".join(lines)
 
 
@@ -387,6 +441,14 @@ def selftest() -> None:
         app.read_events()
         assert len(applied) == 1 and applied[0]["unit"] == "u", applied
         assert app.log_file.getvalue() == b"", app.log_file.getvalue()
+    # (c) A box taller than its content must never scroll: the active row
+    # sits under its pinned group header with finished rows cut off above,
+    # and with nothing active the tail shows.
+    rows = [Text(str(i)) for i in range(20)]
+    assert [r.plain for r in window(rows, 5, active=10, header=2)] == ["2", "10", "11", "12", "13"]
+    assert [r.plain for r in window(rows, 5, active=10, header=9)] == ["9", "10", "11", "12", "13"]
+    assert [r.plain for r in window(rows, 5, active=18, header=2)] == ["2", "15", "16", "17", "18"]
+    assert [r.plain for r in window(rows, 5)] == ["15", "16", "17", "18", "19"]
     print("selftest ok")
 
 

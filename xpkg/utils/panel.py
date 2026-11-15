@@ -160,14 +160,23 @@ def tick_step(span: float, width: int) -> int:
 
 
 def bar(start: float, end: float, slots: int, slot: int, step: int) -> str:
-    """One block per `step`-second slot that [start, end) touches (seconds
-    since the run started), each `slot` cells wide: a "━" run with one blank
-    cell after it, so the gaps line up into a grid across rows. A unit
-    shorter than a slot still gets its block."""
-    first = min(int(start // step), slots - 1)
-    last = max(first, min(math.ceil(end / step) - 1, slots - 1))
-    block = "━" * (slot - 1) + " "
-    return "".join(block if first <= k <= last else " " * slot for k in range(slots))
+    """One block per `step`-second slot (seconds since the run started), each
+    `slot` cells wide with one blank cell after it, so the gaps line up into
+    a grid across rows. Inside a block the line fills at half-cell
+    resolution ("━" a whole cell, "╸"/"╺" its left/right half) for the part
+    of that slot [start, end) covers, so a running bar grows every frame
+    rather than once per slot. Any overlap fills a half-cell, so a unit
+    shorter than one still shows a stub."""
+    halves = (slot - 1) * 2
+    out = []
+    for k in range(slots):
+        lo = k * step
+        filled = [lo + h * step / halves < end and lo + (h + 1) * step / halves > start for h in range(halves)]
+        for c in range(slot - 1):
+            left, right = filled[2 * c], filled[2 * c + 1]
+            out.append("━" if left and right else "╸" if left else "╺" if right else " ")
+        out.append(" ")
+    return "".join(out)
 
 
 def axis_labels(slots: int, slot: int, step: int) -> str:
@@ -427,11 +436,14 @@ def selftest() -> None:
     assert active == 2, active
 
     # (e) One block per second with a gap after each, so blocks line up in
-    # columns across rows; a unit shorter than a second still gets a block,
+    # columns across rows; a unit shorter than a second still gets a stub,
     # and a long run coarsens the slot instead of overflowing the row.
     assert bar(0.0, 3.0, 4, 3, 1) == "━━ ━━ ━━    ", repr(bar(0.0, 3.0, 4, 3, 1))
-    assert bar(1.2, 1.3, 4, 3, 1) == "   ━━       ", repr(bar(1.2, 1.3, 4, 3, 1))
-    assert bar(2.5, 4.0, 4, 3, 1) == "      ━━ ━━ ", repr(bar(2.5, 4.0, 4, 3, 1))
+    assert bar(1.2, 1.3, 4, 3, 1) == "   ━        ", repr(bar(1.2, 1.3, 4, 3, 1))
+    assert bar(2.5, 4.0, 4, 3, 1) == "       ━ ━━ ", repr(bar(2.5, 4.0, 4, 3, 1))
+    # A running bar 0.6s into its second second shows that second partly
+    # filled, not a whole block: the bar grows within the second.
+    assert bar(0.0, 1.6, 4, 3, 1) == "━━ ━╸       ", repr(bar(0.0, 1.6, 4, 3, 1))
     assert tick_step(7.0, 50) == 1 and tick_step(600.0, 50) == 30, (tick_step(7.0, 50), tick_step(600.0, 50))
     print("selftest ok")
 

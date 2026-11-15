@@ -146,83 +146,74 @@ def completion_order(u: Unit) -> tuple[int, float]:
     return 2, 0.0
 
 
-TICK_STEPS = (1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
+WINDOW_SECS = 4
 
 
-def tick_step(span: float, width: int) -> int:
-    """Seconds per block: 1s while every second of the run gets a slot of at
-    least two cells (block plus gap), else the next step in TICK_STEPS that
-    fits."""
-    for step in TICK_STEPS:
-        if math.ceil(span / step) * 2 <= width:
-            return step
-    return TICK_STEPS[-1]
+def bar(start: float, end: float, slot: int, offset: int, width: int) -> str:
+    """`width` cells of a grid with one `slot`-cell block per second (seconds
+    since the run started, a blank cell closing each block so the gaps line
+    up across rows), beginning `offset` half-cells into the run. A block
+    fills at half-cell resolution ("━" a whole cell, "╸"/"╺" its left/right
+    half) for the part of its second that [start, end) covers, so a running
+    bar grows every frame; any overlap fills a half-cell, so a unit shorter
+    than one still shows a stub."""
+    inner = (slot - 1) * 2
 
+    def filled(g: int) -> bool:
+        k, r = divmod(g, slot * 2)
+        return r < inner and k + r / inner < end and k + (r + 1) / inner > start
 
-def bar(start: float, end: float, slots: int, slot: int, step: int) -> str:
-    """One block per `step`-second slot (seconds since the run started), each
-    `slot` cells wide with one blank cell after it, so the gaps line up into
-    a grid across rows. Inside a block the line fills at half-cell
-    resolution ("━" a whole cell, "╸"/"╺" its left/right half) for the part
-    of that slot [start, end) covers, so a running bar grows every frame
-    rather than once per slot. Any overlap fills a half-cell, so a unit
-    shorter than one still shows a stub."""
-    halves = (slot - 1) * 2
     out = []
-    for k in range(slots):
-        lo = k * step
-        filled = [lo + h * step / halves < end and lo + (h + 1) * step / halves > start for h in range(halves)]
-        for c in range(slot - 1):
-            left, right = filled[2 * c], filled[2 * c + 1]
-            out.append("━" if left and right else "╸" if left else "╺" if right else " ")
-        out.append(" ")
+    for c in range(width):
+        left, right = filled(offset + 2 * c), filled(offset + 2 * c + 1)
+        out.append("━" if left and right else "╸" if left else "╺" if right else " ")
     return "".join(out)
 
 
-def axis_labels(slots: int, slot: int, step: int) -> str:
-    """Each slot's start second under its block, skipping a label that would
-    run into the previous one, then the end second."""
+def axis_labels(slot: int, offset: int, width: int) -> str:
+    """Each second's number under the cell where its block starts, for the
+    seconds inside the view, skipping one that would run into the last."""
     out = ""
-    for k in range(slots + 1):
-        label = f"{k * step}s" if k == slots or k == 0 else f"{k * step}"
-        at = k * slot
-        if len(out) < at or k == 0:
-            out = out.ljust(at) + label
+    for k in range(math.ceil(offset / (slot * 2)), (offset + width * 2) // (slot * 2) + 1):
+        at = (k * slot * 2 - offset) // 2
+        if at >= len(out) + (1 if out else 0) and at < width:
+            out = out.ljust(at) + f"{k}s"
     return out
 
 
 def render_timeline(state: State, width: int, frame: int, now: float) -> tuple[list[Text], Text | None, int | None]:
     """One row per unit in `completion_order` -- marker, name, blocks,
     seconds; a waiting unit has no blocks yet -- the axis row, and the index
-    of the first unfinished row (None once everything has finished)."""
+    of the first unfinished row (None once everything has finished). The bar
+    area always spans WINDOW_SECS seconds at a fixed width; past that it
+    scrolls a cell at a time to keep the latest WINDOW_SECS in view."""
     units = sorted(state.all_units(), key=lambda gu: completion_order(gu[1]))
     if not units:
         return [Text("waiting for the first event…", style=DIM)], None, None
     started = [u for _, u in units if u.start is not None]
     t0 = min((u.start for u in started), default=now)
     t1 = max(((u.end or now) for u in started), default=now)
-    span = max(t1 - t0, 1.0)
     bar_width = max(width - 4 - LABEL_WIDTH - SECS_WIDTH, 10)
-    step = tick_step(span, bar_width)
-    # At least four slots, so a short run keeps a fixed 1s width instead of
-    # stretching one second across the row.
-    slots = max(math.ceil(span / step), 4)
-    slot = max(bar_width // slots, 2)
+    slot = max(bar_width // WINDOW_SECS, 2)
+    view = slot * WINDOW_SECS
+    # Whole cells only: an odd half-cell shift would split every gap into
+    # "╸╺" and the grid would flicker between two looks while scrolling.
+    offset = max(0, math.ceil((t1 - t0) * slot) - view) * 2
     rows: list[Text] = []
     active = None
     for i, (_, u) in enumerate(units):
         if active is None and u.status in ("running", "waiting"):
             active = i
-        line = " " * (slots * slot)
+        line = ""
         if u.start is not None:
-            line = bar(u.start - t0, (u.end or now) - t0, slots, slot, step)
+            line = bar(u.start - t0, (u.end or now) - t0, slot, offset, view)
         rows.append(Text.assemble(
             marker(u.status, frame),
             (f"{u.name[:LABEL_WIDTH - 1]:<{LABEL_WIDTH}}", STATUS_COLOR[u.status] if u.status != "done" else ""),
             (f"{line:<{bar_width}}", STATUS_COLOR[u.status]),
             (f"{secs(u, now):>{SECS_WIDTH}}", DIM),
         ))
-    axis = Text(" " * (4 + LABEL_WIDTH) + axis_labels(slots, slot, step), style=DIM)
+    axis = Text(" " * (4 + LABEL_WIDTH) + axis_labels(slot, offset, view), style=DIM)
     return rows, axis, active
 
 
@@ -438,15 +429,15 @@ def selftest() -> None:
     assert active == 2, active
 
     # (e) One block per second with a gap after each, so blocks line up in
-    # columns across rows; a unit shorter than a second still gets a stub,
-    # and a long run coarsens the slot instead of overflowing the row.
-    assert bar(0.0, 3.0, 4, 3, 1) == "━━ ━━ ━━    ", repr(bar(0.0, 3.0, 4, 3, 1))
-    assert bar(1.2, 1.3, 4, 3, 1) == "   ━        ", repr(bar(1.2, 1.3, 4, 3, 1))
-    assert bar(2.5, 4.0, 4, 3, 1) == "       ━ ━━ ", repr(bar(2.5, 4.0, 4, 3, 1))
-    # A running bar 0.6s into its second second shows that second partly
-    # filled, not a whole block: the bar grows within the second.
-    assert bar(0.0, 1.6, 4, 3, 1) == "━━ ━╸       ", repr(bar(0.0, 1.6, 4, 3, 1))
-    assert tick_step(7.0, 50) == 1 and tick_step(600.0, 50) == 30, (tick_step(7.0, 50), tick_step(600.0, 50))
+    # columns across rows; a unit shorter than a second fills only its part,
+    # a running bar fills its current second partly, and a scrolled view
+    # shifts the grid rather than narrowing it.
+    assert bar(0.0, 3.0, 3, 0, 12) == "━━ ━━ ━━    ", repr(bar(0.0, 3.0, 3, 0, 12))
+    assert bar(1.2, 1.3, 3, 0, 12) == "   ━        ", repr(bar(1.2, 1.3, 3, 0, 12))
+    assert bar(2.5, 4.0, 3, 0, 12) == "       ━ ━━ ", repr(bar(2.5, 4.0, 3, 0, 12))
+    assert bar(0.0, 1.6, 3, 0, 12) == "━━ ━╸       ", repr(bar(0.0, 1.6, 3, 0, 12))
+    assert bar(0.0, 5.0, 3, 6, 12) == "━━ ━━ ━━ ━━ ", repr(bar(0.0, 5.0, 3, 6, 12))
+    assert bar(0.0, 5.0, 3, 2, 12) == "━ ━━ ━━ ━━ ━", repr(bar(0.0, 5.0, 3, 2, 12))
     print("selftest ok")
 
 

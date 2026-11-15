@@ -15,6 +15,7 @@ exits with the child's code. Ctrl+C kills the child's process tree and exits 130
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
@@ -149,42 +150,42 @@ TICK_STEPS = (1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
 
 
 def tick_step(span: float, width: int) -> int:
-    """Seconds between bar breaks: 1s while a second spans at least three
-    half-cells, else the next step in TICK_STEPS that does, so a long run
-    does not turn every bar into dots."""
+    """Seconds per block: 1s while every second of the run gets a slot of at
+    least two cells (block plus gap), else the next step in TICK_STEPS that
+    fits."""
     for step in TICK_STEPS:
-        if step * width * 2 / span >= 3:
+        if math.ceil(span / step) * 2 <= width:
             return step
     return TICK_STEPS[-1]
 
 
-def bar(start: float, end: float, width: int, tick: float | None = None) -> str:
-    """A thin line from `start` to `end` (fractions of the run) at half-cell
-    resolution: "━" fills a cell, "╺" and "╸" fill its right or left half.
-    With `tick` (half-cells between breaks) the half-cell holding each tick
-    boundary stays blank, so the line breaks there. Never empty, so a
-    sub-second unit still shows a stub."""
-    halves = width * 2
-    a = min(int(start * halves), halves - 1)
-    b = min(max(a + 1, round(end * halves)), halves)
+def bar(start: float, end: float, slots: int, slot: int, step: int) -> str:
+    """One block per `step`-second slot that [start, end) touches (seconds
+    since the run started), each `slot` cells wide: a "━" run with one blank
+    cell after it, so the gaps line up into a grid across rows. A unit
+    shorter than a slot still gets its block."""
+    first = min(int(start // step), slots - 1)
+    last = max(first, min(math.ceil(end / step) - 1, slots - 1))
+    block = "━" * (slot - 1) + " "
+    return "".join(block if first <= k <= last else " " * slot for k in range(slots))
 
-    def gap(i: int) -> bool:
-        return tick is not None and int((i + 1) / tick + 1e-9) > int(i / tick + 1e-9)
 
-    filled = [a <= i < b and not gap(i) for i in range(halves)]
-    if not any(filled):
-        filled = [a <= i < b for i in range(halves)]
-    out = []
-    for c in range(width):
-        left, right = filled[2 * c], filled[2 * c + 1]
-        out.append("━" if left and right else "╸" if left else "╺" if right else " ")
-    return "".join(out)
+def axis_labels(slots: int, slot: int, step: int) -> str:
+    """Each slot's start second under its block, skipping a label that would
+    run into the previous one, then the end second."""
+    out = ""
+    for k in range(slots + 1):
+        label = f"{k * step}s" if k == slots or k == 0 else f"{k * step}"
+        at = k * slot
+        if len(out) < at or k == 0:
+            out = out.ljust(at) + label
+    return out
 
 
 def render_timeline(state: State, width: int, frame: int, now: float) -> tuple[list[Text], Text | None, int | None]:
-    """One row per unit in `completion_order` -- marker, name, bar, seconds;
-    a waiting unit has no bar yet -- the axis row, and the index of the first
-    unfinished row (None once everything has finished)."""
+    """One row per unit in `completion_order` -- marker, name, blocks,
+    seconds; a waiting unit has no blocks yet -- the axis row, and the index
+    of the first unfinished row (None once everything has finished)."""
     units = sorted(state.all_units(), key=lambda gu: completion_order(gu[1]))
     if not units:
         return [Text("waiting for the first event…", style=DIM)], None, None
@@ -194,23 +195,23 @@ def render_timeline(state: State, width: int, frame: int, now: float) -> tuple[l
     span = max(t1 - t0, 1.0)
     bar_width = max(width - 4 - LABEL_WIDTH - SECS_WIDTH, 10)
     step = tick_step(span, bar_width)
-    tick = step * bar_width * 2 / span
+    slots = math.ceil(span / step)
+    slot = max(bar_width // slots, 2)
     rows: list[Text] = []
     active = None
     for i, (_, u) in enumerate(units):
         if active is None and u.status in ("running", "waiting"):
             active = i
-        line = " " * bar_width
+        line = " " * (slots * slot)
         if u.start is not None:
-            line = bar((u.start - t0) / span, ((u.end or now) - t0) / span, bar_width, tick)
+            line = bar(u.start - t0, (u.end or now) - t0, slots, slot, step)
         rows.append(Text.assemble(
             marker(u.status, frame),
             (f"{u.name[:LABEL_WIDTH - 1]:<{LABEL_WIDTH}}", STATUS_COLOR[u.status] if u.status != "done" else ""),
-            (line, STATUS_COLOR[u.status]),
+            (f"{line:<{bar_width}}", STATUS_COLOR[u.status]),
             (f"{secs(u, now):>{SECS_WIDTH}}", DIM),
         ))
-    end_label = f"{span:.0f}s" if step == 1 else f"ticks {step}s · {span:.0f}s"
-    axis = Text(" " * (4 + LABEL_WIDTH) + "0s".ljust(bar_width - len(end_label)) + end_label, style=DIM)
+    axis = Text(" " * (4 + LABEL_WIDTH) + axis_labels(slots, slot, step), style=DIM)
     return rows, axis, active
 
 
@@ -425,17 +426,12 @@ def selftest() -> None:
     assert [b.plain.split("] ")[1].split()[0] for b in bars] == ["fast", "slow", "busy", "queued"], [b.plain for b in bars]
     assert active == 2, active
 
-    # (e) A unit far shorter than one cell still draws a stub, and a bar
-    # spans its own share of the run rather than the whole row.
-    assert bar(0.5, 0.5001, 10).strip() in ("╸", "╺"), repr(bar(0.5, 0.5001, 10))
-    assert bar(0.0, 0.5, 10) == "━━━━━     ", repr(bar(0.0, 0.5, 10))
-    assert bar(0.25, 1.0, 10) == "  ╺━━━━━━━", repr(bar(0.25, 1.0, 10))
-
-    # (f) With ticks the line breaks once per tick, a unit shorter than one
-    # tick never vanishes, and a long run coarsens the tick instead of
-    # breaking the bar into dots.
-    assert bar(0.0, 1.0, 10, tick=5.0) == "━━╺━╸━━╺━╸", repr(bar(0.0, 1.0, 10, tick=5.0))
-    assert bar(0.2, 0.25, 10, tick=5.0).strip(), repr(bar(0.2, 0.25, 10, tick=5.0))
+    # (e) One block per second with a gap after each, so blocks line up in
+    # columns across rows; a unit shorter than a second still gets a block,
+    # and a long run coarsens the slot instead of overflowing the row.
+    assert bar(0.0, 3.0, 4, 3, 1) == "━━ ━━ ━━    ", repr(bar(0.0, 3.0, 4, 3, 1))
+    assert bar(1.2, 1.3, 4, 3, 1) == "   ━━       ", repr(bar(1.2, 1.3, 4, 3, 1))
+    assert bar(2.5, 4.0, 4, 3, 1) == "      ━━ ━━ ", repr(bar(2.5, 4.0, 4, 3, 1))
     assert tick_step(7.0, 50) == 1 and tick_step(600.0, 50) == 30, (tick_step(7.0, 50), tick_step(600.0, 50))
     print("selftest ok")
 

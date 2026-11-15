@@ -13,6 +13,12 @@ export def relaunch-elevated [script: path] {
     ^$gsudo nu $script
 }
 
+# Runs a command without admin rights from the elevated rebuild: gsudo
+# `-i Medium` starts it at the integrity level of a normal, unelevated process.
+export def --wrapped run-unelevated [...cmd: string] {
+    ^($env.ProgramFiles | path join gsudo Current gsudo.exe) -i Medium ...$cmd
+}
+
 # Adds the registry PATH entries this process does not have yet. winget writes
 # a new package's dir into the registry only, so without this every tool the
 # package step just installed (mise, code, coreutils) is invisible to the rest

@@ -9,6 +9,7 @@
 # printed as one result line when it finishes.
 use ~/.dotfiles/xpkg/utils/events.nu [emit now]
 use ~/.dotfiles/xpkg/utils/@windows/wsl.nu [installed-wsl]
+use ~/.dotfiles/xpkg/utils/@windows/bootstrap.nu [run-unelevated]
 
 # Each install, uninstall and WSL step is one unit of the Packages group in
 # the `rebuild` panel; both are no-ops unless XPKG_EVENTS is set.
@@ -239,32 +240,13 @@ def set-wsl-sparse [name: string] {
     }
 }
 
-export def main [
-    --user-scope  # only uninstall the user-scope `remove` ids; run before elevating
-] {
+export def main [] {
     if $nu.os-info.name != windows {
         print $"    (ansi red)Unsupported OS(ansi reset): xpkg is Windows-only; use nix on macOS/Linux"
         return
     }
 
     let def = (open ~/.dotfiles/xpkg/windows/default.toml)
-
-    # winget refuses to uninstall a user-scope package (OneDrive) from an
-    # elevated shell (exit -1978335107), so xpkg/install.nu calls this before it
-    # relaunches elevated. The elevated pass then no longer sees these ids.
-    if $user_scope {
-        for id in ($def.remove? | default []) {
-            let found = (^winget list --scope user --exact --id $id --accept-source-agreements --disable-interactivity | complete)
-            if $found.exit_code != 0 { continue }
-            print $"     (ansi red)--(ansi reset) ($id) \(user scope\)"
-            let r = (^winget uninstall -eh --scope user --disable-interactivity --accept-source-agreements --id $id | complete)
-            if $r.exit_code != 0 {
-                print $"     (ansi red)!!(ansi reset) ($id) (ansi red)exit ($r.exit_code)(ansi reset)"
-                for l in ($"($r.stdout)($r.stderr)" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
-            }
-        }
-        return
-    }
     let host = (sys host | get hostname)
     let skip = ($def.skip_dependencies? | default [])
     let common = ($def.winget?.packages? | default [])
@@ -294,7 +276,15 @@ export def main [
         print $"     (ansi red)--(ansi reset) ($id)"
         let t = (now)
         item-start $"remove ($id)"
-        let r = (^winget uninstall -eh --disable-interactivity --accept-source-agreements --id $id | complete)
+        # winget refuses to uninstall a user-scope package (OneDrive) from an
+        # elevated shell (exit -1978335107), so that one runs unelevated.
+        let user = (^winget list --scope user --exact --id $id --accept-source-agreements --disable-interactivity | complete).exit_code == 0
+        let args = [uninstall -eh --disable-interactivity --accept-source-agreements --id $id]
+        let r = if $user {
+            run-unelevated winget ...$args --scope user | complete
+        } else {
+            ^winget ...$args | complete
+        }
         item-end $"remove ($id)" $t $r.exit_code (tail-output $r)
         if $r.exit_code != 0 {
             print $"     (ansi red)!!(ansi reset) ($id) (ansi red)exit ($r.exit_code)(ansi reset)"

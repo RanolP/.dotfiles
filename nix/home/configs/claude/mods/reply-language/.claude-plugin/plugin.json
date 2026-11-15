@@ -1,0 +1,7 @@
+{
+  "name": "reply-language",
+  "version": "0.1.0",
+  "description": "Reminds the model to answer in Korean on the next prompt when its previous answer held no Hangul.",
+  "author": { "name": "RanolP" },
+  "types": "./types/index.d.ts"
+}

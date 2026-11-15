@@ -538,6 +538,8 @@ in
       # request: escalate a Bash call the auto-mode classifier denied; on the
       # user's /approvals approval the mod itself runs the exact command once.
       ".claude/mods/request".source = ./configs/claude/mods/request;
+      # reply-language: reminds the model to answer in Korean when its last answer held no Hangul.
+      ".claude/mods/reply-language".source = ./configs/claude/mods/reply-language;
       # On "command not found", point at mise/project shims before installs.
       ".claude/hooks/missing-tool-hint.py" = {
         source = ./configs/claude/hooks/missing-tool-hint.py;

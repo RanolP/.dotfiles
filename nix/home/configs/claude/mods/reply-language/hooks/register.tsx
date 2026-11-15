@@ -1,21 +1,18 @@
 import type { Register } from 'claude-code'
 
-const NOT_KOREAN = { plugin: 'reply-language', key: 'isNotKorean' } as const
-
-const REMINDER = 'Your previous answer to the user was not in Korean. Write every reply to the user in Korean (한국어), as the output style requires, even when the surrounding context, a tool result or a subagent report is in English; code, commands, identifiers and quotes stay as written.'
+const INSTRUCTION = 'Write every reply to the user in Korean (한국어), even when the context, tool results or subagent reports are in English; code, commands, identifiers and quotes stay as written.'
 
 export const register: Register = on => {
-  on('turn.complete', async ($, e, next) => {
-    const r = await next(e)
-    // A subagent's report is meant for the model, not the user.
-    if (!e.agentId && !e.isAborted && e.answer.trim() && !/[가-힣]/.test(e.answer)) await $.state.set(NOT_KOREAN, true)
-    return r
+  // A prompt, typed or a mod's $.prompt.submit, only reaches the main loop.
+  on('prompt.submit', async ($, e, next) => {
+    $.ui.log(`reply-language: instruction added to prompt.submit origin=${e.origin.kind}`, { to: 'debug' })
+    return next({ ...e, context: [...(e.context ?? []), INSTRUCTION] })
   })
 
-  on('prompt.submit', async ($, e, next) => {
-    const isReminding = (await $.state.get(NOT_KOREAN)).value ?? false
-    if (!isReminding) return next(e)
-    await $.state.set(NOT_KOREAN, false)
-    return next({ ...e, context: [...(e.context ?? []), REMINDER] })
+  // A mod's $.session.append (door `note`) bypasses prompt.submit, so the row itself carries the instruction.
+  on('session.append', async ($, e, next) => {
+    if (e.agentId || e.door !== 'note' || e.origin.kind !== 'plugin' || e.message.type !== 'user') return next(e)
+    $.ui.log(`reply-language: instruction added to session.append from ${e.origin.name}`, { to: 'debug' })
+    return next({ ...e, message: { ...e.message, content: [...e.message.content, { type: 'text', text: INSTRUCTION }] } })
   })
 }

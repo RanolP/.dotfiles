@@ -1,7 +1,6 @@
 {
   "name": "reply-language",
-  "version": "0.1.0",
-  "description": "Reminds the model to answer in Korean on the next prompt when its previous answer held no Hangul.",
-  "author": { "name": "RanolP" },
-  "types": "./types/index.d.ts"
+  "version": "0.2.0",
+  "description": "Tells the model to answer in Korean at the start of every main-thread turn, whether a prompt or a mod's session.append started it.",
+  "author": { "name": "RanolP" }
 }

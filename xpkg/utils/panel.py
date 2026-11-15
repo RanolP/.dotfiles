@@ -6,8 +6,8 @@
 Starts <command> as a child with stdout and stderr in a .log beside the
 events file (events.jsonl -> events.log) and XPKG_EVENTS=<events-file> in its
 environment, tails the JSON lines the child appends there
-(xpkg/utils/events.nu), and draws a group -> unit tree, the failures, the
-reboot notices and a timeline, none of which scrolls. When the child exits the
+(xpkg/utils/events.nu), and draws the failures, the reboot notices and a
+timeline of every unit, none of which scrolls. When the child exits the
 panel closes on its own, prints only the failures, notices and a summary line
 to the normal screen, and exits with the child's code. Ctrl+C kills the
 child's process tree and exits 130.
@@ -35,6 +35,7 @@ SPINNER = "|/-\\"
 GREEN, YELLOW, RED, CYAN, DIM = "#5fd75f", "#d7d75f", "#ff5f87", "#5fd7d7", "#808080"
 STATUS_COLOR = {"done": GREEN, "running": YELLOW, "failed": RED, "waiting": DIM}
 LABEL_WIDTH = 26
+SECS_WIDTH = 8
 
 
 def clean(line: str) -> str:
@@ -147,30 +148,6 @@ def completion_order(u: Unit) -> tuple[int, float]:
     return 2, 0.0
 
 
-def render_tree(state: State, frame: int, now: float) -> tuple[list[Text], int | None, int | None]:
-    """The Units rows, plus the index of the first running or waiting unit row
-    and of its group header (both None once every unit has finished). Units
-    inside a group follow `completion_order`."""
-    rows: list[Text] = []
-    active = header = None
-    for g in state.groups.values():
-        g_row = len(rows)
-        rows.append(Text.assemble(marker(g.status, frame), (g.name, f"bold {CYAN}"), (f"  {secs(g, now)}", DIM)))
-        units = sorted(g.units.values(), key=completion_order)
-        for i, u in enumerate(units):
-            if active is None and u.status in ("running", "waiting"):
-                active, header = len(rows), g_row
-            rows.append(Text.assemble(
-                ("  └─ " if i == len(units) - 1 else "  ├─ ", DIM),
-                marker(u.status, frame),
-                (f"{u.name:<{LABEL_WIDTH}}", STATUS_COLOR[u.status] if u.status != "done" else ""),
-                (f" {secs(u, now)}", DIM),
-            ))
-    if not rows:
-        rows.append(Text("waiting for the first event…", style=DIM))
-    return rows, active, header
-
-
 def render_failures(state: State) -> list[Text]:
     rows: list[Text] = []
     for group, u in state.failed():
@@ -185,31 +162,48 @@ def render_notices(state: State) -> list[Text]:
     return [Text(n, style=YELLOW) for n in state.notices] or [Text("none", style=DIM)]
 
 
-def render_timeline(state: State, width: int, now: float) -> tuple[list[Text], Text | None, int | None]:
-    """One bar row per started unit, the axis row, and the index of the
-    first running row (None when nothing runs), in `completion_order`."""
-    units = sorted(
-        ((g, u) for g, u in state.all_units() if u.start is not None),
-        key=lambda gu: completion_order(gu[1]),
-    )
+def bar(start: float, end: float, width: int) -> str:
+    """A thin line from `start` to `end` (fractions of the run) at half-cell
+    resolution: "━" fills a cell, "╺" and "╸" fill its right or left half.
+    Never empty, so a sub-second unit still shows a stub."""
+    halves = width * 2
+    a = min(int(start * halves), halves - 1)
+    b = min(max(a + 1, round(end * halves)), halves)
+    out = []
+    for c in range(width):
+        left, right = a <= 2 * c < b, a <= 2 * c + 1 < b
+        out.append("━" if left and right else "╸" if left else "╺" if right else " ")
+    return "".join(out)
+
+
+def render_timeline(state: State, width: int, frame: int, now: float) -> tuple[list[Text], Text | None, int | None]:
+    """One row per unit in `completion_order` -- marker, name, bar, seconds;
+    a waiting unit has no bar yet -- the axis row, and the index of the first
+    unfinished row (None once everything has finished)."""
+    units = sorted(state.all_units(), key=lambda gu: completion_order(gu[1]))
     if not units:
-        return [Text("nothing has started yet", style=DIM)], None, None
-    t0 = min(u.start for _, u in units)
-    t1 = max((u.end or now) for _, u in units)
+        return [Text("waiting for the first event…", style=DIM)], None, None
+    started = [u for _, u in units if u.start is not None]
+    t0 = min((u.start for u in started), default=now)
+    t1 = max(((u.end or now) for u in started), default=now)
     span = max(t1 - t0, 1.0)
-    bar_width = max(width - LABEL_WIDTH, 10)
+    bar_width = max(width - 4 - LABEL_WIDTH - SECS_WIDTH, 10)
     rows: list[Text] = []
     active = None
     for i, (_, u) in enumerate(units):
-        if active is None and u.status == "running":
+        if active is None and u.status in ("running", "waiting"):
             active = i
-        b = min(max(1, round(((u.end or now) - t0) / span * bar_width)), bar_width)
-        a = min(int((u.start - t0) / span * bar_width), b - 1)
+        line = " " * bar_width
+        if u.start is not None:
+            line = bar((u.start - t0) / span, ((u.end or now) - t0) / span, bar_width)
         rows.append(Text.assemble(
-            (f"{u.name[:LABEL_WIDTH - 1]:<{LABEL_WIDTH}}", DIM), " " * a, ("█" * (b - a), STATUS_COLOR[u.status])
+            marker(u.status, frame),
+            (f"{u.name[:LABEL_WIDTH - 1]:<{LABEL_WIDTH}}", STATUS_COLOR[u.status] if u.status != "done" else ""),
+            (line, STATUS_COLOR[u.status]),
+            (f"{secs(u, now):>{SECS_WIDTH}}", DIM),
         ))
     end_label = f"{span:.0f}s"
-    axis = Text(" " * LABEL_WIDTH + "0s".ljust(bar_width - len(end_label)) + end_label, style=DIM)
+    axis = Text(" " * (4 + LABEL_WIDTH) + "0s".ljust(bar_width - len(end_label)) + end_label, style=DIM)
     return rows, axis, active
 
 
@@ -261,12 +255,10 @@ class Panel(App):
     #header {{ height: 1; background: #1c1c1c; padding: 0 1; }}
     #footer {{ height: 2; background: #1c1c1c; padding: 0 1; }}
     #body {{ height: 1fr; padding: 0 1; }}
-    #top {{ height: 3fr; }}
+    #top {{ height: 1fr; }}
     .box {{ border: round {DIM}; border-title-color: {CYAN}; padding: 0 1; }}
-    #tree {{ width: 1fr; height: 1fr; }}
-    #side {{ width: 1fr; height: 1fr; }}
-    #failures {{ height: 2fr; }}
-    #notices {{ height: 1fr; }}
+    #failures {{ width: 1fr; height: 1fr; }}
+    #notices {{ width: 1fr; height: 1fr; }}
     #timeline {{ height: 3fr; }}
     """
     BINDINGS = [
@@ -291,15 +283,13 @@ class Panel(App):
         yield Static(id="header")
         with Vertical(id="body"):
             with Horizontal(id="top"):
-                yield Static(id="tree", classes="box")
-                with Vertical(id="side"):
-                    yield Static(id="failures", classes="box")
-                    yield Static(id="notices", classes="box")
+                yield Static(id="failures", classes="box")
+                yield Static(id="notices", classes="box")
             yield Static(id="timeline", classes="box")
         yield Static(id="footer")
 
     def on_mount(self) -> None:
-        for wid, title in [("tree", "Units"), ("failures", "Failures"), ("notices", "Notices"), ("timeline", "Timeline")]:
+        for wid, title in [("failures", "Failures"), ("notices", "Notices"), ("timeline", "Timeline")]:
             self.query_one(f"#{wid}").border_title = title
         self.events.parent.mkdir(parents=True, exist_ok=True)
         self.events.touch()
@@ -356,12 +346,10 @@ class Panel(App):
         self.query_one("#header", Static).update(
             Text.assemble((title, f"bold {CYAN}"), " " * max(width - 2 - len(title) - len(elapsed), 1), (elapsed, "bold"))
         )
-        tree, active, header = render_tree(self.state, self.frame, now)
-        self.show("#tree", window(tree, self.inner("#tree")[1], active, header))
         self.show("#failures", window(render_failures(self.state), self.inner("#failures")[1]))
         self.show("#notices", window(render_notices(self.state), self.inner("#notices")[1]))
         tl_width, tl_height = self.inner("#timeline")
-        bars, axis, active = render_timeline(self.state, tl_width, now)
+        bars, axis, active = render_timeline(self.state, tl_width, self.frame, now)
         self.show("#timeline", bars[:1] if axis is None else window(bars, tl_height - 1, active) + [axis])
         hint = Text(f"\nlog {self.log_path}  ctrl+c aborts", style=DIM)
         self.query_one("#footer", Static).update(fit([render_summary(self.state), hint[1:]], width - 2))
@@ -464,21 +452,23 @@ def selftest() -> None:
 
     # (d) Timeline rows follow completion order, not start order: a unit that
     # started first but finished last sits below one that finished earlier,
-    # and a still-running unit stays at the bottom.
+    # and a still-running unit sits below them, then waiting units; the
+    # active row is the first unfinished one.
     s = State()
     for unit, start in [("slow", 1.0), ("fast", 2.0), ("busy", 3.0)]:
         s.apply({"ev": "unit_start", "group": "G", "unit": unit, "t": start})
     s.apply({"ev": "unit_end", "group": "G", "unit": "fast", "exit_code": 0, "t": 4.0})
     s.apply({"ev": "unit_end", "group": "G", "unit": "slow", "exit_code": 0, "t": 5.0})
-    bars, _, active = render_timeline(s, 60, 6.0)
-    assert [b.plain.split()[0] for b in bars] == ["fast", "slow", "busy"], [b.plain for b in bars]
-    assert active == 2, active
-    # The Units tree uses the same order inside a group, with waiting units
-    # last, and its active row is the first unfinished one.
     s.apply({"ev": "unit_wait", "group": "G", "unit": "queued"})
-    tree, active, header = render_tree(s, 0, 6.0)
-    assert [r.plain.split("] ")[1].split()[0] for r in tree[1:]] == ["fast", "slow", "busy", "queued"], [r.plain for r in tree]
-    assert (active, header) == (3, 0), (active, header)
+    bars, _, active = render_timeline(s, 80, 0, 6.0)
+    assert [b.plain.split("] ")[1].split()[0] for b in bars] == ["fast", "slow", "busy", "queued"], [b.plain for b in bars]
+    assert active == 2, active
+
+    # (e) A unit far shorter than one cell still draws a stub, and a bar
+    # spans its own share of the run rather than the whole row.
+    assert bar(0.5, 0.5001, 10).strip() in ("╸", "╺"), repr(bar(0.5, 0.5001, 10))
+    assert bar(0.0, 0.5, 10) == "━━━━━     ", repr(bar(0.0, 0.5, 10))
+    assert bar(0.25, 1.0, 10) == "  ╺━━━━━━━", repr(bar(0.25, 1.0, 10))
     print("selftest ok")
 
 

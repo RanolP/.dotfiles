@@ -84,6 +84,14 @@ args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
 url = "https://github.com/mgth/LittleBigMouse/releases/download/v5.6.0/LittleBigMouse_5.6.0.exe"
 args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
 
+# 산돌구름 (Sandoll Cloud) font manager; not on winget. The vendor's download page
+# (sandollcloud.com/download) links this stable win5 URL. NSIS 3.09, so `/S`;
+# silent mode skips the language dialog and installs the English strings, whose
+# DisplayName is "SandollCloud" (a Korean GUI install registers "산돌구름").
+[direct."SandollCloud"]
+url = "https://media.sandollcloud.com/SandollCloud/win5/Program/SandollCloud5AgentInstaller.exe"
+args = ["/S"]
+
 # The name is the MSI ProductName. A zip holding Setup.exe and the MSI; `member`
 # picks the MSI so msiexec can install it silently. www.steinberg.net/asio-win
 # redirects here; this static URL pins 1.0.9.

@@ -20,6 +20,7 @@ def system-units [configs: path] {
         {name: keyboard, script: $'($configs)/keyboard/install.nu'}
         {name: lock, script: $'($configs)/lock/install.nu'}
         {name: explorer, script: $'($configs)/explorer/install.nu'}
+        {name: smartappcontrol, script: $'($configs)/smartappcontrol/install.nu'}
         {name: theme, script: $'($configs)/theme/install.nu'}
         {name: chrome, script: $'($configs)/chrome/install.nu'}
         {name: audio, script: $'($configs)/audio/install.nu'}

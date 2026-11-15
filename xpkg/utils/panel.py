@@ -145,16 +145,38 @@ def completion_order(u: Unit) -> tuple[int, float]:
     return 2, 0.0
 
 
-def bar(start: float, end: float, width: int) -> str:
+TICK_STEPS = (1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600)
+
+
+def tick_step(span: float, width: int) -> int:
+    """Seconds between bar breaks: 1s while a second spans at least three
+    half-cells, else the next step in TICK_STEPS that does, so a long run
+    does not turn every bar into dots."""
+    for step in TICK_STEPS:
+        if step * width * 2 / span >= 3:
+            return step
+    return TICK_STEPS[-1]
+
+
+def bar(start: float, end: float, width: int, tick: float | None = None) -> str:
     """A thin line from `start` to `end` (fractions of the run) at half-cell
     resolution: "━" fills a cell, "╺" and "╸" fill its right or left half.
-    Never empty, so a sub-second unit still shows a stub."""
+    With `tick` (half-cells between breaks) the half-cell holding each tick
+    boundary stays blank, so the line breaks there. Never empty, so a
+    sub-second unit still shows a stub."""
     halves = width * 2
     a = min(int(start * halves), halves - 1)
     b = min(max(a + 1, round(end * halves)), halves)
+
+    def gap(i: int) -> bool:
+        return tick is not None and int((i + 1) / tick + 1e-9) > int(i / tick + 1e-9)
+
+    filled = [a <= i < b and not gap(i) for i in range(halves)]
+    if not any(filled):
+        filled = [a <= i < b for i in range(halves)]
     out = []
     for c in range(width):
-        left, right = a <= 2 * c < b, a <= 2 * c + 1 < b
+        left, right = filled[2 * c], filled[2 * c + 1]
         out.append("━" if left and right else "╸" if left else "╺" if right else " ")
     return "".join(out)
 
@@ -171,6 +193,8 @@ def render_timeline(state: State, width: int, frame: int, now: float) -> tuple[l
     t1 = max(((u.end or now) for u in started), default=now)
     span = max(t1 - t0, 1.0)
     bar_width = max(width - 4 - LABEL_WIDTH - SECS_WIDTH, 10)
+    step = tick_step(span, bar_width)
+    tick = step * bar_width * 2 / span
     rows: list[Text] = []
     active = None
     for i, (_, u) in enumerate(units):
@@ -178,14 +202,14 @@ def render_timeline(state: State, width: int, frame: int, now: float) -> tuple[l
             active = i
         line = " " * bar_width
         if u.start is not None:
-            line = bar((u.start - t0) / span, ((u.end or now) - t0) / span, bar_width)
+            line = bar((u.start - t0) / span, ((u.end or now) - t0) / span, bar_width, tick)
         rows.append(Text.assemble(
             marker(u.status, frame),
             (f"{u.name[:LABEL_WIDTH - 1]:<{LABEL_WIDTH}}", STATUS_COLOR[u.status] if u.status != "done" else ""),
             (line, STATUS_COLOR[u.status]),
             (f"{secs(u, now):>{SECS_WIDTH}}", DIM),
         ))
-    end_label = f"{span:.0f}s"
+    end_label = f"{span:.0f}s" if step == 1 else f"ticks {step}s · {span:.0f}s"
     axis = Text(" " * (4 + LABEL_WIDTH) + "0s".ljust(bar_width - len(end_label)) + end_label, style=DIM)
     return rows, axis, active
 
@@ -406,6 +430,13 @@ def selftest() -> None:
     assert bar(0.5, 0.5001, 10).strip() in ("╸", "╺"), repr(bar(0.5, 0.5001, 10))
     assert bar(0.0, 0.5, 10) == "━━━━━     ", repr(bar(0.0, 0.5, 10))
     assert bar(0.25, 1.0, 10) == "  ╺━━━━━━━", repr(bar(0.25, 1.0, 10))
+
+    # (f) With ticks the line breaks once per tick, a unit shorter than one
+    # tick never vanishes, and a long run coarsens the tick instead of
+    # breaking the bar into dots.
+    assert bar(0.0, 1.0, 10, tick=5.0) == "━━╺━╸━━╺━╸", repr(bar(0.0, 1.0, 10, tick=5.0))
+    assert bar(0.2, 0.25, 10, tick=5.0).strip(), repr(bar(0.2, 0.25, 10, tick=5.0))
+    assert tick_step(7.0, 50) == 1 and tick_step(600.0, 50) == 30, (tick_step(7.0, 50), tick_step(600.0, 50))
     print("selftest ok")
 
 

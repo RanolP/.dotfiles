@@ -256,7 +256,7 @@ class Panel(App):
     #side {{ width: 1fr; height: 1fr; }}
     #failures {{ height: 2fr; }}
     #notices {{ height: 1fr; }}
-    #timeline {{ height: 2fr; }}
+    #timeline {{ height: 3fr; }}
     """
     BINDINGS = [
         Binding("ctrl+c", "abort", "abort", show=False, priority=True),

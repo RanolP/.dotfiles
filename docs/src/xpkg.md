@@ -29,7 +29,7 @@ The user downloads and installs X by running `rebuild`. The agent never runs `wi
 
 `xpkg/install.nu` relaunches itself elevated through gsudo once when it is not admin; every later step inherits that elevation. It then runs its units concurrently wherever one does not need another's result:
 
-1. **Settings, in the background** -- `xpkg/configs/install.nu --system` starts as a background job and runs the units that only write the registry or powercfg, all at the same time: keyboard, lock, explorer, smartappcontrol, theme, chrome, audio, littlebigmouse, bin.
+1. **Settings, in the background** -- `xpkg/configs/install.nu --system` starts as a background job and runs the units that only write the registry or powercfg, all at the same time: keyboard, lock, explorer, smartappcontrol, onedrive, theme, chrome, audio, littlebigmouse, bin.
 2. **Packages, in the foreground** -- `xpkg/windows/install.nu` applies `xpkg/windows/default.toml` while the settings run. It keeps the terminal because the WSL `passwd` prompt needs it; each winget or direct install prints its result line when it finishes. A Packages failure is recorded rather than aborting, so the settings output still prints and `rebuild` exits non-zero at the end.
 3. **Refresh `PATH`** from the registry, so tools a package just installed are found by the later steps.
 4. **Settings output** -- the captured output of step 1 prints under `== Settings`.

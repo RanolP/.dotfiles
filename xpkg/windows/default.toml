@@ -12,6 +12,7 @@ skip_dependencies = ["Nvidia.CUDA"]
 
 remove = [
   "Bandisoft.Bandizip",
+  "Microsoft.OneDrive",
 ]
 
 # Installed on every Windows profile.

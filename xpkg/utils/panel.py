@@ -7,9 +7,9 @@ Starts <command> as a child with stdout and stderr in a .log beside the
 events file (events.jsonl -> events.log) and XPKG_EVENTS=<events-file> in its
 environment, tails the JSON lines the child appends there
 (xpkg/utils/events.nu), and draws a timeline of every unit that never
-scrolls the terminal. When the child exits the panel erases itself, prints
-only the failures, reboot notices and a summary line, and exits with the
-child's code. Ctrl+C kills the child's process tree and exits 130.
+scrolls the terminal. When the child exits the last frame stays, and under
+it the panel prints the failures, reboot notices and a summary line and
+exits with the child's code. Ctrl+C kills the child's process tree and exits 130.
 """
 
 from __future__ import annotations
@@ -231,7 +231,7 @@ def render_summary(state: State) -> Text:
 
 class Panel:
     """Draws the header, timeline and summary in place under the prompt
-    (rich Live, not a fullscreen app) and removes them when the run ends."""
+    (rich Live, not a fullscreen app); the last frame stays when the run ends."""
 
     def __init__(self, events: Path, command: list[str]) -> None:
         self.events = events
@@ -268,18 +268,24 @@ class Panel:
         the child's tree and returns 130."""
         self.start()
         try:
-            with Live(self.render(), console=self.console, auto_refresh=False, transient=True) as live:
+            with Live(self.render(), console=self.console, auto_refresh=False) as live:
                 while self.proc.poll() is None:
                     self.read_events()
                     self.frame += 1
                     live.update(self.render(), refresh=True)
                     time.sleep(0.25)
+                # The last frame stays on screen, so draw it from the
+                # finished run rather than the previous tick.
+                self.finished = time.time()
+                self.read_events()
+                live.update(self.render(), refresh=True)
         except KeyboardInterrupt:
             kill_tree(self.proc)
             return 130
         finally:
-            self.finished = time.time()
-            self.read_events()
+            if self.finished is None:
+                self.finished = time.time()
+                self.read_events()
             self.log_file.close()
         return self.proc.returncode
 

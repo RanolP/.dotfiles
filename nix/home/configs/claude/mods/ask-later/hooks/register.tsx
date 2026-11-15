@@ -5,6 +5,10 @@ import type { Option, Question } from '../types'
 const QUESTIONS = { plugin: 'ask-later', key: 'questions' } as const
 const TURN = { plugin: 'ask-later', key: 'turnId' } as const
 const WALKING = { plugin: 'ask-later', key: 'isWalking' } as const
+const QUEUED = { plugin: 'ask-later', key: 'hasQueuedThisTurn' } as const
+const REMIND = { plugin: 'ask-later', key: 'hasChatQuestion' } as const
+
+const CHAT_QUESTION_REMINDER = 'Your previous answer ended on a question to the user in chat. Queue a question like that with mcp__ask-later__ask: pass `assumption` to keep working under your best guess, or `blocks` to park only the work it gates, then continue with everything else. Keep AskUserQuestion or a chat question for the case where no work at all can proceed without the answer.'
 
 const RESOLVE_TOOL = 'mcp__ask-later__resolve'
 
@@ -213,17 +217,29 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
     await $.state.set(TURN, r.turnId)
+    if (!e.agentId) await $.state.set(QUEUED, false)
     return r
+  })
+
+  // A question put through AskUserQuestion is a deliberate ask: the model chose its own channel.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    if (!e.agentId) await $.state.set(QUEUED, true)
+    return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     // A subagent's turn ending leaves the main turn running.
     if (!e.agentId) await $.state.set(TURN, null)
+    if (!e.agentId && !e.isAborted && !(await $.state.get(QUEUED)).value) {
+      const last = e.answer.trim().split('\n').map(l => l.trim()).filter(Boolean).pop() ?? ''
+      if (last.endsWith('?')) await $.state.set(REMIND, true)
+    }
     return r
   })
 
   on('tool.call', { tool: 'mcp__ask-later__ask' }, async ($, e) => {
+    if (!e.agentId) await $.state.set(QUEUED, true)
     const a = e as unknown as Record<string, unknown>
     if (typeof a.question !== 'string' || !a.question.trim()) return toolError('Call ask with question as a non-empty string.')
     if (!isOptions(a.options)) return toolError('Call ask with options as 2-4 objects of {label, description?}.')
@@ -300,10 +316,12 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    const isReminding = (await $.state.get(REMIND)).value ?? false
+    if (isReminding) await $.state.set(REMIND, false)
+    const reminder = isReminding ? [CHAT_QUESTION_REMINDER] : []
     const id = /^\[(Q\d+)\]/.exec(e.text)?.[1]
-    if (!id) return next(e)
-    const q = (await questions($)).find(x => x.id === id && x.status === 'pending')
-    if (!q) return next(e)
+    const q = id ? (await questions($)).find(x => x.id === id && x.status === 'pending') : undefined
+    if (!q) return next(reminder.length ? { ...e, context: [...(e.context ?? []), ...reminder] } : e)
     const ctx = [
       `This prompt is about queued question ${q.id}: ${q.question}`,
       `Options: ${q.options.map(o => (o.description ? `${o.label} (${o.description})` : o.label)).join('; ')}${q.multiSelect ? ' [multi-select]' : ''}`,
@@ -311,6 +329,6 @@ export const register: Register = on => {
       ...(q.blocks ? [`Parked work: ${q.blocks}`] : []),
       `Settle this with the user, then call ${RESOLVE_TOOL} with id ${q.id} and the answer.`,
     ].join('\n')
-    return next({ ...e, context: [...(e.context ?? []), ctx] })
+    return next({ ...e, context: [...(e.context ?? []), ...reminder, ctx] })
   })
 }

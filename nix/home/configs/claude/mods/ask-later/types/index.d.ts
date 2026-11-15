@@ -22,6 +22,8 @@ declare module 'claude-code' {
   interface PluginState {
     /** `turnId`: the running main turn, null while idle; picks session.append vs prompt.submit for delivery. */
     /** `isWalking`: a 답하기 walk is opening dialogs; the band hides its button meanwhile. */
-    'ask-later': { questions: Question[]; turnId: string | null; isWalking: boolean }
+    /** `hasQueuedThisTurn`: the main turn called `ask` or AskUserQuestion; reset at turn.start. */
+    /** `hasChatQuestion`: the last answer ended on a chat question with no ask call; the next prompt carries a reminder once. */
+    'ask-later': { questions: Question[]; turnId: string | null; isWalking: boolean; hasQueuedThisTurn: boolean; hasChatQuestion: boolean }
   }
 }

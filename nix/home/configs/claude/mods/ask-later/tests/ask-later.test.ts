@@ -174,3 +174,40 @@ test('the band keeps the row beneath it', async ($, on) => {
     await ui.unmount()
   }
 })
+
+const REMINDER = 'mcp__ask-later__ask: pass `assumption`'
+function contexts(on: On) {
+  const seen: (readonly string[])[] = []
+  on('prompt.submit', async (_$, e) => { seen.push(e.context ?? []); return { text: e.text } })
+  return seen
+}
+const finish = ($: Engine, answer: string) => $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+const hasReminder = (ctx: readonly string[]) => ctx.some(c => c.includes(REMINDER))
+
+// Regression: the model asks in chat and the next prompt never tells it about the ask tool.
+test('a chat question with no ask call puts the reminder into the next prompt once', async ($, on) => {
+  const seen = contexts(on)
+  await start($, on)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await finish($, '진행할까요?\n\n')
+  await $.prompt.submit({ text: 'yes' })
+  await $.prompt.submit({ text: 'again' })
+  expect(hasReminder(seen[0]!)).toBe(true)
+  expect(hasReminder(seen[1]!)).toBe(false)
+})
+
+// Regression: a reminder after an answer that already queued its question or asked nothing.
+test('a turn that called ask or ended without a question mark adds no reminder', async ($, on) => {
+  dialogs(on, {})
+  const seen = contexts(on)
+  await start($, on)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await $.tool.call({ tool: ASK, question: 'Which db?', options: OPTIONS })
+  await finish($, 'Queued it. Which db?')
+  await $.prompt.submit({ text: 'a' })
+  await $.turn.start({ text: 'work', turnId: 't2' })
+  await finish($, 'Done.')
+  await $.prompt.submit({ text: 'b' })
+  expect(seen.length).toBe(2)
+  expect(seen.some(hasReminder)).toBe(false)
+})

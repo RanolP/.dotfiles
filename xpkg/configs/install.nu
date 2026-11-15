@@ -42,6 +42,7 @@ def tool-units [configs: path] {
         {name: terminal, script: $'($configs)/terminal/install.nu', when: $windows}
         {name: prismlauncher, script: $'($configs)/prismlauncher/install.nu', when: $windows}
         {name: keybase, script: $'($configs)/keybase/install.nu', when: $windows}
+        {name: sandollcloud, script: $'($configs)/sandollcloud/install.nu', when: $windows}
         {name: vscode, script: $'($configs)/vscode/install.nu', when: (installed code)}
         {name: claude, script: $'($configs)/claude/install.nu', when: (installed claude)}
         {name: codex, script: $'($configs)/codex/install.nu', when: (installed codex)}

@@ -24,7 +24,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         command: { type: 'string', description: 'The exact command to run, byte for byte, as bash -c will run it' },
-        cwd: { type: 'string', description: 'Absolute directory to run it in' },
+        cwd: { type: 'string', description: 'Absolute directory to run it in (a Windows drive path like C:\\... is accepted)' },
         why_only_way: { type: 'string', description: 'Written in Korean (한국어), the user\'s language: why this command is the only correct way to do the work; for a heavy job, add its cost and the current load. Commands, paths and identifiers inside it stay as written' },
         alternatives: {
           type: 'array', minItems: 1,
@@ -496,8 +496,8 @@ export const register: Register = on => {
   on('tool.call', { tool: RAISE_TOOL }, async ($, e) => {
     const { command, cwd, why_only_way, alternatives, blocks } = e
     if (!nonEmpty(command)) return toolError('Call raise_approval_request with command as the exact Bash command to run.')
-    if (typeof cwd !== 'string' || !cwd.startsWith('/') || /[\n\r]/.test(cwd) || HIDDEN.test(cwd)) {
-      return toolError('cwd must be an absolute directory path with no control, bidi or zero-width characters.')
+    if (typeof cwd !== 'string' || !(cwd.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cwd)) || /[\n\r]/.test(cwd) || HIDDEN.test(cwd)) {
+      return toolError('cwd must be an absolute directory path (a Windows drive path like C:\\... is accepted) with no control, bidi or zero-width characters.')
     }
     if (!nonEmpty(why_only_way)) return toolError('why_only_way must say why this command is the only correct way.')
     if (!isKorean(why_only_way)) return toolError('Rewrite why_only_way in Korean (한국어), keeping commands and identifiers as written, and raise the request again.')

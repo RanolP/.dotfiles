@@ -353,6 +353,15 @@ test('a relative cwd is refused and nothing runs', async ($, on) => {
   expect(asked).toEqual([])
 })
 
+// Regression: a Windows drive cwd refused by the POSIX-only absolute check, so no command could run on a Windows host.
+test('a Windows drive cwd is accepted and the run receives it', async ($, on) => {
+  const { runs, delivered, nextStatus } = await start($, on, APPROVE)
+  await raise($, nextStatus, { cwd: 'C:\\Users\\me' })
+  await delivered
+  expect(runs).toHaveLength(1)
+  expect(runs[0]?.cwd).toBe('C:\\Users\\me')
+})
+
 // Regression: a subagent's outcome landing in main's conversation while the subagent that raised it waits forever.
 test("a subagent's outcome is sent to that subagent", async ($, on) => {
   const { sends, nextStatus } = await start($, on, APPROVE, { send: { isDelivered: true } })

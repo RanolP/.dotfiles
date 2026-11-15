@@ -28,9 +28,14 @@ if not ($work | path exists) {
 }
 
 # Relative path + content hash of every file, so equal trees compare equal.
+# `ls` inside the dir names files relative to it: under the elevated rebuild
+# `glob` returned paths that `path relative-to $dir` rejected ("prefix not found").
 def tree-hash [dir: string] {
-    do { cd $dir; glob '**/*' | where {|p| ($p | path type) == file } }
-    | each {|p| {path: ($p | path relative-to $dir | str replace --all '\' '/'), hash: (open --raw $p | hash sha256)} }
+    do {
+        cd $dir
+        ls -a ('**/*' | into glob) | where type == file
+        | each {|f| {path: ($f.name | str replace --all '\' '/'), hash: (open --raw $f.name | hash sha256)} }
+    }
     | sort-by path
 }
 

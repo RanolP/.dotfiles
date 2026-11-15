@@ -34,8 +34,9 @@ const caseRow = (label: string, value: string): Drawn[] => [{ type: 'Text', text
 // `hold` keeps every process.run from finishing until it resolves.
 async function start($: Engine, on: On, answer: string | undefined | ((n: number) => Promise<string | undefined>), opts: {
   send?: Send; hold?: Promise<void>; viewport?: RenderViewport | null | false; afk?: boolean
+  env?: Record<string, string>; files?: string[]
 } = {}) {
-  const { send, hold, viewport = ROOMY, afk = false } = opts
+  const { send, hold, viewport = ROOMY, afk = false, env = {}, files = [] } = opts
   const asked: Question[] = []
   const drawn: string[][] = []
   const shown: Option[][] = []
@@ -85,6 +86,8 @@ async function start($: Engine, on: On, answer: string | undefined | ((n: number
     const questions = e.questions.map(x => ({ ...x, header: x.header ?? '', multiSelect: x.multiSelect ?? false }))
     return { result: { questions, answers: { [q.question]: text }, ...(afk ? { afkTimeoutMs: 60_000 } : {}) } }
   })
+  on('fs.exists', async (_$, e) => ({ value: files.includes(e.path) }))
+  on('env.get', async (_$, e) => ({ value: env[e.name] }))
   on('process.run', async (_$, e) => {
     runs.push({ argv: e.argv, cwd: e.init?.cwd })
     if (hold) await hold
@@ -110,6 +113,8 @@ const raise = async ($: Engine, nextStatus: () => Promise<void>, input: Record<s
   const walked = nextStatus()
   const r = await $.tool.call({ tool: RAISE, ...INPUT, ...input })
   await walked
+  // The run starts after the shell lookup's env and fs calls, which the review's end does not wait for.
+  await new Promise(resolve => setTimeout(resolve, 50))
   return r
 }
 
@@ -427,4 +432,15 @@ test('the band shows only while a request is pending and keeps the row beneath i
     expect(await bandOn(surface)).toEqual({ review: true, preview: true, beneath: true })
     expect((await bandOn(surface, true)).review).toBe(false)
   }
+})
+
+// Regression: on Windows an approved command ran under the bare `bash` on PATH, which is WSL's (cwd /mnt/c/...), not Git Bash.
+test('an approved command runs Git Bash on Windows, found from git.exe on PATH', async ($, on) => {
+  const gitBash = 'D:\\Git\\cmd\\..\\bin\\bash.exe'
+  const { runs, nextStatus } = await start($, on, APPROVE, {
+    env: { OS: 'Windows_NT', Path: 'C:\\Windows;D:\\Git\\cmd' },
+    files: ['D:\\Git\\cmd\\git.exe', 'D:\\Git\\bin\\bash.exe'], // the engine hands fs.exists the path with its `..` resolved
+  })
+  await raise($, nextStatus)
+  expect(runs).toEqual([{ argv: [gitBash, '-c', COMMAND], cwd: '/tmp' }])
 })

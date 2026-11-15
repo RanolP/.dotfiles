@@ -136,10 +136,28 @@ const cap = (text: string): string => {
   return `${text.slice(0, half)}\n[... ${text.length - OUTPUT_CAP} characters omitted by the request mod ...]\n${text.slice(-half)}`
 }
 
+// On Windows a bare `bash` is WSL's (WindowsApps\bash.exe, paths under /mnt/c); run Git Bash, found as Claude Code finds it for its
+// Bash tool (strings of claude.exe 2.1.288): CLAUDE_CODE_GIT_BASH_PATH when a bash/sh that exists, then the two Program Files
+// installs, then <dir of the first git.exe on PATH>\..\bin\bash.exe. The API exposes no platform; OS=Windows_NT marks Windows.
+const GIT_BASH_NAMES = ['bash.exe', 'sh.exe', 'bash', 'sh']
+const gitBashPath = async ($: Ctx): Promise<string> => {
+  const set = await $.env.get('CLAUDE_CODE_GIT_BASH_PATH')
+  if (set && GIT_BASH_NAMES.includes((set.split(/[\\/]/).pop() ?? '').toLowerCase()) && await $.fs.exists(set)) return set
+  for (const p of ['C:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files (x86)\\Git\\bin\\bash.exe']) if (await $.fs.exists(p)) return p
+  const path = (await $.env.get('Path')) ?? (await $.env.get('PATH')) ?? ''
+  for (const dir of path.split(';').filter(Boolean)) {
+    if (!await $.fs.exists(`${dir}\\git.exe`)) continue
+    const bash = `${dir}\\..\\bin\\bash.exe`
+    if (await $.fs.exists(bash)) return bash
+  }
+  throw new Error('Git Bash not found (a bare bash here would be WSL); set CLAUDE_CODE_GIT_BASH_PATH to your bash.exe location')
+}
+const shellFor = async ($: Ctx): Promise<string> => (await $.env.get('OS')) === 'Windows_NT' ? gitBashPath($) : 'bash'
+
 const execute = async ($: Ctx, r: ApprovalRequest): Promise<ExecResult> => {
   const started = Date.now()
   try {
-    const out = await $.process.run(['bash', '-c', r.command], { cwd: r.cwd, timeoutMs: TIMEOUT_MS })
+    const out = await $.process.run([await shellFor($), '-c', r.command], { cwd: r.cwd, timeoutMs: TIMEOUT_MS })
     const cut = (s: string, isTruncated: boolean) => `${cap(s)}${isTruncated ? '\n[... output past 4 MiB dropped by the host ...]' : ''}`
     return {
       exitCode: out.exitCode,

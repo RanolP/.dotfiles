@@ -28,6 +28,7 @@ def wsl-first-boot-pending [] {
 }
 
 if ($nu.os-info.name == windows) and (not (is-admin)) {
+    nu ~/.dotfiles/xpkg/windows/install.nu --user-scope
     relaunch-elevated ~/.dotfiles/xpkg/install.nu
     return
 }

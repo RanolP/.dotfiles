@@ -47,7 +47,7 @@ Inside Packages, winget and msiexec installs stay serial, because Windows Instal
 
 ## `xpkg/windows/default.toml`
 
-The packages step reads `winget list` once, skips everything already installed, installs the rest, and never uninstalls anything except ids listed in `remove`.
+The packages step reads `winget list` once, skips everything already installed, installs the rest, and never uninstalls anything except ids listed in `remove`. winget refuses to uninstall a user-scope package (OneDrive is one) from an elevated shell, so `xpkg/install.nu` first runs `xpkg/windows/install.nu --user-scope` before it relaunches elevated: that pass uninstalls every `remove` id that `winget list --scope user` finds, and the elevated pass handles the rest.
 
 | Section | Holds | Installed with |
 | --- | --- | --- |

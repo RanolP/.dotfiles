@@ -1,9 +1,9 @@
 #!/usr/bin/env nu
 
-# No Keybase at sign-in. `keybase ctl autostart --disable` is Keybase's own
-# switch for the service, KBFS and GUI autostart; on Windows it owns the
-# `Keybase.Keybase.GUI` value under HKCU\...\Run and the startup shortcuts, so
-# the GUI's own setting stays in sync instead of being fought over.
+# No Keybase at sign-in. `keybase ctl autostart --disable` deletes the
+# `Keybase.Keybase.GUI` value under HKCU\...\Run (the GUI starts the service and
+# KBFS), the same value the GUI's "open on startup" setting reads, so the two
+# stay in sync. It runs with NoFork, so it never spawns an elevated service.
 if $nu.os-info.name != windows {
     return
 }

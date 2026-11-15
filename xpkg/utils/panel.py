@@ -6,9 +6,9 @@
 Starts <command> as a child with stdout and stderr in a .log beside the
 events file (events.jsonl -> events.log) and XPKG_EVENTS=<events-file> in its
 environment, tails the JSON lines the child appends there
-(xpkg/utils/events.nu), and draws the failures, the reboot notices and a
-timeline of every unit, none of which scrolls. When the child exits the
-panel closes on its own, prints only the failures, notices and a summary line
+(xpkg/utils/events.nu), and draws a timeline of every unit that never
+scrolls. When the child exits the panel closes on its own, prints only the
+failures, reboot notices and a summary line
 to the normal screen, and exits with the child's code. Ctrl+C kills the
 child's process tree and exits 130.
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.widgets import Static
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
@@ -148,20 +148,6 @@ def completion_order(u: Unit) -> tuple[int, float]:
     return 2, 0.0
 
 
-def render_failures(state: State) -> list[Text]:
-    rows: list[Text] = []
-    for group, u in state.failed():
-        code = "no exit code" if u.exit_code is None else f"exit {u.exit_code}"
-        rows.append(Text.assemble((f"× {u.name}", f"bold {RED}"), (f"  {group}  {code}", DIM)))
-        tail = [clean(line) for line in u.output.splitlines() if clean(line).strip()][-4:]
-        rows += [Text(f"    {line}", style=DIM) for line in tail]
-    return rows or [Text("none", style=DIM)]
-
-
-def render_notices(state: State) -> list[Text]:
-    return [Text(n, style=YELLOW) for n in state.notices] or [Text("none", style=DIM)]
-
-
 def bar(start: float, end: float, width: int) -> str:
     """A thin line from `start` to `end` (fractions of the run) at half-cell
     resolution: "━" fills a cell, "╺" and "╸" fill its right or left half.
@@ -255,11 +241,8 @@ class Panel(App):
     #header {{ height: 1; background: #1c1c1c; padding: 0 1; }}
     #footer {{ height: 2; background: #1c1c1c; padding: 0 1; }}
     #body {{ height: 1fr; padding: 0 1; }}
-    #top {{ height: 1fr; }}
     .box {{ border: round {DIM}; border-title-color: {CYAN}; padding: 0 1; }}
-    #failures {{ width: 1fr; height: 1fr; }}
-    #notices {{ width: 1fr; height: 1fr; }}
-    #timeline {{ height: 3fr; }}
+    #timeline {{ height: 1fr; }}
     """
     BINDINGS = [
         Binding("ctrl+c", "abort", "abort", show=False, priority=True),
@@ -282,15 +265,11 @@ class Panel(App):
     def compose(self) -> ComposeResult:
         yield Static(id="header")
         with Vertical(id="body"):
-            with Horizontal(id="top"):
-                yield Static(id="failures", classes="box")
-                yield Static(id="notices", classes="box")
             yield Static(id="timeline", classes="box")
         yield Static(id="footer")
 
     def on_mount(self) -> None:
-        for wid, title in [("failures", "Failures"), ("notices", "Notices"), ("timeline", "Timeline")]:
-            self.query_one(f"#{wid}").border_title = title
+        self.query_one("#timeline").border_title = "Timeline"
         self.events.parent.mkdir(parents=True, exist_ok=True)
         self.events.touch()
         env = dict(os.environ, XPKG_EVENTS=str(self.events))
@@ -346,8 +325,6 @@ class Panel(App):
         self.query_one("#header", Static).update(
             Text.assemble((title, f"bold {CYAN}"), " " * max(width - 2 - len(title) - len(elapsed), 1), (elapsed, "bold"))
         )
-        self.show("#failures", window(render_failures(self.state), self.inner("#failures")[1]))
-        self.show("#notices", window(render_notices(self.state), self.inner("#notices")[1]))
         tl_width, tl_height = self.inner("#timeline")
         bars, axis, active = render_timeline(self.state, tl_width, self.frame, now)
         self.show("#timeline", bars[:1] if axis is None else window(bars, tl_height - 1, active) + [axis])

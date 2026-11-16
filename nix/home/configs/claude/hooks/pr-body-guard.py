@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse guard: keep a PR body from losing lines, shipping broken mermaid, or reading as 서술식.
+"""PreToolUse guard: keep a PR body from losing lines, shipping broken mermaid, or leaving 한다체.
 
 Three failures from real sessions produced this hook:
 
@@ -9,10 +9,12 @@ Three failures from real sessions produced this hook:
 - A ```mermaid fence carrying `<br/>` inside a backtick markdown-string label
   reached GitHub and rendered as "Unable to render rich display -- Lexical
   error on line 2".
-- Bodies kept arriving in 서술식 (full sentences ending in ~한다/~합니다) even
-  though guides/pr.md says 개조식 (noun phrases, -함/-됨/-임/-음). The rule was
-  prose aimed at a model, and prose gets skipped; a guard is the only form that
-  holds.
+- Bodies kept arriving in a shape guides/pr.md had already ruled out. The rule
+  was prose aimed at a model, and prose gets skipped; a guard is the only form
+  that holds. The shape itself changed on 2026-11-12: the user rewrote an
+  agent's 개조식 body (noun endings -함/-됨, `원인 → 결과` arrow chains) for
+  <repo> PR <n> into `영역 라벨: 한 문장` items in complete 한다체
+  sentences, and the old 개조식 checks had denied exactly that body.
 
 So this guard does exactly three checks, and one reminder:
 
@@ -27,16 +29,13 @@ So this guard does exactly three checks, and one reminder:
    lint (known diagram type, no `<br>` inside a markdown-string label, balanced
    quotes and brackets). When `mmdc` happens to be on PATH the real parser runs
    too; it is optional and never installed on demand.
-3. `gh pr create|edit` with a body: no Hangul line may end in a sentence-final
-   ending (니다/요/다). Fences, headings, table rows, template lines and lines
-   quoting a commit SHA are exempt, and a wrapped list item is judged as one.
-   The ending check alone was gamed (한다→함 with the clauses intact: "없어 …
-   동작하지 않던 상태"), so the guard also counts predicates per arrow-segment
-   and denies an item that chains more than one. A 작업 내역 listing one flat
-   bullet per commit -- seven siblings at one level -- was rejected three times
-   even after 개조식 and the `문제 -> 해결` arrows landed, so the guard also
-   requires the nesting: a section of 5+ flat Hangul items with nothing nested
-   under any of them is denied.
+3. `gh pr create|edit` with a body: a Hangul line ends in 한다체, so a line
+   ending in 합니다체 or 해요체 (니다/세요/-요) is denied. Fences, headings,
+   table rows, template lines and lines quoting a commit SHA are exempt, and a
+   wrapped list item is judged as one. A 작업 내역 listing one flat bullet per
+   commit -- seven siblings at one level -- was rejected three times, so the
+   guard also requires the nesting: a section of 5+ flat Hangul items with
+   nothing nested under any of them is denied.
 
 4. Whenever the call is allowed and carries reader-facing text -- `gh pr
    create|edit` with a body, `jira edit queue` staging a card-body node (every
@@ -106,23 +105,11 @@ MAX_EDITED_SHARE = 0.5
 ANY_FENCE = re.compile(r"^[ \t]*```")
 HANGUL = re.compile(r"[가-힣]")
 LIST_MARKER = re.compile(r"^[ \t]*(?:[-*+]|\d+\.)(?:[ \t]+\[[ xX]\])?(?:[ \t]|$)")
-# A Korean sentence-final ending: 합니다/하세요/해요/한다. -함/-됨/-임/-음, a bare
-# noun and a closing backtick all miss, which is what 개조식 looks like.
-SENTENCE_END = re.compile(r"(?:니다|세요|[어아여해예]요|[가-힣]다)$")
+# A polite sentence-final ending: 합니다/하세요/해요. A PR body is written in
+# 한다체 (-다.), and a cause-parent item ("…바뀌었기 때문에") or a label ending
+# in a noun both miss as well.
+POLITE_END = re.compile(r"(?:니다|세요|[어아여해예]요)$")
 TRAILING_CLOSERS = re.compile(r"""[.。!?)\]"'\s]+$""")
-# A sentence closed and another begun inside one item: "…한다. 그리고 …".
-SENTENCE_BREAK = re.compile(r"[가-힣]다\.\s")
-# 개조식 compresses a story into an arrow chain of noun phrases, one predicate
-# per segment. A story told in 서술식 chains clauses instead (없어 … 동작하지 않던),
-# so more than one conjugated 어절 in a segment is the tell.
-ARROW = re.compile(r"\s*(?:->|→|=>|⇒)\s*")
-# Explicit connective/conjugated endings only. A generic 고$/어$ would count
-# nouns like 재고 and 언어; 받고/밀림/누락/해결 all miss on purpose.
-PREDICATE_END = re.compile(
-    r"(?:하고|되고|않고|없고|있고|하며|되며|해서|돼서|하여|되어|않아|없어|있어|하지|되지"
-    r"|하게|되게|않던|않는|않게|는데|지만|므로|니까|라서|면서|려고|도록|던|해|돼)$"
-)
-WORD_EDGE = re.compile(r"^\W+|\W+$")
 # A 작업 내역 item opens with the short sha: `3. 795077968 feat: ...`. SHA_TOKEN
 # wants an a-f digit and a 9-digit sha like that one has none, so the position
 # of the token is what identifies it here.
@@ -474,32 +461,20 @@ def dropped_lines(remote, new, boilerplate):
     return out
 
 
-def predicates(segment):
-    """Number of 어절 in one arrow-segment that end in a conjugated verb form."""
-    return sum(
-        1 for tok in segment.split()
-        if PREDICATE_END.search(WORD_EDGE.sub("", tok))
-    )
-
-
 def prose_verdict(text):
-    """'문장 종결', '절 K개' when the item reads as 서술식, else None."""
-    if SENTENCE_END.search(TRAILING_CLOSERS.sub("", text)) or SENTENCE_BREAK.search(text):
-        return "문장 종결"
-    worst = max(predicates(seg) for seg in ARROW.split(text))
-    return "절 %d개" % worst if worst > 1 else None
+    """'존댓말 종결' when the item ends in 합니다체/해요체 rather than 한다체, else None."""
+    if POLITE_END.search(TRAILING_CLOSERS.sub("", text)):
+        return "존댓말 종결"
+    return None
 
 
 def prose_lines(body, boilerplate):
-    """(item, verdict) pairs for Hangul items written as 서술식 rather than 개조식.
+    """(item, verdict) pairs for Hangul items that end in 합니다체/해요체.
 
     A wrapped list item -- an indented line with no list marker under a list
     line -- is joined to its item first, so only the item's real ending is
-    judged. A line carrying a commit SHA quotes a commit subject verbatim, and
-    the work repos' subjects end in ~한다 by convention, so it is exempt.
-
-    Two criteria: a sentence-final ending (or a sentence break mid-item), and
-    more than one predicate inside one arrow-segment -- see prose_verdict.
+    judged. A line carrying a commit SHA quotes a commit subject verbatim, so it
+    is exempt whatever its ending.
     """
     items, inside = [], False
     for line in body.splitlines():
@@ -630,11 +605,11 @@ def main():
         if prose:
             shown = "\n".join("  - %s   (%s)" % (l[:120], why) for l, why in prose[:15])
             decide("deny", (
-                "PR body is 서술식, not 개조식 (%d item(s)):\n%s\n"
-                "WHY: an arrow chain is read by position. Cut the item at every "
-                "connective, let one predicate stand per segment, and put what is "
-                "true but not load-bearing in parentheses:\n"
-                "  저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)\n"
+                "PR body leaves 한다체 (%d item(s)):\n%s\n"
+                "WHY: a body reads as one voice, and the work repos write it in "
+                "한다체. End each item as a complete sentence in -다., with an area "
+                "label in front when it helps:\n"
+                "  - JS → Native: `source`를 Externally Tagged `{ http } | { local }` Union으로 전송한다.\n"
                 "If the prose is deliberate, re-run with PR_BODY_GUARD_ALLOW_PROSE=1 "
                 "in front of the command." % (len(prose), shown)
             ))
@@ -648,9 +623,9 @@ def main():
                 "put it alone at the top level, and indent every action it forced, "
                 "so the reviewer reads the cause once and takes its subtree with "
                 "it:\n"
-                "  - 테스트 러너 없음 -> vitest 구성\n"
-                "    - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체\n"
-                "    - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리\n"
+                "  - 네이티브 Source 형태가 바뀌었기 때문에\n"
+                "    - 네이티브 계약 버전을 1 올린다.\n"
+                "    - 기존 prop을 변환하는 경로를 추가한다.\n"
                 "If the flat list is deliberate, re-run with PR_BODY_GUARD_ALLOW_PROSE=1 "
                 "in front of the command." % where
             ))
@@ -755,84 +730,60 @@ def self_check():
     assert nearest("| 열A | 열B | 내가추가한열 |", ["| 열A | 열B |"]) == "| 열A | 열B |"
     assert nearest("완전히 다른 문장", ["| 열A | 열B |"]) is None
 
-    # A 서술식 bullet (~한다) is the incident: it must be flagged.
-    assert prose_lines("- pill 컴포넌트를 구현한다", set()) == [("- pill 컴포넌트를 구현한다", "문장 종결")]
-    # The 개조식 rewrite of the same bullet passes.
-    assert prose_lines("- pill 컴포넌트를 구현함", set()) == []
-    # A commit-subject line quotes the work repo's ~한다 subject and is exempt,
+    # The user's own body (<repo> PR <n>, 2026-11-12): 한다체 sentences,
+    # `영역 라벨: 한 문장` items, a sub-item carrying two sentences, and a
+    # cause-parent item. The old 개조식 checks
+    # denied it, which is the regression this guards against.
+    user_body = "\n".join([
+        "## 개요",
+        "",
+        "v2 문서에 있는 VideoSource 개념을 사전 도입해 HttpSource, unstable_LocalSource를 구현한다.",
+        "",
+        "## 작업 내역",
+        "",
+        "- JS → Native: `source`를 Externally Tagged `{ http } | { local }` Union으로 전송한다.",
+        "- iOS DRM Key 리팩토링: Online/Offline DRM struct 각각이 ContentKeyResponder를 구현하도록 추상화한다.",
+        "- **[BREAKING]** 키 없는 오프라인 재생을 만료로 처리한다.",
+        "  - 저장된 키가 없는 보호 다운로드는 저장된 토큰으로 Online DRM 라이선스를 받아 재생되고 있었다.",
+        "  - 이는 오프라인 재생을 예상하는 사용자에게 혼동을 주므로 만료 처리한다.",
+        "- 네이티브 Source 형태가 바뀌었기 때문에",
+        "  - 네이티브 계약 버전을 1 올린다.",
+        "  - 기존 prop을 변환하는 경로를 추가한다.",
+    ])
+    assert prose_lines(user_body, set()) == [], prose_lines(user_body, set())
+    assert flat_sections(user_body, set()) == [], flat_sections(user_body, set())
+    # 합니다체 and 해요체 leave 한다체: flagged, as a paragraph and as a bullet.
+    assert prose_lines("이 PR은 pill 컴포넌트를 추가합니다.", set()) == [("이 PR은 pill 컴포넌트를 추가합니다.", "존댓말 종결")]
+    assert prose_lines("- 컴포넌트를 추가했어요", set()) == [("- 컴포넌트를 추가했어요", "존댓말 종결")]
+    # A wrapped item is judged by its joined ending, not the wrap point.
+    wrapped = "- 기존 prop을 변환하는 경로를\n  추가합니다."
+    assert [why for _, why in prose_lines(wrapped, set())] == ["존댓말 종결"]
+    # A commit-subject line quotes the commit verbatim and is exempt,
     # whether the sha carries a hex letter or is all digits.
-    assert prose_lines("3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현한다", set()) == []
-    assert prose_lines("- e1b01069a feat: 채팅 리스트 컴포넌트를 구현한다", set()) == []
-    # A wrapped 리뷰 포인트 item is judged by its joined ending, not the wrap point.
-    wrapped = ("   - 리뷰 포인트: 창 고정 앵커를 길이가 아닌 머리 행 id로 잡은 이유(포화 시 길이 파생\n"
-               "     창은 읽던 행이 밀림, getWindowStart 순수 함수 + 테스트)")
-    assert prose_lines(wrapped, set()) == [], prose_lines(wrapped, set())
-    # A paragraph sentence (~합니다.) is flagged even without a list marker.
-    assert prose_lines("이 PR은 pill 컴포넌트를 추가합니다.", set()) == [("이 PR은 pill 컴포넌트를 추가합니다.", "문장 종결")]
+    assert prose_lines("3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현합니다", set()) == []
+    assert prose_lines("- e1b01069a feat: 채팅 리스트 컴포넌트를 구현합니다", set()) == []
     # Text inside a mermaid fence and a template checklist line are skipped.
-    fenced = "```mermaid\nflowchart LR\n A[시작한다] --> B\n```\n- [ ] 변경 후 확인이 필요한 기능을 명시해주세요\n"
+    fenced = "```mermaid\nflowchart LR\n A[시작합니다] --> B\n```\n- [ ] 변경 후 확인이 필요한 기능을 명시해주세요\n"
     assert prose_lines(fenced, {"- [ ] 변경 후 확인이 필요한 기능을 명시해주세요"}) == []
     # An English-only bullet has no Hangul and is never judged.
-    assert prose_lines("- add the pill component", set()) == []
-    # A bullet ending in `code` passes even when the code word ends in 다.
-    assert prose_lines("- 진입점은 `renderPill다`", set()) == []
-    # ~어요 is a sentence ending too.
-    assert prose_lines("- 컴포넌트를 추가했어요", set()) == [("- 컴포넌트를 추가했어요", "문장 종결")]
-
-    # The ending check was gamed: 한다→함 with the clauses intact. Each of these
-    # chains 2-3 predicates in one segment and must be denied, alone and together.
-    gamed = [
-        ("- 저장소에 vitest가 없어 pnpm test가 동작하지 않던 상태", 3),
-        ("- vitest·storybook 테스트 환경을 도입하고 CI에서 실행되게 함", 2),
-        ("- 그동안 아무데서도 실행되지 않던 scripts/*-self-check.mjs 4개를 이 환경으로 이관", 2),
-    ]
-    for line, n in gamed:
-        assert prose_lines(line, set()) == [(line, "절 %d개" % n)], prose_lines(line, set())
-    block = "\n".join(l for l, _ in gamed)
-    assert [why for _, why in prose_lines(block, set())] == ["절 3개", "절 2개", "절 2개"]
-    # The user's rewrite: an arrow chain of noun phrases, one predicate per segment.
-    chain = "저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)"
-    assert [predicates(s) for s in ARROW.split(chain)] == [0, 0, 1]
-    assert prose_lines(chain, set()) == [], prose_lines(chain, set())
-    # The two 작업 내역 examples in guides/pr.md stay green (the wrapped one is
-    # asserted above): 주입받고 ends in 받고, which is not a listed ending.
-    example = ("3. 795077968 feat: 최근 채팅 pill 컴포넌트를 구현한다\n"
-               "   - 표현 전용 배지 — 쌓인 개수는 주입받고, 탭 시 꼬리 복귀만 위임\n"
-               "4. e1b01069a feat: 채팅 리스트 컴포넌트를 구현한다\n"
-               "   - 비반전 Animated.FlatList + 꼬리 500행 상주 창 — 스크롤 핸들러는 UI 스레드\n"
-               + wrapped)
-    assert prose_lines(example, set()) == [], prose_lines(example, set())
-    # Nouns ending in 고/어 are not predicates: the list is explicit, not 고$/어$.
-    assert prose_lines("- 재고 언어 제어 정리", set()) == []
-    assert predicates("재고 언어 제어 정리") == 0
-    # A sentence break mid-item is 서술식 even when the item's own ending is a noun.
-    assert prose_lines("- 가드를 추가한다. 이후 정리", set()) == [("- 가드를 추가한다. 이후 정리", "문장 종결")]
+    assert prose_lines("- add the pill component, please", set()) == []
+    # A bullet ending in `code` passes even when the code word ends in 요.
+    assert prose_lines("- 진입점은 `renderPill요`", set()) == []
 
     # The incident: 작업 내역 as one flat bullet per commit, 7 siblings, every one
-    # valid 개조식 -- rejected three times, so the prose check alone misses it.
+    # a valid 한다체 sentence -- rejected three times, so the ending check alone misses it.
     flat7 = "\n".join([
         "## 작업 내역",
-        "- 테스트 러너 없음 -> vitest 구성",
-        "- addon-vitest는 Vite 전용 -> nextjs-vite로 교체",
-        "- jest 계열 의존성 제거",
-        "- happy-dom 사용 및 코드 정리",
-        "- 테스트 코드 타입 검사 추가",
-        "- playwright 로컬 전용으로 격리",
-        "- 기존 self-check 스크립트 마이그레이션",
+        "- vitest를 구성한다.",
+        "- nextjs를 nextjs-vite로 교체한다.",
+        "- jest 계열 의존성을 제거한다.",
+        "- happy-dom을 사용한다.",
+        "- 테스트 코드 타입 검사를 추가한다.",
+        "- playwright를 로컬 전용으로 격리한다.",
+        "- 기존 self-check 스크립트를 마이그레이션한다.",
     ])
     assert prose_lines(flat7, set()) == [], prose_lines(flat7, set())
     assert flat_sections(flat7, set()) == [("작업 내역", 7)], flat_sections(flat7, set())
-    # The user's corrected form -- one root cause with its actions nested -- passes.
-    nested = "\n".join([
-        "## 작업 내역",
-        "- 테스트 러너 없음 -> vitest 구성",
-        "  - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체",
-        "  - jest 계열 의존성 제거 -> happy-dom 사용 및 코드 정리",
-        "  - 테스트 코드 타입 검사 추가",
-        "  - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리 (unit + storybook 2 프로젝트 구성)",
-        "  - 기존 *-self-check.mjs 마이그레이션",
-    ])
-    assert flat_sections(nested, set()) == [], flat_sections(nested, set())
     # Under the threshold a flat list still reads as a list, so 4 siblings pass.
     four = "## 작업 내역\n- 가드 추가\n- 훅 등록\n- 문서 갱신\n- 자기검사 보강"
     assert flat_sections(four, set()) == [], flat_sections(four, set())
@@ -842,8 +793,6 @@ def self_check():
     assert flat_sections(fenced_flat, set()) == [], flat_sections(fenced_flat, set())
     fenced_dash = "## 개요\n```mermaid\n- 하나\n- 둘\n- 셋\n- 넷\n- 다섯\n- 여섯\n```"
     assert flat_sections(fenced_dash, set()) == [], flat_sections(fenced_dash, set())
-    # The 작업 내역 example in guides/pr.md is numbered + sub-bulleted: still green.
-    assert flat_sections(example, set()) == [], flat_sections(example, set())
     # A heading-less body is one section, reported as (본문).
     headless = "\n".join("- 항목 %d" % i for i in range(6))
     assert flat_sections(headless, set()) == [("(본문)", 6)], flat_sections(headless, set())

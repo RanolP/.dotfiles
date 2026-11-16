@@ -16,15 +16,17 @@ Conventional Commits, imperative mood — same rules as commit subjects (see `gi
 
 The body answers one question: **what does the reviewer genuinely want to know?** Everything below follows from that. Worked specimens live in `guides/pr-body-examples.md` — read one when a principle here is clear but its shape is not.
 
-**Dense, with the boundaries marked.** A body earns its space by packing information, and density tires the reader exactly where nothing shows one unit ending and the next beginning. So every unit opens with a marker the eye lands on before the content: a `###` sub-header for a group of items, a label prefix such as `리뷰 포인트:` or `증거:` for a line of a known kind, an arrow segment for 원인 / 결과 / 조치 inside one item, and indentation for what a cause forced. Push the density as far as the markers hold it, and reach for one more marker before reaching for one more sentence of explanation.
+**Dense, with the boundaries marked.** A body earns its space by packing information, and density tires the reader exactly where nothing shows one unit ending and the next beginning. So every unit opens with a marker the eye lands on before the content: a `###` sub-header for a group of items, an area label such as `JS → Native:` before an item's sentence, a label prefix such as `증거:` for a line of a known kind, `**[BREAKING]**` on a change that breaks its callers, and indentation for what a cause forced. Push the density as far as the markers hold it, and reach for one more marker before reaching for one more sentence of explanation.
 
 **Sections = the repo template, verbatim.** Keep its headers as they are and add no `##` of your own; anything extra goes in as a `###` under one of them.
 
-**개요 is one line.** It says what was wrong and what was done. A measurement, a refuted hypothesis, and the scope of application all belong elsewhere, and a refuted hypothesis stays out of the body until a reviewer asks for it.
+**개요 gives the background.** In one sentence it says where the change comes from and why now -- the document, incident or earlier decision that makes it due (`v2 문서에 있는 VideoSource 개념을 사전 도입해 ...`) -- because the title already says what was done. A measurement, a refuted hypothesis, and the scope of application all belong elsewhere, and a refuted hypothesis stays out of the body until a reviewer asks for it.
 
-**작업 내역 = one short line per group of commits that does one thing.** Group the commits by what they accomplish, then write each group as a single line saying what was done. Carry no short sha and no commit subject into the body: the reviewer already has the commit list on the PR screen, so copying it there buys nothing.
+**작업 내역 = one `영역 라벨: 한 문장` item per group of commits that does one thing.** Group the commits by what they accomplish. The label names the area the group touched (`JS → Native:`, `iOS DRM Key 리팩토링:`), and the sentence after it says what was done there. An arrow inside a label marks a direction (`JS → Native`). Carry no short sha and no commit subject into the body: the reviewer already has the commit list on the PR screen, so copying it there buys nothing.
 
-Add a `리뷰 포인트:` sub-bullet only where you judge that without it a Haiku-level reader could not understand the change. That bar is deliberately high — most groups get the one line and nothing else. When one does earn the sub-bullet, say **why it had to be that way**, never what was decided, because the decision already sits in the diff and the reason is the only part the code cannot carry.
+**A breaking change opens with `**[BREAKING]**`**, and its sub-items give the background (what existed before) and the reason (why it has to change). When the change covers more than one prior case, each case gets its own background sub-item, so two cases never merge into one sentence. The reason is the part the code cannot carry; the consequences -- an error code, a type error, a contract version bump -- already show in the diff, so the diff carries them.
+
+**Consequences that must be listed hang under their cause.** Write the cause once as the parent item (`네이티브 Source 형태가 바뀌었기 때문에`) and each action it forced as a sub-item sentence (`네이티브 계약 버전을 1 올린다.`), so the reviewer reads the cause once and takes every action with it.
 
 **A number is one `A -> B (-N%p)` line**, and its backing is a `증거: <링크>` line. Whatever the reviewer confirms by opening the link stays unexplained in the body. A table earns its place only from three columns up, with a different kind of thing per row.
 
@@ -43,20 +45,22 @@ Add a `리뷰 포인트:` sub-bullet only where you judge that without it a Haik
 
 **Title**: one short line with the description merged in, not a bare ticket key. It names what the PR achieves -- `feat(billing): 결제 수단 변경 지원` -- and leaves the implementation pieces to the body.
 
-## PR body — Korean, 개조식-first
+## PR body — Korean, 한다체 sentences
 
-A reviewer opens a body to decide where to look, so both rules below make an item readable by position. `guides/pr-body-examples.md` holds a folded specimen.
+A reviewer opens a body to decide where to look, so the rules below let the item's own sentence say what happened and where. `guides/pr-body-examples.md` holds the user's own body as the specimen.
 
-**One predicate per unit (개조식).** An arrow chain (`->`) of noun phrases puts 원인, 결과 and 조치 in fixed positions, so each is found by position. Cut the item at every connective, let one predicate stand per segment, and put what is true but not load-bearing in parentheses.
+**Every item is a complete 한다체 sentence** ending in `-다.`, with its subject, object and verb in place, so the reader takes each relation from the sentence instead of rebuilding it. A cause rides on a connective inside the sentence (`~했고`, `~하기 때문에`, `~하므로`).
 
-**Forward reasoning 대국적으로.** Fold the items by cause: name the root cause, put it alone at the top level, and indent every action it forced. The reviewer then reads the cause once and takes its whole subtree with it, and the 개요 compresses the same chain into one line.
+**Established terms keep their original form.** Write a term the field already names as it is named -- `Externally Tagged Union`, `struct`, `Online/Offline DRM` -- because the reader recognizes the original and has to decode a coined half-translation such as `태그 유니언`.
 
-The `pr-body-guard` hook enforces both: it passes a Hangul item that keeps one predicate per arrow-segment and ends on a noun or `-함`/`-됨`/`-임`/`-음`, and passes a section once its items nest under their cause (a section stays under the guard's eye from 5 top-level items up; commit-sha lines, fences, headings and template lines are exempt). Both share one escape hatch: when the prose or the flat list is deliberate, re-run with `PR_BODY_GUARD_ALLOW_PROSE=1` in front of the command.
+**Forward reasoning 대국적으로.** Fold the items by cause: name the root cause, put it alone at the top level, and indent every action it forced. The reviewer then reads the cause once and takes its whole subtree with it.
+
+The `pr-body-guard` hook checks two of these: it passes a Hangul line once it ends in 한다체 rather than 합니다체 or 해요체 (`-니다`, `-요`), and passes a section once its items nest under their cause (a section stays under the guard's eye from 5 top-level items up; commit-sha lines, fences, headings and template lines are exempt). Both share one escape hatch: when the ending or the flat list is deliberate, re-run with `PR_BODY_GUARD_ALLOW_PROSE=1` in front of the command.
 
 Apply inline prose rules (from technical-writing's Korean rules):
 
 - **Strip translationese (번역투)**: noun stacks → verbs, passive → active, no `~되어지다`, inanimate subject → the real actor, `~를 통해` → `~로`, drop the unnecessary plural `-들`.
-- **One idea per item** — never join two claims with `~하고` inside one bullet.
+- **One idea per item** — two unrelated claims go in two items; a connective inside one item joins only clauses of the same fact.
 - **Concrete numbers over vague wording** — write `콜드스타트 800ms → 120ms`, not `크게 개선`.
 - **One term per concept** — never alternate 매개변수/인자/옵션 for the same thing.
 - **Expand an abbreviation on its first appearance.**

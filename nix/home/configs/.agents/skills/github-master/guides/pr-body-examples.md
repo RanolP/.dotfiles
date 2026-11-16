@@ -15,16 +15,25 @@ Four top-level headers, checklist boilerplate included. A body adds no `##` of i
 - [ ] Ex) 작품이 iOS에서 재생
 ```
 
-## 작업 내역 — one line per commit group
+## 개요 and 작업 내역 — the user's own body
 
-Three groups, one line each. Only the third earned a `리뷰 포인트:`, because the anchor choice is invisible in the diff.
+The shape comes from the user's hand rewrite of an agent's draft (<repo> PR <n>, 2026-11-12). The 개요 gives the origin of the change. Each item is `영역 라벨: 한 문장` in 한다체. The breaking item's sub-items give each legacy case its own background and reason, so two cases never blur into one sentence. The last item states its cause once with the resulting actions under it.
 
 ```markdown
-- 캐시 경로만이 문제였으므로 경로를 수정하고 캐시 히트를 확인
-- 원격 빌드 캐시를 추가로 사용한다
-- 리스트를 비반전 FlatList + 꼬리 500행 상주 창으로 구현
-  - 리뷰 포인트: 창 고정 앵커를 길이가 아닌 머리 행 id로 잡은 이유(포화 시 길이 파생
-    창은 읽던 행이 밀림)
+## 개요
+
+v2 문서에 있는 VideoSource 개념을 사전 도입해 HttpSource, unstable_LocalSource를 구현한다.
+
+## 작업 내역
+
+- JS → Native: `source`를 Externally Tagged `{ http } | { local }` Union으로 전송한다.
+- iOS DRM Key 리팩토링: Online/Offline DRM struct 각각이 ContentKeyResponder를 구현하도록 추상화한다.
+- **[BREAKING]** 키 없는 오프라인 재생을 만료로 처리한다.
+  - 저장된 키가 없는 보호 다운로드는 저장된 토큰으로 Online DRM 라이선스를 받아 재생되고 있었다.
+  - 이는 오프라인 재생을 예상하는 사용자에게 혼동을 주므로 만료 처리한다.
+- 네이티브 Source 형태가 바뀌었기 때문에
+  - 네이티브 계약 버전을 1 올린다.
+  - 기존 prop을 변환하는 경로를 추가한다.
 ```
 
 ## A measurement — one `A -> B (-N%p)` line
@@ -41,21 +50,6 @@ The user's own notation, including `%p` for a ratio change. Evidence is a link l
 ```
 
 A table earns its place only from three columns up, with a different kind of thing per row.
-
-## 개조식 folded by cause
-
-The root cause stands alone at the top level and every action it forced is indented under it.
-
-```
-- 테스트 러너 없음 -> vitest 구성
-  - addon-vitest는 Vite 전용 -> webpack 쓰던 nextjs 대신 nextjs-vite로 교체
-  - jest 계열 의존성 제거 -> happy-dom 사용 및 코드 정리
-  - 테스트 코드 타입 검사 추가
-  - 불필요한 playwright가 CI 타임 잡아먹음 -> 로컬 전용으로 격리 (unit + storybook 2 프로젝트 구성)
-  - 기존 *-self-check.mjs 마이그레이션
-```
-
-The 개요 of that same body compresses the whole chain into one line: `저장소에 vitest 누락 -> pnpm test 실패 -> 도입해 해결 (+ 테스트 환경 표준화)`.
 
 ## What the size difference looks like
 

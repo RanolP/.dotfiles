@@ -10,4 +10,4 @@
 ## Writing issues and comments
 
 - Check for an issue template first (`.github/ISSUE_TEMPLATE/`); when one exists, keep its headers verbatim and fill every section — never invent your own layout.
-- Issue text is outside-facing prose: Korean 개조식 (terse outline style: noun-phrase bullets, `-함`/`-됨` endings), same inline prose rules as PR bodies (see `guides/pr.md`).
+- Issue text is outside-facing prose: Korean in complete 한다체 sentences, with the same inline prose rules as PR bodies (see `guides/pr.md`).

@@ -115,6 +115,19 @@ test('the eight-section ledger keeps actions under the focused task and resource
   expect(row).toContain('- stack 2 · pending 1')
 })
 
+// Regression caught: an agent-written note survived the user's objection and was injected again after every fold.
+test('a note the user objected to must not appear in the next resident ledger', () => {
+  const origin = { session: 's1', repo: 'github.com/o/r', cwd: '/w' }
+  const merged = parseMerge(JSON.stringify({ ops: [{ op: 'retract-note', issue: 's1-task' }] }), new Set(['s1-task']))
+  if (typeof merged === 'string') throw new Error(merged)
+  const [task] = snapshot(toEvents([
+    { op: 'create', issue: 's1-task', title: 'inspect deployment', status: 'doing', note: 'check the server logs for the token' },
+    ...merged.ops,
+  ], origin, 0, '2026-11-06T00:00:00Z'))
+  const row = residentLedgerText(task, '@abcd1234', 1, 0, [])
+  expect(row).not.toContain('check the server logs for the token')
+})
+
 // Regression caught: completed planned steps disappeared or rendered without their intent, finding and decision.
 test('a done planned child renders its result in the plan section', () => {
   const root = {

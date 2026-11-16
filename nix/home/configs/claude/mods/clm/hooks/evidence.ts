@@ -383,6 +383,7 @@ export const describeOp = (o: Payload, title?: string): string => {
     case 'retitle': return `issue ${o.issue} is retitled "${o.title}"`
     case 'progress': return `issue ${o.issue} progress ${o.done}/${o.total}`
     case 'note': return `issue ${o.issue} gets note "${o.text}"`
+    case 'retract-note': return `issue ${o.issue} drops its notes`
     case 'task': return `issue ${o.issue} links panel task ${o.taskId}`
     case 'link': return `issue ${o.issue} is linked`
     case 'parent': return `issue ${o.issue} gets parent ${o.parent ?? '(none)'}`

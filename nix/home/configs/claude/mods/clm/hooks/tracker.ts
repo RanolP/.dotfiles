@@ -41,6 +41,7 @@ export type TrackerEvent = Base & (
   | { op: 'progress'; done: number; total: number }
   | { op: 'task'; taskId: string }
   | { op: 'note'; text: string }
+  | { op: 'retract-note' }
   | { op: 'plan'; priority?: number; ready?: boolean }
   | { op: 'claim'; by: string | null }
   // Links `issue` to `origin.session`, so it is injected there whatever its repo.
@@ -67,6 +68,7 @@ export type Payload =
   | { op: 'progress'; issue: string; done: number; total: number }
   | { op: 'task'; issue: string; taskId: string }
   | { op: 'note'; issue: string; text: string }
+  | { op: 'retract-note'; issue: string }
   | { op: 'plan'; issue: string; priority?: number; ready?: boolean }
   | { op: 'claim'; issue: string; by: string | null }
   | { op: 'link'; issue: string }
@@ -200,6 +202,7 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
     else if (e.op === 'progress') i.progress = { done: e.done, total: e.total }
     else if (e.op === 'task') i.taskId = e.taskId
     else if (e.op === 'note') i.notes.push(e.text)
+    else if (e.op === 'retract-note') i.notes = []
     else if (e.op === 'plan') {
       if (e.priority !== undefined) i.priority = e.priority
       if (e.ready !== undefined) i.ready = e.ready
@@ -282,6 +285,7 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       case 'progress': return { ...base, issue: p.issue, op: 'progress', done: p.done, total: p.total }
       case 'task': return { ...base, issue: p.issue, op: 'task', taskId: p.taskId }
       case 'note': return { ...base, issue: p.issue, op: 'note', text: p.text }
+      case 'retract-note': return { ...base, issue: p.issue, op: 'retract-note' }
       case 'plan': return {
         ...base, issue: p.issue, op: 'plan',
         ...(p.priority === undefined ? {} : { priority: p.priority }), ...(p.ready === undefined ? {} : { ready: p.ready }),
@@ -413,6 +417,8 @@ export function parseOps(raw: string, known: ReadonlySet<string>, knownAssumptio
       ops.push({ op: 'progress', issue: o.issue, done: o.done, total: o.total })
     else if (o?.op === 'note' && typeof o.issue === 'string' && known.has(o.issue) && note)
       ops.push({ op: 'note', issue: o.issue, text: note })
+    else if (o?.op === 'retract-note' && typeof o.issue === 'string' && known.has(o.issue))
+      ops.push({ op: 'retract-note', issue: o.issue })
     else if (o?.op === 'label' && typeof o.issue === 'string' && known.has(o.issue) && (o.label === undefined || isAssumptionLabel(o.label)))
       ops.push({ op: 'label', issue: o.issue, ...(o.label === undefined ? {} : { label: o.label }) })
     else if (o?.op === 'assumption' && typeof o.id === 'string' && known.has(o.id) && (o.status === 'merged' || o.status === 'rejected'))
@@ -477,6 +483,8 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       out.push(`작업 '${title}' 확인 대기 ${storedItems(e.text)?.length ?? 0}건`)
     } else if (e.op === 'note') {
       out.push(`작업 '${title}' 메모: ${clip((e.text.split(/\r?\n/, 1)[0] ?? '').trim(), 60)}`)
+    } else if (e.op === 'retract-note') {
+      out.push(`작업 '${title}' 메모 철회`)
     } else {
       out.push(`작업 '${title}' 연결: ${e.origin.repo}`)
     }

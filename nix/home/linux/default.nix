@@ -5,6 +5,13 @@
   home.packages = with pkgs; [
     wsl-open # xdg-open stand-in: hands files and URLs to the Windows default app
 
+    # agent-browser's own Chrome for Testing download is linked against system
+    # libs (libnspr4, libnss3, ...) that Arch lacks, so it exits 127. nixpkgs'
+    # google-chrome repackages Google's release binary with its libs bundled;
+    # AGENT_BROWSER_EXECUTABLE_PATH below points agent-browser at it, headless
+    # by default and headed through WSLg with --headed.
+    google-chrome
+
     # Claude Code's named auth profiles (~/.claude-<profile>, picked by
     # nushell's `ccc`) need their config mirrored from ~/.claude and their
     # projects/ pointed at the shared store outside ~/.claude, or /resume
@@ -86,6 +93,7 @@
   # env.linux.nu sets the same value for nushell. The shared ~/.profile does
   # not load hm-session-vars.sh on its own; this line merges into it.
   home.sessionVariables.BROWSER = "wsl-open";
+  home.sessionVariables.AGENT_BROWSER_EXECUTABLE_PATH = "${pkgs.google-chrome}/bin/google-chrome-stable";
   home.file.".profile".text = ''
     . "$HOME/.nix-profile/etc/profile.d/hm-session-vars.sh"
   '';

@@ -64,6 +64,9 @@ $env.config.hooks.env_change.PWD = (
       }
       _starship-config-for-pwd $after
     }
+  | append {|before, after|
+      ^($env.HOME | path join ".local" "bin" "rex-project-theme") $after
+    }
 )
 
 # env_change.PWD only fires on a later cd, so apply once at startup too.

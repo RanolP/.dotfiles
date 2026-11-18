@@ -1,0 +1,50 @@
+#!/bin/sh
+
+# Keep a Rex pane's project tint in sync without disturbing non-Rex shells.
+if [ -z "${REX_BLOCK:-}" ]; then
+  exit 0
+fi
+
+rex="/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+if [ ! -x "$rex" ]; then
+  exit 0
+fi
+
+path=${1:-.}
+if [ -d "$path" ]; then
+  directory=$path
+else
+  directory=$(dirname "$path")
+fi
+
+# Same color as _folder-bg-color in nushell/config.nu (the Ghostty / Windows
+# Terminal tint): sha256 of the repo root path picks one of the same dark
+# Nord tints, so a repo keeps its color across terminals. Keep the two
+# palettes and the override in step. Outside a repo, Rex's default returns.
+root=$(git -C "$directory" rev-parse --show-toplevel 2>/dev/null) || root=
+color=
+if [ -n "$root" ]; then
+  if [ "$root" = "$HOME/.dotfiles" ]; then
+    color="#3b3042"
+  else
+    set -- 2e3b3b 3b382e 2e343f 3b2e2e 2e3b30 34303b 3b3630 303b38
+    index=$(( 0x$(printf '%s' "$root" | shasum -a 256 | cut -c1-8) % $# + 1 ))
+    eval "color=\"#\${$index}\""
+  fi
+fi
+
+state_key=$(printf '%s' "$REX_BLOCK" | cksum | awk '{print $1}')
+state_file="${TMPDIR:-/tmp}/rex-project-theme-${state_key}"
+last=
+if [ -f "$state_file" ]; then
+  IFS= read -r last < "$state_file" || true
+  if [ "$color" = "$last" ]; then
+    exit 0
+  fi
+fi
+
+if "$rex" --timeout 2s block call set_theme "{\"background\":\"$color\"}" >/dev/null 2>&1; then
+  printf '%s\n' "$color" > "$state_file"
+fi
+
+exit 0

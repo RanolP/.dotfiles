@@ -246,6 +246,15 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Bash|Read|Edit|Write|MultiEdit|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/rex-project-theme.py"
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
@@ -278,6 +287,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/memory-review-nudge.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/rex-project-theme.py"
           }
         ]
       }

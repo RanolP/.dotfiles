@@ -524,6 +524,11 @@ in
         source = ./configs/claude/hooks/output-shape-reminder.py;
         executable = true;
       };
+      # Keep Claude Code's Rex pane tinted for the cwd or file it just touched.
+      ".claude/hooks/rex-project-theme.py" = {
+        source = ./configs/claude/hooks/rex-project-theme.py;
+        executable = true;
+      };
       # clm replaces compaction: at turn end it folds older turns into a
       # ledger. CLAUDE_CODE_PLUGIN_DIRS in settings.json loads it. The whole
       # directory is linked as one store path because Claude Code rejects a
@@ -636,6 +641,10 @@ in
       # Checks hand-synced copies across repos that deliberately share no package.
       ".local/bin/copy-sync-check" = {
         source = ./configs/bin/copy-sync-check;
+        executable = true;
+      };
+      ".local/bin/rex-project-theme" = {
+        source = ./configs/bin/rex-project-theme;
         executable = true;
       };
       # Agent descriptions always load into the system prompt -- there is no

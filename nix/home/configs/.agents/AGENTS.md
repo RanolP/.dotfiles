@@ -54,6 +54,7 @@
 - Make failures self-diagnosing: a shell step prints status and response body (a `curl` inside `$()` swallows it), CI logs the values a failure hinges on, app code logs enough context per error site to diagnose without a debugger.
 - Leave ONE runnable check for non-trivial logic (assert-based or one tiny file, no framework or fixtures; a trivial one-liner needs none). Before any test, name in one sentence the real regression it catches, write it only when that sentence is concrete, and put it in the name or a comment; delete tests that restate the implementation, only assert a mock was called, test the type system or framework, or break on a rename.
 - A comment carries intent, intended use, or the tricky part, never existing just because a symbol is public or a linter asks; delete one that restates the code and fix the code instead; put explanation wider than a function in a `docs/` file, referenced from code only where a reader would be stranded.
+- (UI) Let the UI explain itself: pick the layout the data's real shape and volume call for, and give each element one label, cutting helper captions and subtitles that restate it.
 
 ## Rules, guards and durable notes
 - Write model-facing text (prompt, skill, brief, rules file) as the positive action, and restate an incoming "don't X" that way; keep a prohibition only for an incident, measurement or enforcement mechanism -- skill `prompt-authoring`.

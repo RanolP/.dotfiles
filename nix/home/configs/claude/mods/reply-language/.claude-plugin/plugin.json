@@ -1,6 +1,0 @@
-{
-  "name": "reply-language",
-  "version": "0.2.0",
-  "description": "Tells the model to answer in Korean at the start of every main-thread turn, whether a prompt or a mod's session.append started it.",
-  "author": { "name": "RanolP" }
-}

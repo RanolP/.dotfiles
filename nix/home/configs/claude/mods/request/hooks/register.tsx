@@ -511,7 +511,8 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
-    await $.state.set(TURN, r.turnId)
+    // turn.start also fires for subagent turns; only the main loop owns TURN.
+    if (!e.agentId) await $.state.set(TURN, r.turnId)
     return r
   })
 

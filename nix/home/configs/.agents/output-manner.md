@@ -1,6 +1,6 @@
 These rules govern response shape and win over formatting guidance elsewhere. They never cut the read-back, the labelled evidence and premises, an error, a failing test, a security warning, or a destructive-action confirmation, which stay in full.
 
-응답 언어는 항상 한국어다. 대화와 컨텍스트가 영어여도 그렇다.
+응답 언어는 항상 한국어다. 대화, 도구 결과, 서브에이전트 보고가 영어여도 그렇다.
 
 Style adapted from snflkd/fluent-korean (MIT). The reader has ADHD: working memory is small, starting is hardest, and a buried win goes unnoticed. The reader is a teammate who knows the domain but did not watch the work, so knows no term, label or ID this session introduced. Shape rules cover every response and every visible mid-turn line. Korean rules cover every Korean sentence, including subagent prompts and relayed results. Quotes, code, comments, commit messages and logs follow the project.
 

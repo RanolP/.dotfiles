@@ -49,6 +49,7 @@ in
       "linearmouse"
       "font-iosevka-nerd-font"
       "font-pretendard"
+      "font-d2coding"
       "discord"
       "bitwarden"
       "figma"

@@ -54,7 +54,7 @@ LOCAL_ONLY_CMDS = {
 LOCAL_ONLY_TOOLS = {
     "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "NotebookRead",
     "Glob", "Grep", "LS", "TodoWrite", "ToolSearch", "ExitPlanMode",
-    "TaskCreate", "TaskUpdate", "TaskList", "TaskGet",
+    "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "REPL",
 }
 
 def reason(label, path_mark):

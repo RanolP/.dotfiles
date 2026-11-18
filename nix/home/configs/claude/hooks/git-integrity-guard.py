@@ -42,6 +42,9 @@ import shlex
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import fold_leading_cd
+
 GIT_GLOBAL_OPT_WITH_ARG = {"-C", "-c", "--namespace", "--git-dir", "--work-tree",
                            "--exec-path", "--config-env"}
 PUSH_OPT_WITH_ARG = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
@@ -412,6 +415,8 @@ def main():
         sys.exit(0)
     tool_input = data.get("tool_input") if isinstance(data, dict) else None
     cmd = tool_input.get("command") if isinstance(tool_input, dict) else None
+    payload_cwd = data.get("cwd") if isinstance(data, dict) else None
+    cwd, cmd = fold_leading_cd(cmd, payload_cwd or os.getcwd())
     if not isinstance(cmd, str) or "git" not in cmd:
         sys.exit(0)
 
@@ -429,7 +434,7 @@ def main():
                      "parsed safely. Rewrite it without the flag.")
         sys.exit(0)
 
-    reason, notes = violation(toks, cwd=data.get("cwd") or os.getcwd())
+    reason, notes = violation(toks, cwd=cwd)
     if reason:
         deny(reason)
     if notes:

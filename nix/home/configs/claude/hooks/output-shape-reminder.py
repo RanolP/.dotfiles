@@ -124,6 +124,8 @@ def main():
         data = {}
     if not isinstance(data, dict):
         data = {}
+    if data.get("source") == "poll_event":
+        sys.exit(0)
     print(REMINDER)
     parts = [clock_line(data.get("transcript_path")), load_line()]
     print("; ".join(p for p in parts if p) + ".")

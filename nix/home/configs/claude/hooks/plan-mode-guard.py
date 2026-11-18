@@ -68,6 +68,7 @@ ALLOWED = frozenset({
     "Edit",
     "AskUserQuestion",
     "ToolSearch",
+    "REPL",
 })
 
 
@@ -281,7 +282,7 @@ def selftest():
     # Only the plan write and the exit survive; every lookup is denied, since
     # a lookup here means the research was unfinished.
     assert ALLOWED == {
-        "ExitPlanMode", "Write", "Edit", "AskUserQuestion", "ToolSearch"
+        "ExitPlanMode", "Write", "Edit", "AskUserQuestion", "ToolSearch", "REPL"
     }
     for denied in ("Read", "Grep", "Glob", "WebFetch", "WebSearch",
                    "NotebookRead", "TaskGet", "Bash", "Agent"):

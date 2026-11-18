@@ -19,7 +19,7 @@ $merged | save -f $'($home)/.codex/AGENTS.md'
 
 # Every script config.toml calls: the codex adapter plus the shared Claude guards.
 echo $"     (ansi blue)Copy(ansi reset) hooks"
-let hooks = (open $'($nix)/codex/config.toml' --raw | parse --regex 'hooks/([\w.-]+\.py)' | get capture0 | uniq)
+let hooks = (open $'($nix)/codex/config.toml' --raw | parse --regex 'hooks/([\w.-]+\.py)' | get capture0 | append 'command_cwd.py' | uniq)
 for name in $hooks {
     let src = if $name == 'claude-hook-adapter.py' { $'($nix)/codex/hooks/($name)' } else { $'($nix)/claude/hooks/($name)' }
     do -i { rm -f $'($home)/.codex/hooks/($name)' }

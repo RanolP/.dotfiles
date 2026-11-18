@@ -16,7 +16,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 ## Escalate one hard question to `oracle`, from a worker as readily as from main
 - WHEN: committing to an approach that is expensive to reverse, or reporting done when that unlocks an irreversible step (prod migration, column drop, publish).
 - Spawn `subagent_type: "oracle"` with NO `model` param, passing `question:` and the `context:` that makes it judgeable (`subagent-model-guard.py` allows it from workers); escalate where the evidence sits, since that context expires with your turn.
-- State the verdict in your own words and surface any `suggest_more` other than `none` before continuing. The advisor tool double-counts context and force-compacts early ([[advisor-inflates-autocompact-threshold]]).
+- State the verdict in your own words and surface any `suggest_more` other than `none` before continuing.
 
 ## An Artifact page is written apart from the session that researched it
 - Spawn `artifact-writer` with `page_facts` (subject content only), `reader`, `purpose`, `path`; every gap, exclusion, failed lookup, coverage note, tool detail and the writer's `returned_to_chat` items go in the chat reply.

@@ -61,6 +61,9 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import fold_leading_cd
+
 # gh options that consume the next token as their value.
 OPTS_WITH_VALUE = {
     "--body", "-b", "--body-file", "-F", "--title", "-t", "--repo", "-R",
@@ -559,6 +562,7 @@ def main():
     if data.get("tool_name") not in (None, "Bash"):
         sys.exit(0)
     cmd = data.get("tool_input", {}).get("command", "")
+    cwd, cmd = fold_leading_cd(cmd, data.get("cwd") or os.getcwd())
     if "jira" in cmd:
         try:
             target = jira_prose_target(shlex.split(cmd))
@@ -568,8 +572,6 @@ def main():
             allow(data, *target)
     if "gh" not in cmd or " pr " not in cmd:
         sys.exit(0)
-    cwd = data.get("cwd") or os.getcwd()
-
     try:
         tokens = shlex.split(cmd)
     except ValueError:

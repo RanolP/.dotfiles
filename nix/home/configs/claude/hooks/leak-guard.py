@@ -44,6 +44,9 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import fold_leading_cd
+
 WRAPPERS = {"sudo", "command", "env", "nohup", "nice", "time", "doas", "exec"}
 GIT_OPTS_WITH_ARG = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 
@@ -468,6 +471,10 @@ def evaluate(data):
     command = tool_input.get("command")
     if not isinstance(command, str) or not command.strip():
         return None
+    cwd = data.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        cwd = os.getcwd()
+    cwd, command = fold_leading_cd(command, cwd)
     specs = find_commits(command)
     if not specs:
         return None
@@ -475,9 +482,6 @@ def evaluate(data):
         return None
     if shutil.which("git") is None:
         return None
-    cwd = data.get("cwd")
-    if not isinstance(cwd, str) or not cwd:
-        cwd = os.getcwd()
 
     patterns = BUILTIN_PATTERNS + load_denylist(denylist_path())
     hits = []

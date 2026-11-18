@@ -25,8 +25,12 @@ import re
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import fold_leading_cd
+
 data = json.load(sys.stdin)
 cmd = data.get("tool_input", {}).get("command", "")
+cwd, cmd = fold_leading_cd(cmd, data.get("cwd") or os.getcwd())
 
 # git global options that consume the following token as their argument.
 GLOBAL_OPT_WITH_ARG = {"-C", "-c", "--namespace", "--git-dir", "--work-tree",
@@ -248,7 +252,7 @@ if not push_segments:
     sys.exit(0)
 
 toks, idx = push_segments[0]
-target_dir = push_target_dir(toks, idx, data.get("cwd") or os.getcwd())
+target_dir = push_target_dir(toks, idx, cwd)
 
 # Escape hatch: a .nanno-workers.json opting in bypasses every push restriction.
 # Evaluated at the repo being pushed, never at the shell's cwd.

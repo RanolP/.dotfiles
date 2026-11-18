@@ -376,6 +376,7 @@ in
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;
       };
+      ".claude/hooks/command_cwd.py".source = ./configs/claude/hooks/command_cwd.py;
       # This machine's package set is declared (mise-global.toml, homebrew
       # lists, the flake). An imperative install lands outside all three, so
       # the guard denies one and names the file to edit instead.
@@ -536,9 +537,6 @@ in
       ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
       # dash: one auto-opened pane stacking Usage (limits, cost, context, duration, lines), Fleet and Clm.
       ".claude/mods/dash".source = ./configs/claude/mods/dash;
-      # tool-compose: the exec tool runs a script whose tools.* calls relay to
-      # $.tool.call; the child runs under sandbox-exec + node --permission.
-      ".claude/mods/tool-compose".source = ./configs/claude/mods/tool-compose;
       # ask-later: a non-blocking AskUserQuestion; the model queues questions
       # and keeps working, and /answers walks them when the user chooses.
       ".claude/mods/ask-later".source = ./configs/claude/mods/ask-later;
@@ -555,6 +553,7 @@ in
         source = ./configs/codex/hooks/claude-hook-adapter.py;
         executable = true;
       };
+      ".codex/hooks/command_cwd.py".source = ./configs/claude/hooks/command_cwd.py;
       ".codex/hooks/git-push-guard.py" = {
         source = ./configs/claude/hooks/git-push-guard.py;
         executable = true;

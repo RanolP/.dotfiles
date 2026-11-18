@@ -38,6 +38,7 @@ READ_ONLY = frozenset({
     "TaskList",
     "TaskGet",
     "TaskOutput",
+    "REPL",
 })
 
 CONTEXT = (
@@ -65,6 +66,8 @@ def handle(data):
     path = flag_path(data.get("session_id", ""))
 
     if event == "UserPromptSubmit":
+        if data.get("source") == "poll_event":
+            return None, os.path.exists(path)
         if ASK_RE.match(data.get("prompt", "") or ""):
             with open(path, "w") as fh:
                 fh.write("1")

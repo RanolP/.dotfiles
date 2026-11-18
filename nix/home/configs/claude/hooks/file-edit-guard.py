@@ -33,6 +33,9 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import fold_leading_cd
+
 # Roots where a rewrite is throwaway work that Edit/Write has no business doing.
 TEMP_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/dev/")
 TEMP_EXACT = ("/tmp", "/private/tmp", "/dev/null")
@@ -448,6 +451,7 @@ def main():
         sys.exit(0)
     command = (data.get("tool_input", {}) or {}).get("command", "") or ""
     cwd = data.get("cwd") or os.getcwd()
+    cwd, command = fold_leading_cd(command, cwd)
     hits = targets_for(command, cwd)
     if hits:
         deny(reason_for(hits[0]))

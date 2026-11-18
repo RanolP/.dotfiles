@@ -9,12 +9,11 @@ for by reflex:
   agent-device  -- iOS, Android, macOS, TV and web app UI, plus logs, install,
                    screenshots, perf and React Native helpers
 
-The reflex paths -- the claude-in-chrome MCP tools, and raw `adb` / `xcrun
-simctl` / `idb` / `cliclick` -- both raise "ask" ONCE per session. The first
-call of each family puts the CLI equivalent in front of the user, so picking the
-reflex path is a decision rather than a habit. Every later call of that family
-in the same session falls through untouched: a 20-step browser or device task
-must not cost 20 prompts, so the reminder fires once and gets out of the way.
+The reflex path -- raw `adb` / `xcrun simctl` / `idb` / `cliclick` -- raises
+"ask" ONCE per session. The first call puts the CLI equivalent in front of the
+user, so picking the reflex path is a decision rather than a habit. Every later
+call in the same session falls through untouched: a 20-step device task must
+not cost 20 prompts, so the reminder fires once and gets out of the way.
 
 A third family covers the CLIs themselves: the first `agent-browser` or
 `agent-device` command of a session that drives UI is denied once, with the
@@ -22,7 +21,7 @@ A third family covers the CLIs themselves: the first `agent-browser` or
 batch call before it starts firing single steps. Reading commands (`help`,
 `skills`, `devices`, ...) and an already-batched call pass through.
 
-The three families are tracked separately, so one prompt never swallows another.
+The two families are tracked separately, so one prompt never swallows another.
 
 Only the LEADING Bash token is checked, after any `NAME=val` env assignments, so
 `echo adb`, `grep simctl log.txt`, or a path containing "adb" is left alone.
@@ -35,7 +34,6 @@ import os
 import shlex
 import sys
 
-CHROME_TOOL_PREFIX = "mcp__claude-in-chrome__"
 STATE_DIR = os.path.expanduser("~/.claude-personal/state/agent-tooling-guard")
 SKILL_PATH = os.environ.get(
     "AGENT_TOOLING_GUARD_SKILL",
@@ -60,23 +58,6 @@ DEVICE_BINS = {
         "screenshot, record, settings, push, orientation)"
     ),
 }
-
-CHROME_REASON = (
-    "Review `agent-browser` before taking this one. It is on PATH and covers "
-    "this ground: open/click/type/fill/press, snapshot (accessibility tree with "
-    "refs), get text|html|value, find by role|text|label|testid, eval, "
-    "screenshot, pdf, upload, download, scroll, wait.\n"
-    "Start with `agent-browser skills get core --full` -- the skills ship with "
-    "the CLI and are version-matched, so they beat guessing from flag docs.\n"
-    "To drive the browser the user already has open, attach over CDP with "
-    "`agent-browser connect <port|url>` -- that is the usual reason the "
-    "extension looked necessary, and it is covered.\n"
-    "Approve this call only after saying which agent-browser command you "
-    "checked and why it does not fit.\n"
-    "(This prompt fires once per session. Later claude-in-chrome calls in this "
-    "session pass through under the normal permission rules.)"
-)
-
 
 def device_reason(binary, cmd):
     return (
@@ -207,9 +188,6 @@ def handle(data, state_dir=None, skill_path=None):
     sdir = state_dir or STATE_DIR
     session = data.get("session_id") or "no-session"
 
-    if tool.startswith(CHROME_TOOL_PREFIX):
-        return ask_once(sdir, session, "chrome", CHROME_REASON)
-
     if tool != "Bash":
         return None
 
@@ -264,26 +242,11 @@ def selftest():
     assert reflex_binary("adb 'unterminated") is None
 
     with tempfile.TemporaryDirectory() as td:
-        def chrome(session):
-            return handle({"tool_name": "mcp__claude-in-chrome__computer",
-                           "session_id": session}, state_dir=td)
-
-        first = chrome("s1")
-        assert first["hookSpecificOutput"]["permissionDecision"] == "ask"
-        assert "agent-browser skills get core --full" in \
-            first["hookSpecificOutput"]["permissionDecisionReason"]
-        # Same session, later calls: silent, no second prompt.
-        assert chrome("s1") is None
-        assert chrome("s1") is None
-        # A different session gets its own single reminder.
-        assert chrome("s2") is not None
-        assert chrome("s2") is None
         def bash(cmd, session="s1"):
             return handle({"tool_name": "Bash", "session_id": session,
                            "tool_input": {"command": cmd}}, state_dir=td)
 
-        # The device family asks once too, and tracks apart from chrome --
-        # session s1 already spent its chrome prompt above.
+        # The device family asks once per session.
         first = bash("adb shell input tap 1 2")
         assert first["hookSpecificOutput"]["permissionDecision"] == "ask"
         assert "agent-device help commands" in \
@@ -291,9 +254,8 @@ def selftest():
         assert bash("adb devices") is None
         assert bash("xcrun simctl list") is None
         assert bash("cliclick c:1,2") is None
-        # s3 has spent neither prompt: the device one still fires on its own.
+        # A different session gets its own single reminder.
         assert bash("adb devices", session="s3") is not None
-        assert chrome("s3") is not None
         assert bash("adb devices", session="s3") is None
         assert bash("git status") is None
         assert handle({"tool_name": "Read", "tool_input": {}}, state_dir=td) is None

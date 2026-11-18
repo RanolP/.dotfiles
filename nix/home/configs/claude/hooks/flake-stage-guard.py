@@ -29,6 +29,9 @@ import shlex
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import fold_leading_cd
+
 REBUILD_CMDS = {"darwin-rebuild", "nixos-rebuild", "home-manager"}
 UNTRACKED_CAP = 50
 
@@ -114,12 +117,12 @@ def main():
     command = data.get("tool_input", {}).get("command", "")
     if not command:
         sys.exit(0)
+    cwd, command = fold_leading_cd(command, data.get("cwd") or os.getcwd())
     try:
         toks = shlex.split(command)
     except ValueError:
         sys.exit(0)
 
-    cwd = data.get("cwd") or os.getcwd()
     messages, seen = [], set()
     try:
         for ref in flake_refs(toks):

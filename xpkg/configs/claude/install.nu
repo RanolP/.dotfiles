@@ -29,10 +29,9 @@ $merged | save -f $'($home)/.claude/CLAUDE.md'
 # CLAUDE_CODE_PLUGIN_DIRS is split on the platform PATH delimiter (`;` here,
 # `:` in the nix source) and each entry must be absolute or start with ~, so
 # the list is rebuilt with `;` and absolute forward-slash paths. Mods in
-# $skipped_mods stay out of it: codex-subagent and tool-compose run their
-# daemons on a Unix-domain socket file, and tool-compose's exec refuses any OS
-# but darwin, so neither works on native Windows.
-let skipped_mods = [codex-subagent tool-compose]
+# $skipped_mods stay out of it: codex-subagent runs its daemon on a
+# Unix-domain socket file, so it does not work on native Windows.
+let skipped_mods = [codex-subagent]
 let home_fwd = ($home | str replace --all '\' '/')
 let plugin_dirs_src = (open $'($nix)/claude/settings.json' | get env.CLAUDE_CODE_PLUGIN_DIRS)
 let mods = ($plugin_dirs_src | split row ':' | each {|d| $d | path basename } | where {|m| $m not-in $skipped_mods })

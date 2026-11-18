@@ -21,6 +21,9 @@ import shlex
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import fold_leading_cd
+
 # git global options that consume the following token as their argument, so that
 # `git -C path commit` resolves its subcommand to `commit`.
 GIT_GLOBAL_OPT_WITH_ARG = {"-C", "-c", "--namespace", "--git-dir", "--work-tree",
@@ -112,6 +115,7 @@ def main():
 
     cmd = data.get("tool_input", {}).get("command", "")
     cwd = data.get("cwd") or os.getcwd()
+    cwd, cmd = fold_leading_cd(cmd, cwd)
 
     try:
         toks = shlex.split(cmd)

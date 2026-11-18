@@ -359,6 +359,13 @@ in
       ".agents/skills/frontend-design".source = "${anthropicsSkills}/skills/frontend-design";
       ".profile".text = ''
         export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+        # Rex opens each pane in the login shell (/bin/sh, see
+        # nix/darwin/default.nix) and has no setting for another one, so an
+        # interactive Rex pane hands itself to nushell. `rex run -- cmd` and
+        # other non-interactive logins stay in sh.
+        case $- in *i*)
+          if [ -n "''${REX_SESSION-}" ]; then exec ${lib.getExe pkgs.nushell} --login; fi ;;
+        esac
       '';
       ".claude/CLAUDE.md".source = claudeUserRules;
       ".claude/statusline.sh" = {

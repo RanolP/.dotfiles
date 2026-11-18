@@ -679,6 +679,7 @@ in
   # opencode's shared config; its rea MCP server resolves `rea` from the mise
   # shims on PATH.
   xdg.configFile."opencode/opencode.jsonc".source = ./configs/opencode/opencode.jsonc;
+  xdg.configFile."rex/init.lua".source = ./configs/rex/init.lua;
 
   # Herdr (terminal workspace manager, installed via mise) spawns new panes with
   # $SHELL, which is zsh. Point it at nushell instead -- absolute path because

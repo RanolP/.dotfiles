@@ -55,6 +55,9 @@ in
 
     docker-compose
 
+    # headless decompiler for reverse-engineering Apple frameworks (analyzeHeadless)
+    ghidra
+
     # required by cocoapods
     gmp
     libyaml

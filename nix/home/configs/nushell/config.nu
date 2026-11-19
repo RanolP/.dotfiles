@@ -65,7 +65,9 @@ $env.config.hooks.env_change.PWD = (
       _starship-config-for-pwd $after
     }
   | append {|before, after|
-      ^($env.HOME | path join ".local" "bin" "rex-project-theme") $after
+      # Home Manager installs the script; Windows has no copy.
+      let theme = ($env.HOME | path join ".local" "bin" "rex-project-theme")
+      if ($theme | path exists) { ^$theme $after }
     }
 )
 

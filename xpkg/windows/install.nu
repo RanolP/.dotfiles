@@ -132,7 +132,15 @@ def install-direct [name: string, url: string, download: string, args: list<stri
     let r = if $is_msi {
         retry-busy $name $MSI_BUSY {|| ^msiexec /i $installer ...$args /l*v $log | complete }
     } else {
-        ^$installer ...$args | complete
+        # Redirect to a file, not a pipe: an installer that launches the app it installed
+        # (RustDesk) leaves it holding an inherited pipe, and `complete` would wait for
+        # that app to exit long after the installer did.
+        let out = $"($stem).out"
+        try { ^$installer ...$args o+e> $out }
+        let code = $env.LAST_EXIT_CODE
+        let text = if ($out | path exists) { open --raw $out | into string } else { "" }
+        rm -f $out
+        {exit_code: $code, stdout: $text, stderr: ""}
     }
     rm -rf $download $stem
     # 3010: msiexec succeeded and asks for a reboot.

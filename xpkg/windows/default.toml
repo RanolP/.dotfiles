@@ -124,6 +124,14 @@ args = ["-s", "-noreboot"]
 url = "https://us.download.nvidia.com/nvapp/client/11.0.9.585/x64/NVIDIA_app_v11.0.9.585_x64.exe"
 args = ["-s"]
 
+# Not on winget. The official GitHub release, pinned to 1.5.3 (released
+# 2026-11-09). The .exe, not the .msi: a bare .msi url is saved as .exe by
+# download-direct and never reaches msiexec. `--silent-install` is RustDesk's
+# own unattended-install flag; the key is its ARP DisplayName.
+[direct."RustDesk"]
+url = "https://github.com/rustdesk/rustdesk/releases/download/1.5.3/rustdesk-1.5.3-x86_64.exe"
+args = ["--silent-install"]
+
 # WSL distributions (`wsl --list --online` names). A missing one is installed
 # with `wsl --install <name> --no-launch`, then booted once as root to create
 # `user` (wheel, sudo), make it the default and write /etc/wsl.conf.

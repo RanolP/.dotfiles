@@ -23,7 +23,10 @@ url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d
 """, url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/{{ version }}/windows-x64/claude", version_list_url = "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest" }
 deno = "2"
 go = "latest"
-java = "temurin-25"
+# Corretto 25.0.5.1 fixes Java4Shell (CVE-2026-114938). The tool option lifts
+# the default release-age gate for java only, so the build is not hidden for
+# its first days (corretto-25.0.5.1.2 was released 2026-11-18).
+java = { version = "corretto-25", minimum_release_age = "0d" }
 "npm:@google/gemini-cli" = "latest"
 pnpm = "11.11.0"
 typst = "latest"

@@ -246,6 +246,11 @@ export def main [] {
         return
     }
 
+    # A REG_SZ user PATH leaves a literal %USERPROFILE%\...\WindowsApps unexpanded, dropping winget off PATH.
+    if (which winget | is-empty) {
+        $env.PATH = ($env.PATH | prepend ($env.LOCALAPPDATA | path join Microsoft WindowsApps))
+    }
+
     let def = (open ~/.dotfiles/xpkg/windows/default.toml)
     let host = (sys host | get hostname)
     let skip = ($def.skip_dependencies? | default [])

@@ -37,8 +37,17 @@ for name in ($shims | columns) {
     }
 }
 
-let user_path = (^reg query 'HKCU\Environment' /v Path | lines | where ($it | str contains 'Path') | first | parse --regex 'REG_(?:EXPAND_)?SZ\s+(?<v>.*)' | get v.0)
-if not ($user_path | split row ';' | any {|p| ($p | str trim --right --char '\') == $bin }) {
-    ^reg add 'HKCU\Environment' /v Path /t REG_EXPAND_SZ /d $"($user_path);($bin)" /f | ignore
-    echo $"(ansi yellow)!!(ansi reset) Added ($bin) to the user PATH; new shells see it"
+let reg_line = (^reg query 'HKCU\Environment' /v Path | lines | where ($it | str contains 'Path') | first)
+let user_path = ($reg_line | parse --regex 'REG_(?:EXPAND_)?SZ\s+(?<v>.*)' | get v.0)
+let missing_bin = not ($user_path | split row ';' | any {|p| ($p | str trim --right --char '\') == $bin })
+let plain_sz = ($reg_line | str contains 'REG_SZ')
+if $missing_bin or $plain_sz {
+    let new_path = (if $missing_bin { $"($user_path);($bin)" } else { $user_path })
+    ^reg add 'HKCU\Environment' /v Path /t REG_EXPAND_SZ /d $new_path /f | ignore
+    if $missing_bin {
+        echo $"(ansi yellow)!!(ansi reset) Added ($bin) to the user PATH; new shells see it"
+    }
+    if $plain_sz {
+        echo $"(ansi yellow)!!(ansi reset) The user PATH was REG_SZ and was restored to REG_EXPAND_SZ so %VARS% expand; new shells see it"
+    }
 }

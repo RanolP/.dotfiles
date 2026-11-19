@@ -12,6 +12,8 @@ skip_dependencies = ["Nvidia.CUDA"]
 
 remove = [
   "Bandisoft.Bandizip",
+  "EclipseAdoptium.Temurin.21.JDK", # Java4Shell (CVE-2026-114938); Corretto 21.0.13.1 replaces it
+  "JetBrains.Toolbox",
   "Microsoft.OneDrive",
 ]
 
@@ -20,13 +22,13 @@ remove = [
 packages = [
   "7zip.7zip",
   "9PFXXSHC64H3", # Raycast (msstore; not in the winget source)
+  "Amazon.Corretto.21.JDK",
   "AntibodySoftware.WizTree",
   "Bitwarden.Bitwarden",
   "Canva.Affinity",
   "CrystalDewWorld.CrystalDiskInfo.ShizukuEdition",
   "DigitalScholar.Zotero",
   "Discord.Discord",
-  "EclipseAdoptium.Temurin.21.JDK",
   "Espanso.Espanso",
   "FTB.App",
   "gerardog.gsudo",
@@ -37,7 +39,6 @@ packages = [
   "Google.QuickShare",
   "Gyan.FFmpeg",
   "jdx.mise",
-  "JetBrains.Toolbox",
   "Kakao.KakaoTalk",
   "Keybase.Keybase",
   "M2Team.NanaZip",

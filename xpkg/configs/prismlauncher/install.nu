@@ -47,7 +47,12 @@ set-key $cfg JavaPath $java
 set-key $cfg AutomaticJavaDownload "false"
 set-key $cfg AutomaticJavaSwitch "false"
 
-for dir in (glob ($prism | path join instances * instance.cfg)) {
+# `glob` reads the backslashes in a Windows path as escapes and fails to parse.
+let instances = (
+    ls ($prism | path join instances) | where type == dir | get name
+    | each {|d| $d | path join instance.cfg } | where {|f| $f | path exists }
+)
+for dir in $instances {
     set-key $dir OverrideJavaLocation "false"
     set-key $dir AutomaticJava "false"
     let kept = (open --raw $dir | lines | where {|l| not ($l starts-with 'JavaPath=') })

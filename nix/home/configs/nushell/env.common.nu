@@ -15,3 +15,14 @@ $env.GITHUB_TOKEN = (with-env {GITHUB_TOKEN: null} { try { ^gh auth token | str 
 $env.DISABLE_AUTOUPDATER = "1"
 $env.EDITOR = "nvim"
 $env.VISUAL = "code --wait"
+
+# ~/.secrets.env: one KEY=VALUE per line, '#' comments and blank lines ignored, no quotes.
+if ($"($env.HOME)/.secrets.env" | path exists) {
+  open --raw $"($env.HOME)/.secrets.env"
+  | lines
+  | str trim
+  | where {|l| $l != "" and not ($l | str starts-with "#") }
+  | each {|l| let p = ($l | split row --number 2 "="); {($p | first): ($p | get 1? | default "")} }
+  | reduce --fold {} {|it, acc| $acc | merge $it }
+  | load-env
+}

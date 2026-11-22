@@ -80,6 +80,7 @@
   '';
   home.file.".bashrc".text = ''
     [[ $- != *i* ]] && return
+    if [ -f "$HOME/.secrets.env" ]; then set -a; . "$HOME/.secrets.env"; set +a; fi
     if [[ -z $CLAUDECODE && $SHLVL -le 1 && -t 0 && -x ~/.nix-profile/bin/nu ]]; then
       exec ~/.nix-profile/bin/nu --login
     fi
@@ -96,6 +97,7 @@
   home.sessionVariables.AGENT_BROWSER_EXECUTABLE_PATH = "${pkgs.google-chrome}/bin/google-chrome-stable";
   home.file.".profile".text = ''
     . "$HOME/.nix-profile/etc/profile.d/hm-session-vars.sh"
+    if [ -f "$HOME/.secrets.env" ]; then set -a; . "$HOME/.secrets.env"; set +a; fi
   '';
 
   # Nothing else installs mise-global.toml's pins here, so a bumped or newly

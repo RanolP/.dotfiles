@@ -46,6 +46,8 @@
       # only lever that reaches a `claude -p --setting-sources ""` child, which
       # loads no settings.json at all. Version changes come from mise-global.toml.
       export DISABLE_AUTOUPDATER=1
+      # Unmanaged KEY=VALUE secrets (no quotes, no export); see env.common.nu.
+      if [ -f "$HOME/.secrets.env" ]; then set -a; . "$HOME/.secrets.env"; set +a; fi
       export ANDROID_HOME="$HOME/Library/Android/sdk"
       export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
       # BrowserStack credentials for `agent-device connect browserstack`. They

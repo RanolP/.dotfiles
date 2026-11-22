@@ -118,7 +118,7 @@ const complete = ($: Engine, turnId: string, answer: string) =>
   $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId, reason: 'answer' } satisfies TurnCompleteInput)
 type SpawnVia = Pick<AgentSpawnInput, 'subagentType' | 'provider'>
 const ENGINE_SPAWN: SpawnVia = { subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' } }
-const CODEX_SOL: SpawnVia = { subagentType: 'codex-subagent:sol', provider: { plugin: 'codex-subagent', tier: 'user' } }
+const CODEX_SOL: SpawnVia = { subagentType: 'hetero-subagents:codex:gpt-5.6-sol', provider: { plugin: 'hetero-subagents', tier: 'user' } }
 const spawn = ($: Engine, tool_use_id: string, prompt: string, description: string, via = ENGINE_SPAWN) =>
   $.agent.spawn({ tool_use_id, prompt, description, ...via, parentModel: 'm', background: false, fork: false } satisfies AgentSpawnInput)
 const onlyIssue = (seen: ReturnType<typeof world>['seen']) => {

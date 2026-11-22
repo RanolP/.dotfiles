@@ -4,6 +4,11 @@ import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexNam
 import { codexConfig } from '../daemon/codex-config.mjs'
 import { beginAcpPrompt, decidePermission, finalAgentMessage, finalTurnText, handleAcpLine, installChildPending, interruptAcp, runAcpStep } from '../daemon/acp-bridge.mjs'
 
+const LUNA = 'codex:gpt-6-luna' as const
+const SOL = 'codex:gpt-5.6-sol' as const
+const NEON = 'agy:gemini-4-neon-high' as const
+const FLASH = 'agy:gemini-3.8-flash-medium' as const
+
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
 
@@ -27,9 +32,10 @@ test('pendingPrompt picks the newest real user message after the last answer', a
 // Regression: a Claude agent type gets hijacked into codex, or a codex type
 // slips past and is sent to Claude with a dummy model.
 test('typeOf claims only this plugin\'s registered types', async () => {
-  expect(typeOf('codex-subagent:luna')).toBe('luna')
-  expect(typeOf('codex-subagent:sol')).toBe('sol')
-  expect(typeOf('codex-subagent:other')).toBeUndefined()
+  expect(Object.keys(TYPES)).toContain('codex:gpt-6-luna')
+  expect(typeOf('hetero-subagents:codex:gpt-6-luna')).toBe(LUNA)
+  expect(typeOf('hetero-subagents:codex:gpt-5.6-sol')).toBe(SOL)
+  expect(typeOf('hetero-subagents:codex:other')).toBeUndefined()
   expect(typeOf('general-purpose')).toBeUndefined()
 })
 
@@ -53,13 +59,13 @@ test('decidePermission denies an unknown tool kind', () => {
   expect(decidePermission({ name: 'mystery', kind: 'other', locations: [] }, { writableRoots: ['/repo'], tmpDir: '/tmp/session' })).toBe('deny')
 })
 
-test('typeOf resolves neon and flash to ACP while sol stays on Codex', () => {
-  expect(typeOf('codex-subagent:neon')).toBe('neon')
-  expect(TYPES.neon.backend).toBe('acp')
-  expect(typeOf('codex-subagent:flash')).toBe('flash')
-  expect(TYPES.flash.backend).toBe('acp')
-  expect(typeOf('codex-subagent:sol')).toBe('sol')
-  expect(TYPES.sol.backend).toBe('codex')
+test('typeOf resolves agy models to ACP while the sol model stays on Codex', () => {
+  expect(typeOf('hetero-subagents:agy:gemini-4-neon-high')).toBe(NEON)
+  expect(TYPES[NEON].backend).toBe('acp')
+  expect(typeOf('hetero-subagents:agy:gemini-3.8-flash-medium')).toBe(FLASH)
+  expect(TYPES[FLASH].backend).toBe('acp')
+  expect(typeOf('hetero-subagents:codex:gpt-5.6-sol')).toBe(SOL)
+  expect(TYPES[SOL].backend).toBe('codex')
 })
 
 test('ACP line handling answers request_permission from decidePermission without launching agy', () => {
@@ -85,9 +91,9 @@ test('ACP line handling answers request_permission from decidePermission without
 })
 
 test('ACP registrations describe Antigravity tools and session continuity', () => {
-  expect(agentDescription(TYPES.neon)).toBe("Runs the task on gemini-4-neon-high through Google Antigravity (agy's own shell and edit tools; no Claude-side tools relayed; Google Antigravity implementer using Gemini 4 Neon). SendMessage continues the same ACP session.")
-  expect(agentPrompt(TYPES.neon)).toContain('Google Antigravity over ACP')
-  expect(agentDescription(TYPES.sol)).toContain('through Codex')
+  expect(agentDescription(TYPES[NEON])).toBe("Runs the task on gemini-4-neon-high through Google Antigravity (agy's own shell and edit tools; no Claude-side tools relayed; Google Antigravity implementer using Gemini 4 Neon). SendMessage continues the same ACP session.")
+  expect(agentPrompt(TYPES[NEON])).toContain('Google Antigravity over ACP')
+  expect(agentDescription(TYPES[SOL])).toContain('through Codex')
 })
 
 test('ACP developer instructions omit Codex-only relayed tools and apply_patch', () => {
@@ -236,7 +242,7 @@ test('a failed Codex recovery ends the turn and asks the coordinator to resend',
   let r = await stream.next()
   while (!r.done) r = await stream.next()
   expect(nextCalls).toBe(0)
-  expect(r.value.answer).toBe('[codex-subagent error] cannot reach the bridge to recover a-recover-throw: codex-subagent: $.http.fetch: bridge unavailable; send the message again')
+  expect(r.value.answer).toBe('[hetero-subagents error] cannot reach the bridge to recover a-recover-throw: hetero-subagents: $.http.fetch: bridge unavailable; send the message again')
 })
 
 // Regression caught: the main-session cwd overrides the first writable root named in the brief, or the bridge spawn omits codex's auto-compaction limit.
@@ -262,8 +268,8 @@ test('a spawned codex agent is remembered by the bridge so a restart can recover
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
   })
 
-  await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repoB, /other-worktree\nImplement the change\nDone when: the test passes', subagentType: 'codex-subagent:luna', cwd: '/repoA' } satisfies AgentSpawnArgs)
-  expect(remembered).toEqual([{ key: 'spawned-codex', type: 'luna', cwd: '/repoB', writableRoots: ['/repoB', '/other-worktree'] }])
+  await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repoB, /other-worktree\nImplement the change\nDone when: the test passes', subagentType: 'hetero-subagents:codex:gpt-6-luna', cwd: '/repoA' } satisfies AgentSpawnArgs)
+  expect(remembered).toEqual([{ key: 'spawned-codex', type: LUNA, cwd: '/repoB', writableRoots: ['/repoB', '/other-worktree'] }])
   // Regression caught: the hook stopped passing the auto-compaction limit to the bridge, so codex kept the engine's larger context window.
   expect(spawnArgv[0]?.[4]).toBe('150000')
 })
@@ -289,7 +295,7 @@ test("a codex agent's auto-compaction never reaches the Claude compactor and kee
     return { messages: [row('user', 'CLAUDE COMPACTOR')] }
   })
 
-  await $.agent.spawn({ prompt: 'writable: /repo\nImplement it\nDone when: the test passes', subagentType: 'codex-subagent:sol', cwd: '/repo' } satisfies AgentSpawnArgs)
+  await $.agent.spawn({ prompt: 'writable: /repo\nImplement it\nDone when: the test passes', subagentType: 'hetero-subagents:codex:gpt-5.6-sol', cwd: '/repo' } satisfies AgentSpawnArgs)
   const messages = [
     row('user', 'initial request'),
     row('assistant', 'first relayed answer'),
@@ -318,7 +324,7 @@ test('a codex spawn without a writable line is denied with the brief fix', async
   let spawnCalls = 0
   on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-6-luna' } })
 
-  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repo' } satisfies AgentSpawnArgs)
+  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nImplement the change', subagentType: 'hetero-subagents:codex:gpt-6-luna', cwd: '/repo' } satisfies AgentSpawnArgs)
 
   expect(result.deny).toContain('missing the required writable: line')
   expect(result.deny).toContain('add a line `writable: /abs/repo, /abs/other-worktree` to the brief naming every directory the worker must write')
@@ -331,8 +337,8 @@ test('a codex spawn rejects relative and nonexistent writable paths by name', as
   on('process.run', async (_$, e) => ({ value: { exitCode: e.argv[0] === 'test' ? 1 : 128, stdout: '', stderr: '' } }))
   on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-6-luna' } })
 
-  const relative = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: relative/repo\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repo' } satisfies AgentSpawnArgs)
-  const missing = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /missing/worktree\nImplement the change', subagentType: 'codex-subagent:luna', cwd: '/repo' } satisfies AgentSpawnArgs)
+  const relative = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: relative/repo\nImplement the change', subagentType: 'hetero-subagents:codex:gpt-6-luna', cwd: '/repo' } satisfies AgentSpawnArgs)
+  const missing = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /missing/worktree\nImplement the change', subagentType: 'hetero-subagents:codex:gpt-6-luna', cwd: '/repo' } satisfies AgentSpawnArgs)
 
   expect(relative.deny).toContain('relative/repo')
   expect(relative.deny).toContain('must be absolute')
@@ -344,10 +350,10 @@ test('a codex spawn rejects relative and nonexistent writable paths by name', as
 // Regression: sol and luna resolve to each other's model id, or a step for a
 // codex model is not recognized as one and goes to Claude.
 test('typeForModel maps each Codex model back to its own type', async () => {
-  expect(TYPES.luna.model).toBe('gpt-6-luna')
-  expect(TYPES.sol.model).toBe('gpt-5.6-sol')
-  expect(typeForModel('gpt-6-luna')).toBe('luna')
-  expect(typeForModel('gpt-5.6-sol')).toBe('sol')
+  expect(TYPES[LUNA].model).toBe('gpt-6-luna')
+  expect(TYPES[SOL].model).toBe('gpt-5.6-sol')
+  expect(typeForModel('gpt-6-luna')).toBe(LUNA)
+  expect(typeForModel('gpt-5.6-sol')).toBe(SOL)
   expect(typeForModel('claude-opus-5-5')).toBeUndefined()
 })
 
@@ -598,7 +604,7 @@ test('an unmapped Codex tool call is answered with a failed toolResult', async (
   on('http.fetch', async (_$, e) => {
     const route = new URL(e.url).pathname
     const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
     if (route === '/wait') return json(replies[steps.length - 1])
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
@@ -632,7 +638,7 @@ test('a codex step reports the bridge usage on its stop chunk and result', async
   on('http.fetch', async (_$, e) => {
     const route = new URL(e.url).pathname
     const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') return json({ pending: true })
     if (route === '/wait') return json({
       threadId: 'thread-usage', model: 'gpt-6-luna', resumed: false, bridgePid: 1, codexPid: 2,
@@ -683,7 +689,7 @@ test('a codex step that loops over an unrelayed tool reports the latest usage, n
   on('http.fetch', async (_$, e) => {
     const route = new URL(e.url).pathname
     const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
     if (route === '/wait') return json(replies[steps.length - 1])
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
@@ -727,7 +733,7 @@ test('a resumed worker receives a long multi-line message and runs a new turn in
     const route = new URL(e.url).pathname
     const body = JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>
     const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') { steps.push(body); return json({ pending: true }) }
     if (route === '/wait') return json({ threadId: 'thread-1', resumed: false, bridgePid: 1, codexPid: 2, final: { text: finals[steps.length - 1], status: 'completed', errors: [] } })
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
@@ -791,7 +797,7 @@ test('a SendMessage carrying a new writable: line updates the roots sent to the 
     const route = new URL(e.url).pathname
     const body = JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>
     const json = (value: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(value) } })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo', writableRoots: ['/repo'], threadId: 'thread-1' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo', writableRoots: ['/repo'], threadId: 'thread-1' })
     if (route === '/step') { steps.push(body); return json({ pending: true }) }
     if (route === '/wait') return json({ threadId: 'thread-1', resumed: true, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
@@ -857,7 +863,7 @@ test('a coordinator message that arrives with a relayed tool result still reache
   on('http.fetch', async (_$, e) => {
     const route = new URL(e.url).pathname
     const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
     if (route === '/wait') return json(replies[steps.length - 1])
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
@@ -914,7 +920,7 @@ test('a bridge started from older bridge code is replaced before the next step i
     log.push(route)
     // The first bridge runs code from before /health reported a fingerprint.
     if (route === '/health') return json(spawns.length === 1 ? { bridgePid: 1, threads: [] } : { bridgePid: 3, threads: [], busy: [], fingerprint: spawns.at(-1)?.[3] })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') return json({ pending: true })
     if (route === '/wait') return json({ threadId: 'thread-3', resumed: false, bridgePid: 3, codexPid: 4, final: { text: 'done', status: 'completed', errors: [] } })
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
@@ -953,7 +959,7 @@ test('a transient /wait failure recovers when the bridge is healthy instead of f
     const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
     // The bridge routes /health for GET only, as codex-bridge.mjs does.
     if (route === '/health' && method === 'GET') return json({ bridgePid: 1, threads: [], busy: [], fingerprint: 'unused' })
-    if (route === '/recover') return json({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return json({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') return json({ pending: true })
     if (route === '/wait') {
       if (++waits === 1) return { deny: 'fetch failed: aborted: no complete answer' }
@@ -1014,7 +1020,7 @@ test('a step for a codex model is never sent to Claude, even for an agent spawn 
 
   expect(claudeSteps).toBe(0)
   expect(steps).toHaveLength(1)
-  expect(steps[0]).toMatchObject({ key: agentId, agentType: 'sol', model: 'gpt-5.6-sol', cwd: '/repo' })
+  expect(steps[0]).toMatchObject({ key: agentId, agentType: SOL, model: 'gpt-5.6-sol', cwd: '/repo' })
 })
 
 // Incident: a luna worker's first step ended with Anthropic's 404 for the
@@ -1058,7 +1064,7 @@ const drainStep = async (stream: AsyncGenerator<unknown, { answer: string }>) =>
 test('a recovered codex agent without roots falls back to its cwd', async ($, on) => {
   const steps: Record<string, unknown>[] = []
   const { api, claude } = codexStepHarness(on, (route, body) => {
-    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return reply({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') {
       steps.push(JSON.parse(body) as Record<string, unknown>)
       return reply({ threadId: 'thread-legacy', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
@@ -1076,7 +1082,7 @@ test('a recovered codex agent without roots falls back to its cwd', async ($, on
 test('a recovered codex agent uses its first writable root as cwd', async ($, on) => {
   const steps: Record<string, unknown>[] = []
   const { api, claude } = codexStepHarness(on, (route, body) => {
-    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repoA', writableRoots: ['/repoB', '/repoC'] })
+    if (route === '/recover') return reply({ found: true, type: LUNA, cwd: '/repoA', writableRoots: ['/repoB', '/repoC'] })
     if (route === '/step') {
       steps.push(JSON.parse(body) as Record<string, unknown>)
       return reply({ threadId: 'thread-roots', resumed: true, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
@@ -1093,7 +1099,7 @@ test('a recovered codex agent uses its first writable root as cwd', async ($, on
 test('a codex step whose hook throws ends with an error turn and never reaches Claude', async ($, on) => {
   mock.clock(on)
   const { api, claude } = codexStepHarness(on, route => {
-    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return reply({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') return reply({ error: 'codex app-server exited' }, 500)
     return reply({ error: `no route ${route}` }, 404)
   })
@@ -1101,7 +1107,7 @@ test('a codex step whose hook throws ends with an error turn and never reaches C
   const { chunks, result } = await drainStep($.turn.step({ turnId: 'turn-throw', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-throw' }))
 
   expect(claude.steps).toBe(0)
-  expect(result.answer).toStartWith('[codex-subagent error] step hook throw: bridge POST /step 500')
+  expect(result.answer).toStartWith('[hetero-subagents error] step hook throw: bridge POST /step 500')
   expect(result.answer).toEndWith('; send the message again')
   expect(chunks[0]).toMatchObject({ kind: 'text', index: 0 })
 })
@@ -1113,7 +1119,7 @@ test('a codex step that fails after a keepalive beat writes its error past the t
   const { promise: atWait, resolve: reachedWait } = Promise.withResolvers<void>()
   const { promise: gate, resolve: failWait } = Promise.withResolvers<void>()
   const { api, claude } = codexStepHarness(on, async route => {
-    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return reply({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') return reply({ pending: true })
     if (route === '/wait') { reachedWait(); await gate; return reply({ error: 'bridge lost the thread' }, 500) }
     return reply({ error: `no route ${route}` }, 404)
@@ -1128,7 +1134,7 @@ test('a codex step that fails after a keepalive beat writes its error past the t
   expect(claude.steps).toBe(0)
   expect(chunks[0]).toEqual({ kind: 'thinking', index: 0, text: '' })
   expect(chunks.find(c => (c as { kind: string }).kind === 'text')).toMatchObject({ index: 1 })
-  expect(result.answer).toStartWith('[codex-subagent error] step hook throw: bridge POST /wait 500')
+  expect(result.answer).toStartWith('[hetero-subagents error] step hook throw: bridge POST /wait 500')
 })
 
 // Incident class: the step waited on a spawn that never registered past the
@@ -1136,14 +1142,14 @@ test('a codex step that fails after a keepalive beat writes its error past the t
 test('a codex step whose hook overruns its budget ends with an error turn and never reaches Claude', { timeoutMs: 30_000 }, async ($, on) => {
   mock.clock(on)
   on('agent.spawn', () => new Promise(() => {}))
-  const spawnArgs: AgentSpawnArgs = { prompt: 'Budget: 10 min\nwritable: /repo\nimplement it\nDone when: the test passes', subagentType: 'codex-subagent:luna', cwd: '/repo' }
+  const spawnArgs: AgentSpawnArgs = { prompt: 'Budget: 10 min\nwritable: /repo\nimplement it\nDone when: the test passes', subagentType: 'hetero-subagents:codex:gpt-6-luna', cwd: '/repo' }
   const { api, claude } = codexStepHarness(on, route => reply({ error: `no route ${route}` }, 404))
   void $.agent.spawn(spawnArgs).catch(() => {})
 
   const { result } = await drainStep($.turn.step({ turnId: 'turn-timeout', index: 0, model: 'gpt-6-luna', messageCount: api.length, agentId: 'a-timeout' }))
 
   expect(claude.steps).toBe(0)
-  expect(result.answer).toStartWith('[codex-subagent error] step hook timeout')
+  expect(result.answer).toStartWith('[hetero-subagents error] step hook timeout')
 })
 
 // Regression: a bridge start slower than the step budget was dropped from
@@ -1153,7 +1159,7 @@ test('a bridge start slower than the step budget is reused on the next step, not
   let spawns = 0
   const { promise: started, resolve: finishStart } = Promise.withResolvers<void>()
   const { api } = codexStepHarness(on, route => {
-    if (route === '/recover') return reply({ found: true, type: 'luna', cwd: '/repo' })
+    if (route === '/recover') return reply({ found: true, type: LUNA, cwd: '/repo' })
     if (route === '/step') return reply({ text: 'done' })
     return reply({ error: `no route ${route}` }, 404)
   }, async () => { if (++spawns === 1) await started })
@@ -1177,7 +1183,7 @@ test('a step on the stale definition model gpt-5.6-luna ends in codex or error t
   mock.clock(on)
   let stepFails = false
   const steps: Record<string, unknown>[] = []
-  on('agent.list', async () => ({ value: [listed('a-stale-typed', 'codex-subagent:luna')] }))
+  on('agent.list', async () => ({ value: [listed('a-stale-typed', 'hetero-subagents:codex:gpt-6-luna')] }))
   const { api, claude } = codexStepHarness(on, route => {
     if (route === '/recover') return reply({ found: false })
     if (route === '/step') {
@@ -1193,23 +1199,23 @@ test('a step on the stale definition model gpt-5.6-luna ends in codex or error t
   expect(served.result.answer).toBe('')
 
   const untyped = await drainStep($.turn.step({ turnId: 'turn-stale-2', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId: 'a-stale-untyped' }))
-  expect(untyped.result.answer).toStartWith('[codex-subagent error] cannot serve a-stale-untyped on codex')
+  expect(untyped.result.answer).toStartWith('[hetero-subagents error] cannot serve a-stale-untyped on codex')
 
   stepFails = true
   const thrown = await drainStep($.turn.step({ turnId: 'turn-stale-3', index: 0, model: 'gpt-5.6-luna', messageCount: api.length, agentId: 'a-stale-typed' }))
-  expect(thrown.result.answer).toStartWith('[codex-subagent error] step hook throw')
+  expect(thrown.result.answer).toStartWith('[hetero-subagents error] step hook throw')
 
   expect(claude.steps).toBe(0)
 })
 
-// Regression: an Agent-tool model override ('opus') on a codex-subagent spawn
+// Regression: an Agent-tool model override ('opus') on a hetero-subagents spawn
 // gave the step a Claude model; once a reload cleared the agents Map nothing
 // marked it as codex's, so it ran on Claude.
-test('a codex-subagent agent with model override opus after the agents Map was cleared never calls next(e)', async ($, on) => {
+test('a hetero-subagents agent with model override opus after the agents Map was cleared never calls next(e)', async ($, on) => {
   mock.clock(on)
   let stepFails = false
   const steps: Record<string, unknown>[] = []
-  on('agent.list', async () => ({ value: [listed('a-opus', 'codex-subagent:luna'), listed('a-claude', 'general-purpose')] }))
+  on('agent.list', async () => ({ value: [listed('a-opus', 'hetero-subagents:codex:gpt-6-luna'), listed('a-claude', 'general-purpose')] }))
   const { api, claude } = codexStepHarness(on, route => {
     if (route === '/recover') return reply({ found: false })
     if (route === '/step') {
@@ -1224,7 +1230,7 @@ test('a codex-subagent agent with model override opus after the agents Map was c
   expect(steps).toHaveLength(1)
   stepFails = true
   const thrown = await drainStep($.turn.step({ turnId: 'turn-opus-2', index: 0, model: 'opus', messageCount: api.length, agentId: 'a-opus' }))
-  expect(thrown.result.answer).toStartWith('[codex-subagent error] step hook throw')
+  expect(thrown.result.answer).toStartWith('[hetero-subagents error] step hook throw')
   expect(claude.steps).toBe(0)
 
   // A real Claude subagent still goes to Claude.
@@ -1232,19 +1238,9 @@ test('a codex-subagent agent with model override opus after the agents Map was c
   expect(claude.steps).toBe(1)
 })
 
-// Regression: definitions were registered only in session.start, which a hot
-// reload does not fire, so a TYPES model change never reached a running session.
-test('a reloaded module re-registers its agent types on the first hook without session.start', async ($, on) => {
-  mock.clock(on)
-  const registered: { name: string; model?: string }[] = []
-  on('agent.register', async (_$, e) => { registered.push({ name: e.name, model: e.model }); return { value: { agent: `codex-subagent:${e.name}` } } })
-  const { api, claude } = codexStepHarness(on, route => reply({ error: `no route ${route}` }, 404))
-
-  await drainStep($.turn.step({ turnId: 'turn-main-1', index: 0, model: 'claude-opus-4-1', messageCount: api.length }))
-  await drainStep($.turn.step({ turnId: 'turn-main-2', index: 1, model: 'claude-opus-4-1', messageCount: api.length }))
-
-  expect(claude.steps).toBe(2)
-  expect(registered).toEqual(Object.entries(TYPES).map(([name, t]) => ({ name, model: t.model })))
+test('type keys pair each backend label with its model id', () => {
+  const backendLabel = { codex: 'codex', acp: 'agy' } as const
+  expect(Object.entries(TYPES).map(([name, type]) => `${backendLabel[type.backend]}:${type.model}`)).toEqual(Object.keys(TYPES))
 })
 
 // Regression caught: the limit left the generated codex config's top level, so codex never compacted before Claude's unknown-model window,
@@ -1310,7 +1306,7 @@ test("a codex thread's developer instructions carry the style rules and the work
   on('http.fetch', async (_$, e) => {
     const route = new URL(e.url).pathname
     const json = (body: unknown) => ({ value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } })
-    if (route === '/recover') return json({ found: true, type: 'sol', cwd: '/wt/pkg', writableRoots: ['/wt/pkg'] })
+    if (route === '/recover') return json({ found: true, type: SOL, cwd: '/wt/pkg', writableRoots: ['/wt/pkg'] })
     if (route === '/step') { steps.push(JSON.parse(e.init?.body ?? '{}') as Record<string, unknown>); return json({ pending: true }) }
     if (route === '/wait') return json({ threadId: 'thread-instructions', resumed: false, bridgePid: 1, codexPid: 2, final: { text: 'done', status: 'completed', errors: [] } })
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
@@ -1343,7 +1339,7 @@ test('a codex spawn whose brief writes code but names no Done when: line is deni
   on('process.run', async (_$, e) => ({ value: { exitCode: e.argv[0] === 'test' ? 0 : 128, stdout: '', stderr: '' } }))
   on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-5.6-sol' } })
 
-  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repo\nImplement the change', subagentType: 'codex-subagent:sol', cwd: '/repo' } satisfies AgentSpawnArgs)
+  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repo\nImplement the change', subagentType: 'hetero-subagents:codex:gpt-5.6-sol', cwd: '/repo' } satisfies AgentSpawnArgs)
 
   expect(result.deny).toBe('Codex subagent spawn denied: prompt is missing the required Done when: line; add a line `Done when: <a failing test that must pass, or a concrete input -> output>` to the brief.')
   expect(spawnCalls).toBe(0)

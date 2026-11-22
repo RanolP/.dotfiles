@@ -534,9 +534,9 @@ in
       # directory is linked as one store path because Claude Code rejects a
       # hook module whose realpath escapes the plugin directory.
       ".claude/mods/clm".source = ./configs/claude/mods/clm;
-      # codex-subagent runs subagent types on GPT through `codex app-server`;
+      # hetero-subagents runs subagent types through Codex or Antigravity;
       # its hook starts the bridge as `node <root>/daemon/codex-bridge.mjs`.
-      ".claude/mods/codex-subagent".source = ./configs/claude/mods/codex-subagent;
+      ".claude/mods/hetero-subagents".source = ./configs/claude/mods/hetero-subagents;
       # time-budget gates every tool on an estimate and stops the work at the
       # budget: checkpoint reports at 1/3, 1/2, 2/3, 5/6, then abort past 6/6.
       ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
@@ -654,13 +654,13 @@ in
       # 437 recorded sessions, at ~360 tokens of every session's first request.
       ".claude/agents".source = ./configs/claude/agents;
       # The owner's style rubric as one text for grader and implementer:
-      # code-reviewer reads it at this path, and codex-subagent copies it into
+      # code-reviewer reads it at this path, and hetero-subagents copies it into
       # every Codex implementer's developer instructions. It sits outside
       # agents/ because every .md there is read as an agent definition.
       ".claude/shared/style-rules.md".source = ./configs/claude/shared/style-rules.md;
       # The agent-agnostic rules alone, without the Claude-only appendix: codex
       # runs in an isolated CODEX_HOME where ~/.codex/AGENTS.md never loads, so
-      # codex-subagent copies this into every implementer's instructions.
+      # hetero-subagents copies this into every implementer's instructions.
       ".claude/shared/agent-rules.md".source = sharedAgentRules;
       # One explicit entry per style, never directory recursion: every file here
       # shows up in the /config picker, and settings.json's "outputStyle" names

@@ -3,14 +3,14 @@ import type { AgentInfo } from 'claude-code'
 import { reconcileAgents, recordCompletion, recordMessage, recordSpawn, taskDescription, withoutStaleDone } from './fleet'
 
 test('task description skips codex brief metadata', () => {
-  const description = taskDescription({ prompt: 'Budget: 20 min\nwritable: /repo\nFix the login race\nmore', subagentType: 'codex-subagent:luna' })
+  const description = taskDescription({ prompt: 'Budget: 20 min\nwritable: /repo\nFix the login race\nmore', subagentType: 'hetero-subagents:codex:gpt-6-luna' })
 
   expect(description).toBe('Fix the login race')
 })
 
 // Regression: the task description silently vanished after the first agent message.
 test('a message preserves the task description', () => {
-  const spawned = recordSpawn([], 'agent-1', 'codex-subagent:luna', 'Fix the login race', 10_000)
+  const spawned = recordSpawn([], 'agent-1', 'hetero-subagents:codex:gpt-6-luna', 'Fix the login race', 10_000)
   const updated = recordMessage(spawned, 'agent-1', 'Working', 20_000)
 
   expect(updated[0]?.description).toBe('Fix the login race')
@@ -19,13 +19,13 @@ test('a message preserves the task description', () => {
 // Regression: a stale listing requested before completion cannot undo the newer turn.complete event.
 test('reconcile keeps a completion newer than the agent.list request', () => {
   const done = recordCompletion([], 'agent-1', 'Finished the task', 10_000)
-  const listed: AgentInfo[] = [{ id: 'agent-1', description: 'work', type: 'codex-subagent:sol', status: 'running' }]
+  const listed: AgentInfo[] = [{ id: 'agent-1', description: 'work', type: 'hetero-subagents:codex:gpt-5.6-sol', status: 'running' }]
   const merged = reconcileAgents(done, listed, 5_000, 20_000)
 
   expect(merged).toHaveLength(1)
   expect(merged[0]?.status).toBe('done')
   expect(merged[0]?.finishedAt).toBe(10_000)
-  expect(merged[0]?.type).toBe('codex-subagent:sol')
+  expect(merged[0]?.type).toBe('hetero-subagents:codex:gpt-5.6-sol')
 })
 
 // Regression: a SendMessage resume after turn.complete must restore running status and elapsed time.

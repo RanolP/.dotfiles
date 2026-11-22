@@ -29,9 +29,9 @@ $merged | save -f $'($home)/.claude/CLAUDE.md'
 # CLAUDE_CODE_PLUGIN_DIRS is split on the platform PATH delimiter (`;` here,
 # `:` in the nix source) and each entry must be absolute or start with ~, so
 # the list is rebuilt with `;` and absolute forward-slash paths. Mods in
-# $skipped_mods stay out of it: codex-subagent runs its daemon on a
+# $skipped_mods stay out of it: hetero-subagents runs its daemon on a
 # Unix-domain socket file, so it does not work on native Windows.
-let skipped_mods = [codex-subagent]
+let skipped_mods = [hetero-subagents]
 let home_fwd = ($home | str replace --all '\' '/')
 let plugin_dirs_src = (open $'($nix)/claude/settings.json' | get env.CLAUDE_CODE_PLUGIN_DIRS)
 let mods = ($plugin_dirs_src | split row ':' | each {|d| $d | path basename } | where {|m| $m not-in $skipped_mods })
@@ -73,7 +73,7 @@ for m in $mods {
 nu $'($local)/mcp.nu'
 
 # nix/home/default.nix puts these two under ~/.claude/shared: code-reviewer
-# reads style-rules.md, and codex-subagent copies agent-rules.md (the shared
+# reads style-rules.md, and hetero-subagents copies agent-rules.md (the shared
 # AGENTS.md alone, without the Claude-only appendix) into implementer prompts.
 echo $"     (ansi blue)Copy(ansi reset) shared style-rules.md and agent-rules.md"
 do -i { mkdir $'($home)/.claude/shared' }

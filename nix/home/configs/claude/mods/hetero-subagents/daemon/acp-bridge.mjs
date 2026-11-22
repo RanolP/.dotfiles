@@ -132,7 +132,7 @@ export function handleAcpLine(line, { pending, sessions, write, log }) {
     return
   }
   if (message.id !== undefined && message.method)
-    write({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `codex-subagent does not serve ${message.method}` } })
+    write({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `hetero-subagents does not serve ${message.method}` } })
 }
 
 async function main() {

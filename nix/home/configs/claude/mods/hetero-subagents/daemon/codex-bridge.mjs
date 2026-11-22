@@ -288,7 +288,7 @@ function emit(key, ev) {
 // still spawn, and no server request precedes a spawn, so nothing can refuse
 // one up front. The bridge interrupts each sub-thread the moment it shows up
 // (archiving it if the interrupt fails) and steers the parent turn.
-const BLOCK_TEXT = '[codex-subagent] sub-agent spawning is blocked; do the work in this thread'
+const BLOCK_TEXT = '[hetero-subagents] sub-agent spawning is blocked; do the work in this thread'
 const SPAWNING_TOOLS = new Set(['spawnAgent', 'sendInput', 'resumeAgent', 'sendMessage', 'followupTask'])
 const blocked = new Map() // sub-thread id -> parent session
 const foreignTurns = new Map() // thread id this bridge did not start -> its running turn id
@@ -367,7 +367,7 @@ function onMessage(m) {
     }
     // approvalPolicy "never" means codex should ask nothing else; log what it did ask.
     console.error('[bridge] refusing server request', m.method, JSON.stringify(p).slice(0, 300))
-    send({ id: m.id, error: { code: -32601, message: `codex-subagent does not serve ${m.method}` } })
+    send({ id: m.id, error: { code: -32601, message: `hetero-subagents does not serve ${m.method}` } })
     return
   }
   guardSubAgents(m, p)
@@ -412,7 +412,7 @@ let codexVersion = 'unknown'
 let initTimer
 const ready = Promise.race([
   rpc('initialize', {
-    clientInfo: { name: 'codex-subagent', title: 'Claude Code codex-subagent', version: '0.2.0' },
+    clientInfo: { name: 'hetero-subagents', title: 'Claude Code hetero-subagents', version: '0.2.0' },
     capabilities: { experimentalApi: true },
   }).then(r => { if (initTimer) clearTimeout(initTimer); codexVersion = String(r?.userAgent ?? 'unknown'); send({ method: 'initialized' }); return r }),
   new Promise((_, reject) => {

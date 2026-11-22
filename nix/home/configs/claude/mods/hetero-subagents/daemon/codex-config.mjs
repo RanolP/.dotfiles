@@ -7,7 +7,7 @@ export function codexConfig(userConfig, modelAutoCompactTokenLimit) {
     ...inherited,
     `model_auto_compact_token_limit = ${modelAutoCompactTokenLimit}`,
     'web_search = "disabled"',
-    // codex-subagent emits the target repo's AGENTS.md itself; codex's own load would repeat it.
+    // hetero-subagents emits the target repo's AGENTS.md itself; codex's own load would repeat it.
     'project_doc_max_bytes = 0',
     '[tools]', 'web_search = false',
     '[features]',

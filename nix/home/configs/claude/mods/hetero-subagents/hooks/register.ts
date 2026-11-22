@@ -1,8 +1,8 @@
 import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, TimerCall, TurnStepChunk, TurnStepResult, TurnUsage } from 'claude-code'
 
-// codex-subagent: pinned GPT agent types, served by codex app-server.
+// hetero-subagents: pinned Codex and Antigravity agent types.
 //
-// The Agent tool spawns `codex-subagent:luna` (or `:sol`) like any agent, so
+// The Agent tool spawns `hetero-subagents:codex:gpt-6-luna` like any agent, so
 // the engine owns the agentId, the background task, the completion
 // notification and SendMessage resumes. This plugin answers every `turn.step`
 // of those agents without `next`, so no Claude request is ever sent.
@@ -21,14 +21,14 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, Time
 // speaking HTTP on a unix socket to the mod and JSON-RPC on stdio to its CLI.
 
 export const TYPES = {
-  luna: { backend: 'codex', model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'slow but cheap implementer, only for a task that may run slow but must run cheap' },
-  sol: { backend: 'codex', model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'default implementer for code changes from a settled plan' },
-  neon: { backend: 'acp', model: 'gemini-4-neon-high', effort: 'high', sandbox: 'workspace-write', blurb: 'Google Antigravity implementer using Gemini 4 Neon' },
-  flash: { backend: 'acp', model: 'gemini-3.8-flash-medium', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast Google Antigravity implementer using Gemini 3.8 Flash' },
+  'codex:gpt-6-luna': { backend: 'codex', model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'slow but cheap implementer, only for a task that may run slow but must run cheap' },
+  'codex:gpt-5.6-sol': { backend: 'codex', model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'default implementer for code changes from a settled plan' },
+  'agy:gemini-4-neon-high': { backend: 'acp', model: 'gemini-4-neon-high', effort: 'high', sandbox: 'workspace-write', blurb: 'Google Antigravity implementer using Gemini 4 Neon' },
+  'agy:gemini-3.8-flash-medium': { backend: 'acp', model: 'gemini-3.8-flash-medium', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast Google Antigravity implementer using Gemini 3.8 Flash' },
 } as const
 type TypeName = keyof typeof TYPES
 type Backend = typeof TYPES[TypeName]['backend']
-const PREFIX = 'codex-subagent:'
+const PREFIX = 'hetero-subagents:'
 const MODEL_AUTO_COMPACT_TOKEN_LIMIT = 150000
 
 // Claude-side tools codex has no equivalent of. Read/Edit/Write/Bash/Grep/Glob
@@ -515,7 +515,7 @@ export async function bridgeFingerprint($: EngineInterface, backend: Backend = '
     return contentHash((await Promise.all(sources.map(p => $.fs.read(p)))).join('\0'))
   } catch (err) {
     // An unreadable source must not keep the bridge from starting; it only skips the staleness check.
-    $.ui.log(`[codex-subagent] cannot fingerprint ${bridgeSource($, backend)}: ${String(err)}`, { to: 'debug' })
+    $.ui.log(`[hetero-subagents] cannot fingerprint ${bridgeSource($, backend)}: ${String(err)}`, { to: 'debug' })
     return UNREAD_FINGERPRINT
   }
 }
@@ -574,9 +574,7 @@ async function socketPath($: EngineInterface, backend: Backend = 'codex'): Promi
 type ModState = {
   hookLog?: { path: string; text: string }
   logChain: Promise<void>
-  registration?: Promise<void>
-  registrationLogged: boolean
-  // Each agent's definition (`codex-subagent:luna`, `general-purpose`, ...), by id.
+  // Each agent's definition (`hetero-subagents:codex:gpt-6-luna`, `general-purpose`, ...), by id.
   subagentTypes: Map<string, string>
 }
 
@@ -585,7 +583,7 @@ type ModState = {
 // once it passes LOG_MAX.
 const LOG_MAX = 1 << 20
 function diag(st: ModState, $: EngineInterface, line: string): void {
-  try { $.ui.log(`[codex-subagent] ${line}`, { to: 'debug' }) } catch {}
+  try { $.ui.log(`[hetero-subagents] ${line}`, { to: 'debug' }) } catch {}
   st.logChain = st.logChain.then(async () => {
     if (!st.hookLog) {
       const path = (await socketPath($)).replace(/\.sock$/, '.hook.log')
@@ -595,26 +593,6 @@ function diag(st: ModState, $: EngineInterface, line: string): void {
     if (st.hookLog.text.length > LOG_MAX) st.hookLog.text = st.hookLog.text.slice(-(LOG_MAX >> 1))
     await $.fs.write(st.hookLog.path, st.hookLog.text)
   }).catch(() => {})
-}
-
-// A hot reload runs register() again but not session.start, so the first
-// hook of a fresh module registers the types once more; a re-registered name
-// is replaced, so a TYPES model change reaches the running session.
-function ensureRegistered(st: ModState, $: EngineInterface): Promise<void> {
-  return st.registration ??= (async () => {
-    if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return
-    for (const [name, t] of Object.entries(TYPES)) {
-      await $.agent.register({
-        name,
-        description: agentDescription(t),
-        prompt: agentPrompt(t),
-        model: t.model, // turn steps go to codex; engine compaction also sees this id, intercepted below
-      })
-    }
-  })().catch(err => {
-    st.registration = undefined
-    if (!st.registrationLogged) { st.registrationLogged = true; diag(st, $, `agent type registration failed (retried on the next hook): ${String(err)}`) }
-  })
 }
 
 export const agentDescription = (type: (typeof TYPES)[TypeName]): string => type.backend === 'acp'
@@ -667,7 +645,7 @@ async function writableRootsFromPrompt($: EngineInterface, prompt: string, cwd: 
 }
 
 export const register: Register = (on) => {
-  const st: ModState = { logChain: Promise.resolve(), registrationLogged: false, subagentTypes: new Map() }
+  const st: ModState = { logChain: Promise.resolve(), subagentTypes: new Map() }
   const agents = new Map<string, Agent>()
   // Messages delivered to a codex agent and not yet handed to codex, by agent id.
   const inbox = new Map<string, string[]>()
@@ -703,14 +681,12 @@ export const register: Register = (on) => {
     // The bridge's schema-harvest child is a `claude -p` that never reaches the
     // API; were this plugin installed there, it would start a bridge of its own.
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
-    await ensureRegistered(st, $)
     resetBridgeStates(bridges, await socketPath($, 'codex'))
     await ensureBridge($, 'codex', bridges.codex)
     return started
   })
 
   on('agent.spawn', async ($, e, next) => {
-    void ensureRegistered(st, $)
     const type = typeOf(e.subagentType)
     if (!type) return next(e)
     // The first step can race both writable-root checks and next(e), so track the whole spawn.
@@ -772,7 +748,6 @@ export const register: Register = (on) => {
     const bridgeUp = (ready: Promise<void>) => withinBudget(abortable(ready, next.signal), Infinity, () => {
       throw new Error(`the codex bridge is still starting after this step's time budget (${next.budget.ms} ms)`)
     })
-    void ensureRegistered(st, $)
     let agent = agentId ? agents.get(agentId) : undefined
     if (!agent && agentId && spawning.size) {
       // This may be the first step of a codex spawn still inside next(e); a
@@ -804,7 +779,7 @@ export const register: Register = (on) => {
         }
       } catch (err) {
         diag(st, $, `recovery lookup failed for ${agentId} (${cause}): ${String(err)}`)
-        if (claim.ours) return yield* finish(`[codex-subagent error] cannot reach the bridge to recover ${agentId}: ${err instanceof Error ? err.message : String(err)}; send the message again`)
+        if (claim.ours) return yield* finish(`[hetero-subagents error] cannot reach the bridge to recover ${agentId}: ${err instanceof Error ? err.message : String(err)}; send the message again`)
       }
       // Neither this module nor the bridge has seen the spawn: the agent's
       // type (or its model) names the codex type, and the session's repo root
@@ -812,7 +787,7 @@ export const register: Register = (on) => {
       if (!agent && !found && claim.ours) {
         if (!claim.type) {
           diag(st, $, `${agentId} is a codex step no type serves (${cause})`)
-          return yield* finish(`[codex-subagent error] cannot serve ${agentId} on codex: neither its agent type nor its model names a codex-subagent type (${cause}); this step was not sent to Claude`)
+          return yield* finish(`[hetero-subagents error] cannot serve ${agentId} on codex: neither its agent type nor its model names a hetero-subagents type (${cause}); this step was not sent to Claude`)
         }
         try {
           const cwd = await workspaceRoot((argv, init) => $.process.run(argv, init), await $.session.cwd())
@@ -820,7 +795,7 @@ export const register: Register = (on) => {
           rebuilt = true
           diag(st, $, `${agentId} unknown to spawn and bridge; serving it as ${claim.type} in ${agent.cwd} (${cause})`)
         } catch (err) {
-          return yield* finish(`[codex-subagent error] cannot recover ${agentId ??'(unknown agent)'}: ${err instanceof Error ? err.message : String(err)}`)
+          return yield* finish(`[hetero-subagents error] cannot recover ${agentId ??'(unknown agent)'}: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
       if (agent && agentId) agents.set(agentId, agent)
@@ -828,11 +803,11 @@ export const register: Register = (on) => {
     if (!agent || !agentId) {
       if (claim.ours) {
         diag(st, $, `ending an unservable codex step for ${agentId ?? '(no agent id)'} (${cause})`)
-        return yield* finish(agentId ? `[codex-subagent error] cannot recover ${agentId} (${cause})` : `[codex-subagent error] ${e.model} step carries no agent id`)
+        return yield* finish(agentId ? `[hetero-subagents error] cannot recover ${agentId} (${cause})` : `[hetero-subagents error] ${e.model} step carries no agent id`)
       }
       return yield* next(e)
     }
-    if (next.signal.aborted) return yield* finish('[codex-subagent error] interrupted')
+    if (next.signal.aborted) return yield* finish('[hetero-subagents error] interrupted')
     const onAbort = () => { void post('/interrupt', { key: agentId }).catch(err => diag(st, $, `interrupt failed: ${String(err)}`)) }
     next.signal.addEventListener('abort', onAbort)
     // Block 0 holds the keepalive's thinking once it beats; the answer then streams in block 1.
@@ -1005,8 +980,8 @@ export const register: Register = (on) => {
 
       const f = 'final' in reply ? reply.final : { text: '', status: undefined, errors: ['bridge reply had neither toolCall nor final'] }
       const errors = f.errors.length ? `\n\n[codex errors] ${f.errors.join('\n')}` : ''
-      const notice = rebuilt && api.some(m => m.role === 'assistant') ? '[codex-subagent: the earlier codex thread was not recoverable; this answer comes from a fresh thread]\n\n' : ''
-      const text = `${notice}${f.text}${errors}\n\n[codex-subagent: model=${reply.model ?? '?'} thread=${reply.threadId}${reply.resumed ? ' (resumed)' : ''} codexPid=${reply.codexPid} bridgePid=${reply.bridgePid} status=${f.status}]`
+      const notice = rebuilt && api.some(m => m.role === 'assistant') ? '[hetero-subagents: the earlier codex thread was not recoverable; this answer comes from a fresh thread]\n\n' : ''
+      const text = `${notice}${f.text}${errors}\n\n[hetero-subagents: model=${reply.model ?? '?'} thread=${reply.threadId}${reply.resumed ? ' (resumed)' : ''} codexPid=${reply.codexPid} bridgePid=${reply.bridgePid} status=${f.status}]`
       const toolUseId = `toolu_codex_handback_${reply.threadId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.turnId.replace(/[^A-Za-z0-9_-]/g, '_')}_${e.index}`
       agent.handback = { toolUseId, text }
       const input = { message: text }
@@ -1040,7 +1015,7 @@ export const register: Register = (on) => {
     freeBlock.delete(key)
     const { kind, message } = next.error
     try { diag(st, $, `turn.step ${kind} for ${e.agentId ?? '(no agent id)'}: ${message ?? '(no message)'}`) } catch {}
-    return yield* endTurn(e, `[codex-subagent error] step hook ${kind}: ${message ?? '(no message)'}; send the message again`, index)
+    return yield* endTurn(e, `[hetero-subagents error] step hook ${kind}: ${message ?? '(no message)'}; send the message again`, index)
   })
 }
 

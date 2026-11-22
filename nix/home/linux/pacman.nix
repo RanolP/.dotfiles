@@ -18,14 +18,17 @@ in
       fi
     done
 
-    if [ "''${#missing[@]}" -eq 0 ]; then
-      echo "     == pacman ${packages}"
-    else
-      echo "     ++ pacman ''${missing[*]}"
-      if ! run /usr/bin/sudo /usr/bin/pacman -S --needed --noconfirm "''${missing[@]}"; then
-        echo "     !! pacman: run sudo pacman -S --needed ''${missing[*]}" >&2
-        exit 1
-      fi
+    # Refresh the sync db and the keyring before the upgrade, so packages
+    # signed by a key newer than the installed keyring still verify.
+    echo "     ++ pacman -Sy archlinux-keyring"
+    if ! run /usr/bin/sudo /usr/bin/pacman -Sy --needed --noconfirm archlinux-keyring; then
+      echo "     !! pacman: run sudo pacman -Sy archlinux-keyring" >&2
+      exit 1
+    fi
+    echo "     ++ pacman -Su ''${missing[*]}"
+    if ! run /usr/bin/sudo /usr/bin/pacman -Su --needed --noconfirm "''${missing[@]}"; then
+      echo "     !! pacman: run sudo pacman -Su --needed ''${missing[*]}" >&2
+      exit 1
     fi
   '';
 }

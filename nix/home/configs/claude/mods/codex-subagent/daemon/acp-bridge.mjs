@@ -431,4 +431,6 @@ async function main() {
   }, 2000).unref()
 }
 
-if (typeof process !== 'undefined' && process.argv[1] && decodeURIComponent(new URL(import.meta.url).pathname) === process.argv[1]) await main()
+// Compare real paths: home-manager runs this file through a symlink, and node resolves import.meta.url to its target.
+const isEntry = () => { try { const fs = process.getBuiltinModule('node:fs'); return fs.realpathSync(process.argv[1]) === fs.realpathSync(decodeURIComponent(new URL(import.meta.url).pathname)) } catch { return false } }
+if (typeof process !== 'undefined' && process.argv[1] && isEntry()) await main()

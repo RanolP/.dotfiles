@@ -1,6 +1,15 @@
 { lib, pkgs, ... }:
 {
+  imports = [ ./pacman.nix ];
+
   home.homeDirectory = "/home/ranolp";
+
+  # base-devel gives a system cc (glibc-matched) for node-gyp, build.rs, sdists and makepkg.
+  arch.pacman.packages = [
+    "git"
+    "nix"
+    "base-devel"
+  ];
 
   home.packages = with pkgs; [
     wsl-open # xdg-open stand-in: hands files and URLs to the Windows default app
@@ -108,6 +117,6 @@
   '';
 
   programs.nushell.shellAliases = {
-    rebuild = "bash /home/ranolp/.dotfiles/xpkg/setup-scripts/linux/arch.sh";
+    rebuild = "home-manager switch --flake /home/ranolp/.dotfiles/nix#ranolp-archwsl -b before-hm";
   };
 }

@@ -36,7 +36,7 @@ HM_OWNED = frozenset({
 REBUILD = (
     "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26"
     if sys.platform == "darwin"
-    else "bash ~/.dotfiles/xpkg/setup-scripts/linux/arch.sh"
+    else "home-manager switch --flake ~/.dotfiles/nix#ranolp-archwsl -b before-hm"
 )
 
 MANAGED_ENTRIES = {

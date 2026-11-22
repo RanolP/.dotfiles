@@ -195,13 +195,20 @@ export function inheritedContext(api: readonly ApiMessage[]): string {
   return texts.slice(0, -1).join('\n\n')
 }
 
-const PREAMBLE = `You are running as a subagent inside a Claude Code session; a Claude model delegated this task to you and reads your final message as the result.
+const CODEX_PREAMBLE = `You are running as a subagent inside a Claude Code session; a Claude model delegated this task to you and reads your final message as the result.
 - Do file reads, edits and commands with your own shell and apply_patch tools.
 - The Claude session's other tools are relayed to you as dynamic tools: read-only mcp__<server>__<tool> as claude_mcp__<server>__<tool>, Skill (load a skill from the listing below by name, then follow what it returns), WebFetch and WebSearch. Call them through tools.<name> in exec. Claude Code runs them with its own permissions and returns the result.
 - Never call spawn_agent, followup_task, send_message, wait_agent, interrupt_agent or list_agents: this task runs in one agent, you.
 - Where the instructions below name Claude tools you do not have (Read, Edit, Write, Bash, Grep, Glob, Agent, Task*), use your shell or apply_patch for the same effect, or skip the step.
 
 The Claude session's context for this agent follows.`
+
+const ACP_PREAMBLE = `You are running as a subagent inside a Claude Code session; a Claude model delegated this task to you and reads your final message as the result.
+- Do file reads, edits and commands with your own tools. No Claude-side tools are relayed.
+
+The Claude session's context for this agent follows.`
+
+export const preambleFor = (backend: Backend): string => backend === 'acp' ? ACP_PREAMBLE : CODEX_PREAMBLE
 
 // Of the main session's first-message context, an implementer acts on the
 // environment, the model and date lines, and the skill listing it loads through
@@ -331,9 +338,9 @@ const sharedRules = async ($: EngineInterface, rel: string, what: string, log: L
 // The first step's developer instructions: tool mapping, the implementer's
 // share of the inherited context, the role, the owner's agent rules, the style
 // rules the reviewer grades against, and the rules of every repo the agent writes.
-const developerInstructions = async ($: EngineInterface, api: readonly ApiMessage[], roots: readonly string[], log: Log): Promise<string> => {
+const developerInstructions = async ($: EngineInterface, api: readonly ApiMessage[], roots: readonly string[], backend: Backend, log: Log): Promise<string> => {
   const parts = [
-    PREAMBLE,
+    preambleFor(backend),
     implementerContext(api),
     IMPLEMENTER_ROLE,
     await sharedRules($, AGENT_RULES_PATH, "the owner's agent rules", log),
@@ -543,6 +550,11 @@ function startBridge($: EngineInterface, backend: Backend, sock: string, onFail:
 }
 
 type BridgeState = { sock: string; ready?: Promise<void>; verified?: Promise<void> }
+export const resetBridgeStates = (bridges: Record<Backend, BridgeState>, codexSock: string): void => {
+  bridges.codex = { sock: codexSock }
+  bridges.acp = { sock: '' }
+}
+
 async function ensureBridge($: EngineInterface, backend: Backend, bridge: BridgeState): Promise<BridgeState & { ready: Promise<void> }> {
   bridge.sock ||= await socketPath($, backend)
   if (!bridge.ready) {
@@ -594,8 +606,8 @@ function ensureRegistered(st: ModState, $: EngineInterface): Promise<void> {
     for (const [name, t] of Object.entries(TYPES)) {
       await $.agent.register({
         name,
-        description: `Runs the task on OpenAI ${t.model} at ${t.effort} effort in the ${t.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; ${t.blurb}). SendMessage continues the same codex thread.`,
-        prompt: 'This agent is served by Codex; this prompt is never sent to a Claude model.',
+        description: agentDescription(t),
+        prompt: agentPrompt(t),
         model: t.model, // turn steps go to codex; engine compaction also sees this id, intercepted below
       })
     }
@@ -604,6 +616,14 @@ function ensureRegistered(st: ModState, $: EngineInterface): Promise<void> {
     if (!st.registrationLogged) { st.registrationLogged = true; diag(st, $, `agent type registration failed (retried on the next hook): ${String(err)}`) }
   })
 }
+
+export const agentDescription = (type: (typeof TYPES)[TypeName]): string => type.backend === 'acp'
+  ? `Runs the task on ${type.model} through Google Antigravity (agy's own shell and edit tools; no Claude-side tools relayed; ${type.blurb}). SendMessage continues the same ACP session.`
+  : `Runs the task on OpenAI ${type.model} at ${type.effort} effort in the ${type.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; ${type.blurb}). SendMessage continues the same codex thread.`
+
+export const agentPrompt = (type: (typeof TYPES)[TypeName]): string => type.backend === 'acp'
+  ? 'This agent is served by Google Antigravity over ACP; this prompt is never sent to a Claude model.'
+  : 'This agent is served by Codex; this prompt is never sent to a Claude model.'
 
 async function subagentTypeOf(st: ModState, $: EngineInterface, agents: ReadonlyMap<string, Agent>, agentId: string | undefined): Promise<string | undefined> {
   if (!agentId) return undefined
@@ -684,6 +704,7 @@ export const register: Register = (on) => {
     // API; were this plugin installed there, it would start a bridge of its own.
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
     await ensureRegistered(st, $)
+    resetBridgeStates(bridges, await socketPath($, 'codex'))
     await ensureBridge($, 'codex', bridges.codex)
     return started
   })
@@ -944,7 +965,7 @@ export const register: Register = (on) => {
         if (!prompt) throw new Error(`agent ${agentId} has neither a pending prompt nor the tool_result for ${agent.waiting?.toolUseId ?? '(none)'}`)
         if (!agent.threadId) {
           body.dynamicTools = agent.relay.tools
-          body.developerInstructions = await developerInstructions($, api, [...new Set([...agent.writableRoots, agent.cwd])], line => diag(st, $, line))
+          body.developerInstructions = await developerInstructions($, api, [...new Set([...agent.writableRoots, agent.cwd])], backend, line => diag(st, $, line))
         }
         body.prompt = prompt
       }

@@ -27,6 +27,24 @@ export const decidePermission = (toolCall, { writableRoots, tmpDir }) => {
   }) ? 'allow' : 'deny'
 }
 
+export const childPendingHandlers = pending => {
+  const reject = error => {
+    for (const request of pending.values()) request.reject(error)
+    pending.clear()
+  }
+  return { error: reject, exit: reject }
+}
+
+export const clearQueuedEvents = queue => { queue.length = 0 }
+
+export const consumePendingInterrupt = (session, pendingInterrupts) => {
+  const cancelled = Boolean(session.cancelRequested) || pendingInterrupts.delete(session.key)
+  session.cancelRequested = false
+  return cancelled
+}
+
+export const finalAgentMessage = messages => messages.findLast(message => message.trim()) ?? ''
+
 export function handleAcpLine(line, { pending, sessions, write, log }) {
   let message
   try { message = JSON.parse(line) } catch { log('[acp-bridge] unparsable line', line.slice(0, 300)); return }
@@ -54,8 +72,12 @@ export function handleAcpLine(line, { pending, sessions, write, log }) {
     const session = sessions.get(params.sessionId)
     const update = params.update ?? {}
     if (!session) return
-    if (update.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') session.messages.push(update.content.text)
+    if (update.sessionUpdate === 'agent_message_chunk' && typeof update.content?.text === 'string') {
+      if (!session.messages.length) session.messages.push('')
+      session.messages[session.messages.length - 1] += update.content.text
+    }
     else if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+      session.messages.push('')
       const target = (update.locations ?? []).map(location => location.path).join(', ') || JSON.stringify(update.rawInput ?? {})
       log(`[acp-bridge] tool ${update.status ?? 'unknown'} name=${update.name ?? '(unknown)'} kind=${update.kind ?? '(unknown)'} target=${target}`)
     }
@@ -104,6 +126,7 @@ async function main() {
   const bySessionId = new Map()
   const boxes = new Map()
   const inFlight = new Set()
+  const pendingInterrupts = new Set()
   const box = key => { let value = boxes.get(key); if (!value) boxes.set(key, value = { queue: [], waiter: null }); return value }
   const emit = (key, event) => {
     const value = box(key)
@@ -145,12 +168,13 @@ async function main() {
     const child = spawn('agy', args, { cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'] })
     session.child = child
     session.stopping = false
-    session.pending = new Map()
+    const pending = new Map()
+    session.pending = pending
     session.nextId = 0
     const write = message => child.stdin.write(`${JSON.stringify(message)}\n`)
     const rpc = (method, params) => new Promise((resolve, reject) => {
       const id = ++session.nextId
-      session.pending.set(id, { resolve, reject, method })
+      pending.set(id, { resolve, reject, method })
       write({ jsonrpc: '2.0', id, method, params })
     })
     session.write = write
@@ -162,14 +186,12 @@ async function main() {
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
-        if (line.trim()) handleAcpLine(line, { pending: session.pending, sessions: bySessionId, write, log: message => console.error(message) })
+        if (line.trim()) handleAcpLine(line, { pending, sessions: bySessionId, write, log: message => console.error(message) })
       }
     })
     child.stderr.on('data', data => process.stderr.write(`[agy] ${data}`))
-    child.on('error', error => {
-      for (const request of session.pending.values()) request.reject(error)
-      session.pending.clear()
-    })
+    const pendingHandlers = childPendingHandlers(pending)
+    child.on('error', pendingHandlers.error)
     child.on('exit', (code, signal) => {
       const current = child === session.child
       const expected = session.stopping || !current
@@ -179,8 +201,7 @@ async function main() {
       }
       session.stopping = false
       const error = new Error(`agy acp exited code=${code} signal=${signal}`)
-      for (const request of session.pending?.values() ?? []) request.reject(error)
-      session.pending?.clear()
+      pendingHandlers.exit(error)
       if (!expected) console.error('[acp-bridge] agy exited unexpectedly', error.message)
     })
     await Promise.race([
@@ -231,6 +252,7 @@ async function main() {
       errors: [],
       usage: null,
       active: false,
+      cancelRequested: false,
       nextPrompts: [],
     }
     sessions.set(body.key, session)
@@ -240,6 +262,10 @@ async function main() {
 
   const prompt = async (session, text) => {
     await ensureChild(session)
+    if (consumePendingInterrupt(session, pendingInterrupts)) {
+      emit(session.key, { final: { text: '', status: 'cancelled', errors: [] } })
+      return
+    }
     session.active = true
     session.messages = []
     session.errors = []
@@ -265,7 +291,7 @@ async function main() {
     session.active = false
     persisted.agents[session.key] = { type: session.agentType, cwd: session.cwd, writableRoots: session.writableRoots, threadId: session.sessionId }
     saveState()
-    emit(session.key, { final: { text: session.messages.join(''), status: result.stopReason, errors: session.errors } })
+    emit(session.key, { final: { text: finalAgentMessage(session.messages), status: result.stopReason, errors: session.errors } })
   }
 
   const run = async body => {
@@ -273,10 +299,16 @@ async function main() {
     if (body.toolResult) throw new Error('ACP bridge does not relay Claude-side tools')
     if (body.prompt === undefined) throw new Error('step needs prompt')
     if (session.active) { session.nextPrompts.push(body.prompt); return }
+    clearQueuedEvents(box(body.key).queue)
     await prompt(session, body.prompt)
   }
   const step = body => {
     if (!body.key) throw new Error('step needs key')
+    if (body.prompt !== undefined) {
+      pendingInterrupts.delete(body.key)
+      const session = sessions.get(body.key)
+      if (session) session.cancelRequested = false
+    }
     inFlight.add(body.key)
     run(body).catch(error => { console.error('[acp-bridge] step failed', body.key, error); emit(body.key, { error: String(error?.message ?? error) }) }).finally(() => inFlight.delete(body.key))
     return { pending: true }
@@ -302,7 +334,16 @@ async function main() {
   }
   const interrupt = ({ key }) => {
     const session = sessions.get(key)
-    if (!session?.active) return { interrupted: false }
+    if (!session) {
+      if (!inFlight.has(key)) return { interrupted: false }
+      pendingInterrupts.add(key)
+      return { interrupted: true, deferred: true }
+    }
+    if (!session.active) {
+      if (!inFlight.has(key)) return { interrupted: false }
+      session.cancelRequested = true
+      return { interrupted: true, deferred: true }
+    }
     session.nextPrompts = []
     session.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: session.sessionId } })
     return { interrupted: true }

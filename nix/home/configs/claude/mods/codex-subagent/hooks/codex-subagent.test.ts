@@ -1,8 +1,8 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
-import { bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 import { codexConfig } from '../daemon/codex-config.mjs'
-import { decidePermission, handleAcpLine } from '../daemon/acp-bridge.mjs'
+import { childPendingHandlers, clearQueuedEvents, consumePendingInterrupt, decidePermission, finalAgentMessage, handleAcpLine } from '../daemon/acp-bridge.mjs'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -82,6 +82,65 @@ test('ACP line handling answers request_permission from decidePermission without
     log: () => {},
   })
   expect(written).toEqual([{ jsonrpc: '2.0', id: 'permission-1', result: { outcome: { outcome: 'selected', optionId: 'deny' } } }])
+})
+
+test('a new ACP run clears the cancelled turn final before the next wait', () => {
+  const queue = [{ final: { text: '', status: 'cancelled', errors: [] } }]
+  clearQueuedEvents(queue)
+  expect(queue).toEqual([])
+})
+
+test('an old ACP child exit rejects only that child pending requests', () => {
+  const rejected: string[] = []
+  const oldPending = new Map([[1, { reject: () => rejected.push('old') }]])
+  const replacementPending = new Map([[2, { reject: () => rejected.push('replacement') }]])
+  const oldChild = childPendingHandlers(oldPending)
+  oldChild.exit(new Error('old child exited'))
+  expect(rejected).toEqual(['old'])
+  expect(replacementPending.size).toBe(1)
+})
+
+test('ACP registrations describe Antigravity tools and session continuity', () => {
+  expect(agentDescription(TYPES.neon)).toBe("Runs the task on gemini-4-neon-high through Google Antigravity (agy's own shell and edit tools; no Claude-side tools relayed; Google Antigravity implementer using Gemini 4 Neon). SendMessage continues the same ACP session.")
+  expect(agentPrompt(TYPES.neon)).toContain('Google Antigravity over ACP')
+  expect(agentDescription(TYPES.sol)).toContain('through Codex')
+})
+
+test('ACP developer instructions omit Codex-only relayed tools and apply_patch', () => {
+  const preamble = preambleFor('acp')
+  expect(preamble).toContain('Do file reads, edits and commands with your own tools. No Claude-side tools are relayed.')
+  expect(preamble).not.toContain('apply_patch')
+  expect(preamble).not.toContain('tools.<name>')
+})
+
+test('an ACP interrupt requested while the child opens cancels before session prompt', () => {
+  const session = { key: 'agent-1', cancelRequested: true }
+  expect(consumePendingInterrupt(session, new Set())).toBe(true)
+  expect(session.cancelRequested).toBe(false)
+  const pending = new Set(['agent-2'])
+  expect(consumePendingInterrupt({ key: 'agent-2', cancelRequested: false }, pending)).toBe(true)
+  expect(pending.size).toBe(0)
+})
+
+test('session start discards both backend bridge states for the new session socket', () => {
+  const bridges = {
+    codex: { sock: '/old.sock', ready: Promise.resolve(), verified: Promise.resolve() },
+    acp: { sock: '/old-acp.sock', ready: Promise.resolve(), verified: Promise.resolve() },
+  }
+  resetBridgeStates(bridges, '/new.sock')
+  expect(bridges).toEqual({ codex: { sock: '/new.sock' }, acp: { sock: '' } })
+})
+
+test('ACP final text returns the last non-empty agent message after tool updates', () => {
+  const session = { messages: [] as string[] }
+  const context = { pending: new Map(), sessions: new Map([['session-1', session]]), write: () => {}, log: () => {} }
+  const update = (value: Record<string, unknown>) => handleAcpLine(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'session-1', update: value } }), context)
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'first answer' } })
+  update({ sessionUpdate: 'tool_call', name: 'write_file', kind: 'edit', status: 'pending' })
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'last ' } })
+  update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } })
+  update({ sessionUpdate: 'tool_call_update', name: 'write_file', kind: 'edit', status: 'failed' })
+  expect(finalAgentMessage(session.messages)).toBe('last answer')
 })
 
 test('a missing Codex recovery never falls through to Claude', async ($, on) => {

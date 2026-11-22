@@ -193,38 +193,6 @@ def install-wsl [name: string, user: string] {
     true
 }
 
-# Install nix and apply the home-manager flake inside a distro: the `system`
-# phase of xpkg/setup-scripts/linux/arch.sh as root, then `home` as the
-# default user. Both phases are idempotent, so this runs on every rebuild.
-# Returns {exit_code, output}: the failing phase's, or exit 0.
-def setup-wsl-home [name: string] {
-    # Strip CR so a CRLF checkout cannot break the script.
-    let script = (open --raw ~/.dotfiles/xpkg/setup-scripts/linux/arch.sh | str replace -a "\r\n" "\n")
-    for phase in [system home] {
-        let s = if $phase == system {
-            $script | ^wsl.exe -d $name -u root -- bash -s -- system | complete
-        } else {
-            $script | ^wsl.exe -d $name -- bash -s -- home | complete
-        }
-        # The script's own `==`/`++`/`!!` status lines.
-        for l in ($"($s.stdout)($s.stderr)" | lines | where $it =~ '^\s*(==|\+\+|!!) ') { print $"   ($l)" }
-        if $s.exit_code != 0 {
-            print $"     (ansi red)!!(ansi reset) wsl ($name) home-manager ($phase) (ansi red)exit ($s.exit_code)(ansi reset)"
-            for l in ($"($s.stdout)($s.stderr)" | str replace -a (char nul) "" | lines | where ($it | str trim | is-not-empty) | last 3) { print $"        ($l)" }
-            return {exit_code: $s.exit_code, output: (tail-output $s)}
-        }
-    }
-    {exit_code: 0, output: ""}
-}
-
-# setup-wsl-home as one Packages unit.
-def wsl-home-item [name: string] {
-    let t = (now)
-    item-start $"wsl ($name) home-manager"
-    let r = (setup-wsl-home $name)
-    item-end $"wsl ($name) home-manager" $t $r.exit_code $r.output
-}
-
 # Make an existing distro's ext4.vhdx sparse. WSL 2.7 refuses plain
 # `--set-sparse` (potential data corruption), so `--allow-unsafe` is passed.
 def set-wsl-sparse [name: string] {
@@ -335,8 +303,8 @@ export def main [] {
         }
     }
 
-    # WSL distros: skip when `wsl -l -q` lists the name; else install, run the
-    # first-boot script as root, set the password interactively, then restart.
+    # WSL distros: existing ones only apply sparse; missing ones install, run
+    # the first-boot script as root, set the password interactively, then restart.
     let wsl_entries = ($def.wsl? | default {} | transpose name spec)
     if not ($wsl_entries | is-empty) {
         # A failing wsl.exe lists none, so each distro goes down the install path.
@@ -347,7 +315,6 @@ export def main [] {
             if ($entry.name in $have) {
                 print $"     (ansi dark_gray)==(ansi reset) wsl ($entry.name)"
                 if ($entry.spec.sparse? | default false) { set-wsl-sparse $entry.name }
-                if ($entry.spec.home-manager? | default false) { wsl-home-item $entry.name }
             } else if $reboot_pending {
                 print $"     (ansi yellow)[!](ansi reset) wsl ($entry.name) (ansi yellow)waiting on a Windows reboot -- reboot, then run `rebuild` again(ansi reset)"
                 item-end $"wsl ($entry.name)" (now) 0 $"[!] wsl ($entry.name) waiting on a Windows reboot -- reboot, then run `rebuild` again"
@@ -356,7 +323,6 @@ export def main [] {
                 item-start $"wsl ($entry.name)"
                 let ok = (install-wsl $entry.name $entry.spec.user)
                 item-end $"wsl ($entry.name)" $t (if $ok { 0 } else { 1 }) ""
-                if $ok and ($entry.spec.home-manager? | default false) { wsl-home-item $entry.name }
             }
         }
     }

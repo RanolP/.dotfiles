@@ -94,8 +94,12 @@ phase_home() {
   fi
 
   changed "home-manager switch --flake $repo/nix#ranolp-archwsl"
-  nix --extra-experimental-features 'nix-command flakes' \
-    run home-manager/master -- switch --flake "$repo/nix#ranolp-archwsl" -b before-hm </dev/null
+  if command -v home-manager >/dev/null; then
+    home-manager switch --flake "$repo/nix#ranolp-archwsl" -b before-hm </dev/null
+  else
+    nix --extra-experimental-features 'nix-command flakes' \
+      run home-manager/master -- switch --flake "$repo/nix#ranolp-archwsl" -b before-hm </dev/null
+  fi
 }
 
 main() {

@@ -67,7 +67,7 @@ DOTFILES_DIR = os.path.expanduser("~/.dotfiles") + os.sep
 # slip -- it is the one command the user is told to run, so a darwin-only
 # string strands every linux session with an unrunnable instruction.
 DARWIN_REBUILD_CMD = "sudo darwin-rebuild switch --flake ~/.dotfiles/nix#ranolp-work-MBP-26"
-LINUX_REBUILD_CMD = "home-manager switch --flake ~/.dotfiles/nix#ranolp-archwsl -b before-hm"
+LINUX_REBUILD_CMD = "bash ~/.dotfiles/xpkg/setup-scripts/linux/arch.sh"
 
 # The symlink each host's switch repoints. Its own mtime (never the target's --
 # store paths carry a frozen epoch timestamp) is when the generation landed.

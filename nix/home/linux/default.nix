@@ -108,6 +108,6 @@
   '';
 
   programs.nushell.shellAliases = {
-    rebuild = "home-manager switch --flake /home/ranolp/.dotfiles/nix#ranolp-archwsl -b before-hm";
+    rebuild = "bash /home/ranolp/.dotfiles/xpkg/setup-scripts/linux/arch.sh";
   };
 }

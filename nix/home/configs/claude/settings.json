@@ -4,7 +4,8 @@
     "allow": [
       "Bash(zellij run -n \"Claude Continue\"*)",
       "Edit(~/.claude-personal/projects/**/memory/**)",
-      "Edit(~/.local/share/claude-projects/**/memory/**)"
+      "Edit(~/.local/share/claude-projects/**/memory/**)",
+      "Edit(~/.claude/projects/**/memory/**)"
     ],
     "deny": [
       "Bash(git commit *--no-verify*)",

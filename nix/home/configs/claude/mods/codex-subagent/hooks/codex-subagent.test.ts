@@ -2,7 +2,7 @@ import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
 import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 import { codexConfig } from '../daemon/codex-config.mjs'
-import { childPendingHandlers, clearQueuedEvents, consumePendingInterrupt, decidePermission, finalAgentMessage, handleAcpLine } from '../daemon/acp-bridge.mjs'
+import { beginAcpPrompt, decidePermission, finalAgentMessage, finalTurnText, handleAcpLine, installChildPending, interruptAcp, runAcpStep } from '../daemon/acp-bridge.mjs'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -84,22 +84,6 @@ test('ACP line handling answers request_permission from decidePermission without
   expect(written).toEqual([{ jsonrpc: '2.0', id: 'permission-1', result: { outcome: { outcome: 'selected', optionId: 'deny' } } }])
 })
 
-test('a new ACP run clears the cancelled turn final before the next wait', () => {
-  const queue = [{ final: { text: '', status: 'cancelled', errors: [] } }]
-  clearQueuedEvents(queue)
-  expect(queue).toEqual([])
-})
-
-test('an old ACP child exit rejects only that child pending requests', () => {
-  const rejected: string[] = []
-  const oldPending = new Map([[1, { reject: () => rejected.push('old') }]])
-  const replacementPending = new Map([[2, { reject: () => rejected.push('replacement') }]])
-  const oldChild = childPendingHandlers(oldPending)
-  oldChild.exit(new Error('old child exited'))
-  expect(rejected).toEqual(['old'])
-  expect(replacementPending.size).toBe(1)
-})
-
 test('ACP registrations describe Antigravity tools and session continuity', () => {
   expect(agentDescription(TYPES.neon)).toBe("Runs the task on gemini-4-neon-high through Google Antigravity (agy's own shell and edit tools; no Claude-side tools relayed; Google Antigravity implementer using Gemini 4 Neon). SendMessage continues the same ACP session.")
   expect(agentPrompt(TYPES.neon)).toContain('Google Antigravity over ACP')
@@ -111,15 +95,6 @@ test('ACP developer instructions omit Codex-only relayed tools and apply_patch',
   expect(preamble).toContain('Do file reads, edits and commands with your own tools. No Claude-side tools are relayed.')
   expect(preamble).not.toContain('apply_patch')
   expect(preamble).not.toContain('tools.<name>')
-})
-
-test('an ACP interrupt requested while the child opens cancels before session prompt', () => {
-  const session = { key: 'agent-1', cancelRequested: true }
-  expect(consumePendingInterrupt(session, new Set())).toBe(true)
-  expect(session.cancelRequested).toBe(false)
-  const pending = new Set(['agent-2'])
-  expect(consumePendingInterrupt({ key: 'agent-2', cancelRequested: false }, pending)).toBe(true)
-  expect(pending.size).toBe(0)
 })
 
 test('session start discards both backend bridge states for the new session socket', () => {
@@ -141,6 +116,54 @@ test('ACP final text returns the last non-empty agent message after tool updates
   update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } })
   update({ sessionUpdate: 'tool_call_update', name: 'write_file', kind: 'edit', status: 'failed' })
   expect(finalAgentMessage(session.messages)).toBe('last answer')
+})
+
+test('ACP denial text names the denied tool, target, and writable roots when agy sends no message', () => {
+  const session = { writableRoots: ['/repo', '/worktree'], tmpDir: '/tmp/session', messages: [] as string[], denials: [] as { name: string; target: string }[] }
+  handleAcpLine(JSON.stringify({
+    jsonrpc: '2.0',
+    id: 'permission-denied',
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'session-denied',
+      toolCall: { name: 'write_file', kind: 'edit', locations: [{ path: '/home/test/private.txt' }] },
+      options: [{ optionId: 'allow', kind: 'allow_once' }, { optionId: 'deny', kind: 'reject_once' }],
+    },
+  }), {
+    pending: new Map(),
+    sessions: new Map([['session-denied', session]]),
+    write: () => {},
+    log: () => {},
+  })
+  expect(finalTurnText(session)).toBe('agy ended the turn after a denied write_file: /home/test/private.txt (outside the writable roots: /repo, /worktree).')
+})
+
+test('ACP lifecycle keeps cancellation, queued finals, and replacement-child requests isolated', async () => {
+  const events: { final: { text: string; status: string; errors: string[] } }[] = []
+  const queue = [{ final: { text: '', status: 'cancelled', errors: [] } }]
+  const session = { key: 'agent', active: false, cancelRequested: false, nextPrompts: [] as string[] }
+  await runAcpStep({ key: 'agent', prompt: 'own final' }, {
+    open: async () => session,
+    box: () => ({ queue }),
+    prompt: async (_session: typeof session, text: string) => { queue.push({ final: { text, status: 'end_turn', errors: [] } }) },
+  })
+  expect(queue.shift()?.final).toMatchObject({ text: 'own final', status: 'end_turn' })
+
+  const pendingInterrupts = new Set<string>()
+  const sessions = new Map([['agent', session]])
+  expect(interruptAcp({ key: 'agent' }, { sessions, inFlight: new Set(['agent']), pendingInterrupts })).toMatchObject({ interrupted: true, deferred: true })
+  expect(beginAcpPrompt(session, pendingInterrupts, (_key: string, event: typeof events[number]) => events.push(event))).toBe(false)
+  expect(events).toEqual([{ final: { text: '', status: 'cancelled', errors: [] } }])
+
+  const rejected: string[] = []
+  const childSession: { pending?: Map<number, { reject: () => void }> } = {}
+  const oldChild = installChildPending(childSession)
+  oldChild.pending.set(1, { reject: () => rejected.push('old') })
+  const replacementChild = installChildPending(childSession)
+  replacementChild.pending.set(2, { reject: () => rejected.push('replacement') })
+  oldChild.handlers.exit(new Error('old child exited'))
+  expect(rejected).toEqual(['old'])
+  expect(replacementChild.pending.size).toBe(1)
 })
 
 test('a missing Codex recovery never falls through to Claude', async ($, on) => {

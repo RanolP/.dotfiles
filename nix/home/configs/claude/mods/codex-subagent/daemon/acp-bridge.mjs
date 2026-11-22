@@ -27,7 +27,7 @@ export const decidePermission = (toolCall, { writableRoots, tmpDir }) => {
   }) ? 'allow' : 'deny'
 }
 
-export const childPendingHandlers = pending => {
+const childPendingHandlers = pending => {
   const reject = error => {
     for (const request of pending.values()) request.reject(error)
     pending.clear()
@@ -35,15 +35,62 @@ export const childPendingHandlers = pending => {
   return { error: reject, exit: reject }
 }
 
-export const clearQueuedEvents = queue => { queue.length = 0 }
+const clearQueuedEvents = queue => { queue.length = 0 }
 
-export const consumePendingInterrupt = (session, pendingInterrupts) => {
+const consumePendingInterrupt = (session, pendingInterrupts) => {
   const cancelled = Boolean(session.cancelRequested) || pendingInterrupts.delete(session.key)
   session.cancelRequested = false
   return cancelled
 }
 
+export const installChildPending = session => {
+  const pending = new Map()
+  session.pending = pending
+  return { pending, handlers: childPendingHandlers(pending) }
+}
+
+export const beginAcpPrompt = (session, pendingInterrupts, emit) => {
+  if (!consumePendingInterrupt(session, pendingInterrupts)) return true
+  emit(session.key, { final: { text: '', status: 'cancelled', errors: [] } })
+  return false
+}
+
+export const runAcpStep = async (body, { open, box, prompt }) => {
+  const session = await open(body)
+  if (body.toolResult) throw new Error('ACP bridge does not relay Claude-side tools')
+  if (body.prompt === undefined) throw new Error('step needs prompt')
+  if (session.active) { session.nextPrompts.push(body.prompt); return }
+  clearQueuedEvents(box(body.key).queue)
+  await prompt(session, body.prompt)
+}
+
+export const interruptAcp = ({ key }, { sessions, inFlight, pendingInterrupts }) => {
+  const session = sessions.get(key)
+  if (!session) {
+    if (!inFlight.has(key)) return { interrupted: false }
+    pendingInterrupts.add(key)
+    return { interrupted: true, deferred: true }
+  }
+  if (!session.active) {
+    if (!inFlight.has(key)) return { interrupted: false }
+    session.cancelRequested = true
+    return { interrupted: true, deferred: true }
+  }
+  session.nextPrompts = []
+  session.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: session.sessionId } })
+  return { interrupted: true }
+}
+
 export const finalAgentMessage = messages => messages.findLast(message => message.trim()) ?? ''
+
+const permissionTarget = toolCall => (toolCall?.locations ?? []).map(location => location.path).join(', ') || JSON.stringify(toolCall?.rawInput ?? {})
+
+export const finalTurnText = session => {
+  const message = finalAgentMessage(session.messages)
+  if (message || !session.denials.length) return message
+  const roots = session.writableRoots.join(', ')
+  return session.denials.map(({ name, target }) => `agy ended the turn after a denied ${name}: ${target} (outside the writable roots: ${roots}).`).join('\n')
+}
 
 export function handleAcpLine(line, { pending, sessions, write, log }) {
   let message
@@ -62,8 +109,9 @@ export function handleAcpLine(line, { pending, sessions, write, log }) {
     const decision = session ? decidePermission(params.toolCall, session) : 'deny'
     const wantedKind = decision === 'allow' ? 'allow_once' : 'reject_once'
     const option = params.options?.find(candidate => candidate.kind === wantedKind)
-    const target = (params.toolCall?.locations ?? []).map(location => location.path).join(', ') || JSON.stringify(params.toolCall?.rawInput ?? {})
+    const target = permissionTarget(params.toolCall)
     log(`[acp-bridge] permission ${decision} tool=${params.toolCall?.name ?? '(unknown)'} target=${target}`)
+    if (session && decision === 'deny') (session.denials ??= []).push({ name: params.toolCall?.name ?? '(unknown)', target })
     if (option) write({ jsonrpc: '2.0', id: message.id, result: { outcome: { outcome: 'selected', optionId: option.optionId } } })
     else write({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `no ${wantedKind} permission option` } })
     return
@@ -168,8 +216,7 @@ async function main() {
     const child = spawn('agy', args, { cwd: session.cwd, stdio: ['pipe', 'pipe', 'pipe'] })
     session.child = child
     session.stopping = false
-    const pending = new Map()
-    session.pending = pending
+    const { pending, handlers: pendingHandlers } = installChildPending(session)
     session.nextId = 0
     const write = message => child.stdin.write(`${JSON.stringify(message)}\n`)
     const rpc = (method, params) => new Promise((resolve, reject) => {
@@ -190,7 +237,6 @@ async function main() {
       }
     })
     child.stderr.on('data', data => process.stderr.write(`[agy] ${data}`))
-    const pendingHandlers = childPendingHandlers(pending)
     child.on('error', pendingHandlers.error)
     child.on('exit', (code, signal) => {
       const current = child === session.child
@@ -249,6 +295,7 @@ async function main() {
       developerInstructions: body.developerInstructions,
       instructionsSent: Boolean(body.threadId),
       messages: [],
+      denials: [],
       errors: [],
       usage: null,
       active: false,
@@ -262,12 +309,10 @@ async function main() {
 
   const prompt = async (session, text) => {
     await ensureChild(session)
-    if (consumePendingInterrupt(session, pendingInterrupts)) {
-      emit(session.key, { final: { text: '', status: 'cancelled', errors: [] } })
-      return
-    }
+    if (!beginAcpPrompt(session, pendingInterrupts, emit)) return
     session.active = true
     session.messages = []
+    session.denials = []
     session.errors = []
     const blocks = []
     if (!session.instructionsSent && session.developerInstructions) blocks.push({ type: 'text', text: session.developerInstructions })
@@ -291,17 +336,10 @@ async function main() {
     session.active = false
     persisted.agents[session.key] = { type: session.agentType, cwd: session.cwd, writableRoots: session.writableRoots, threadId: session.sessionId }
     saveState()
-    emit(session.key, { final: { text: finalAgentMessage(session.messages), status: result.stopReason, errors: session.errors } })
+    emit(session.key, { final: { text: finalTurnText(session), status: result.stopReason, errors: session.errors } })
   }
 
-  const run = async body => {
-    const session = await open(body)
-    if (body.toolResult) throw new Error('ACP bridge does not relay Claude-side tools')
-    if (body.prompt === undefined) throw new Error('step needs prompt')
-    if (session.active) { session.nextPrompts.push(body.prompt); return }
-    clearQueuedEvents(box(body.key).queue)
-    await prompt(session, body.prompt)
-  }
+  const run = body => runAcpStep(body, { open, box, prompt })
   const step = body => {
     if (!body.key) throw new Error('step needs key')
     if (body.prompt !== undefined) {
@@ -332,22 +370,7 @@ async function main() {
     if (response.destroyed) { value.queue.unshift(event); return { pending: true } }
     return decorate(key, event)
   }
-  const interrupt = ({ key }) => {
-    const session = sessions.get(key)
-    if (!session) {
-      if (!inFlight.has(key)) return { interrupted: false }
-      pendingInterrupts.add(key)
-      return { interrupted: true, deferred: true }
-    }
-    if (!session.active) {
-      if (!inFlight.has(key)) return { interrupted: false }
-      session.cancelRequested = true
-      return { interrupted: true, deferred: true }
-    }
-    session.nextPrompts = []
-    session.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: session.sessionId } })
-    return { interrupted: true }
-  }
+  const interrupt = body => interruptAcp(body, { sessions, inFlight, pendingInterrupts })
   const recover = ({ key }) => {
     const session = sessions.get(key)
     const agent = session

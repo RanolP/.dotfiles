@@ -40,6 +40,7 @@ def tool-units [configs: path] {
         {name: espanso, script: $'($configs)/espanso/install.nu', when: $windows}
         {name: firefox, script: $'($configs)/firefox/install.nu', when: $windows}
         {name: terminal, script: $'($configs)/terminal/install.nu', when: $windows}
+        {name: msvc, script: $'($configs)/msvc/install.nu', when: $windows}
         {name: prismlauncher, script: $'($configs)/prismlauncher/install.nu', when: $windows}
         {name: keybase, script: $'($configs)/keybase/install.nu', when: $windows}
         {name: sandollcloud, script: $'($configs)/sandollcloud/install.nu', when: $windows}

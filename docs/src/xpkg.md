@@ -65,7 +65,7 @@ A winget package installed but not declared is reported as a warning only.
 
 An installed package is skipped, so changing its `[winget.override]` line does nothing on a machine that already has it. Change the installed components by hand (for Visual Studio, the Visual Studio Installer's Modify), or uninstall it and run `rebuild`.
 
-`Microsoft.VisualStudio.BuildTools` is the current override. Its bare install has no compiler, so the override adds the C++ build tools workload, MSVC x64/x86 and the Windows 11 SDK 10.0.26100.
+`Microsoft.VisualStudio.BuildTools` is the current override. Its bare install has no compiler, so the override adds the C++ build tools workload, MSVC x64/x86 and the Windows 11 SDK 10.0.26100. The `msvc` config unit puts the current MSVC `Hostx64\x64` bin dir on the user PATH so nvcc finds cl.exe.
 
 ### WSL distros
 

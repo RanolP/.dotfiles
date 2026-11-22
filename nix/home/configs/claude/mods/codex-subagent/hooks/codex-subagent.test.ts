@@ -2,6 +2,7 @@ import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
 import { bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, relaySet, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 import { codexConfig } from '../daemon/codex-config.mjs'
+import { decidePermission, handleAcpLine } from '../daemon/acp-bridge.mjs'
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -30,6 +31,57 @@ test('typeOf claims only this plugin\'s registered types', async () => {
   expect(typeOf('codex-subagent:sol')).toBe('sol')
   expect(typeOf('codex-subagent:other')).toBeUndefined()
   expect(typeOf('general-purpose')).toBeUndefined()
+})
+
+test('decidePermission allows an edit inside a writable root', () => {
+  expect(decidePermission({ name: 'write_file', kind: 'edit', locations: [{ path: '/repo/src/file.ts' }] }, { writableRoots: ['/repo'], tmpDir: '/tmp/session' })).toBe('allow')
+})
+
+test('decidePermission denies an edit under HOME outside writable roots', () => {
+  expect(decidePermission({ name: 'write_file', kind: 'edit', locations: [{ path: '/home/test/private.txt' }] }, { writableRoots: ['/repo'], tmpDir: '/tmp/session' })).toBe('deny')
+})
+
+test('decidePermission allows an edit inside tmpDir', () => {
+  expect(decidePermission({ name: 'write_file', kind: 'edit', locations: [{ path: '/tmp/session/output.txt' }] }, { writableRoots: ['/repo'], tmpDir: '/tmp/session' })).toBe('allow')
+})
+
+test('decidePermission denies a multi-location edit when one path is outside the roots', () => {
+  expect(decidePermission({ name: 'write_file', kind: 'edit', locations: [{ path: '/repo/src/file.ts' }, { path: '/home/test/private.txt' }] }, { writableRoots: ['/repo'], tmpDir: '/tmp/session' })).toBe('deny')
+})
+
+test('decidePermission denies an unknown tool kind', () => {
+  expect(decidePermission({ name: 'mystery', kind: 'other', locations: [] }, { writableRoots: ['/repo'], tmpDir: '/tmp/session' })).toBe('deny')
+})
+
+test('typeOf resolves neon and flash to ACP while sol stays on Codex', () => {
+  expect(typeOf('codex-subagent:neon')).toBe('neon')
+  expect(TYPES.neon.backend).toBe('acp')
+  expect(typeOf('codex-subagent:flash')).toBe('flash')
+  expect(TYPES.flash.backend).toBe('acp')
+  expect(typeOf('codex-subagent:sol')).toBe('sol')
+  expect(TYPES.sol.backend).toBe('codex')
+})
+
+test('ACP line handling answers request_permission from decidePermission without launching agy', () => {
+  const written: Record<string, unknown>[] = []
+  const stdout = { write: (line: string) => { written.push(JSON.parse(line) as Record<string, unknown>) } }
+  const write = (message: Record<string, unknown>) => stdout.write(`${JSON.stringify(message)}\n`)
+  handleAcpLine(JSON.stringify({
+    jsonrpc: '2.0',
+    id: 'permission-1',
+    method: 'session/request_permission',
+    params: {
+      sessionId: 'session-1',
+      toolCall: { name: 'write_file', kind: 'edit', locations: [{ path: '/home/test/private.txt' }] },
+      options: [{ optionId: 'allow', kind: 'allow_once' }, { optionId: 'deny', kind: 'reject_once' }],
+    },
+  }), {
+    pending: new Map(),
+    sessions: new Map([['session-1', { writableRoots: ['/repo'], tmpDir: '/tmp/session', messages: [] }]]),
+    write,
+    log: () => {},
+  })
+  expect(written).toEqual([{ jsonrpc: '2.0', id: 'permission-1', result: { outcome: { outcome: 'selected', optionId: 'deny' } } }])
 })
 
 test('a missing Codex recovery never falls through to Claude', async ($, on) => {

@@ -17,15 +17,17 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, Time
 // the environment and skill listing from the agent's first message, the
 // implementer role, the owner's agent and style rules, and the target repo's own rules.
 //
-// A hooks module has no Node and no sockets, so the daemon is a node bridge
-// (daemon/codex-bridge.mjs) speaking HTTP on a unix socket to the mod and
-// JSON-RPC on stdio to `codex app-server`.
+// A hooks module has no Node and no sockets, so each backend has a Node bridge
+// speaking HTTP on a unix socket to the mod and JSON-RPC on stdio to its CLI.
 
 export const TYPES = {
-  luna: { model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'slow but cheap implementer, only for a task that may run slow but must run cheap' },
-  sol: { model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'default implementer for code changes from a settled plan' },
+  luna: { backend: 'codex', model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'slow but cheap implementer, only for a task that may run slow but must run cheap' },
+  sol: { backend: 'codex', model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'default implementer for code changes from a settled plan' },
+  neon: { backend: 'acp', model: 'gemini-4-neon-high', effort: 'high', sandbox: 'workspace-write', blurb: 'Google Antigravity implementer using Gemini 4 Neon' },
+  flash: { backend: 'acp', model: 'gemini-3.8-flash-medium', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast Google Antigravity implementer using Gemini 3.8 Flash' },
 } as const
 type TypeName = keyof typeof TYPES
+type Backend = typeof TYPES[TypeName]['backend']
 const PREFIX = 'codex-subagent:'
 const MODEL_AUTO_COMPACT_TOKEN_LIMIT = 150000
 
@@ -495,17 +497,18 @@ export function contentHash(text: string): string {
 
 // The bridge's source as this module sees it on disk. A bridge outlives a
 // module reload, so a bridge whose /health reports another fingerprint runs
-// code this module was not written against. The fingerprint covers every file
-// the bridge loads at startup: codex-bridge.mjs and codex-config.mjs.
-export const bridgeSource = ($: EngineInterface) => `${$.plugin.root}/daemon/codex-bridge.mjs`
+// code this module was not written against. Each fingerprint covers every file
+// its backend bridge loads at startup.
+export const bridgeSource = ($: EngineInterface, backend: Backend = 'codex') => `${$.plugin.root}/daemon/${backend === 'codex' ? 'codex' : 'acp'}-bridge.mjs`
 export const bridgeConfigSource = ($: EngineInterface) => `${$.plugin.root}/daemon/codex-config.mjs`
 export const UNREAD_FINGERPRINT = 'unread'
-export async function bridgeFingerprint($: EngineInterface): Promise<string> {
+export async function bridgeFingerprint($: EngineInterface, backend: Backend = 'codex'): Promise<string> {
   try {
-    return contentHash((await Promise.all([bridgeSource($), bridgeConfigSource($)].map(p => $.fs.read(p)))).join('\0'))
+    const sources = backend === 'codex' ? [bridgeSource($, backend), bridgeConfigSource($)] : [bridgeSource($, backend)]
+    return contentHash((await Promise.all(sources.map(p => $.fs.read(p)))).join('\0'))
   } catch (err) {
     // An unreadable source must not keep the bridge from starting; it only skips the staleness check.
-    $.ui.log(`[codex-subagent] cannot fingerprint ${bridgeSource($)}: ${String(err)}`, { to: 'debug' })
+    $.ui.log(`[codex-subagent] cannot fingerprint ${bridgeSource($, backend)}: ${String(err)}`, { to: 'debug' })
     return UNREAD_FINGERPRINT
   }
 }
@@ -514,10 +517,12 @@ export async function bridgeFingerprint($: EngineInterface): Promise<string> {
 // again when nothing listens on the socket (the bridge or codex died), or when
 // the bridge runs stale code; the new bridge takes over the socket (the old one
 // exits once its socket is replaced) and resumes threads from the threadId the step sends.
-function startBridge($: EngineInterface, sock: string, onFail: (ready: Promise<void>) => void): Promise<void> {
+function startBridge($: EngineInterface, backend: Backend, sock: string, onFail: (ready: Promise<void>) => void): Promise<void> {
   let stop: (() => void) | undefined
   async function* output() {
-    const bridge = await $.process.spawn({ argv: ['node', bridgeSource($), sock, await bridgeFingerprint($), String(MODEL_AUTO_COMPACT_TOKEN_LIMIT)] })
+    const argv = ['node', bridgeSource($, backend), sock, await bridgeFingerprint($, backend)]
+    if (backend === 'codex') argv.push(String(MODEL_AUTO_COMPACT_TOKEN_LIMIT))
+    const bridge = await $.process.spawn({ argv })
     stop = () => {
       try { (bridge as unknown as { kill?: (signal?: string) => void }).kill?.('SIGTERM') } catch (err) { $.ui.log(`[codex-bridge] failed to stop after startup failure: ${String(err)}`, { to: 'debug' }) }
     }
@@ -537,9 +542,20 @@ function startBridge($: EngineInterface, sock: string, onFail: (ready: Promise<v
   return ready
 }
 
-async function socketPath($: EngineInterface): Promise<string> {
+type BridgeState = { sock: string; ready?: Promise<void>; verified?: Promise<void> }
+async function ensureBridge($: EngineInterface, backend: Backend, bridge: BridgeState): Promise<BridgeState & { ready: Promise<void> }> {
+  bridge.sock ||= await socketPath($, backend)
+  if (!bridge.ready) {
+    const ready = startBridge($, backend, bridge.sock, failed => { if (bridge.ready === failed) bridge.ready = undefined })
+    bridge.ready = ready
+  }
+  return bridge as BridgeState & { ready: Promise<void> }
+}
+
+async function socketPath($: EngineInterface, backend: Backend = 'codex'): Promise<string> {
   const home = (await $.env.get('HOME')) ?? '/tmp'
-  return `${home}/.claude-work/run/codex-subagent-${await $.session.id()}.sock`
+  const suffix = backend === 'codex' ? '' : `-${backend}`
+  return `${home}/.claude-work/run/codex-subagent-${await $.session.id()}${suffix}.sock`
 }
 
 // What one load of this module keeps: a hot reload starts it over.
@@ -660,20 +676,15 @@ export const register: Register = (on) => {
     return { messages: messages.slice(Math.max(0, lastAssistant)) }
   })
 
-  let sock = ''
-  let bridgeReady: Promise<void> | undefined
-  const dropFailedBridge = (failed: Promise<void>) => { if (bridgeReady === failed) bridgeReady = undefined }
-  // The bridgeReady whose /health matched this module's bridge source.
-  let verifiedBridge: Promise<void> | undefined
+  const bridges: Record<Backend, BridgeState> = { codex: { sock: '' }, acp: { sock: '' } }
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     // The bridge's schema-harvest child is a `claude -p` that never reaches the
     // API; were this plugin installed there, it would start a bridge of its own.
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
-    sock = await socketPath($)
     await ensureRegistered(st, $)
-    bridgeReady = startBridge($, sock, dropFailedBridge)
+    await ensureBridge($, 'codex', bridges.codex)
     return started
   })
 
@@ -704,12 +715,11 @@ export const register: Register = (on) => {
     }
     if (r.agentId) {
       try {
-        sock ||= await socketPath($)
-        bridgeReady ??= startBridge($, sock, dropFailedBridge)
-        const ready = bridgeReady
-        await abortable(ready, next.signal)
+        const backend = TYPES[type].backend
+        const bridge = await ensureBridge($, backend, bridges[backend])
+        await abortable(bridge.ready, next.signal)
         const res = await $.http.fetch('http://codex-bridge/remember', {
-          method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' },
+          method: 'POST', socketPath: bridge.sock, headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ key: r.agentId, type, cwd, writableRoots }),
         })
         if (!res.ok) throw new Error(`bridge POST /remember ${res.status}: ${res.text.slice(0, 2000)}`)
@@ -741,8 +751,6 @@ export const register: Register = (on) => {
     const bridgeUp = (ready: Promise<void>) => withinBudget(abortable(ready, next.signal), Infinity, () => {
       throw new Error(`the codex bridge is still starting after this step's time budget (${next.budget.ms} ms)`)
     })
-    const post = (route: string, payload: unknown) =>
-      $.http.fetch(`http://codex-bridge${route}`, { method: 'POST', socketPath: sock, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
     void ensureRegistered(st, $)
     let agent = agentId ? agents.get(agentId) : undefined
     if (!agent && agentId && spawning.size) {
@@ -755,14 +763,16 @@ export const register: Register = (on) => {
     const claim: Claim = agent ? { ours: true, type: agent.type } : codexClaim(e.model, subagentType)
     if (claim.ours && agentId) claimed.add(agentId)
     const cause = `model=${e.model} type=${subagentType ?? '(unknown)'}`
+    const backend = claim.type ? TYPES[claim.type].backend : 'codex'
+    let bridge = bridges[backend]
+    const post = (route: string, payload: unknown) =>
+      $.http.fetch(`http://codex-bridge${route}`, { method: 'POST', socketPath: bridge.sock, headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
     let rebuilt = false
     if (!agent && agentId) {
       let found = false
       try {
-        sock ||= await socketPath($)
-        bridgeReady ??= startBridge($, sock, dropFailedBridge)
-        const ready = bridgeReady
-        await bridgeUp(ready)
+        bridge = await ensureBridge($, backend, bridge)
+        await bridgeUp(bridge.ready)
         const res = await abortable(post('/recover', { key: agentId }), next.signal)
         if (!res.ok) throw new Error(`bridge POST /recover ${res.status}: ${res.text.slice(0, 2000)}`)
         const recovered = JSON.parse(res.text) as { found?: boolean; type?: TypeName; cwd?: string; writableRoots?: string[]; threadId?: string }
@@ -815,7 +825,7 @@ export const register: Register = (on) => {
     }
 
     // The bridge routes /health for GET only; every other route is a POST.
-    const getHealth = () => abortable($.http.fetch('http://codex-bridge/health', { method: 'GET', socketPath: sock }), next.signal)
+    const getHealth = () => abortable($.http.fetch('http://codex-bridge/health', { method: 'GET', socketPath: bridge.sock }), next.signal)
 
     const settle = (reply: StepReply): Promise<StepResult> => settlePending(
       reply,
@@ -830,9 +840,9 @@ export const register: Register = (on) => {
     // bridge is replaced only while no other agent has a turn in it and this
     // step holds none of its tool calls; otherwise the next step checks again.
     const bridgeCurrent = async (body: Record<string, unknown>): Promise<boolean> => {
-      const ready = bridgeReady
-      if (!ready || verifiedBridge === ready) return true
-      const want = await bridgeFingerprint($)
+      const ready = bridge.ready
+      if (!ready || bridge.verified === ready) return true
+      const want = await bridgeFingerprint($, backend)
       if (want === UNREAD_FINGERPRINT) return true
       const res = await getHealth()
       if (!res.ok) {
@@ -840,7 +850,7 @@ export const register: Register = (on) => {
         return true
       }
       const health = JSON.parse(res.text) as { fingerprint?: string; busy?: string[]; threads?: [string, string | null][] }
-      if (health.fingerprint === want) { verifiedBridge = ready; return true }
+      if (health.fingerprint === want) { bridge.verified = ready; return true }
       // A bridge from before /health reported `busy` still lists its threads;
       // any of those agents the engine shows running may be mid-turn in it.
       const known = new Set((health.threads ?? []).map(([key]) => key))
@@ -853,16 +863,17 @@ export const register: Register = (on) => {
         return false
       }
       diag(st, $, `bridge runs stale code (fingerprint ${health.fingerprint ?? '(none)'}, want ${want}); replacing it`)
-      const fresh = bridgeReady = startBridge($, sock, dropFailedBridge)
+      const fresh = startBridge($, backend, bridge.sock, failed => { if (bridge.ready === failed) bridge.ready = undefined })
+      bridge.ready = fresh
       await bridgeUp(fresh)
-      verifiedBridge = fresh
+      bridge.verified = fresh
       return true
     }
     const step = async (body: Record<string, unknown>): Promise<StepResult> => {
       let submitted = false
       const roundTrip = async () => {
-        const ready = bridgeReady ?? (bridgeReady = startBridge($, sock, dropFailedBridge))
-        await bridgeUp(ready)
+        bridge = await ensureBridge($, backend, bridge)
+        await bridgeUp(bridge.ready)
         if (!(await bridgeCurrent(body)) && body.toolResult && body.prompt !== undefined) {
           // A stale bridge may ignore `prompt` beside `toolResult`; the message
           // rides in the tool's output instead, the one place it reaches codex.
@@ -879,7 +890,8 @@ export const register: Register = (on) => {
       } catch (err) {
         if (!unreachable(err) || submitted) throw err
         diag(st, $, `bridge unreachable (${String(err)}); restarting it`)
-        const fresh = bridgeReady = startBridge($, sock, dropFailedBridge)
+        const fresh = startBridge($, backend, bridge.sock, failed => { if (bridge.ready === failed) bridge.ready = undefined })
+        bridge.ready = fresh
         await bridgeUp(fresh)
         return roundTrip()
       }
@@ -942,8 +954,7 @@ export const register: Register = (on) => {
         if (parsed.writableRoots) { agent.writableRoots = parsed.writableRoots; body.writableRoots = parsed.writableRoots }
       }
       agent.waiting = undefined
-      sock ||= await socketPath($)
-      bridgeReady ??= startBridge($, sock, dropFailedBridge)
+      bridge = await ensureBridge($, backend, bridge)
       let reply = yield* keepalive(step(body), next.signal, () => { block = 1; used(0) }, (ms, fn) => $.clock.after(ms, fn))
       agent.threadId = reply.threadId
       let usage = claudeUsage(reply.usage, reply.model ?? type.model)

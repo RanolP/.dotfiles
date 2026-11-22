@@ -4,7 +4,7 @@
 # `==` already done, `++` changed, `!!` failed.
 #
 #   bash arch.sh            # system phase via sudo, then home phase
-#   bash arch.sh system     # as root: pacman git+nix, nix-daemon, flakes
+#   bash arch.sh system     # as root: pacman git+nix+base-devel, nix-daemon, flakes
 #   bash arch.sh home       # as the user: clone ~/.dotfiles, home-manager switch
 #   curl -fsSL https://raw.githubusercontent.com/RanolP/.dotfiles/main/xpkg/setup-scripts/linux/arch.sh | bash
 #
@@ -21,11 +21,12 @@ phase_system() {
   set -euo pipefail
   [ "$(id -u)" -eq 0 ] || die "system phase must run as root"
 
-  if pacman -Q git nix >/dev/null 2>&1; then
-    ok "pacman git nix"
+  # base-devel gives a system cc for node-gyp, build.rs, sdists and makepkg.
+  if pacman -Q git nix base-devel >/dev/null 2>&1; then
+    ok "pacman git nix base-devel"
   else
-    changed "pacman git nix"
-    pacman -S --needed --noconfirm git nix </dev/null
+    changed "pacman git nix base-devel"
+    pacman -S --needed --noconfirm git nix base-devel </dev/null
   fi
 
   # `metadata` lets chmod on /mnt/c stick. An existing distro never re-runs

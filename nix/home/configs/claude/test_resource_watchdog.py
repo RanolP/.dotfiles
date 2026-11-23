@@ -28,4 +28,8 @@ with tempfile.TemporaryDirectory() as d:
     assert wd.session_of(300, d + "/{pid}.json") is None, "a file whose pid field disagrees is not trusted"
     assert wd.owner(999, procs, lookup)["session_id"] is None
 assert max(wd.agent_children(procs), key=lambda k: k[1])[0] == 111
+bridge = {**procs, 130: (100, 9_999_999, "S", "node /h/.claude/mods/hetero-subagents/daemon/codex-bridge.mjs")}
+cands = {k[0] for k in wd.agent_children(bridge)}
+assert 130 not in cands, "a codex bridge under a claude session is never a stop candidate"
+assert cands == {111}, f"only shell-tool jobs are candidates (not the shell, codex app-server, its children, MCP): {cands}"
 print("ok")

@@ -9,6 +9,7 @@ from pathlib import Path
 
 STATE = Path.home() / ".cache/claude-resource-watchdog/stopped.json"
 AGENTS = {"claude", "codex", "agy"}
+SHELLS = {"bash", "zsh", "sh", "dash", "fish"}
 WARN = 2  # kern.memorystatus_vm_pressure_level: 1 normal, 2 warn, 4 critical
 LEVELS = {1: "normal", 2: "warn", 4: "critical"}
 # Resume: after pressure has read normal on every tick for RESUME_AFTER_S, SIGCONT the oldest still-stopped pid,
@@ -36,17 +37,25 @@ def processes() -> dict[int, tuple[int, int, str, str]]:
 def is_agent(cmd: str) -> bool:
     return os.path.basename(cmd.split()[0]) in AGENTS if cmd.split() else False
 
+def is_shell(cmd: str) -> bool:
+    return os.path.basename(cmd.split()[0]).lstrip("-") in SHELLS if cmd.split() else False
+
 def agent_children(procs: dict) -> list[tuple[int, int, str, str]]:
+    """Stop candidates: jobs an agent started through its shell tool, i.e. a non-shell process with a shell between
+    it and the nearest agent root. Agent infrastructure has no shell ancestor and is never a candidate: 2026-11-23
+    the watchdog froze this session's hetero-subagents codex bridge repeatedly, dropping the codex worker."""
     roots = {p for p, (_, _, _, cmd) in procs.items() if is_agent(cmd)}
-    def under_agent(pid: int) -> bool:
-        seen = set()
+    def shell_job(pid: int) -> bool:
+        seen, shell = set(), False
         while pid in procs and pid not in seen:
             seen.add(pid)
             pid = procs[pid][0]
             if pid in roots:
-                return True
+                return shell
+            shell = shell or (pid in procs and is_shell(procs[pid][3]))
         return False
-    return [(p, rss, stat, cmd) for p, (_, rss, stat, cmd) in procs.items() if p not in roots and under_agent(p)]
+    return [(p, rss, stat, cmd) for p, (_, rss, stat, cmd) in procs.items()
+            if p not in roots and not is_shell(cmd) and shell_job(p)]
 
 def session_of(claude_pid: int, pattern: str = SESSION_GLOB) -> dict | None:
     for path in glob.glob(pattern.format(pid=claude_pid)):

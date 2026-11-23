@@ -216,8 +216,9 @@ in
   };
 
   # Freezes (SIGSTOP) the largest agent-spawned process when memory pressure
-  # leaves normal, one at a time, and never kills; resource-guard.py reads its
-  # state file and tells the agent, which kills or resumes it. Incident: 2026-11-23, parallel `ipsw dyld xref` panicked the Mac.
+  # leaves normal, one at a time, and never kills; it records the owning Claude
+  # Code session and resumes (SIGCONT) once pressure stays normal for 60 s.
+  # resource-guard.py tells only the owning session. Incident: 2026-11-23, parallel `ipsw dyld xref` panicked the Mac.
   launchd.agents.claude-resource-watchdog = {
     enable = true;
     config = {

@@ -589,6 +589,8 @@ test('compaction starts when foldable rows exceed budget despite the fixed prefi
     writeMeta: async () => undefined,
     usageReading: async () => 50_000,
     sessionCompact: async () => { compactions++; clearFoldJob(key); return { messages: rows } },
+    queuedMessages: async () => [],
+    markQueuedMessagesFolded: async () => undefined,
     pendingKey: async () => `pending:${key}`,
     storeSet: async () => undefined,
     storeDelete: async () => undefined,
@@ -607,6 +609,7 @@ test('ready native-compaction loop stops when session.compact bypasses clm', OPT
   const key = transcriptKey(session)
   const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(12_000), toolUses: [] }]
   const summary = M('user', 'ENGINE SUMMARY')
+  const queued: QueuedMessage = { uuid: 'native-covered', message: M('user', 'queued before native compact'), sentAt: new Date(0).toISOString() }
   const events: string[] = []
   const stored = new Map<string, unknown>([[`pending:${key}`, readyPlan]])
   let meta: Meta = { seq: 0, fails: 0 }
@@ -618,6 +621,8 @@ test('ready native-compaction loop stops when session.compact bypasses clm', OPT
     writeMeta: async (next: Meta) => { meta = next },
     usageReading: async () => 50_000,
     sessionCompact: async () => { compactions++; return { messages: [summary] } },
+    queuedMessages: async () => [queued],
+    markQueuedMessagesFolded: async (messages: readonly QueuedMessage[]) => { stored.set('retired', messages.map(message => message.uuid)) },
     pendingKey: async () => `pending:${key}`,
     storeSet: async (storeKey: string, value: unknown) => { stored.set(storeKey, value) },
     storeDelete: async (storeKey: string) => { stored.delete(storeKey) },
@@ -634,6 +639,7 @@ test('ready native-compaction loop stops when session.compact bypasses clm', OPT
     expect(meta.foldTokens).toBe(50_000)
     expect(meta.lastObserved).toBe(50_000)
     expect(stored.has(`pending:${key}`)).toBe(false)
+    expect(stored.get('retired')).toEqual(['native-covered'])
     expect(events).toContain('session.compact unhandled by clm (native compaction ran); ready plan dropped')
   } finally { clearFoldJob(key) }
 })

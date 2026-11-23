@@ -1,4 +1,4 @@
-// Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noSummaryDropLoop noReinjection noLoss unhandledStaysInContext unhandledCompactRebases --witnesses wCompactUnhandled --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
+// Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noSummaryDropLoop noReinjection noLoss unhandledStaysInContext unhandledCompactRetiresReady --witnesses wCompactUnhandled --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
 // Red on the code before the fixes: the same command with --main head (unhandledStaysInContext, noReinjection) or --main prefix (noReinjection)
 // Regenerate the conformance traces (hooks/fold-conformance.test.ts): nice -n 15 sh nix/home/configs/claude/mods/clm/spec/fold-job-traces.sh
 //
@@ -43,8 +43,7 @@ module foldJob {
   var msgs: int -> Msg
   var job: Job
   var compactWaiting: bool
-  // A ready plugin compaction that bypassed clm was dropped and anchored to the returned native summary.
-  var metaRebased: bool
+  var lastAction: str
   var swap: Swap
   // Set when a job ends without a plan because its split overflowed tailTarget twice.
   var endedNoPlanOnOverflow: bool
@@ -122,7 +121,7 @@ module foldJob {
     not(msgs.get(m).typed),
     msgs' = msgs.set(m, { ...freshMsg, typed: true, inStore: true, inContext: true, typedAt: clock + 1 }),
     clock' = clock + 1,
-    job' = job, compactWaiting' = compactWaiting, metaRebased' = metaRebased, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow,
+    job' = job, compactWaiting' = compactWaiting, lastAction' = "typeMsg", swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow,
     seen' = if (job.phase != "idle") seen.union(Set("typedDuringFold")) else seen,
   }
 
@@ -134,7 +133,7 @@ module foldJob {
       if (r.inContext and not(r.handled)) { ...r, handled: true, repliedAt: clock + 1 } else r
     }),
     clock' = clock + 1,
-    job' = job, compactWaiting' = compactWaiting, metaRebased' = metaRebased, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    job' = job, compactWaiting' = compactWaiting, lastAction' = "assistantReply", swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   // ---- summary job ----
@@ -143,7 +142,7 @@ module foldJob {
   action turnEnd(twoTurns: bool, fits: bool): bool = all {
     job.phase == "idle", not(compactWaiting), not(swap.active),
     job' = { ...idleJob, phase: if (routeToSplit(FIXED, twoTurns, fits)) "bg" else "single", fits: fits, snap: stored(msgs), snapAt: clock },
-    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, metaRebased' = metaRebased, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, lastAction' = "turnEnd", swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   // One split-merge attempt. src: fold-job.ts:261-328 prepareBackgroundFold
@@ -166,14 +165,14 @@ module foldJob {
       endedNoPlanOnOverflow' = (endedNoPlanOnOverflow or (outcome == "overflow" and job.attempt == 1 and nextJob.phase == "idle")),
       seen' = if (outcome == "overflow" and job.attempt == 1 and nextJob.phase == "single") seen.union(Set("singleAfterOverflow")) else seen,
     },
-    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, metaRebased' = metaRebased, swap' = swap,
+    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, lastAction' = "bgAttempt", swap' = swap,
   }
 
   // src: fold-job.ts:363-377 prepareSingleFold; fold-job.ts:379-401 prepareEngineFold
   action finishFold(ok: bool): bool = all {
     job.phase == "single" or job.phase == "engine",
     job' = { ...job, phase: if (ok) "ready" else "idle" },
-    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, metaRebased' = metaRebased, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, lastAction' = "finishFold", swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   // ---- compaction ----
@@ -184,7 +183,7 @@ module foldJob {
     compactWaiting' = true,
     job' = if (job.phase == "idle") { ...idleJob, phase: "engine", snap: stored(msgs), csnap: stored(msgs), snapAt: clock, csnapAt: clock }
       else { ...job, csnap: stored(msgs), csnapAt: clock },
-    clock' = clock, msgs' = msgs, metaRebased' = metaRebased, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    clock' = clock, msgs' = msgs, lastAction' = "requestCompact", swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   // Start the swap of a plan over the rows read at readAt, which held the queued messages in `read`.
@@ -203,7 +202,7 @@ module foldJob {
     },
     job' = { ...job, phase: "swapping", mechanical: mechanical },
     compactWaiting' = false, clock' = clock,
-    endedNoPlanOnOverflow' = endedNoPlanOnOverflow, metaRebased' = metaRebased,
+    endedNoPlanOnOverflow' = endedNoPlanOnOverflow, lastAction' = if (mechanical) "deadline" else "swapReady",
   }
 
   // The plan is ready (from a turn end, or the awaited job resolved inside the deadline). src: fold-job.ts:754-755
@@ -214,10 +213,13 @@ module foldJob {
 
   // A plugin ahead of clm forwards the event to Claude Code's native compactor without invoking clm's handler.
   // src: fold-job.ts applyReadyIfAtThreshold
-  action compactUnhandled: bool = all {
+  action compactUnhandled(retireOk: bool): bool = all {
     job.phase == "ready", not(compactWaiting), not(swap.active),
-    job' = idleJob, compactWaiting' = false, metaRebased' = true,
-    clock' = clock, msgs' = msgs, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow,
+    retireOk or RETIRE_MAY_FAIL,
+    val covered = msgs.keys().mapBy(m => { ...msgs.get(m), engine: msgs.get(m).engine or m.in(stored(msgs)), foldedRow: false })
+    msgs' = retire(covered, stored(msgs), retireOk),
+    job' = idleJob, compactWaiting' = false, lastAction' = "compactUnhandled",
+    clock' = clock, swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow,
     seen' = seen.union(Set("compactUnhandled")),
   }
 
@@ -239,7 +241,7 @@ module foldJob {
     val covered = msgs.keys().mapBy(m => { ...msgs.get(m), engine: msgs.get(m).engine or m.in(stored(msgs)), foldedRow: false })
     msgs' = retire(covered, stored(msgs), retireOk),
     job' = idleJob, compactWaiting' = false, clock' = clock,
-    swap' = swap, metaRebased' = metaRebased, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen.union(Set("handOff")),
+    swap' = swap, lastAction' = "handOff", endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen.union(Set("handOff")),
   }
 
   // ---- persistence inside applyFoldPlan ----
@@ -257,19 +259,19 @@ module foldJob {
       swap' = { ...swap, pc: if (ok or (step == "retire" and FIXED)) swap.pc + 1 else DONE },
       seen' = if (ok) seen else seen.union(Set("writeFailed")),
     },
-    job' = job, compactWaiting' = compactWaiting, metaRebased' = metaRebased, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, clock' = clock,
+    job' = job, compactWaiting' = compactWaiting, lastAction' = "persist", endedNoPlanOnOverflow' = endedNoPlanOnOverflow, clock' = clock,
   }
 
   // src: fold-job.ts:782-786 (finally: job idle, pending plan deleted)
   action finishSwap: bool = all {
     swap.active, swap.pc == DONE,
     swap' = noSwap, job' = idleJob, clock' = clock,
-    msgs' = msgs, compactWaiting' = compactWaiting, metaRebased' = metaRebased, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
+    msgs' = msgs, compactWaiting' = compactWaiting, lastAction' = "finishSwap", endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen,
   }
 
   action init = all {
     msgs' = MSGS.mapBy(_ => freshMsg),
-    job' = idleJob, compactWaiting' = false, metaRebased' = false, swap' = noSwap, endedNoPlanOnOverflow' = false, clock' = 0, seen' = Set(),
+    job' = idleJob, compactWaiting' = false, lastAction' = "init", swap' = noSwap, endedNoPlanOnOverflow' = false, clock' = 0, seen' = Set(),
   }
 
   action step = any {
@@ -285,7 +287,8 @@ module foldJob {
     finishFold(ok),
     requestCompact,
     swapReady,
-    compactUnhandled,
+    nondet u = Set(true, false).oneOf()
+    compactUnhandled(u),
     deadline,
     nondet r = Set(true, false).oneOf()
     handOff(r),
@@ -318,8 +321,8 @@ module foldJob {
     (r.typed and not(r.handled)) implies r.inContext
   })
 
-  // P4: a ready plan whose compact event bypasses clm is retired with metadata anchored to the native summary.
-  val unhandledCompactRebases = seen.contains("compactUnhandled") implies metaRebased
+  // P4: the unhandled compact transition consumes the ready plan instead of allowing another compact next turn.
+  val unhandledCompactRetiresReady = lastAction == "compactUnhandled" implies job.phase == "idle"
 
   // Sanity: must be violated, showing a carry is reachable at all.
   val sanityNoCarry = MSGS.forall(m => msgs.get(m).carried == 0)

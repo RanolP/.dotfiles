@@ -150,7 +150,7 @@ const queuedMessages = async (io: Pick<FoldJobIo, 'queuedMessages'>, key: string
   const retired = retiredQueued.get(key)
   return (await io.queuedMessages()).filter(message => !retired?.has(message.uuid))
 }
-async function retireQueued(io: FoldJobIo, key: string, messages: readonly QueuedMessage[]): Promise<void> {
+async function retireQueued(io: PersistenceIo & Pick<FoldJobIo, 'markQueuedMessagesFolded'>, key: string, messages: readonly QueuedMessage[]): Promise<void> {
   const retired = retiredQueued.get(key) ?? new Map<string, QueuedMessage>()
   for (const message of messages) retired.set(message.uuid, message)
   retiredQueued.set(key, retired)
@@ -503,7 +503,7 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
   return job
 }
 
-type ReadyFoldIo = Pick<FoldJobIo, 'sessionId' | 'sessionMessages' | 'readMeta' | 'writeMeta' | 'usageReading' | 'sessionCompact' | 'storeSet' | 'storeDelete' | 'pendingKey' | 'logEvent' | 'log'>
+type ReadyFoldIo = Pick<FoldJobIo, 'sessionId' | 'sessionMessages' | 'readMeta' | 'writeMeta' | 'usageReading' | 'sessionCompact' | 'queuedMessages' | 'markQueuedMessagesFolded' | 'storeSet' | 'storeDelete' | 'pendingKey' | 'logEvent' | 'log'>
 
 export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: string): Promise<boolean> {
   const job = foldJobs.get(key)
@@ -525,6 +525,7 @@ export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: 
         await io.storeDelete(await io.pendingKey(key))
         if (reading !== undefined) await io.writeMeta({ ...await io.readMeta(), foldTokens: reading, lastObserved: reading })
       })
+      await retireQueued(io, key, await persistStep<QueuedMessage[]>(io, [], () => queuedMessages(io, key)))
       await logFoldOutcome(io, 'session.compact unhandled by clm (native compaction ran); ready plan dropped')
     }
   }

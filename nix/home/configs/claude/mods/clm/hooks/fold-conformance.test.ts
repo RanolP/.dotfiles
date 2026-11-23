@@ -19,7 +19,7 @@ import { expect, test } from 'claude-code/testing'
 import type { SessionCompactResult, SessionMessage } from 'claude-code'
 import { applyReadyIfAtThreshold, clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, resetRetiredQueued, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
 import { captureAppendedRow } from './register'
-import { estTokens, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, liveRows, planClear, protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type QueuedMessage } from './fold'
+import { estTokens, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, liveRows, planClear, protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type QueuedMessage } from './fold'
 import { EMPTY_LEDGER, notesOf, SPLIT_MERGE_SYSTEM } from './ledger'
 import type { Fold, Meta, Opts } from './fold-runtime'
 import type { RewindIo } from './rewind'
@@ -189,14 +189,18 @@ function world(id: string) {
     },
     set retiringForHandOff(value: boolean) { retiringForHandOff = value },
     set handOffRetireFails(value: boolean) { handOffRetireFails = value },
-    async compactUnhandled(options: Opts) {
+    async compactUnhandled(options: Opts, retireOk: boolean) {
       bypassCompact = true
+      retiringForHandOff = true
+      handOffRetireFails = !retireOk
       try {
         await applyReadyIfAtThreshold(io, { ...options, budget: 1, reserve: 0 }, key)
       } finally {
         bypassCompact = false
+        retiringForHandOff = false
+        handOffRetireFails = false
       }
-      nativeMetaRebased = meta.boundary !== undefined
+      nativeMetaRebased = w.session[0] !== undefined && meta.boundary?.fp === fingerprint(w.session[0]) && meta.boundary.offset === 0
     },
     // Messages whose folded row the planned cut keeps in its tail, set when the harness picks the cut.
     get keptFolded() { return kept },
@@ -405,8 +409,9 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
         cover(`swapReady ${before.w ? 'awaited by a compaction' : 'at a new compaction'}${MSGS.some(m => after.m[m]!.carried > before.m[m]!.carried) ? ', carrying' : ''}`)
         break
       case 'compactUnhandled':
-        await w.compactUnhandled(opts(0))
-        cover('compactUnhandled')
+        await w.compactUnhandled(opts(0), Boolean(after.p.u))
+        expect(w.nativeMetaRebased, `${at}: native compact meta rebased to the returned summary`).toBe(true)
+        cover(`compactUnhandled(retireOk=${Boolean(after.p.u)})`)
         break
       case 'handOff': {
         if (!before.w) {
@@ -476,7 +481,6 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
       }
     }
     expect(modelPhase(after), `${at}: code phase vs model ${after.j.phase} (waiting=${after.w}, swap pc=${after.s.active ? after.s.pc : '-'}) ${JSON.stringify(w.events.slice(-3))}`).toContain(codePhase(w))
-    expect(w.nativeMetaRebased, `${at}: native compact meta rebased`).toBe(after.r)
     // Attempt n of the split is the code's (n + 1)th split-merge call; the job that leaves bg makes no further one.
     if (after.j.phase === 'bg') expect(w.splitCalls, `${at}: split-merge calls for attempt ${after.j.attempt}`).toBe(after.j.attempt + 1)
     else if (after.a === 'bgAttempt') expect(w.splitCalls, `${at}: split-merge calls after the job left bg`).toBe(before.j.attempt + 1)
@@ -500,7 +504,7 @@ test('fold job conformance: the replayed traces cover every model action', () =>
     'persist(true) at retire', 'persist(false) at retire', 'handOff(retireOk=true)', 'handOff(retireOk=false)', 'persist(true) at ledger', 'persist(true) at snapshot', 'persist(true) at meta',
     'persist(false) at ledger', 'persist(false) at snapshot', 'persist(false) at meta', 'finishSwap', 'finishSwap mechanical',
     'finishSwap carrying an unhandled message', 'turnEnd(two=false, fits=true) on one turn',
-    'compactUnhandled',
+    'compactUnhandled(retireOk=true)', 'compactUnhandled(retireOk=false)',
   ]
   const report = [...coverage].sort().map(([label, n]) => `${label}: ${n}`).join('\n')
   console.log(`replayed steps per action:\n${report}`)

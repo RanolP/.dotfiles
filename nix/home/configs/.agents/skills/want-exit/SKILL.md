@@ -1,6 +1,6 @@
 ---
 name: want-exit
-description: Close out a session before the user types `exit` -- audit every resource this session or the machine left running or unsaved (background tasks, listening ports, git state, worktrees, browser/device/simulator/emulator/container sessions, herdr workspaces, the scratchpad, unrecorded learnings), give each a safe/ask/keep verdict, remove only the safe ones, ask once about the rest, and end with a report plus the line that `exit` is now safe. Use when the user says "want-exit", "/want-exit", "exit 전 정리", "세션 정리", "before exit", or is about to end the session.
+description: Close out a session before the user types `exit` -- audit every resource this session or the machine left running or unsaved (background tasks, listening ports, git state, worktrees, browser/device/simulator/emulator/container sessions, the scratchpad, unrecorded learnings), give each a safe/ask/keep verdict, remove only the safe ones, ask once about the rest, and end with a report plus the line that `exit` is now safe. Use when the user says "want-exit", "/want-exit", "exit 전 정리", "세션 정리", "before exit", or is about to end the session.
 ---
 
 # want-exit
@@ -22,7 +22,6 @@ Send all probes in ONE message so they run in parallel. For each CLI category, r
 | Browser / device | `agent-browser`, `agent-device` -- their session list command |
 | Simulators / emulators | `xcrun simctl list devices booted`, `adb devices` |
 | Containers | `docker ps` (OrbStack answers the same CLI) |
-| Workspaces | `herdr` -- its workspace list command |
 | Scratchpad | `du -sh <scratchpad>` and `ls <scratchpad>` for the session scratchpad directory named in the system prompt |
 | Learnings | review this session for non-obvious conclusions reached from explicit premises; grep `memory/evidence/` for each so a recorded one is skipped |
 

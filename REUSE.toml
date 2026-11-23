@@ -370,7 +370,6 @@ path = [
     "docs/src/jira-cli.md",
     "docs/src/codex.md",
     "docs/src/fast-apply.md",
-    "docs/src/herdr.md",
     "docs/src/agent-incidents.md",
     "docs/src/xpkg.md",
 ]

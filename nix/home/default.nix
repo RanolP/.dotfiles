@@ -78,64 +78,6 @@ let
       ${supermemoryPlugin}/plugin/skills/supermemory-search/SKILL.md > $out/SKILL.md
   '';
 
-  # herdr-browser renders a Chromium view inside a herdr pane over CDP. herdr
-  # has no way to declare plugins in config.toml -- registration only happens
-  # through `herdr plugin install` (git-clones into a mutable data dir) or
-  # `herdr plugin link <PATH>` (registers a local dir, runs no build). The
-  # manifest declares no build step and package.json has devDependencies only,
-  # so a plain source fetch is enough -- nothing compiles.
-  # The manifest's commands invoke bare `bun`; rewrite them to an absolute
-  # store path for the same reason as nushell below -- herdr execs the binary
-  # directly and bun is not on the PATH of the process that launched the
-  # herdr server. Upstream tags no releases, so the rev is a pinned commit.
-  herdrBrowser =
-    let
-      src = pkgs.fetchFromGitHub {
-        owner = "ogulcancelik";
-        repo = "herdr-browser";
-        rev = "f05ae7a61ead89685eef5a7365f01f81110ba777";
-        hash = "sha256-33/ihmGVKh/vP2/KuQ7uj5iMGuVQ0dypBf0NQ78H77A=";
-      };
-    in
-    pkgs.runCommand "herdr-browser" { } ''
-      cp -R ${src} $out
-      chmod -R u+w $out
-      sed -i 's|command = \["bun"|command = ["${lib.getExe pkgs.bun}"|' $out/herdr-plugin.toml
-    '';
-
-  # herdr-handsfree (voice dictation + webcam gaze mouse) is registered the same
-  # way as herdrBrowser above, with one extra step: its manifest carries a
-  # [[build]] block that curls the release tarball into ./target/release. A
-  # linked store path is read-only and `plugin link` runs no build anyway, so
-  # fetch that same prebuilt binary here (never compile -- the crate needs rust
-  # + cmake), drop the build block, and point every command at the absolute
-  # store path instead of the relative target/release/ one.
-  herdrHandsfree =
-    let
-      src = pkgs.fetchFromGitHub {
-        owner = "RanolP";
-        repo = "herdr-handsfree";
-        rev = "0b7b3f8eeab28ae4b49ad2187fde421205804f76";
-        hash = "sha256-xEv6HqVdDdW/dksFnXhPYQmskXkLlDWyieip+tsgn+k=";
-      };
-      bin = pkgs.fetchurl {
-        url = "https://github.com/RanolP/herdr-handsfree/releases/download/v0.1.0/herdr-handsfree-v0.1.0-aarch64-apple-darwin.tar.gz";
-        hash = "sha256-Q4HJq3UhDlycRDDlPjLqd73D6F+/ROoUzbDpdtJi2IY=";
-      };
-    in
-    pkgs.runCommand "herdr-handsfree" { } ''
-      mkdir -p $out/bin
-      tar xzf ${bin} -C $out/bin
-      chmod +x $out/bin/herdr-handsfree
-      cp ${src}/herdr-plugin.toml $out/herdr-plugin.toml
-      chmod u+w $out/herdr-plugin.toml
-      sed -i 's|"target/release/herdr-handsfree"|"'"$out"'/bin/herdr-handsfree"|g' $out/herdr-plugin.toml
-      sed -i '/^# Fetches the prebuilt binary/,/^$/d' $out/herdr-plugin.toml
-      grep -q 'target/release' $out/herdr-plugin.toml && exit 1
-      grep -q '^\[\[build\]\]' $out/herdr-plugin.toml && exit 1
-      true
-    '';
-
   # The vendored choco-pi tree, deployed to ~/.pi/agent/vendor/choco-pi where
   # configs/pi/settings.json points its relative `packages` entries (the review
   # extension writes its data under ~/.pi/agent/choco-pi, so the tree stays out
@@ -341,8 +283,6 @@ in
 
   home.packages = with pkgs; [
     age
-    # Runtime for the herdr-browser plugin (see herdrBrowser above).
-    bun
     # Composes the QA review videos built by the jira-qa-batch skill.
     ffmpeg
     gnupg
@@ -657,10 +597,6 @@ in
       # shows up in the /config picker, and settings.json's "outputStyle" names
       # the one whose body goes resident.
       ".claude/output-styles/concise-adhd-korean.md".source = claudeOutputStyle;
-      # Pins the herdr-browser store path as a GC root: the plugin registry
-      # holds a bare path in herdr's own mutable state, which nix can't see.
-      ".local/share/herdr-plugins/herdr-browser".source = herdrBrowser;
-      ".local/share/herdr-plugins/herdr-handsfree".source = herdrHandsfree;
       ".pi/agent/vendor/choco-pi".source = piVendor;
       ".gnupg/gpg-agent.conf".source = ./configs/gnupg/gpg-agent.conf;
     }
@@ -671,51 +607,6 @@ in
   # shims on PATH.
   xdg.configFile."opencode/opencode.jsonc".source = ./configs/opencode/opencode.jsonc;
   xdg.configFile."rex/init.lua".source = ./configs/rex/init.lua;
-
-  # Herdr (terminal workspace manager, installed via mise) spawns new panes with
-  # $SHELL, which is zsh. Point it at nushell instead -- absolute path because
-  # herdr execs the binary directly, and nu is not on the PATH of the process
-  # that launched the herdr server. shell_mode stays "auto" (login shell on
-  # macOS); nu supports --login. Run `herdr server reload-config` after a
-  # rebuild to pick up the new store path without restarting the session.
-  # Tabs are turned off by unbinding every tab action ("" is accepted by
-  # `herdr config check`) -- herdr 0.7.5 has no single "disable tabs" switch.
-  # With no way to create a second tab, every workspace stays at one tab, so
-  # hide_tab_bar_when_single_tab hides the tab row permanently. Workspaces
-  # (prefix+shift+n) remain the only grouping level.
-  xdg.configFile."herdr/config.toml".text = ''
-    [terminal]
-    default_shell = "${lib.getExe pkgs.nushell}"
-
-    [keys]
-    new_tab = ""
-    rename_tab = ""
-    previous_tab = ""
-    next_tab = ""
-    switch_tab = ""
-    close_tab = ""
-
-    # herdr-handsfree toggles (plugin pinned as herdrHandsfree above).
-    [[keys.command]]
-    key = "prefix+d"
-    type = "plugin_action"
-    command = "ranolp.handsfree.toggle-dictation"
-    description = "toggle dictation"
-
-    [[keys.command]]
-    key = "prefix+g"
-    type = "plugin_action"
-    command = "ranolp.handsfree.toggle-gaze"
-    description = "toggle gaze mouse"
-
-    [theme]
-    name = "nord"
-
-    [ui]
-    hide_tab_bar_when_single_tab = true
-    # "spaces" (default, grouped by space) or "priority" (attention queue).
-    agent_panel_sort = "priority"
-  '';
 
   # Claude Code rewrites ~/.claude/settings.json at runtime (model selection,
   # approved permissions), so it can't be a read-only home.file symlink: the
@@ -764,33 +655,6 @@ in
         run rm -f "$nodedir/bin/claude"
       fi
     done
-  '';
-
-  # Register herdr-browser (fetched above) with herdr. `plugin link` is the only
-  # declarative-friendly entry point: it takes a local dir and runs no build.
-  # Unlink first so a rev bump re-points the registry at the new store path
-  # instead of leaving the old one behind. herdr comes from mise, not nix, so
-  # skip silently when it is not installed yet (fresh machine). The registry is
-  # server state -- run `herdr server reload-config` after a rebuild.
-  home.activation.herdrBrowserPlugin = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    herdrBin="$HOME/.local/share/mise/shims/herdr"
-    if [ -x "$herdrBin" ]; then
-      "$herdrBin" plugin unlink official.browser >/dev/null 2>&1 || true
-      run "$herdrBin" plugin link ${herdrBrowser} --enabled
-    fi
-  '';
-
-  # Same registration as herdrBrowserPlugin above. `plugin uninstall` first: the
-  # plugin was originally added with `plugin install RanolP/herdr-handsfree`,
-  # which git-clones into ~/.config/herdr/plugins/github/ and would keep shadowing
-  # the linked store path under the same id.
-  home.activation.herdrHandsfreePlugin = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    herdrBin="$HOME/.local/share/mise/shims/herdr"
-    if [ -x "$herdrBin" ]; then
-      "$herdrBin" plugin uninstall ranolp.handsfree >/dev/null 2>&1 || true
-      "$herdrBin" plugin unlink ranolp.handsfree >/dev/null 2>&1 || true
-      run "$herdrBin" plugin link ${herdrHandsfree} --enabled
-    fi
   '';
 
   home.activation.nixYourShellCache = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
@@ -864,7 +728,6 @@ in
         tools =
           base.tools
           // lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
-            herdr = "0.7.5";
             colima = "0.10.3";
             lima = "2.1.4";
             docker-cli = "29.6.0";

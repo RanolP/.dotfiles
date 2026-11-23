@@ -45,6 +45,5 @@ Tool version manager. Replaces nvm, pyenv, rbenv, etc.
 | colima | 0.10.3 | macOS |
 | lima | 2.1.4 | macOS |
 | docker-cli | 29.6.0 | macOS |
-| herdr | 0.7.5 | macOS |
 
 On macOS, a Home Manager launchd agent runs the pin-bump script daily at 10:30; the script's seven-day guard limits successful updates to weekly. Its source is `nix/home/configs/mise/bump.py`.

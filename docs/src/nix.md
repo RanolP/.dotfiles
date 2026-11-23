@@ -33,7 +33,6 @@ System configuration layer. Managed by nix-darwin with home-manager.
 | Package | Purpose |
 |---------|---------|
 | age | Encryption tool |
-| bun | Runtime for the Herdr browser plugin |
 | ffmpeg | Composes Jira QA review videos |
 | gnupg | GPG toolchain |
 | nix-your-shell | nix develop/nix-shell → nushell |

@@ -17,7 +17,7 @@
 // disagreement.
 import { expect, test } from 'claude-code/testing'
 import type { SessionCompactResult, SessionMessage } from 'claude-code'
-import { clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, resetRetiredQueued, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
+import { applyReadyIfAtThreshold, clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, resetRetiredQueued, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
 import { captureAppendedRow } from './register'
 import { estTokens, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, liveRows, planClear, protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type QueuedMessage } from './fold'
 import { EMPTY_LEDGER, notesOf, SPLIT_MERGE_SYSTEM } from './ledger'
@@ -71,6 +71,8 @@ function world(id: string) {
   let afterFn: (() => void) | undefined
   let retiringForHandOff = false
   let handOffRetireFails = false
+  let bypassCompact = false
+  let nativeMetaRebased = false
   let splitCalls = 0
   let kept: string[] = []
   // Appended rows carry send times on the clock queued messages read, so withQueuedMessages can place a message
@@ -116,13 +118,17 @@ function world(id: string) {
       const all = (queueState as Record<string, QueuedMessage[]> | undefined) ?? {}
       queueState = { ...all, [sid]: queued().filter(message => !uuids.has(message.uuid)) }
     },
-    sessionCompact: async () => { throw new Error('the harness starts every compaction itself') },
+    sessionCompact: async () => {
+      if (!bypassCompact) throw new Error('the harness starts every compaction itself')
+      // Keep message contents abstract here; the transition checks ownership, cleanup and rebasing.
+      return { messages: [...w.session] }
+    },
     now: async () => 0,
     after: (_ms: number, fn: () => void) => {
       afterFn = fn
       return { cancel: () => { if (afterFn === fn) afterFn = undefined } }
     },
-    usageReading: async () => undefined, sentAt: async () => sentAt,
+    usageReading: async () => bypassCompact ? 50_000 : undefined, sentAt: async () => sentAt,
     readMeta: async () => ({ ...meta }),
     writeMeta: async (next: Meta) => {
       if (next.seq !== meta.seq) await gate('meta')
@@ -160,6 +166,7 @@ function world(id: string) {
     session: [] as SessionMessage[],
     get gates() { return gates },
     get meta() { return meta },
+    get nativeMetaRebased() { return nativeMetaRebased },
     sentAt,
     // Split-merge calls prepareBackgroundFold made since the last reset.
     get splitCalls() { return splitCalls },
@@ -182,6 +189,15 @@ function world(id: string) {
     },
     set retiringForHandOff(value: boolean) { retiringForHandOff = value },
     set handOffRetireFails(value: boolean) { handOffRetireFails = value },
+    async compactUnhandled(options: Opts) {
+      bypassCompact = true
+      try {
+        await applyReadyIfAtThreshold(io, { ...options, budget: 1, reserve: 0 }, key)
+      } finally {
+        bypassCompact = false
+      }
+      nativeMetaRebased = meta.boundary !== undefined
+    },
     // Messages whose folded row the planned cut keeps in its tail, set when the harness picks the cut.
     get keptFolded() { return kept },
     set keptFolded(value: string[]) { kept = value },
@@ -388,6 +404,10 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
         if (!before.w) startCompaction(1e9)
         cover(`swapReady ${before.w ? 'awaited by a compaction' : 'at a new compaction'}${MSGS.some(m => after.m[m]!.carried > before.m[m]!.carried) ? ', carrying' : ''}`)
         break
+      case 'compactUnhandled':
+        await w.compactUnhandled(opts(0))
+        cover('compactUnhandled')
+        break
       case 'handOff': {
         if (!before.w) {
           startCompaction(1e9)
@@ -456,6 +476,7 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
       }
     }
     expect(modelPhase(after), `${at}: code phase vs model ${after.j.phase} (waiting=${after.w}, swap pc=${after.s.active ? after.s.pc : '-'}) ${JSON.stringify(w.events.slice(-3))}`).toContain(codePhase(w))
+    expect(w.nativeMetaRebased, `${at}: native compact meta rebased`).toBe(after.r)
     // Attempt n of the split is the code's (n + 1)th split-merge call; the job that leaves bg makes no further one.
     if (after.j.phase === 'bg') expect(w.splitCalls, `${at}: split-merge calls for attempt ${after.j.attempt}`).toBe(after.j.attempt + 1)
     else if (after.a === 'bgAttempt') expect(w.splitCalls, `${at}: split-merge calls after the job left bg`).toBe(before.j.attempt + 1)
@@ -479,6 +500,7 @@ test('fold job conformance: the replayed traces cover every model action', () =>
     'persist(true) at retire', 'persist(false) at retire', 'handOff(retireOk=true)', 'handOff(retireOk=false)', 'persist(true) at ledger', 'persist(true) at snapshot', 'persist(true) at meta',
     'persist(false) at ledger', 'persist(false) at snapshot', 'persist(false) at meta', 'finishSwap', 'finishSwap mechanical',
     'finishSwap carrying an unhandled message', 'turnEnd(two=false, fits=true) on one turn',
+    'compactUnhandled',
   ]
   const report = [...coverage].sort().map(([label, n]) => `${label}: ${n}`).join('\n')
   console.log(`replayed steps per action:\n${report}`)

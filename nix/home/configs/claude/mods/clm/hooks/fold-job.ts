@@ -120,12 +120,15 @@ const compactResult = async <T>(
   void settled.then(log, log)
   return result
 }
-async function logPersistenceFailure(io: FoldJobIo, error: unknown): Promise<void> {
+type PersistenceIo = Pick<FoldJobIo, 'logEvent' | 'log'>
+type EngineSummaryIo = PersistenceIo & Pick<FoldJobIo, 'readMeta' | 'writeMeta' | 'storeSet' | 'storeDelete' | 'pendingKey'>
+
+async function logPersistenceFailure(io: PersistenceIo, error: unknown): Promise<void> {
   const reason = String(error).slice(0, 1000)
   try { await io.logEvent('fold-persist-failed', { reason }) } catch { /* compaction must remain fail-open */ }
   try { io.log(`clm: fold result returned after persistence failed (${reason})`, { to: 'debug' }) } catch { /* the result still belongs to the engine */ }
 }
-async function persistStep<T>(io: FoldJobIo, fallback: T, run: () => Promise<T>): Promise<T> {
+async function persistStep<T>(io: PersistenceIo, fallback: T, run: () => Promise<T>): Promise<T> {
   try { return await run() }
   catch (error) { await logPersistenceFailure(io, error); return fallback }
 }
@@ -176,13 +179,17 @@ const notShrunk = (before: readonly SessionMessage[], after: readonly SessionMes
   sum(after) < sum(before) ? undefined : { notShrunk: `the clm fold did not shrink the context (${sum(before)} -> ${sum(after)} est. tokens)` }
 
 /** After the engine summarized, its summary heads the live chain; a fold built on the old rows must never swap in. */
-export async function adoptEngineSummary(io: FoldJobIo, key: string, messages: readonly SessionMessage[] | undefined): Promise<void> {
+export async function adoptEngineSummary(io: EngineSummaryIo, key: string, messages: readonly SessionMessage[] | undefined, reading?: number): Promise<void> {
   const head = messages?.[0]
   if (!messages || !head) return
   foldJobs.set(key, { state: 'idle' })
   await persistStep<void>(io, undefined, async () => {
     await io.storeDelete(await io.pendingKey(key))
-    await io.writeMeta({ ...await io.readMeta(), boundary: { fp: fingerprint(head), offset: 0 } })
+    await io.writeMeta({
+      ...await io.readMeta(),
+      ...(reading === undefined ? {} : { foldTokens: reading, lastObserved: reading }),
+      boundary: { fp: fingerprint(head), offset: 0 },
+    })
     // Left on the pre-summary rows, the next observation read the clm ledger row as rewound away and rolled the ledger back.
     await io.storeSet(transcriptRowsKey(key), messages.map(fingerprint))
   })
@@ -496,7 +503,7 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
   return job
 }
 
-type ReadyFoldIo = Pick<FoldJobIo, 'sessionId' | 'sessionMessages' | 'readMeta' | 'usageReading' | 'sessionCompact' | 'logEvent' | 'log'>
+type ReadyFoldIo = Pick<FoldJobIo, 'sessionId' | 'sessionMessages' | 'readMeta' | 'writeMeta' | 'usageReading' | 'sessionCompact' | 'storeSet' | 'storeDelete' | 'pendingKey' | 'logEvent' | 'log'>
 
 export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: string): Promise<boolean> {
   const job = foldJobs.get(key)
@@ -506,7 +513,21 @@ export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: 
     const rows = liveRows(await io.sessionMessages(), meta.boundary)
     if (!atFoldPoint(rows, await io.usageReading(), meta, opts)) return false
   }
-  try { await io.sessionCompact() }
+  try {
+    const result = await io.sessionCompact()
+    // clm's handler replaces this exact ready object with swapping, then idle, before the compact promise resolves.
+    // If it is still current, another plugin forwarded the event past clm and the returned rows are the native summary.
+    if (foldJobs.get(key) === job) {
+      foldJobs.set(key, { state: 'idle' })
+      const reading = await persistStep(io, undefined, () => io.usageReading())
+      if (result.messages?.[0]) await adoptEngineSummary(io, key, result.messages, reading)
+      else await persistStep<void>(io, undefined, async () => {
+        await io.storeDelete(await io.pendingKey(key))
+        if (reading !== undefined) await io.writeMeta({ ...await io.readMeta(), foldTokens: reading, lastObserved: reading })
+      })
+      await logFoldOutcome(io, 'session.compact unhandled by clm (native compaction ran); ready plan dropped')
+    }
+  }
   catch (err) {
     await logFoldOutcome(io, `ready fold swap deferred (${String(err).slice(0, 1000)})`)
     io.log(`clm: ready fold swap deferred (${String(err)})`, { to: 'debug' })

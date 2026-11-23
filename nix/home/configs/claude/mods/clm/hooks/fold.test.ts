@@ -559,8 +559,12 @@ test('a large fixed prefix does not start compaction when foldable rows are belo
     sessionId: async () => session,
     sessionMessages: async () => rows,
     readMeta: async () => meta,
+    writeMeta: async () => undefined,
     usageReading: async () => 50_000,
     sessionCompact: async () => { compactions++; return { messages: rows } },
+    pendingKey: async () => `pending:${key}`,
+    storeSet: async () => undefined,
+    storeDelete: async () => undefined,
     logEvent: async () => undefined,
     log: () => undefined,
   }
@@ -582,8 +586,12 @@ test('compaction starts when foldable rows exceed budget despite the fixed prefi
     sessionId: async () => session,
     sessionMessages: async () => rows,
     readMeta: async () => meta,
+    writeMeta: async () => undefined,
     usageReading: async () => 50_000,
-    sessionCompact: async () => { compactions++; return { messages: rows } },
+    sessionCompact: async () => { compactions++; clearFoldJob(key); return { messages: rows } },
+    pendingKey: async () => `pending:${key}`,
+    storeSet: async () => undefined,
+    storeDelete: async () => undefined,
     logEvent: async () => undefined,
     log: () => undefined,
   }
@@ -591,6 +599,43 @@ test('compaction starts when foldable rows exceed budget despite the fixed prefi
   setRewindFoldJob(key, readyPlan, [])
   try { await applyReadyIfAtThreshold(io, thresholdOpts, transcriptKey(await io.sessionId())) } finally { clearFoldJob(key) }
   expect(compactions).toBe(1)
+})
+
+// Regression caught: a native compaction bypassed clm's handler, so the ready plan requested another native compaction at every turn end.
+test('ready native-compaction loop stops when session.compact bypasses clm', OPTS, async () => {
+  const session = 'native-compact-loop'
+  const key = transcriptKey(session)
+  const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(12_000), toolUses: [] }]
+  const summary = M('user', 'ENGINE SUMMARY')
+  const events: string[] = []
+  const stored = new Map<string, unknown>([[`pending:${key}`, readyPlan]])
+  let meta: Meta = { seq: 0, fails: 0 }
+  let compactions = 0
+  const io = {
+    sessionId: async () => session,
+    sessionMessages: async () => rows,
+    readMeta: async () => meta,
+    writeMeta: async (next: Meta) => { meta = next },
+    usageReading: async () => 50_000,
+    sessionCompact: async () => { compactions++; return { messages: [summary] } },
+    pendingKey: async () => `pending:${key}`,
+    storeSet: async (storeKey: string, value: unknown) => { stored.set(storeKey, value) },
+    storeDelete: async (storeKey: string) => { stored.delete(storeKey) },
+    logEvent: async (event: string, fields: { reason?: string }) => { if (event === 'fold-job' && fields.reason) events.push(fields.reason) },
+    log: () => undefined,
+  }
+  clearFoldJob(key)
+  setRewindFoldJob(key, readyPlan, [])
+  try {
+    await applyReadyIfAtThreshold(io, thresholdOpts, key)
+    await applyReadyIfAtThreshold(io, thresholdOpts, key)
+    expect(compactions).toBe(1)
+    expect(meta.boundary).toEqual({ fp: fingerprint(summary), offset: 0 })
+    expect(meta.foldTokens).toBe(50_000)
+    expect(meta.lastObserved).toBe(50_000)
+    expect(stored.has(`pending:${key}`)).toBe(false)
+    expect(events).toContain('session.compact unhandled by clm (native compaction ran); ready plan dropped')
+  } finally { clearFoldJob(key) }
 })
 
 // Regression caught: with a 67k fixed prefix the window budget sat past the engine's own autocompact point (~166.7k of 200k), so the ready clm plan never applied before the engine summarized.

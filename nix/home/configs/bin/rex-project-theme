@@ -33,18 +33,24 @@ if [ -n "$root" ]; then
   fi
 fi
 
+# Palette 8 is the comment gray, raised from Nord's 2.0:1 to #7b88a1 (3.5:1).
+# Same value as Ghostty and VS Code; sent on every call because Rex has no
+# config-file theme.
+palette="8=#7b88a1"
+state="$color $palette"
+
 state_key=$(printf '%s' "$REX_BLOCK" | cksum | awk '{print $1}')
 state_file="${TMPDIR:-/tmp}/rex-project-theme-${state_key}"
 last=
 if [ -f "$state_file" ]; then
   IFS= read -r last < "$state_file" || true
-  if [ "$color" = "$last" ]; then
+  if [ "$state" = "$last" ]; then
     exit 0
   fi
 fi
 
-if "$rex" --timeout 2s block call set_theme "{\"background\":\"$color\"}" >/dev/null 2>&1; then
-  printf '%s\n' "$color" > "$state_file"
+if "$rex" --timeout 2s block call set_theme "{\"background\":\"$color\",\"palette\":[\"$palette\"]}" >/dev/null 2>&1; then
+  printf '%s\n' "$state" > "$state_file"
 fi
 
 exit 0

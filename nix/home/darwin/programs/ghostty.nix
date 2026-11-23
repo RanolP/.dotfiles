@@ -5,6 +5,9 @@
     package = null;
     settings = {
       theme = "Nord";
+      # Bright black (palette 8) is the dim/comment gray for CLI tools; Nord's
+      # #596377 is 2.0:1 on the background. Same #7b88a1 as VS Code's comments.
+      palette = [ "8=#7b88a1" ];
       font-family = [
         "Iosevka Nerd Font Mono"
         "Pretendard"

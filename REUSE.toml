@@ -203,6 +203,8 @@ path = [
     "nix/home/configs/claude/hooks/plan-mode-guard.py",
     "nix/home/configs/claude/hooks/output-shape-reminder.py",
     "nix/home/configs/claude/hooks/rex-project-theme.py",
+    "nix/home/configs/claude/hooks/resource-guard.py",
+    "nix/home/configs/claude/resource-watchdog.py",
     "nix/home/configs/claude/mods/clm/.claude-plugin/plugin.json",
     "nix/home/configs/claude/mods/clm/hooks/hooks.json",
     "nix/home/configs/claude/mods/clm/hooks/register.ts",

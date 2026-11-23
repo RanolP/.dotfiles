@@ -215,6 +215,24 @@ in
     };
   };
 
+  # Freezes (SIGSTOP) the largest agent-spawned process when memory pressure
+  # leaves normal, one at a time, and never kills; resource-guard.py reads its
+  # state file and tells the agent, which kills or resumes it. Incident: 2026-11-23, parallel `ipsw dyld xref` panicked the Mac.
+  launchd.agents.claude-resource-watchdog = {
+    enable = true;
+    config = {
+      ProgramArguments = [
+        "${pkgs.python3}/bin/python3"
+        "${../configs/claude/resource-watchdog.py}"
+      ];
+      RunAtLoad = true;
+      KeepAlive = true;
+      EnvironmentVariables.HOME = config.home.homeDirectory;
+      StandardOutPath = "${config.home.homeDirectory}/.local/state/claude-resource-watchdog/launchd.out.log";
+      StandardErrorPath = "${config.home.homeDirectory}/.local/state/claude-resource-watchdog/launchd.err.log";
+    };
+  };
+
   programs.nushell.shellAliases = {
     rebuild = rebuildCmd;
   };

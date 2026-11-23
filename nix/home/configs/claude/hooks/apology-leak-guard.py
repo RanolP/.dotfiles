@@ -50,11 +50,12 @@ LOCAL_ONLY_CMDS = {
 # and `Edit`, which put the same text on disk permanently. An audit found this
 # guard blocked ExitPlanMode in 2 of 16 handoffs (transcripts 17e31af0-...:1108
 # and a71f6658-...:262), costing five extra Edit round-trips scrubbing the plan
-# file before a second ExitPlanMode got through.
+# file before a second ExitPlanMode got through. `SendMessage` was added on the
+# user's order (2026-11-23) after this guard blocked messaging in a session.
 LOCAL_ONLY_TOOLS = {
     "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "NotebookRead",
     "Glob", "Grep", "LS", "TodoWrite", "ToolSearch", "ExitPlanMode",
-    "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "REPL",
+    "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "REPL", "SendMessage",
 }
 
 def reason(label, path_mark):

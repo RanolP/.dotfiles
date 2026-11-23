@@ -11,8 +11,6 @@ Terminal multiplexer.
 | Super+D | New pane to the right |
 | Super+Shift+D | New pane below |
 
-These mirror the split bindings in [Ghostty](./ghostty.md).
-
 ## Behaviour
 
 | Setting | Value |

@@ -2,9 +2,10 @@ source ~/.cache/nix-your-shell.nu
 
 $env.config = ($env.config | upsert show_banner false)
 
-# --- Per-folder terminal background (Ghostty / Windows Terminal, OSC 11) ---
+# --- Per-folder terminal background (Windows Terminal, OSC 11) ---
 # Tints the terminal background per project so it's obvious which repo you're in.
-# Active in bare Ghostty and Windows Terminal; Zellij owns its own rendering, so it's skipped there.
+# Active in bare Windows Terminal; Zellij owns its own rendering, so it's skipped there.
+# Rex gets the same tint through rex-project-theme below.
 # Backgrounds stay dark so the Nord foreground keeps its contrast.
 def _folder-bg-color []: nothing -> string {
   # Explicit overrides win; matched against the absolute project-root path.
@@ -59,7 +60,7 @@ def --env _starship-config-for-pwd [pwd: string]: nothing -> nothing {
 $env.config.hooks.env_change.PWD = (
   ($env.config.hooks?.env_change?.PWD? | default [])
   | append {|before, after|
-      if (($env.TERM_PROGRAM? == "ghostty") or ($env.WSL_DISTRO_NAME? | is-not-empty)) and ($env.ZELLIJ? | is-empty) {
+      if ($env.WSL_DISTRO_NAME? | is-not-empty) and ($env.ZELLIJ? | is-empty) {
         print -n $"(char -u '1b')]11;#(_folder-bg-color)(char -u '07')"
       }
       _starship-config-for-pwd $after

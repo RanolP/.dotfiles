@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# Windows Terminal equivalent of nix/home/darwin/programs/ghostty.nix: Nord
+# Windows Terminal setup: Nord
 # scheme, Iosevka font, nu as the default profile. Merges into the user's
 # settings.json and keeps everything else (comments are dropped on rewrite;
 # the original is saved once as settings.json.bak).
@@ -13,7 +13,7 @@ if not ($target | path exists) {
     return
 }
 
-# Palette of arcticicestudio/nord-windows-terminal (ghostty's built-in Nord is the same).
+# Palette of arcticicestudio/nord-windows-terminal.
 let nord = {
     name: Nord
     cursorColor: '#D8DEE9', selectionBackground: '#434C5E'

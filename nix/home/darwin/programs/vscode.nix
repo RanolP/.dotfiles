@@ -86,8 +86,7 @@
         "workbench.colorTheme" = "Nord";
         # Nord's comment color (#616E88) sits at 2.4:1 on nord0. #7b88a1 is the
         # +20% step from Nord's own comment-brightness table (nordtheme/nord#94),
-        # 3.5:1, and still clear of nord9 keywords. Same value as Ghostty and
-        # Rex palette 8.
+        # 3.5:1, and still clear of nord9 keywords. Same value as Rex palette 8.
         "editor.tokenColorCustomizations" = {
           "[Nord]" = {
             textMateRules = [

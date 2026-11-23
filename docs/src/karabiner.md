@@ -29,7 +29,3 @@ External keyboard remapping for the Dareu Z82.
 ## F18 → 한영
 
 F18 is mapped to the Korean input method toggle (symbolic hotkey ID 60) via the macOS activation script in `nix/darwin/default.nix`.
-
-## Ghostty Shortcuts
-
-In Ghostty, Karabiner routes Cmd+D, Cmd+Shift+D, Cmd+T, and Cmd+W to `herdr-key`. The helper sends the action to Herdr when its window is active and otherwise redispatches the split or tab action to Ghostty.

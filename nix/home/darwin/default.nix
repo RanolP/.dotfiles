@@ -40,7 +40,6 @@ in
 {
   imports = [
     ./programs/firefox.nix
-    ./programs/ghostty.nix
     ./programs/vscode.nix
     ./programs/zsh.nix
   ];
@@ -71,50 +70,6 @@ in
   };
 
   home.file.".config/linearmouse/linearmouse.json".source = ./configs/linearmouse/linearmouse.json;
-
-  # cmd+d / cmd+shift+d / cmd+t arbiter, called from the Karabiner rule of the
-  # same name. Ghostty has no keybind condition on the running program (1.3.1
-  # has only all:/global:/unconsumed:/performable:), so the decision happens
-  # here: Ghostty's own window title is "<cwd>> <foreground command>", which
-  # reads "> herdr" exactly while the herdr client owns that window -- programs
-  # inside herdr set pane titles, not the outer window title. herdr window ->
-  # drive herdr over its socket API (pane split/close, workspace create);
-  # anything else -> hand the action back to
-  # Ghostty on the alt chord Karabiner leaves alone (see programs/ghostty.nix).
-  home.file.".local/bin/herdr-key" = {
-    executable = true;
-    text = ''
-      #!/bin/sh
-      action="''${1:-right}"
-      herdr="$HOME/.local/share/mise/shims/herdr"
-
-      case "$(/usr/bin/osascript -e 'tell application "Ghostty" to get name of front window' 2>/dev/null)" in
-        *"> herdr"*)
-          case "$action" in
-            down)  exec "$herdr" pane split --current --direction down --focus ;;
-            right) exec "$herdr" pane split --current --direction right --focus ;;
-            # herdr's sidebar "+ new workspace" button, not "+ new tab".
-            new)   exec "$herdr" workspace create --focus ;;
-            close)
-              # pane close takes an explicit id, and Karabiner runs this outside
-              # any pane, so `pane current` resolves to the focused one.
-              pane=$("$herdr" pane current | sed -n 's/.*"pane_id":"\([^"]*\)".*/\1/p')
-              [ -n "$pane" ] && exec "$herdr" pane close "$pane"
-              exit 0
-              ;;
-          esac
-          ;;
-      esac
-
-      case "$action" in
-        down)  chord='keystroke "d" using {command down, option down, shift down}' ;;
-        new)   chord='keystroke "t" using {command down, option down}' ;;
-        close) chord='keystroke "w" using {command down, option down}' ;;
-        *)     chord='keystroke "d" using {command down, option down}' ;;
-      esac
-      exec /usr/bin/osascript -e "tell application \"System Events\" to $chord"
-    '';
-  };
 
   # `ntn` is the official Notion CLI name, and every agent reaching for it
   # types `notion` instead. This shim keeps the wrong name working on PATH for

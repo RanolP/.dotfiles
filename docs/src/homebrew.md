@@ -27,7 +27,6 @@ Declarative Homebrew managed by [nix-homebrew](https://github.com/zhaofengli/nix
 
 | Cask | App |
 |------|-----|
-| ghostty | Terminal emulator |
 | raycast | Launcher |
 | karabiner-elements | Keyboard remapping |
 | linearmouse | Mouse/trackpad customization |

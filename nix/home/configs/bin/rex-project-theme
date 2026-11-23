@@ -17,8 +17,8 @@ else
   directory=$(dirname "$path")
 fi
 
-# Same color as _folder-bg-color in nushell/config.nu (the Ghostty / Windows
-# Terminal tint): sha256 of the repo root path picks one of the same dark
+# Same color as _folder-bg-color in nushell/config.nu (the Windows Terminal
+# tint): sha256 of the repo root path picks one of the same dark
 # Nord tints, so a repo keeps its color across terminals. Keep the two
 # palettes and the override in step. Outside a repo, plain Nord nord0 returns.
 root=$(git -C "$directory" rev-parse --show-toplevel 2>/dev/null) || root=
@@ -33,10 +33,10 @@ if [ -n "$root" ]; then
   fi
 fi
 
-# The rest of the theme is Ghostty's built-in Nord (themes/Nord), sent on every
+# The rest of the theme is the standard Nord terminal palette, sent on every
 # call because Rex has no config-file theme. Palette 8 is the comment gray,
 # raised from Nord's #596377 (2.0:1) to #7b88a1 (3.5:1), the same value as
-# Ghostty's override and VS Code's comments. set_theme has no selection colors.
+# VS Code's comments. set_theme has no selection colors.
 foreground="#d8dee9"
 cursor="#eceff4"
 palette='"0=#3b4252","1=#bf616a","2=#a3be8c","3=#ebcb8b","4=#81a1c1","5=#b48ead","6=#88c0d0","7=#e5e9f0","8=#7b88a1","9=#bf616a","10=#a3be8c","11=#ebcb8b","12=#81a1c1","13=#b48ead","14=#8fbcbb","15=#eceff4"'

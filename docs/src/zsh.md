@@ -10,7 +10,7 @@ The account login shell is `/bin/sh`. Home Manager makes the user-profile `zsh` 
 
 The Claude Code wrapper sets `SHELL=/bin/zsh` to short-circuit Claude Code's shell probe, which would otherwise select the nix zsh and encounter its SIGCHLD startup hang.
 
-Ghostty launches [Nushell](./nushell.md) as the primary interactive shell. Interactive Zsh remains configured with aliases and the `mise activate` hook.
+Rex launches [Nushell](./nushell.md) as the primary interactive shell. Interactive Zsh remains configured with aliases and the `mise activate` hook.
 
 Non-interactive Zsh reads `.zshenv`, which adds `~/.local/bin` and the mise shims to `PATH`, disables the Claude Code autoupdater, and configures the Android SDK paths.
 

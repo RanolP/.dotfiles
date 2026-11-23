@@ -4,14 +4,6 @@ Mouse and trackpad customization.
 
 **Managed by:** `nix/home/darwin/configs/linearmouse/linearmouse.json`, linked by `nix/home/darwin/default.nix`; the app comes from the Homebrew cask
 
-## Ghostty: Middle-Click
-
-| App | Button | Action |
-|-----|--------|--------|
-| com.mitchellh.ghostty | Middle click (2) | none (disabled) |
-
-Prevents accidental paste-on-middle-click in the terminal.
-
 ## All Mice: Gestures
 
 Middle-click drag gestures (threshold: 50px):

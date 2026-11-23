@@ -43,7 +43,6 @@ in
     ];
     casks = [
       "openusage"
-      "ghostty"
       "raycast"
       "karabiner-elements"
       "linearmouse"
@@ -159,7 +158,7 @@ in
   # Code's Bash tool at startup: nushell via heavy per-invocation startup, zsh via
   # a job-control deadlock (interactive zsh blocks in acquire_pgrp/tcsetpgrp when
   # spawned on a tty it isn't the foreground pgrp of). /bin/sh has a trivial,
-  # non-blocking startup. The terminal (Ghostty) still launches zsh interactively.
+  # non-blocking startup. The terminal (Rex) still launches Nushell interactively.
   users.users.ranolp = {
     name = "ranolp";
     home = "/Users/ranolp";

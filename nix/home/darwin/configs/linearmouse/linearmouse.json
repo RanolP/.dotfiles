@@ -3,19 +3,6 @@
   "schemes" : [
     {
       "if" : {
-        "app" : "com.mitchellh.ghostty"
-      },
-      "buttons" : {
-        "mappings" : [
-          {
-            "button" : 2,
-            "action" : "none"
-          }
-        ]
-      }
-    },
-    {
-      "if" : {
         "device" : {
           "category" : "mouse"
         }

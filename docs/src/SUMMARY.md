@@ -8,7 +8,6 @@
 - [Zsh](./zsh.md)
 - [Starship](./starship.md)
 - [Zellij](./zellij.md)
-- [Ghostty](./ghostty.md)
 - [Herdr](./herdr.md)
 - [Git](./git.md)
 - [fast-apply](./fast-apply.md)

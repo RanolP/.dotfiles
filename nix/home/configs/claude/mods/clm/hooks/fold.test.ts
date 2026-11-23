@@ -11,7 +11,7 @@ import type { ClmWorkflow } from '../types'
 import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { buildCleared, estTokens, fingerprint, foldedRows, isLedgerRow, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION, withQueuedMessages, type QueuedMessage } from './fold'
-import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, resetRetiredQueued, setRewindFoldJob, transcriptKey } from './fold-job'
+import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, resetRetiredQueued, setRewindFoldJob, transcriptKey, type FoldJobIo } from './fold-job'
 import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
 import { applyClauses, emptyClauseStore, parseClause } from './clauses'
 import { recallAddress } from './address'
@@ -603,8 +603,8 @@ test('compaction starts when foldable rows exceed budget despite the fixed prefi
   expect(compactions).toBe(1)
 })
 
-// Regression caught: a native compaction bypassed clm's handler, so the ready plan requested another native compaction at every turn end.
-test('ready native-compaction loop stops when session.compact bypasses clm', OPTS, async () => {
+// Regression caught: a native compaction bypassed clm's handler, so each threshold started another summary and native compaction.
+test('after one unhandled session.compact, clm requests no further compaction in that session', OPTS, async () => {
   const session = 'native-compact-loop'
   const key = transcriptKey(session)
   const rows: SessionMessage[] = [{ role: 'user', text: 'x'.repeat(12_000), toolUses: [] }]
@@ -614,18 +614,38 @@ test('ready native-compaction loop stops when session.compact bypasses clm', OPT
   const stored = new Map<string, unknown>([[`pending:${key}`, readyPlan]])
   let meta: Meta = { seq: 0, fails: 0 }
   let compactions = 0
-  const io = {
+  let foldStarts = 0
+  const rewind: RewindIo = {
+    storeGet: async key => stored.get(key), storeSet: async (storeKey, value) => { stored.set(storeKey, value) }, storeDelete: async storeKey => { stored.delete(storeKey) },
+    writeFile: async () => undefined, ledgerPath: async () => '', topicsKey: async storeKey => `topics:${storeKey}`, pendingKey: async storeKey => `pending:${storeKey}`,
+    readMeta: async () => meta, writeMeta: async next => { meta = next }, readyFoldDropFps: () => undefined, clearReadyFold: async () => undefined,
+    setRewindReady: () => undefined, logEvent: async () => undefined, log: () => undefined,
+  }
+  const io: FoldJobIo = {
     sessionId: async () => session,
     sessionMessages: async () => rows,
+    stableAttachments: async headKept => ({ rows: [], headKept }), markStableAttachmentsCarried: async () => undefined,
     readMeta: async () => meta,
     writeMeta: async (next: Meta) => { meta = next },
     usageReading: async () => 50_000,
     sessionCompact: async () => { compactions++; return { messages: [summary] } },
+    now: async () => 0, after: () => ({ cancel: () => undefined }), sentAt: async () => () => undefined,
     queuedMessages: async () => [queued],
     markQueuedMessagesFolded: async (messages: readonly QueuedMessage[]) => { stored.set('retired', messages.map(message => message.uuid)) },
     pendingKey: async () => `pending:${key}`,
+    topicsKey: async () => `topics:${key}`,
+    storeGet: async storeKey => stored.get(storeKey),
     storeSet: async (storeKey: string, value: unknown) => { stored.set(storeKey, value) },
     storeDelete: async (storeKey: string) => { stored.delete(storeKey) },
+    serialize: async (_session, run) => run(),
+    readLedger: async () => undefined, ledgerPath: async () => '', basePath: async () => '', readFile: async () => undefined,
+    writeFile: async () => undefined, appendFile: async () => undefined, lessonsPath: async () => '', fileExists: async () => false, fileList: async () => [],
+    run: async () => ({ exitCode: 0, stderr: '' }), captureOrigin: async () => ({ session, repo: '', cwd: '' }), readAll: async () => [],
+    trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }), updateHeld: async () => undefined,
+    backfillClauses: async () => undefined, residentLedger: async () => '', append: async () => [], projectPanel: async () => undefined,
+    readRewindIo: () => rewind, observeTranscript: async () => undefined,
+    fold: async () => { foldStarts++; return 'disabled fold unexpectedly started' },
+    complete: async () => ({ isAnswered: false, text: '', reason: 'unused' }),
     logEvent: async (event: string, fields: { reason?: string }) => { if (event === 'fold-job' && fields.reason) events.push(fields.reason) },
     log: () => undefined,
   }
@@ -633,14 +653,17 @@ test('ready native-compaction loop stops when session.compact bypasses clm', OPT
   setRewindFoldJob(key, readyPlan, [])
   try {
     await applyReadyIfAtThreshold(io, thresholdOpts, key)
-    await applyReadyIfAtThreshold(io, thresholdOpts, key)
+    await maybeClear(io, { ...thresholdOpts, queueTarget: 1 }, false)
+    await maybeClear(io, { ...thresholdOpts, queueTarget: 1 }, false)
     expect(compactions).toBe(1)
+    expect(foldStarts).toBe(0)
+    expect(meta.compactionDisabled).toBe(true)
     expect(meta.boundary).toEqual({ fp: fingerprint(summary), offset: 0 })
     expect(meta.foldTokens).toBe(50_000)
     expect(meta.lastObserved).toBe(50_000)
     expect(stored.has(`pending:${key}`)).toBe(false)
     expect(stored.get('retired')).toEqual(['native-covered'])
-    expect(events).toContain('session.compact unhandled by clm (native compaction ran); ready plan dropped')
+    expect(events).toEqual(['session.compact unhandled by clm; clm compaction disabled for this session, native autocompact takes over'])
   } finally { clearFoldJob(key) }
 })
 

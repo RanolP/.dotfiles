@@ -455,6 +455,7 @@ async function prepareMechanicalFold(io: FoldJobIo, opts: Opts, rows: readonly S
 
 async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMessage[], meta: Meta, key: string, turnEnd: boolean): Promise<FoldJob> {
   const current = foldJobs.get(key)
+  if (meta.compactionDisabled) return current ?? { state: 'idle' }
   if (current && current.state !== 'idle') return current
   const first = protectedIndex(rows)
   const turns = queueTurns(rows, first)
@@ -508,8 +509,9 @@ type ReadyFoldIo = Pick<FoldJobIo, 'sessionId' | 'sessionMessages' | 'readMeta' 
 export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: string): Promise<boolean> {
   const job = foldJobs.get(key)
   if (job?.state !== 'ready') return false
+  const meta = await io.readMeta()
+  if (meta.compactionDisabled) return false
   if (!job.plan.rewindOnly) {
-    const meta = await io.readMeta()
     const rows = liveRows(await io.sessionMessages(), meta.boundary)
     if (!atFoldPoint(rows, await io.usageReading(), meta, opts)) return false
   }
@@ -519,6 +521,9 @@ export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: 
     // If it is still current, another plugin forwarded the event past clm and the returned rows are the native summary.
     if (foldJobs.get(key) === job) {
       foldJobs.set(key, { state: 'idle' })
+      await persistStep<void>(io, undefined, async () => {
+        await io.writeMeta({ ...await io.readMeta(), compactionDisabled: true })
+      })
       const reading = await persistStep(io, undefined, () => io.usageReading())
       if (result.messages?.[0]) await adoptEngineSummary(io, key, result.messages, reading)
       else await persistStep<void>(io, undefined, async () => {
@@ -526,7 +531,7 @@ export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: 
         if (reading !== undefined) await io.writeMeta({ ...await io.readMeta(), foldTokens: reading, lastObserved: reading })
       })
       await retireQueued(io, key, await persistStep<QueuedMessage[]>(io, [], () => queuedMessages(io, key)))
-      await logFoldOutcome(io, 'session.compact unhandled by clm (native compaction ran); ready plan dropped')
+      await logFoldOutcome(io, 'session.compact unhandled by clm; clm compaction disabled for this session, native autocompact takes over')
     }
   }
   catch (err) {
@@ -540,13 +545,14 @@ export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: 
 // pass canSwap=false and leave a ready plan to the engine's own compaction.
 export async function maybeClear(io: FoldJobIo, opts: Opts, canSwap = true): Promise<void> {
   const key = transcriptKey(await io.sessionId())
+  const meta = await io.readMeta()
+  if (meta.compactionDisabled) return
   const current = foldJobs.get(key)
   if (current?.state === 'ready') {
     if (canSwap) await applyReadyIfAtThreshold(io, opts, key)
     return
   }
   if (current && current.state !== 'idle') return
-  const meta = await io.readMeta()
   const used = await io.usageReading()
   if (used !== undefined && meta.firstObserved !== undefined && used < opts.budget - opts.reserve) return
   const rows = await rowsWithQueuedMessages(io, key, liveRows(await io.sessionMessages(), meta.boundary))
@@ -790,6 +796,7 @@ async function compactOrHandOff(
   // Observe first: it repairs meta.seq after a fold that failed to persist, which this fold numbers past.
   await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))
   const meta = await persistStep(io, { seq: 0, fails: 0 }, () => io.readMeta())
+  if (meta.compactionDisabled) return compactResult(io, compactStartedAt, trigger, entryState, 'disabled-handoff', handOff(io, key, handoff, 'clm compaction is disabled for this session'))
   const workingRows = await rowsWithQueuedMessages(io, key, liveRows(all, meta.boundary))
   const first = protectedIndex(workingRows)
   const decline = (outcome: string, why: string) => compactResult(io, compactStartedAt, trigger, entryState, outcome, handOff(io, key, handoff, why))

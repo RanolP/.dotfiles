@@ -481,6 +481,7 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
       }
     }
     expect(modelPhase(after), `${at}: code phase vs model ${after.j.phase} (waiting=${after.w}, swap pc=${after.s.active ? after.s.pc : '-'}) ${JSON.stringify(w.events.slice(-3))}`).toContain(codePhase(w))
+    expect(w.meta.compactionDisabled === true, `${at}: persisted compaction-disabled state`).toBe(after.d)
     // Attempt n of the split is the code's (n + 1)th split-merge call; the job that leaves bg makes no further one.
     if (after.j.phase === 'bg') expect(w.splitCalls, `${at}: split-merge calls for attempt ${after.j.attempt}`).toBe(after.j.attempt + 1)
     else if (after.a === 'bgAttempt') expect(w.splitCalls, `${at}: split-merge calls after the job left bg`).toBe(before.j.attempt + 1)

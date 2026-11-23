@@ -362,6 +362,7 @@ const optional = (v: unknown, type: 'number' | 'string') => v === undefined || t
 const isMeta = (v: unknown): v is Partial<Meta> =>
   isRecord(v) && optional(v.seq, 'number') && optional(v.fails, 'number') && optional(v.ratio, 'number') && optional(v.overhead, 'number')
   && optional(v.foldTokens, 'number') && optional(v.firstObserved, 'number') && optional(v.estimatorVersion, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
+  && (v.compactionDisabled === undefined || typeof v.compactionDisabled === 'boolean')
 async function readMeta($: StoreReader): Promise<Meta> {
   const stored = await sessionStoreGet($, await metaKey($))
   const meta = { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }

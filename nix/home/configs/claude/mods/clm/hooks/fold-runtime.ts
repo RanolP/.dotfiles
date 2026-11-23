@@ -20,7 +20,7 @@ import type { AddressRow } from './address'
 import { migrateLegacyLedger } from './resident'
 
 export type Opts = { budget: number; tailTarget: number; queueTarget: number; ledgerTarget: number; reserve: number; model: string; reviewModel: string }
-export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; firstObserved?: number; estimatorVersion?: number }
+export type Meta = { seq: number; lastClear?: string; lastFoldAt?: number; foldDurationsMs?: Record<string, number>; foldTokens?: number; boundary?: Boundary; lastSkip?: string; fails: number; ratio?: number; overhead?: number; lastObserved?: number; firstObserved?: number; estimatorVersion?: number; compactionDisabled?: boolean }
 export type TopicState = RewindTopic
 export type SplitAnswer = { split: number; mergeReply: string; steps: unknown[] }
 export type PreparedFold = { plan: ClearPlan; mergeReply: string }

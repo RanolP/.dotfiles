@@ -47,4 +47,4 @@ codex = "0.155.1"
 "ubi:namespacelabs/foundation" = { version = "0.0.573", exe = "nsc", matching = "nsc" }
 # No Windows build upstream; `os` keeps `mise install` on Windows from failing on it.
 "ubi:lightpanda-io/browser" = { version = "1.0.2", exe = "lightpanda", os = ["linux", "macos"] }
-"ubi:blacktop/ipsw" = { version = "3.1.750", exe = "ipsw", os = ["linux", "macos"], matching_regex = "^ipsw_[0-9.]+_[A-Za-z]+_(arm64|x86_64)\\.tar\\.gz$" }
+"github:blacktop/ipsw" = { version = "3.1.750", bin = "ipsw", os = ["linux", "macos"], platforms = { macos-arm64 = { asset_pattern = "ipsw_*_macOS_arm64.tar.gz" }, macos-x64 = { asset_pattern = "ipsw_*_macOS_x86_64.tar.gz" }, linux-arm64 = { asset_pattern = "ipsw_*_linux_arm64.tar.gz" }, linux-x64 = { asset_pattern = "ipsw_*_linux_x86_64.tar.gz" } } }

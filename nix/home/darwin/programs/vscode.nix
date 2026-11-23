@@ -91,7 +91,10 @@
           "[Nord]" = {
             textMateRules = [
               {
-                scope = [ "comment" "punctuation.definition.comment" ];
+                scope = [
+                  "comment"
+                  "punctuation.definition.comment"
+                ];
                 settings.foreground = "#7b88a1";
               }
             ];

@@ -103,7 +103,10 @@ def main():
                      "and hold off on new heavy jobs until this clears; tell the user what you stopped.")
     pid = os.getppid()
     for _ in range(6):
-        row = subprocess.run(["/bin/ps", "-o", "ppid=,command=", "-p", str(pid)], capture_output=True, text=True).stdout.split(None, 1)
+        try:
+            row = subprocess.run(["/bin/ps", "-o", "ppid=,command=", "-p", str(pid)], capture_output=True, text=True).stdout.split(None, 1)
+        except OSError:  # no /bin/ps (e.g. a slim container): skip the renice, keep the notice
+            break
         if len(row) < 2:
             break
         if os.path.basename(row[1].split()[0]) in AGENTS:

@@ -450,11 +450,6 @@ in
         source = ./configs/claude/hooks/architect-rules.py;
         executable = true;
       };
-      # Unlock GPG before a signed commit so pinentry can't hijack the TTY.
-      ".claude/hooks/gpg-commit-guard.py" = {
-        source = ./configs/claude/hooks/gpg-commit-guard.py;
-        executable = true;
-      };
       # Enforce the repo's declared package manager (npm/pnpm/yarn/bun).
       ".claude/hooks/package-manager-guard.py" = {
         source = ./configs/claude/hooks/package-manager-guard.py;
@@ -573,10 +568,6 @@ in
       };
       ".codex/hooks/ssh-guard.py" = {
         source = ./configs/claude/hooks/ssh-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/gpg-commit-guard.py" = {
-        source = ./configs/claude/hooks/gpg-commit-guard.py;
         executable = true;
       };
       ".codex/hooks/package-manager-guard.py" = {

@@ -91,11 +91,6 @@ timeout = 30
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/gpg-commit-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
 command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/package-manager-guard.py"'
 timeout = 30
 
@@ -185,27 +180,24 @@ trusted_hash = "sha256:324d0772394c6bcb2ce898f4adb0c51fe6754890eb3d27a00625bdf2a
 trusted_hash = "sha256:45ba7398a70caab1b0eaf05b3eaeab87020c4b8126d79df1babb29979238beb4"
 
 [hooks.state."@codexConfig@:pre_tool_use:0:4"]
-trusted_hash = "sha256:3eade5629281d2e1d27e64fc212d0291b24cf337a858353c19a049d1fda7cebc"
-
-[hooks.state."@codexConfig@:pre_tool_use:0:5"]
 trusted_hash = "sha256:8a73e021ed03d4376b8656675a0c236017ee2ce1d8dbdb162ddbf9035effe8c9"
 
-[hooks.state."@codexConfig@:pre_tool_use:0:6"]
+[hooks.state."@codexConfig@:pre_tool_use:0:5"]
 trusted_hash = "sha256:51cf946f8991ec72798464903ef1df3a76a8a47ccc205f828e7b51a6a587d407"
 
-[hooks.state."@codexConfig@:pre_tool_use:0:7"]
+[hooks.state."@codexConfig@:pre_tool_use:0:6"]
 trusted_hash = "sha256:35b738910c05f1c0a406325a77bb8ed3166124cb754aa42e758a6ad93e4b0faf"
 
-[hooks.state."@codexConfig@:pre_tool_use:0:8"]
+[hooks.state."@codexConfig@:pre_tool_use:0:7"]
 trusted_hash = "sha256:8afd7ca91e2521992f484dbd7fc798f04449c96bfa64451525b70f2558d81981"
 
-[hooks.state."@codexConfig@:pre_tool_use:0:9"]
+[hooks.state."@codexConfig@:pre_tool_use:0:8"]
 trusted_hash = "sha256:d5dbff449bf359cc8fd6af8f6c2318e297ebf47c1e0b1eb087e7fee4f54dcbb4"
 
-[hooks.state."@codexConfig@:pre_tool_use:0:10"]
+[hooks.state."@codexConfig@:pre_tool_use:0:9"]
 trusted_hash = "sha256:1f9f01c318fb17b797fa0ae132031be37bef46b32b367a14c9f644a76582501a"
 
-[hooks.state."@codexConfig@:pre_tool_use:0:11"]
+[hooks.state."@codexConfig@:pre_tool_use:0:10"]
 trusted_hash = "sha256:e1d4f37cf9a0f4d6ef5ef70b587e4d6954ed1d5f3cb2e622d10df2441c2727b8"
 
 [hooks.state."@codexConfig@:pre_tool_use:1:0"]

@@ -174,10 +174,6 @@
           },
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/gpg-commit-guard.py"
-          },
-          {
-            "type": "command",
             "command": "python3 ~/.claude/hooks/package-manager-guard.py"
           },
           {

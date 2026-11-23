@@ -69,10 +69,7 @@ COMMIT_OPT_WITH_ARG = {"-m", "--message", "-F", "--file", "-C", "--reuse-message
                        "--strategy", "--onto", "--exec", "-x"}
 SIGNING_REASON = (
     "Commit signing is the user's setup, so a commit stays signed. When signing "
-    "fails, stop and report the raw gpg error to the user, then wait for them. "
-    "When the error says the key is locked, the user unlocks it by running "
-    "`! echo | gpg -s` in their prompt (the path gpg-commit-guard.py names), and "
-    "the same commit then runs signed.")
+    "fails, stop and report the raw gpg error to the user, then wait for them.")
 
 
 def is_env_assign(tok):

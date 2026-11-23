@@ -17,7 +17,7 @@ const TOOLS = [
     description: [
       'Raise one shell command that needs the user\'s approval before it runs, when that command is the only correct way to do the work: a Bash call the auto-mode permission classifier denied, a command a codex worker\'s sandbox blocked, or one the rules say to ask before running (a heavy build, an emulator, a container run, a GUI app launch). Raise it in place of asking in chat; the user approves it in one step.',
       'A review dialog opens for the user at once, as AskUserQuestion does, and the call returns with a request id (R<n>) once they answer or dismiss it; dismissed, the request waits in the approval band above their prompt (or /approvals), so keep working on what does not depend on it. On approval this tool\'s mod runs the exact command once on the host, outside any sandbox, in cwd (bash -c), and the stdout, stderr and exit code arrive as a message; on rejection the rejection and its reason arrive. Leave the command to this mod and wait for that message.',
-      'The mod runs bash -c with no TTY, so a command that needs a password, pinentry or other TTY input (sudo, gpg signing) goes to the user as a `! <command>` line instead. A denial, rejection or "stop"/"cancel" from the user still halts that line of work.',
+      'The mod runs bash -c with no TTY, so a command that needs a password, pinentry or other TTY input (sudo) goes to the user as a `! <command>` line instead. A denial, rejection or "stop"/"cancel" from the user still halts that line of work.',
       'Each approval runs the command once; running it again needs a new request.',
     ].join(' '),
     inputSchema: {

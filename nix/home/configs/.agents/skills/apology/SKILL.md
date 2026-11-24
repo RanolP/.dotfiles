@@ -53,6 +53,7 @@ When a 시말서 for the same rule already exists:
 - Write the earlier 시말서's filename and date at the top of the new document, and state that its recurrence guard failed.
 - This time the recurrence guard **must not be a prose rule**. A rule already proved unable to stop it, so propose a machine-checked guard (a PreToolUse hook, a CI check).
 - Mark the repeat count as `N차 재발`.
+- Hand the repeated class to the `correct` skill, which moves it up the enforcement ladder and records it in the `## Rule enforcers` table.
 
 ## 4. Write the document
 

@@ -23,7 +23,7 @@ Send all probes in ONE message so they run in parallel. For each CLI category, r
 | Simulators / emulators | `xcrun simctl list devices booted`, `adb devices` |
 | Containers | `docker ps` (OrbStack answers the same CLI) |
 | Scratchpad | `du -sh <scratchpad>` and `ls <scratchpad>` for the session scratchpad directory named in the system prompt |
-| Learnings | review this session for non-obvious conclusions reached from explicit premises; grep `memory/evidence/` for each so a recorded one is skipped; for each user correction, name the skill that should have fired (or states the point unclearly) and propose an edit to its description or body, proposing a guard via `rule-write` instead when a hook or lint could check it |
+| Learnings | review this session for non-obvious conclusions reached from explicit premises; grep `memory/evidence/` for each so a recorded one is skipped; for each user correction, name the skill that should have fired (or states the point unclearly) and propose an edit to its description or body, proposing a guard via `rule-write` instead when a hook or lint could check it; hand a correction the user gave more than once to the `correct` skill |
 
 Print ONE table, one row per resource:
 

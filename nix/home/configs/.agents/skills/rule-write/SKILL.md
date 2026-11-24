@@ -61,6 +61,8 @@ Follow `claude-hook-management` for the container verification, the `nix/home/de
 
 Keep the prose alone only for what no matcher can inspect: intent, priority, taste, and judgement criteria.
 
+When the candidate is a mistake the user has already corrected more than once, run the `correct` skill first; it picks the rung and keeps the rule-to-enforcer table current.
+
 ## 7. Hand the rebuild to the user
 
 The rule is inert until Home Manager applies it, and the user runs that command themselves:

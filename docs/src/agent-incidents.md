@@ -157,3 +157,8 @@ Across two projects in two days the same shape recurred. An audio-model run prod
 ## 2026-11-23 -- a slow loop was explained without naming the limiter
 
 Asked why a development loop was slow, an agent listed three plausible causes. The user: "그건 니가 gpu 쓰면 될걸 cpu 쓴 게 문제 아니었을까" (wasn't it that you used the CPU where the GPU was available). None of the three causes had been checked against live counters, and the one resource that bounded the run was never measured. A speed number is now explained only after the bounding resource is named from counters taken during the run (`nvidia-smi` utilization and device placement, per-process CPU in `top`, I/O wait, a profiler).
+
+## Rule enforcers
+
+| Rule | Lives in | Enforced by | Incidents |
+|---|---|---|---|

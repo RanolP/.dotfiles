@@ -94,6 +94,8 @@ export type FoldJobIo = {
 }
 
 const foldJobs = new Map<string, FoldJob>()
+// Transcript keys with a session.compact in progress, counted because an engine event may join a running one.
+const compactionsWaiting = new Map<string, number>()
 export const transcriptKey = (session: string, agentId?: string) => `${session}:${agentId ?? 'main'}`
 const WITHHELD = '.withheld-'
 // The engine kills session.compact at 10 s; the rest leaves room for the swap after the deadline.
@@ -581,13 +583,17 @@ export type FoldRequest = { outcome: 'started' | 'flagged' | 'refused'; detail: 
 
 /**
  * clm_fold: starts a turn-end fold job now when none runs, past the usage and queue gates, or flags the running or
- * ready one; either way its plan swaps at the next turn end. A running swap or disabled compaction refuses it.
+ * ready one; either way its plan swaps at the next turn end. A waiting compaction, a running swap or disabled compaction
+ * refuses it.
  * spec/fold-job.qnt modelFold.
  */
 export async function requestFold(io: FoldJobIo, opts: Opts): Promise<FoldRequest> {
   const key = transcriptKey(await io.sessionId())
   const meta = await io.readMeta()
   if (meta.compactionDisabled) return { outcome: 'refused', detail: 'clm compaction is disabled for this session; native autocompact handles it' }
+  // The waiting compaction swaps its own plan or hands off; a request flagged on its job would outlive a handoff and
+  // swap a ready plan at the next turn end below the fold point. spec/fold-job.qnt modelFold not(compactWaiting).
+  if (compactionsWaiting.has(key)) return { outcome: 'refused', detail: 'a compaction is already folding' }
   const current = foldJobs.get(key)
   if (current?.state === 'swapping') return { outcome: 'refused', detail: 'a fold is being applied right now' }
   if (current?.state === 'summarizing' || current?.state === 'ready') {
@@ -837,6 +843,19 @@ async function compactOrHandOff(
 ): Promise<SessionCompactResult> {
   const compactStartedAt = await io.now()
   const key = transcriptKey(await io.sessionId())
+  compactionsWaiting.set(key, (compactionsWaiting.get(key) ?? 0) + 1)
+  try { return await compactWhileWaiting(io, opts, all, trigger, handoff, key, compactStartedAt) }
+  finally {
+    const left = (compactionsWaiting.get(key) ?? 1) - 1
+    if (left > 0) compactionsWaiting.set(key, left)
+    else compactionsWaiting.delete(key)
+  }
+}
+
+async function compactWhileWaiting(
+  io: FoldJobIo, opts: Opts, all: readonly SessionMessage[], trigger: string, handoff: () => Promise<SessionCompactResult>,
+  key: string, compactStartedAt: number,
+): Promise<SessionCompactResult> {
   const entryState: CompactEntryState = foldJobs.get(key)?.state ?? 'none'
   // Observe first: it repairs meta.seq after a fold that failed to persist, which this fold numbers past.
   await persistStep<void>(io, undefined, () => io.observeTranscript(key, all))

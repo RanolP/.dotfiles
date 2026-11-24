@@ -1577,6 +1577,21 @@ test('clm_fold starts the summary job below the fold point and queue target', { 
   await waitForPending(seen)
 })
 
+// Regression caught: clm_fold during a compaction flagged the engine job it was awaiting; when that compaction handed off
+// instead of swapping, the flagged plan swapped at the next turn end below the fold point. spec/fold-job.qnt modelFold.
+test('clm_fold is refused while a compaction waits on its fold job', OPTS, async ($, on) => {
+  const { promise: gate, resolve: release } = Promise.withResolvers<void>()
+  const seen = bottoms(on, { rows: ROWS, replies: [ledger('compaction fact')], mergeBlock: () => gate, sessionId: 'fold-refused' })
+  on('tool.call', () => ({ result: { success: true } }))
+  const compacting = $.session.compact(compactInput('auto', handled(ROWS)))
+  for (let i = 0; i < 50 && seen.prompts.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(seen.prompts).toHaveLength(1)
+  const answer = JSON.stringify(await $.tool.call({ tool: 'mcp__clm__clm_fold' } as unknown as ToolCallInput))
+  expect(answer).toContain('Fold not requested: a compaction is already folding')
+  release()
+  await compacting
+})
+
 test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(14_000)), M('user', 'active B'), M('assistant', 'working')]
   let release!: () => void

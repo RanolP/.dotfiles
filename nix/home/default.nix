@@ -247,6 +247,7 @@ let
     quint-verify = localSkill "quint-verify";
     evidence-store = localSkill "evidence-store";
     teardown = localSkill "teardown";
+    why = localSkill "why";
     apology = localSkill "apology";
     # Same skill under the name the user actually types. Slash-command
     # resolution uses the linked directory name, so the alias is a second link

@@ -58,7 +58,9 @@ const SECRETS: readonly RegExp[] = [
   /(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}=*/gi,
   /((?:^|[^A-Za-z0-9])(?:x-api-key|authorization)\s*:\s*(?:(?:Bearer|Basic|Token)\s+)?)[^\s"',;]{8,}/gim,
   // An env-style NAME_ prefix (CLOUDFLARE_API_TOKEN=) defeats \b, since _ is a word char; the lead keeps it out of the middle of a word.
-  /((?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:api[_-]?key|token|secret|password|passwd)["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gim,
+  /((?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:api[_-]?key|secret[_-]?access[_-]?key|access[_-]?key|token|secret|password|passwd)\\?["']?\s*[:=]\s*\\?["']?)[^\s"',;]{8,}/gim,
+  // camelCase names (accessToken, clientSecret); case-sensitive so monkey or keyed stay untouched.
+  /((?:^|[^A-Za-z0-9])[a-z][A-Za-z0-9]*(?:Token|Secret|Password|Key)\\?["']?\s*[:=]\s*\\?["']?)[^\s"',;]{8,}/gm,
 ]
 export const redact = (text: string) =>
   SECRETS.reduce((out, pattern) => out.replace(pattern, (match, lead) => `${typeof lead === 'string' && match.startsWith(lead) ? lead : ''}[redacted]`), text)

@@ -55,8 +55,20 @@ test('the archive redacts credential shapes and keeps the rest', () => {
     ['see npm' + '_' + 'm'.repeat(36) + ' end', 'see [redacted] end'],
     ['see glpat' + '-' + 'l'.repeat(20), 'see [redacted]'],
     ['x-api-key: ' + 'x'.repeat(30), 'x-api-key: [redacted]'],
+    // Regression caught: AWS-style and camelCase key names passed unredacted.
+    ['AWS_SECRET_ACCESS_KEY=' + 'a'.repeat(40), 'AWS_SECRET_ACCESS_KEY=[redacted]'],
+    ['accessToken: ' + 'v'.repeat(30), 'accessToken: [redacted]'],
+    ['"refreshToken":"' + 'r'.repeat(30) + '"', '"refreshToken":"[redacted]"'],
+    ['clientSecret=' + 's'.repeat(30), 'clientSecret=[redacted]'],
+    ['max_tokens: 4096', 'max_tokens: 4096'],
+    ['the tokenizer splits text', 'the tokenizer splits text'],
   ] as const
   for (const [input, expected] of samples) expect(redact(input)).toBe(expected)
+  // Regression caught: a value inside JSON-escaped quotes (a tool input after JSON.stringify) escaped redaction.
+  const fakeGh = 'g'.repeat(40)
+  const escaped = redact(JSON.stringify({ command: 'export GH_TOKEN="' + fakeGh + '"' }))
+  expect(escaped).not.toContain(fakeGh)
+  expect(escaped).toContain('GH_TOKEN=\\"[redacted]')
 })
 
 // Regression caught: the archive grew without bound, or cutting it split a block so its address no longer parsed.

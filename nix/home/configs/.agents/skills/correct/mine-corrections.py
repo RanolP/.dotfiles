@@ -28,7 +28,9 @@ SECRETS = [
     re.compile(r'(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}=*', re.I),
     re.compile(r'((?:^|[^A-Za-z0-9])(?:x-api-key|authorization)\s*:\s*(?:(?:Bearer|Basic|Token)\s+)?)[^\s"\',;]{8,}', re.I | re.M),
     # An env-style NAME_ prefix (CLOUDFLARE_API_TOKEN=) defeats \b, since _ is a word char.
-    re.compile(r'((?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:api[_-]?key|token|secret|password|passwd)["\']?\s*[:=]\s*["\']?)[^\s"\',;]{8,}', re.I | re.M),
+    re.compile(r'((?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:api[_-]?key|secret[_-]?access[_-]?key|access[_-]?key|token|secret|password|passwd)\\?["\']?\s*[:=]\s*\\?["\']?)[^\s"\',;]{8,}', re.I | re.M),
+    # camelCase names (accessToken, clientSecret); case-sensitive so monkey or keyed stay untouched.
+    re.compile(r'((?:^|[^A-Za-z0-9])[a-z][A-Za-z0-9]*(?:Token|Secret|Password|Key)\\?["\']?\s*[:=]\s*\\?["\']?)[^\s"\',;]{8,}', re.M),
 ]
 
 
@@ -129,8 +131,18 @@ def selftest():
     for raw, want in [('github' + '_pat_11' + 'g' * 40, '[REDACTED]'),
                       ('export CLOUDFLARE_API_TOKEN=' + 'c' * 40, 'export CLOUDFLARE_API_TOKEN=[REDACTED]'),
                       ('x-api-key: ' + 'x' * 30, 'x-api-key: [REDACTED]'),
-                      ('token: ' + 't' * 20, 'token: [REDACTED]')]:
+                      ('token: ' + 't' * 20, 'token: [REDACTED]'),
+                      # Regression: AWS-style and camelCase key names passed unredacted.
+                      ('AWS_SECRET_ACCESS_KEY=' + 'a' * 40, 'AWS_SECRET_ACCESS_KEY=[REDACTED]'),
+                      ('accessToken: ' + 'v' * 30, 'accessToken: [REDACTED]'),
+                      ('"refreshToken":"' + 'r' * 30 + '"', '"refreshToken":"[REDACTED]"'),
+                      ('clientSecret=' + 's' * 30, 'clientSecret=[REDACTED]'),
+                      ('max_tokens: 4096', 'max_tokens: 4096'),
+                      ('the tokenizer splits text', 'the tokenizer splits text')]:
         assert redact(raw) == want, (raw, redact(raw))
+    # Regression: a value inside JSON-escaped quotes (a tool input after json.dumps) escaped redaction.
+    escaped = redact(json.dumps({'command': 'export GH_TOKEN="' + 'g' * 40 + '"'}))
+    assert 'g' * 40 not in escaped and 'GH_TOKEN=\\"[REDACTED]' in escaped, escaped
     # Regression: truncating before redacting left a token prefix that no pattern matched.
     long_tool = {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Bash', 'input': {'command': 'x' * 150 + ' ghp_' + 'b' * 36}}]}}
     user = {'type': 'user', 'message': {'content': 'no'}}

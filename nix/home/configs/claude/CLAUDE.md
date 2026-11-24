@@ -14,9 +14,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - (load) Raise a heavy local job per (approval) with its cost and current load in one line, measuring its memory on a small input before a large one; reuse a running emulator or build; brief workers to "stop and report if a build is needed"; stop every emulator, Metro and Gradle daemon (`./gradlew --stop`) you started (`docs/src/agent-incidents.md`, 2026-10-15: one unasked `assembleDebug`, load average 25).
 
 ## Escalate one hard question to `oracle`, from a worker as readily as from main
-- WHEN: committing to an approach that is expensive to reverse, or reporting done when that unlocks an irreversible step (prod migration, column drop, publish).
-- Spawn `subagent_type: "oracle"` with NO `model` param, passing `question:` and the `context:` that makes it judgeable (`subagent-model-guard.py` allows it from workers); escalate where the evidence sits, since that context expires with your turn.
-- State the verdict in your own words and surface any `suggest_more` other than `none` before continuing.
+- WHEN committing to an approach that is expensive to reverse, or reporting done when that unlocks an irreversible step (prod migration, column drop, publish): spawn `subagent_type: "oracle"` with NO `model` param, passing `question:` and `context:`, from a worker or main, wherever the evidence sits; then state the verdict in your own words and surface any `suggest_more` other than `none`.
 
 ## An Artifact page is written apart from the session that researched it
 - (deliver) Ship a result the user opens or listens to (HTML page, wav/mp3 set) as a published Artifact link, audio uploaded as `asset: true` files the page plays; when the user objects to a local file, move that same page into an Artifact (2026-11-24: a blind TTS test handed over as a scratchpad path, then cut to a bare folder of mp3s).

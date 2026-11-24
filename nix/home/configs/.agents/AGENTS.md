@@ -74,7 +74,7 @@
 - Evidence for done is the artifact running (run it, measure it, query live state); a filename, diff stat, source read or type-check is a hypothesis. Say which claims stayed unverified, and never say done without a runtime check -- name the missing check.
 - Verify once at the final gate (before reporting done, `git push`, or handing over a rebuild) over the whole diff; mid-task edits and checkpoints go unchecked unless the next step consumes the result (a blocking build, a TDD red test, a diagnosis loop).
 - (scope) Trace what the diff reaches and run only those suites or screens, saying which slice and why.
-- (baseline) Start an experiment from the production shape (batch size, model, effort) and report gains against it (`docs/src/agent-incidents.md`, 2026-10-06).
+- (baseline) Start an experiment from the production shape (batch size, model, effort) and report gains against it; before explaining a speed number, name the resource bounding it from counters taken during the run (`nvidia-smi`, `top`, I/O wait, a profiler) (`docs/src/agent-incidents.md`, 2026-10-06 and 2026-11-23).
 - (facts) For a flag, parameter or option, rank installed binary / node_modules source / lockfile / real response over official docs over blogs or memory, and say which rung you used.
 
 ## The user's message and denials govern the turn

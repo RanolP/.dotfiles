@@ -478,6 +478,11 @@ in
         source = ./configs/claude/hooks/done-claim-guard.py;
         executable = true;
       };
+      # Block a mostly-English reply when the output style requires Korean.
+      ".claude/hooks/korean-reply-guard.py" = {
+        source = ./configs/claude/hooks/korean-reply-guard.py;
+        executable = true;
+      };
       # Keep Claude Code's Rex pane tinted for the cwd or file it just touched.
       ".claude/hooks/rex-project-theme.py" = {
         source = ./configs/claude/hooks/rex-project-theme.py;
@@ -754,4 +759,5 @@ in
       };
   };
 }
+
 

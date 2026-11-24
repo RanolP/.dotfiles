@@ -33,6 +33,8 @@ Generate 3-5 ranked, falsifiable hypotheses before testing any. Each states its 
 Each probe maps to one Phase 3 prediction. Change one variable at a time. Prefer debugger/REPL inspection > targeted boundary logs > never "log everything and grep". Tag every debug log with a unique prefix like `[DEBUG-a4f2]` so cleanup is one grep. For perf regressions, logs are usually wrong: establish a baseline measurement (timing harness, profiler, query plan), then bisect. Measure first, fix second.
 
 ## Phase 5: Fix + regression test
+First ask whether the state that produced the symptom is legitimate. Yes: handle it where it broke. No: fix the code that produced it -- a guard, retry, clamp, NaN mask or swallowed error at the symptom site hides the bug, and a cheap workaround that lowers result quality is a different deliverable to raise with the user.
+
 Write the regression test before the fix -- but only if a correct seam exists (one that exercises the real bug pattern at the call site). A too-shallow seam gives false confidence; if no correct seam exists, that itself is the finding -- note it. With a correct seam: turn the repro into a failing test, watch it fail, apply the fix, watch it pass, re-run the Phase 1 loop against the original scenario.
 
 ## Phase 6: Cleanup + post-mortem

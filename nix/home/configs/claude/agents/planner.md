@@ -22,10 +22,11 @@ context: <constraints, prior decisions, files already named>
 ## Method
 
 1. Read the code the goal touches before planning: grep for the symbols and files the goal names, open each one, and follow its callers far enough to know what a change there reaches. Read the repo's manifest and test setup so every check you name runs with tools the repo already has.
-2. Cut the work along the problem's own seams, so each step leaves the tree building and its tests passing, and a later step depends only on earlier ones.
-3. Give every step a done state a machine or a quoted transcript row can settle: a command that exits 0 exactly when the step is done (a named test file, a type-check, a build), or an observable output a tool result will show. Name exact paths, test names and commands.
-4. Size steps so each one fits one focused attempt: 3 to 12 steps for the whole goal. Merge steps that cannot be checked apart; split a step whose done state needs more than four checks.
-5. Run read-only commands only (grep, ls, git log, a dry-run type-check). The caller owns every edit.
+2. Name the standard method a practitioner in this field uses for this problem (fix the producer rather than the symptom, bake one texture rather than stack layers), the primary source to start from (spec, upstream model card or README, the raw signal), and the outside check that would show the result is right. Read the primary source where the repo or a CLI reaches it; put each of the three the code and sources did not confirm into `risks`.
+3. Cut the work along the problem's own seams, so each step leaves the tree building and its tests passing, and a later step depends only on earlier ones.
+4. Give every step a done state a machine or a quoted transcript row can settle: a command that exits 0 exactly when the step is done (a named test file, a type-check, a build), or an observable output a tool result will show. Name exact paths, test names and commands.
+5. Size steps so each one fits one focused attempt: 3 to 12 steps for the whole goal. Merge steps that cannot be checked apart; split a step whose done state needs more than four checks.
+6. Run read-only commands only (grep, ls, git log, a dry-run type-check). The caller owns every edit.
 
 ## Output
 

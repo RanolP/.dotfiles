@@ -1,4 +1,4 @@
-// Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noCompactAfterUnhandled noSummaryDropLoop noReinjection noLoss unhandledStaysInContext unhandledCompactRetiresReady --witnesses wCompactUnhandled --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
+// Run: nice -n 15 quint run nix/home/configs/claude/mods/clm/spec/fold-job.qnt --main current --invariants noCompactAfterUnhandled requestOnlyWithJob noSummaryDropLoop noReinjection noLoss unhandledStaysInContext unhandledCompactRetiresReady --witnesses wCompactUnhandled --max-steps 40 --max-samples 5000 --n-threads 2 --seed 0x1
 // Red on the code before the fixes: the same command with --main head (unhandledStaysInContext, noReinjection), --main prefix (noReinjection) or --main unguarded (noCompactAfterUnhandled)
 // Regenerate the conformance traces (hooks/fold-conformance.test.ts): nice -n 15 sh nix/home/configs/claude/mods/clm/spec/fold-job-traces.sh
 //
@@ -37,9 +37,11 @@ module foldJob {
     reinjected: bool, // a swap read it from the queue after it left or the engine summary covered it
   }
   // phase: idle | bg (split summary) | single | engine | ready | swapping
+  // requested: the model asked for this fold through clm_fold, so the ready plan swaps at the next turn end without
+  // waiting for the fold point (fold-job.ts requestFold, applyReadyIfAtThreshold).
   // snap: queued messages in the rows the job planned over; csnap: those in the rows a waiting compaction read.
   // snapAt / csnapAt: the clock when those rows were read, so a reply after it is outside the rows.
-  type Job = { phase: str, attempt: int, fits: bool, snap: Set[int], csnap: Set[int], snapAt: int, csnapAt: int, mechanical: bool }
+  type Job = { phase: str, attempt: int, fits: bool, snap: Set[int], csnap: Set[int], snapAt: int, csnapAt: int, mechanical: bool, requested: bool }
   type Swap = { active: bool, pc: int, dropped: Set[int] }
 
   var msgs: int -> Msg
@@ -54,7 +56,7 @@ module foldJob {
   var seen: Set[str]
   var compactionDisabled: bool
 
-  pure val idleJob: Job = { phase: "idle", attempt: 0, fits: true, snap: Set(), csnap: Set(), snapAt: 0, csnapAt: 0, mechanical: false }
+  pure val idleJob: Job = { phase: "idle", attempt: 0, fits: true, snap: Set(), csnap: Set(), snapAt: 0, csnapAt: 0, mechanical: false, requested: false }
   pure val noSwap: Swap = { active: false, pc: 0, dropped: Set() }
   pure val freshMsg: Msg = { typed: false, inStore: false, inContext: false, handled: false, carried: 0, engine: false, foldedRow: false, typedAt: 0, repliedAt: 0, retired: false, left: false, reinjected: false }
 
@@ -153,10 +155,10 @@ module foldJob {
   // When the newest turn does not fit, every split overflows: B always ends with it (fold-job.ts:436-439).
   pure def bgNext(j: Job, outcome: str, fixed: bool): Job =
     if (outcome == "ok") { ...j, phase: "ready" }
-    else if (outcome == "skip") { ...j, phase: "idle" }
+    else if (outcome == "skip") { ...j, phase: "idle", requested: false }
     else if (j.attempt == 0) { ...j, attempt: 1 }
     else if (outcome == "overflow" and fixed) { ...j, phase: "single" }   // fold-job.ts:301-309
-    else { ...j, phase: "idle" }                                           // 520a61f: "background fold dropped"
+    else { ...j, phase: "idle", requested: false }                                        // 520a61f: "background fold dropped"
 
   action bgAttempt(outcome: str): bool = all {
     job.phase == "bg",
@@ -174,8 +176,18 @@ module foldJob {
   // src: fold-job.ts:363-377 prepareSingleFold; fold-job.ts:379-401 prepareEngineFold
   action finishFold(ok: bool): bool = all {
     job.phase == "single" or job.phase == "engine",
-    job' = { ...job, phase: if (ok) "ready" else "idle" },
+    job' = { ...job, phase: if (ok) "ready" else "idle", requested: ok and job.requested },
     clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, lastAction' = "finishFold", swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen, compactionDisabled' = compactionDisabled,
+  }
+
+  // The model calls clm_fold: an idle job starts like a turn end, a running or ready one is flagged; a waiting
+  // compaction, a running swap and disabled compaction refuse it. src: fold-job.ts requestFold, register.ts clm_fold
+  action modelFold(twoTurns: bool, fits: bool): bool = all {
+    not(compactWaiting), not(swap.active), not(compactionDisabled) or not(GUARD_UNHANDLED),
+    job.phase == "idle" or job.phase == "bg" or job.phase == "single" or job.phase == "ready",
+    job' = if (job.phase == "idle") { ...idleJob, phase: if (routeToSplit(FIXED, twoTurns, fits)) "bg" else "single", fits: fits, snap: stored(msgs), snapAt: clock, requested: true }
+      else { ...job, requested: true },
+    clock' = clock, msgs' = msgs, compactWaiting' = compactWaiting, lastAction' = "modelFold", swap' = swap, endedNoPlanOnOverflow' = endedNoPlanOnOverflow, seen' = seen.union(Set("modelFold")), compactionDisabled' = compactionDisabled,
   }
 
   // ---- compaction ----
@@ -284,6 +296,9 @@ module foldJob {
     nondet two = Set(true, false).oneOf()
     nondet fits = Set(true, false).oneOf()
     turnEnd(two, fits),
+    nondet mtwo = Set(true, false).oneOf()
+    nondet mfits = Set(true, false).oneOf()
+    modelFold(mtwo, mfits),
     nondet o = Set("noReply", "skip", "overflow", "ok").oneOf()
     bgAttempt(o),
     nondet ok = Set(true, false).oneOf()
@@ -328,7 +343,10 @@ module foldJob {
   val unhandledCompactRetiresReady = lastAction == "compactUnhandled" implies job.phase == "idle"
 
   // P5: once an unhandled compact disables clm compaction, neither clm compact requests nor background fold starts recur.
-  val noCompactAfterUnhandled = compactionDisabled implies (lastAction != "requestCompact" and lastAction != "turnEnd")
+  val noCompactAfterUnhandled = compactionDisabled implies (lastAction != "requestCompact" and lastAction != "turnEnd" and lastAction != "modelFold")
+
+  // P6: a clm_fold request lives only on a job that can still swap; every way a job ends drops it with the job.
+  val requestOnlyWithJob = job.requested implies (job.phase == "bg" or job.phase == "single" or job.phase == "ready" or job.phase == "swapping")
 
   // Sanity: must be violated, showing a carry is reachable at all.
   val sanityNoCarry = MSGS.forall(m => msgs.get(m).carried == 0)
@@ -341,6 +359,7 @@ module foldJob {
   val wWriteFailed = seen.contains("writeFailed")
   val wHandOff = seen.contains("handOff")
   val wCompactUnhandled = seen.contains("compactUnhandled")
+  val wModelFold = seen.contains("modelFold")
 }
 
 module current { import foldJob(FIXED = true, KEEP_UNHANDLED = true, RETIRE_IN_MEMORY = true, RETIRE_MAY_FAIL = true, GUARD_UNHANDLED = true, MSGS = Set(1, 2)).* }

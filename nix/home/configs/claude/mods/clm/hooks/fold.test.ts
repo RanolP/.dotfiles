@@ -1558,6 +1558,25 @@ test('the wrap-up notice stays silent outside the last stretch before the fold p
   expect((await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)).context ?? []).toEqual([])
 })
 
+// Regression caught: clm_fold waited for the usage and queue gates like the turn-end check, so a model asking to fold a
+// finished unit of work early got nothing.
+test('clm_fold starts the summary job below the fold point and queue target', { options: { budget: 100000, tailTarget: 3000, queueTarget: 100000, ledgerTarget: 500, reserve: 1000 } }, async ($, on) => {
+  const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(4000)), M('user', 'active B'), M('assistant', 'working')]
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const seen = bottoms(on, { rows, replies: [], splitBlock: () => gate, usage: { startedAt: 0, context: { window: 200000, tokens: 2000 }, rateLimits: [] } })
+  on('tool.call', () => ({ result: { success: true } }))
+  await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(seen.splitPrompts).toHaveLength(0)
+  const answer = await $.tool.call({ tool: 'mcp__clm__clm_fold' } as unknown as ToolCallInput)
+  expect(JSON.stringify(answer)).toContain('Fold requested')
+  for (let i = 0; i < 50 && seen.splitPrompts.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(seen.splitPrompts).toHaveLength(1)
+  release()
+  await waitForPending(seen)
+})
+
 test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(14_000)), M('user', 'active B'), M('assistant', 'working')]
   let release!: () => void

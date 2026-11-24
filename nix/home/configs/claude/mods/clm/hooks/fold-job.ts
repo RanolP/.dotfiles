@@ -29,8 +29,9 @@ type Pending = {
   rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]
 }
 type PendingJob =
-  | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[] }
-  | { state: 'ready'; plan: Pending; fingerprints: string[] }
+  // requested: the model called clm_fold, so the ready plan swaps at the next turn end without waiting for the fold point.
+  | { state: 'summarizing'; promise: Promise<Pending | undefined>; fingerprints: string[]; requested?: boolean }
+  | { state: 'ready'; plan: Pending; fingerprints: string[]; requested?: boolean }
 // A swap that would not shrink the conversation reports why instead of a result, before it persists anything.
 type NotShrunk = { notShrunk: string }
 type SwapResult = SessionCompactResult | NotShrunk
@@ -489,7 +490,7 @@ async function startFoldJob(io: FoldJobIo, opts: Opts, rows: readonly SessionMes
       io.log('clm: background fold finished after its job was replaced; plan discarded', { to: 'debug' })
       return
     }
-    foldJobs.set(key, plan ? { state: 'ready', plan, fingerprints: job.fingerprints } : { state: 'idle' })
+    foldJobs.set(key, plan ? { state: 'ready', plan, fingerprints: job.fingerprints, ...(job.requested ? { requested: true } : {}) } : { state: 'idle' })
     void (async () => {
       const pending = await io.pendingKey(key)
       if (plan) await io.storeSet(pending, plan)
@@ -512,7 +513,7 @@ export async function applyReadyIfAtThreshold(io: ReadyFoldIo, opts: Opts, key: 
   if (job?.state !== 'ready') return false
   const meta = await io.readMeta()
   if (meta.compactionDisabled) return false
-  if (!job.plan.rewindOnly) {
+  if (!job.plan.rewindOnly && !job.requested) {
     const rows = liveRows(await io.sessionMessages(), meta.boundary)
     if (!atFoldPoint(rows, await io.usageReading(), meta, opts)) return false
   }
@@ -569,6 +570,35 @@ export async function maybeClear(io: FoldJobIo, opts: Opts, canSwap = true): Pro
     await logFoldOutcome(io, `background fold failed (${String(err).slice(0, 1000)})`)
     io.log(`clm: background fold failed (${String(err)})`, { to: 'debug' })
   })
+}
+
+export function foldRequested(key: string): boolean {
+  const job = foldJobs.get(key)
+  return (job?.state === 'summarizing' || job?.state === 'ready') && job.requested === true
+}
+
+export type FoldRequest = { outcome: 'started' | 'flagged' | 'refused'; detail: string }
+
+/**
+ * clm_fold: starts a turn-end fold job now when none runs, past the usage and queue gates, or flags the running or
+ * ready one; either way its plan swaps at the next turn end. A running swap or disabled compaction refuses it.
+ * spec/fold-job.qnt modelFold.
+ */
+export async function requestFold(io: FoldJobIo, opts: Opts): Promise<FoldRequest> {
+  const key = transcriptKey(await io.sessionId())
+  const meta = await io.readMeta()
+  if (meta.compactionDisabled) return { outcome: 'refused', detail: 'clm compaction is disabled for this session; native autocompact handles it' }
+  const current = foldJobs.get(key)
+  if (current?.state === 'swapping') return { outcome: 'refused', detail: 'a fold is being applied right now' }
+  if (current?.state === 'summarizing' || current?.state === 'ready') {
+    current.requested = true
+    return { outcome: 'flagged', detail: current.state === 'ready' ? 'the fold plan is ready' : 'the fold summary is already running' }
+  }
+  const rows = await rowsWithQueuedMessages(io, key, liveRows(await io.sessionMessages(), meta.boundary))
+  // A turn-end check may have started the job since the read above; the request then rides on that job.
+  const job = await startFoldJob(io, opts, rows, meta, key, true)
+  if (job.state === 'summarizing' || job.state === 'ready') job.requested = true
+  return { outcome: 'started', detail: 'the fold summary started' }
 }
 
 // The confirm question is asked against the tracker as it stands when the fold

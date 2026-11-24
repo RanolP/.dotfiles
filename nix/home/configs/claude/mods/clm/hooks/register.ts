@@ -30,7 +30,7 @@ import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes, WRAP_UP_
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
-import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo } from './fold-job'
+import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
 import { registerResources } from './resources'
 import { coworkerIntent, registerCoworkers } from './coworker-runtime'
 import { clauseStoreKey, emptyClauseStore, readClauseStore } from './clauses'
@@ -47,6 +47,7 @@ export { messageTokens, type Meta, type Opts }
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 const RECALL_TOOL = 'mcp__clm__clm_recall'
 const NOTE_TOOL_ID = `mcp__clm__${NOTE_TOOL}`
+const FOLD_TOOL_ID = 'mcp__clm__clm_fold'
 export { TASK_TOOL }
 
 type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value: unknown }> } }
@@ -1110,6 +1111,16 @@ async function wrapUpNotice($: EngineInterface, opts: Opts): Promise<string | un
   return WRAP_UP_NOTICE
 }
 
+/** clm_fold: asks for a fold now; the swap itself waits for a turn end, where the host allows session.compact. */
+export async function foldOnRequest($: EngineInterface, opts: Opts) {
+  let request: FoldRequest
+  try { request = await requestFold(foldJobIo($), opts) }
+  catch (err) { request = { outcome: 'refused', detail: `the fold could not start (${String(err).slice(0, 160)})` } }
+  await logEvent($, 'model-fold', { outcome: request.outcome, reason: request.detail })
+  if (request.outcome === 'refused') return { result: `Fold not requested: ${request.detail}.`, isError: true }
+  return { result: `Fold requested: ${request.detail}. It applies at a turn end once the summary is ready; keep working meanwhile.` }
+}
+
 /** clm_note: keeps one line for the ledger's facts, evicting the oldest past NOTE_KEEP. */
 export async function recordNote($: EngineInterface, key: string, text: unknown) {
   const added = addNote(readNotes(await sessionStoreGet($, noteStoreKey(key))), text)
@@ -1149,6 +1160,7 @@ const GUIDE = [
   'A result shown as `[clm step … done: …]` was folded. Call clm_recall with its @step address to read the raw output instead of re-running the command or re-reading the file.',
   'To find folded work you have no address for, call clm_recall with query (words that must all appear), then read a hit by its address.',
   'Record a fact, path or decision you will need after a fold with clm_note; the ledger keeps each note verbatim.',
+  'Call clm_fold when a unit of work is finished and its turns can leave the conversation; clm folds them at the end of this turn or the next.',
 ].join('\n')
 
 export const register: Register = (on, options) => {
@@ -1209,6 +1221,15 @@ export const register: Register = (on, options) => {
       })
     } catch (err) {
       $.ui.log(`clm: clm_note registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
+    }
+    try {
+      await $.tool.register({
+        name: 'clm_fold',
+        description: 'Fold the older turns into the clm ledger now instead of waiting for the context budget. Call it when a unit of work is finished and the turns that produced it can leave the conversation; record anything you need verbatim with clm_note first. The summary runs in the background and the fold applies at a turn end.',
+        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      })
+    } catch (err) {
+      $.ui.log(`clm: clm_fold registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
     }
     try {
       await $.tool.register({
@@ -1350,6 +1371,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: NOTE_TOOL_ID }, async ($, e) => recordNote($, transcriptKey(await sid($)), e.text))
+  on('tool.call', { tool: FOLD_TOOL_ID }, async $ => foldOnRequest($, await liveOpts($, userOptions)))
 
   on('agent.spawn', async ($, e, next) => {
     const io = panelIo($)

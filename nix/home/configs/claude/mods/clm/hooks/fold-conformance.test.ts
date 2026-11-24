@@ -17,7 +17,7 @@
 // disagreement.
 import { expect, test } from 'claude-code/testing'
 import type { SessionCompactResult, SessionMessage } from 'claude-code'
-import { applyReadyIfAtThreshold, clearFoldJob, foldJobDropFps, foldJobIdle, handleSessionCompact, maybeClear, resetRetiredQueued, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
+import { applyReadyIfAtThreshold, clearFoldJob, foldJobDropFps, foldJobIdle, foldRequested, handleSessionCompact, maybeClear, requestFold, resetRetiredQueued, retiredQueuedUuids, transcriptKey, type FoldJobIo } from './fold-job'
 import { captureAppendedRow } from './register'
 import { estTokens, fingerprint, foldedRows, headRows, isHarnessText, isLedgerRow, isPrompt, liveRows, planClear, protectedIndex, queuedMessageSourceOf, sum, withQueuedMessages, type QueuedMessage } from './fold'
 import { EMPTY_LEDGER, notesOf, SPLIT_MERGE_SYSTEM } from './ledger'
@@ -353,6 +353,25 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
         cover(`turnEnd -> ${after.j.phase}`)
         break
       }
+      case 'modelFold': {
+        // From idle the request starts a turn-end job over the same rows a turnEnd would read; otherwise it flags the job.
+        let tailTarget = after.p.mfits ? 1e9 : 0
+        if (before.j.phase === 'idle') {
+          w.insertBulk()
+          if (after.p.mtwo) {
+            await w.appendRow(M('user', `prompt ${w.nextId()}`))
+            await w.appendRow(M('user', `prompt ${w.nextId()}`))
+          } else {
+            if (promptStarts(w) === 0) await w.appendRow(M('user', `prompt ${w.nextId()}`))
+            if (promptStarts(w) > 1) tailTarget = 0
+          }
+          w.resetSplitCalls()
+        }
+        const request = await requestFold(w.io, opts(tailTarget))
+        expect(request.outcome, `${at}: clm_fold outcome`).toBe(before.j.phase === 'idle' ? 'started' : 'flagged')
+        cover(`modelFold in ${before.j.phase} -> ${after.j.phase}`)
+        break
+      }
       case 'bgAttempt': {
         const o = String(after.p.o)
         const g = w.take('split')
@@ -482,6 +501,9 @@ async function replay(id: string, trace: readonly State[]): Promise<void> {
     }
     expect(modelPhase(after), `${at}: code phase vs model ${after.j.phase} (waiting=${after.w}, swap pc=${after.s.active ? after.s.pc : '-'}) ${JSON.stringify(w.events.slice(-3))}`).toContain(codePhase(w))
     expect(w.meta.compactionDisabled === true, `${at}: persisted compaction-disabled state`).toBe(after.d)
+    // P6: the clm_fold request lives exactly as long as the model's job keeps it. A waiting compaction swaps the plan
+    // itself, so the request is moot while one waits; the code drops it once the swap starts.
+    if (!after.w) expect(foldRequested(w.key), `${at}: clm_fold request on the job`).toBe(after.j.requested && ['bg', 'single', 'ready'].includes(after.j.phase))
     // Attempt n of the split is the code's (n + 1)th split-merge call; the job that leaves bg makes no further one.
     if (after.j.phase === 'bg') expect(w.splitCalls, `${at}: split-merge calls for attempt ${after.j.attempt}`).toBe(after.j.attempt + 1)
     else if (after.a === 'bgAttempt') expect(w.splitCalls, `${at}: split-merge calls after the job left bg`).toBe(before.j.attempt + 1)
@@ -506,6 +528,7 @@ test('fold job conformance: the replayed traces cover every model action', () =>
     'persist(false) at ledger', 'persist(false) at snapshot', 'persist(false) at meta', 'finishSwap', 'finishSwap mechanical',
     'finishSwap carrying an unhandled message', 'turnEnd(two=false, fits=true) on one turn',
     'compactUnhandled(retireOk=true)', 'compactUnhandled(retireOk=false)',
+    'modelFold in idle -> bg', 'modelFold in idle -> single', 'modelFold in bg -> bg', 'modelFold in single -> single', 'modelFold in ready -> ready',
   ]
   const report = [...coverage].sort().map(([label, n]) => `${label}: ${n}`).join('\n')
   console.log(`replayed steps per action:\n${report}`)

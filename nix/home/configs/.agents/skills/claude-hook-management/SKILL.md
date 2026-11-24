@@ -46,6 +46,10 @@ A PostToolUse hook that prints plain text is invisible. That mistake already shi
 
 An injected string stays in the transcript, so every later request re-reads all earlier copies as cache-read input. Cost grows with the SQUARE of the turn count: a 300-token injection over 50 turns is roughly 375k cache-read tokens, while a 20-token one is roughly 25k. Inject the checkable core; leave the full spec in the always-loaded rules.
 
+## Shared state
+
+Parallel sessions and subagents fire the same hooks, so give each writer its own file or key and merge where the state is read. clm keeps session state, the tracker log and the fold archive in one file per session id (`register.ts` `sessionStatePath`, `.claude-work/tracker/events/<session>.jsonl`, `fold-job.ts:622`); its per-session promise chains (`register.ts` `serializeSessionState`, `events.ts` `serialized`) then only order callbacks inside one process. Two writers each updating their own field of one JSON file still share that file. Reach for a cross-process lock only where a single shared target is the invariant, as with a clm mutex resource one session owns at a time (`resources.ts` `takeReclaimLock`, an atomic `mkdir`), and check first whether splitting the state removes the need.
+
 ## Deployed hooks
 
 | File | Event | Concern |

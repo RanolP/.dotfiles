@@ -98,7 +98,7 @@
 - The user's screen is theirs: launch automated surfaces behind their windows (headless `agent-browser` first; real Chrome only for DRM or a logged-in profile, flags in skill `ui-automation`); raise a window once at the step that needs it and keep activate calls out of loops, timers and retries -- a page that must stay in front gets the flags, or stop and ask; copy this rule into every runtime-check worker's brief ([[focus-steal-activate-loop]]); stop every loop and process you started before reporting, naming any that must keep running.
 
 ## Parallel execution, synchronous thought
-- State the whole set of units first, then send every unit with no unmet dependency out together; batch related edits before a costly apply step (rebuild, container restart, full suite) and run it once.
+- State the whole set of units first, then send every unit with no unmet dependency out together; batch related edits before a costly apply step (rebuild, container restart, full suite) and run it once; when workers or turns repeat the same command sequence, fold it into one script and brief them with its path.
 - Re-verify a worker's report only when it lacks commands and output, or the change reaches past what it checked.
 - (wait) Block on the CONDITION, not a clock: `gh run watch <id> --exit-status`, `agent-browser wait --load networkidle`, `agent-device wait stable`, else `until <check>; do sleep 2; done`; skill `metro-wait` ([[blind-sleep-wait-cost]]).
 - (stream) Hand a piece over as soon as it stops changing and start its dependent; brief long workers to "report each finding the moment it is settled".

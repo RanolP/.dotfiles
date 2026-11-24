@@ -12,6 +12,7 @@ Quint is an executable specification language: state variables, guarded actions,
 - `references/syntax.md` -- the language rules that cause most typecheck and runtime errors, and the undefined-behaviour table.
 - `references/running.md` -- every `quint run` flag this skill uses, how to read the output, step and sample staging, and the `quint verify` escalation.
 - `references/worked-example.md` -- a complete lost-update spec with the commands and their real output under quint 0.33.1.
+- `references/persistent.md` -- promoting a spec into the repo as a check tied to the code by a trace replay (clm's fold job), and the resync pass after that code changes.
 
 ## Setup
 

@@ -27,6 +27,14 @@ For each remaining behavior: write the next test (RED) -> minimal code to pass (
 ## Phase 4: Refactor
 Only once all tests are GREEN: extract duplication, deepen modules (complexity behind simple interfaces), apply SOLID where natural, reconsider existing code in light of the new code. Run tests after each refactor step.
 
+## Bug fix
+A reported bug skips Phase 1's approval and runs this path:
+1. Write one test through the public interface that reproduces the reported symptom.
+2. Run it before touching the code and confirm it fails for the reported reason -- an import error, typo or missing fixture is a broken test, not a reproduction.
+3. Apply the smallest fix, rerun the test until it passes, then rerun the suites the fix reaches.
+4. When a failing test is impractical, capture the repro another way before the fix -- a script that exits non-zero, a before/after screenshot diff, an audio metric or a listenable Artifact -- and run the same capture after it.
+5. Report the test or repro name with its failing output before the fix and its passing output after.
+
 ## Per-cycle checklist
 - The RED names in one sentence the real regression it catches; a sentence you cannot finish means this cycle skips the test and moves on
 - Test describes behavior, not implementation

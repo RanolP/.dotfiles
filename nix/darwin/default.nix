@@ -63,6 +63,7 @@ in
       "menubarx" # menu bar browser
       "proxyman" # HTTP debugging proxy
       "thaw" # menu bar utility
+      "t3-code" # GUI for coding agents (Claude Code, Codex)
     ]
     ++ (casksByHost.${hostName} or [ ]);
   };

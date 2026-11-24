@@ -33,7 +33,7 @@ A model that passes describes the model. The conformance replay is what shows th
 
 1. A script runs the `current` instance with `--mbt --out-itf` at a fixed SEED, TRACES and STEPS and packs each state's variables, `mbt::actionTaken` and `mbt::nondetPicks` into a generated `.ts` (the plugin test loader imports code files only). Its first line records the seed and counts and says the file is generated.
 2. A test drives the real functions through a fake IO whose awaits wait on gates the trace opens one step at a time, and after every step compares each model variable with the code's observable state (`fold-conformance.test.ts` compares queue membership with `inStore`, the job with `phase`, the pending write with `swap.pc`).
-3. One more test asserts that the traces cover every model action (`fold-conformance.test.ts:519`), so a regenerated sample that loses an action fails loudly.
+3. One more test asserts that the traces cover every model action (the test 'the replayed traces cover every model action' in `fold-conformance.test.ts`), so a regenerated sample that loses an action fails loudly.
 
 Run a mod's tests with `claude plugin test .` from the mod folder (`docs/src/claude-code.md:34`); elsewhere use the repo's own runner. The replay catches disagreement on sampled traces only; code paths the model has no action for stay invisible to it, and the resync pass below is what finds them.
 

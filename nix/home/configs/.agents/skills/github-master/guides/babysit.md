@@ -44,7 +44,7 @@ Classify each thread before acting, checking the claim against the code at the P
 
 Human reviewers' threads go to `fix` or `ask`; `dismiss` is for bot findings (Bugbot, Copilot, CodeRabbit, Codex and similar review automation).
 
-Commit and push each wave of fixes before replying, so every reply cites its commit SHA. Posting a reply and resolving a thread are visible to everyone on the PR, so they follow the user's mutation rules: post when the user's request covers replying (a granted permission covers its whole class), otherwise return the drafted replies in the report.
+On a `claude/*` branch, commit and push each wave of fixes before replying, so every reply cites its commit SHA. On any other branch, leave the fixes in the working tree and draft the replies against the pending change, unless the user asked for the commit and push. Posting a reply and resolving a thread are visible to everyone on the PR, so they follow the user's mutation rules: post when the user's request covers replying (a granted permission covers its whole class), otherwise return the drafted replies in the report.
 
 ```sh
 gh api --method POST repos/<owner>/<repo>/pulls/<n>/comments/<comment-databaseId>/replies --input reply.json

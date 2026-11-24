@@ -50,7 +50,7 @@ Run from `~/syncthing/Projects/personal-work-memory`; the regression gate is `fo
 
 - **A judge (Jev vs haiku agreement)** -- harness: `uv run --project eval python eval/skilleval/jev_judge_ab.py eval/frev/<session>` over a fixed set of sealed sessions; metrics: `exact_agreement`, `adjacent_agreement`, `top_candidate_agreement`, `strict_top_agreement` from its `jev_ab.json`. It exits non-zero when any case failed, so an errored run never counts as a measurement. `JEV_MODEL` is `jev-latest`, a moving alias: re-measure the baseline at the start of each sitting and whenever deltas look implausible.
 - **A gate threshold** (`JEV_MIN_CONFIDENCE`, `JEV_WORKERS` in `jev_gate.py`) -- replay the same sealed sessions per value; one value per attempt.
-- **A skill's instruction text** -- FrEv is already the per-edit harness (`frev edit <skill> --adopt`, `frev propose`, `frev ingest --bank`, `frev seal`, `frev apply`); hillclimb wraps it: one proposal per attempt, the case bank ingested with `--bank` frozen for the run, and the judged score as the metric.
+- **A skill's instruction text** -- FrEv is already the per-edit harness (`uv run --project eval frev edit <skill> --adopt`, `uv run --project eval frev propose`, `uv run --project eval frev ingest --bank`, `uv run --project eval frev seal`, `uv run --project eval frev apply`); hillclimb wraps it: one proposal per attempt, the case bank ingested with `--bank` frozen for the run, and the judged score as the metric.
 
 ## Reply
 

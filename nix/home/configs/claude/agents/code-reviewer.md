@@ -77,6 +77,7 @@ Load the matching skill and follow it exactly rather than reviewing from memory:
 | When the diff includes | Read |
 |---|---|
 | TypeScript, Kotlin, Swift, or Rust | `constraint-evasion` skill — suppressed warnings and escape hatches, values stuffed into existing holes, types weakened away from the plan, sum types extended flat, call sites that should have changed and did not. Every pattern it hunts compiles, so no linter will surface them. |
+| `.ts`/`.tsx` type definitions, `as` casts, `!` assertions, or `isX` type guards | `typescript-types` skill — casts that lie, guards that do not verify their claim, `never` exhaustiveness, tagged unions |
 | a security-sensitive surface (auth, crypto, deserialization, file paths, shell, SQL, network input) | `security-review` skill |
 | moved files or a new/redrawn module boundary | `modularize-by-domain` skill — the owner's rule that a module is a problem area, never a slice |
 | dead or newly orphaned code | `remove-dead-code` skill (scan only; never remove during a review) |

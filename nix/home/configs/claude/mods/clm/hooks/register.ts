@@ -26,7 +26,7 @@ import { backfillClausesChained, recordPromptIntent as classifyPrompt, isRequest
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
-import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes } from './memory'
+import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes, WRAP_UP_NOTICE, wrapUpDue, wrapUpStoreKey } from './memory'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
@@ -1098,6 +1098,18 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
 
 export const report = foldJobReport
 
+/** The pre-fold notice, once per ledger seq, while usage sits just under the fold point and no fold has started. */
+async function wrapUpNotice($: EngineInterface, opts: Opts): Promise<string | undefined> {
+  const key = transcriptKey(await sid($))
+  if (!foldJobIdle(key)) return undefined
+  const [meta, used, noticedSeq] = await Promise.all([readMeta($), usageReading($), sessionStoreGet($, wrapUpStoreKey(key))])
+  const due = wrapUpDue({ used, budget: opts.budget, reserve: opts.reserve, jobIdle: foldJobIdle(key), compactionDisabled: meta.compactionDisabled, seq: meta.seq, noticedSeq })
+  if (!due) return undefined
+  await sessionStoreSet($, wrapUpStoreKey(key), meta.seq)
+  await logEvent($, 'wrap-up-notice', { tokensBefore: used, reason: `seq ${meta.seq}, fold point ${opts.budget - opts.reserve}` })
+  return WRAP_UP_NOTICE
+}
+
 /** clm_note: keeps one line for the ledger's facts, evicting the oldest past NOTE_KEEP. */
 export async function recordNote($: EngineInterface, key: string, text: unknown) {
   const added = addNote(readNotes(await sessionStoreGet($, noteStoreKey(key))), text)
@@ -1320,7 +1332,12 @@ export const register: Register = (on, options) => {
         finally { if (foldChecks.get(key) === check) foldChecks.delete(key) }
       })().catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
     }
-    return next(e)
+    const result = await next(e)
+    if (e.agentId !== undefined || result.deny !== undefined) return result
+    let notice: string | undefined
+    try { notice = await wrapUpNotice($, await liveOpts($, userOptions)) }
+    catch (err) { $.ui.log(`clm: wrap-up notice check failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+    return notice ? { ...result, context: [...(result.context ?? []), notice] } : result
   })
 
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => {

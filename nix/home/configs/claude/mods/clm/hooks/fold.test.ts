@@ -1538,6 +1538,26 @@ test('an uncalibrated background fold check reads messages and records its first
 })
 
 // Regression caught: queueTarget was checked only after turn completion, so long turns entered compact without a summary job.
+// Regression caught: a fold took older turns away with no warning, so the model had no turn left to record what it still needed.
+test('a tool call just under the fold point carries the wrap-up notice once per fold cycle', { options: { budget: 10000, tailTarget: 3000, queueTarget: 100000, ledgerTarget: 500, reserve: 1000 } }, async ($, on) => {
+  bottoms(on, { rows: [M('user', 'protected request'), M('assistant', 'working')], replies: [], usage: { startedAt: 0, context: { window: 200000, tokens: 8000 }, rateLimits: [] } })
+  on('tool.call', () => ({ result: { success: true } }))
+  const first = await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
+  const second = await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
+  expect(first.context?.some(line => line.includes('clm_note'))).toBe(true)
+  expect(second.context ?? []).toEqual([])
+})
+
+// Regression caught: the wrap-up notice fired far from the fold point, or at and past it where the fold may already be running.
+test('the wrap-up notice stays silent outside the last stretch before the fold point', { options: { budget: 10000, tailTarget: 3000, queueTarget: 100000, ledgerTarget: 500, reserve: 1000 } }, async ($, on) => {
+  const usage = { startedAt: 0, context: { window: 200000, tokens: 3000 }, rateLimits: [] }
+  bottoms(on, { rows: [M('user', 'protected request'), M('assistant', 'working')], replies: [], usage })
+  on('tool.call', () => ({ result: { success: true } }))
+  expect((await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)).context ?? []).toEqual([])
+  usage.context.tokens = 9500
+  expect((await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)).context ?? []).toEqual([])
+})
+
 test('a tool step past queueTarget starts a background fold', BG_OPTS, async ($, on) => {
   const rows = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(14_000)), M('user', 'active B'), M('assistant', 'working')]
   let release!: () => void

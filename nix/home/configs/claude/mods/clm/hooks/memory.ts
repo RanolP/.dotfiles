@@ -52,8 +52,13 @@ const SECRETS: readonly RegExp[] = [
   /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /\bgithub[_]pat_[A-Za-z0-9_]{20,}/g,
+  /\bnpm_[A-Za-z0-9]{36}\b/g,
+  /\bglpat-[A-Za-z0-9_-]{20,}/g,
   /(\bBearer\s+)[A-Za-z0-9._~+/-]{16,}=*/gi,
-  /(\b(?:api[_-]?key|token|secret|password|passwd)\b["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gi,
+  /((?:^|[^A-Za-z0-9])(?:x-api-key|authorization)\s*:\s*(?:(?:Bearer|Basic|Token)\s+)?)[^\s"',;]{8,}/gim,
+  // An env-style NAME_ prefix (CLOUDFLARE_API_TOKEN=) defeats \b, since _ is a word char; the lead keeps it out of the middle of a word.
+  /((?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+_)*(?:api[_-]?key|token|secret|password|passwd)["']?\s*[:=]\s*["']?)[^\s"',;]{8,}/gim,
 ]
 export const redact = (text: string) =>
   SECRETS.reduce((out, pattern) => out.replace(pattern, (match, lead) => `${typeof lead === 'string' && match.startsWith(lead) ? lead : ''}[redacted]`), text)

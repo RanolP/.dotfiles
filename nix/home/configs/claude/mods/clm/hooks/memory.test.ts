@@ -1,7 +1,7 @@
 import { test, expect } from 'claude-code/testing'
 
 import { ledgerRowText } from './fold'
-import { addNote, appendArchive, archiveBlocks, NOTE_CHARS, NOTE_KEEP, noteStoreKey, parseArchive } from './memory'
+import { addNote, appendArchive, archiveBlocks, NOTE_CHARS, NOTE_KEEP, noteStoreKey, parseArchive, redact } from './memory'
 import { M } from './clm-test-support'
 import { residentLedger, type ResidentIo } from './resident'
 
@@ -47,6 +47,16 @@ test('the archive redacts credential shapes and keeps the rest', () => {
   expect(text).not.toContain(fakeKey)
   expect(text).toContain('Bearer [redacted]')
   expect(text).toContain(' ok')
+  // Regression caught: env-style names (_ is a word char, so \b missed them) and prefixed tokens passed unredacted.
+  const samples = [
+    ['export CLOUDFLARE_API_TOKEN=' + 'c'.repeat(40), 'export CLOUDFLARE_API_TOKEN=[redacted]'],
+    ['NPM_TOKEN=' + 'npm' + '_' + 'n'.repeat(36), 'NPM_TOKEN=[redacted]'],
+    ['see ' + 'github' + '_pat_11' + 'g'.repeat(40), 'see [redacted]'],
+    ['see npm' + '_' + 'm'.repeat(36) + ' end', 'see [redacted] end'],
+    ['see glpat' + '-' + 'l'.repeat(20), 'see [redacted]'],
+    ['x-api-key: ' + 'x'.repeat(30), 'x-api-key: [redacted]'],
+  ] as const
+  for (const [input, expected] of samples) expect(redact(input)).toBe(expected)
 })
 
 // Regression caught: the archive grew without bound, or cutting it split a block so its address no longer parsed.

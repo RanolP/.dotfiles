@@ -111,9 +111,11 @@ args = ["/qn", "/norestart"]
 # installed entry that is older count as missing. To upgrade: pick the new
 # version at nvidia.com/Download, then bump `version` and the version in `url`.
 # `-s -noreboot` are the NVIDIA installer's silent flags; reboot afterwards.
+# Floor is 621.40: 621.14 and 621.24 make NVDisplay.Container.exe rewrite
+# nvlog.nvlgstg at idle (GB/hour of SSD writes); 621.40 lists it fixed (7116722).
 [direct."NVIDIA Graphics Driver"]
-version = "621.24"
-url = "https://us.download.nvidia.com/Windows/621.24/621.24-desktop-win10-win11-64bit-international-dch-whql.exe"
+version = "621.40"
+url = "https://us.download.nvidia.com/Windows/621.40/621.40-desktop-win10-win11-64bit-international-dch-whql.exe"
 args = ["-s", "-noreboot"]
 
 # NVIDIA App keeps the driver current between rebuilds; the driver entry above is

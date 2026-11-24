@@ -467,6 +467,12 @@ in
         source = ./configs/claude/hooks/output-shape-reminder.py;
         executable = true;
       };
+      # A prompt complaining of a repeated mistake gets a nudge to turn the
+      # class into a mechanism (skill `correct` / `rule-write`).
+      ".claude/hooks/repeat-correction-nudge.py" = {
+        source = ./configs/claude/hooks/repeat-correction-nudge.py;
+        executable = true;
+      };
       # Keep Claude Code's Rex pane tinted for the cwd or file it just touched.
       ".claude/hooks/rex-project-theme.py" = {
         source = ./configs/claude/hooks/rex-project-theme.py;

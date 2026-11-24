@@ -38,6 +38,16 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "seochecks-ai and slopless contributors"
 SPDX-License-Identifier = "MIT"
 
+# Adapted (not verbatim) from pstack 0.15.48, github.com/cursor/plugins/tree/main/pstack (MIT);
+# each SKILL.md footer names the upstream skills it draws on.
+[[annotations]]
+path = [
+    "nix/home/configs/.agents/skills/correct/SKILL.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = ["2026 Lauren Tan", "2026 RanolP"]
+SPDX-License-Identifier = "MIT"
+
 # Distilled from github.com/toss/technical-writing (CC BY-NC-SA 4.0); ShareAlike applies.
 # The prose-editor agents carry the adapted rules; the docs-write skill no longer does.
 [[annotations]]
@@ -310,6 +320,7 @@ path = [
     "nix/home/configs/.agents/skills/ui-automation/SKILL.md",
     "nix/home/configs/.agents/skills/claude-hook-management/SKILL.md",
     "nix/home/configs/.agents/skills/memory-review/SKILL.md",
+    "nix/home/configs/.agents/skills/correct/mine-corrections.py",
     "nix/home/configs/.agents/skills/dotfiles-evolve/SKILL.md",
     "nix/home/configs/.agents/skills/evidence-store/SKILL.md",
     "nix/home/configs/.agents/skills/docs-write/SKILL.md",

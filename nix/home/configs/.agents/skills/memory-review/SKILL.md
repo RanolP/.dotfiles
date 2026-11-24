@@ -1,13 +1,13 @@
 ---
 name: memory-review
-description: Survey the Claude memories saved across every project, rank them by how much they belong in the shared rules file, and recommend a shortlist to internalize, keep, or delete. Use when the user asks which memories should become rules, wants the memory store cleaned up, or opens `~/.dotfiles` after a stretch of work in other repos.
+description: Survey the Claude memories saved across every project, plus the user corrections in recent session transcripts that no memory caught, rank them by how much they belong in the shared rules file, and recommend a shortlist to internalize, keep, delete, or hand to `correct` for a guard. Use when the user asks which memories should become rules, wants the memory store cleaned up, or opens `~/.dotfiles` after a stretch of work in other repos.
 ---
 
 # Memory review
 
 Memories are written wherever the work happened, so a correction that applies on every host can sit in one project folder forever. This skill reads the whole store, sorts it by where each memory belongs, and hands the user a ranked shortlist. It recommends; the user picks; `dotfiles:evolve` does the moving.
 
-Nothing is deleted here. This skill only reads.
+Nothing is deleted here. This skill only reads; the transcript pass in step 5 writes its extract to the scratchpad and nowhere else.
 
 ## 1. Sweep cheaply
 
@@ -46,16 +46,34 @@ A memory in the **Stale** or **Conflicting** bucket needs its premise tested bef
 Order the shortlist by damage, highest first:
 
 1. **Conflicting** — a memory that fights a rule makes behavior random, so it lands at the top no matter how small it is.
-2. **Global habit** repeated across projects — the same correction saved twice means it keeps happening.
-3. **Global habit** seen once.
-4. **Stale** — wrong facts are worse than missing ones.
-5. **Duplicate** — harmless, just noise in every session's startup context.
+2. **Recurring correction** with a live rule (step 5) — the rule exists and the mistake still happens, so prose has already failed for it.
+3. **Global habit** repeated across projects — the same correction saved twice means it keeps happening.
+4. **Recurring correction** with no rule yet (step 5).
+5. **Global habit** seen once.
+6. **Stale** — wrong facts are worse than missing ones.
+7. **Duplicate** — harmless, just noise in every session's startup context.
 
 ## 4. Report as a table the user can act on
 
 One row per memory, ranked, with the exact file path, the bucket, and one sentence of evidence. Name the rule it conflicts with or duplicates by its heading text, so the user can judge without opening anything.
 
-Close with the single highest-value next step: which memory to internalize first, and why that one.
+Close with the single highest-value next step: which memory to internalize first, or which correction class to hand to `correct` first, and why that one.
+
+## 5. Mine the corrections no memory caught
+
+A correction the agent never saved as a memory is invisible to steps 1-4, and the repeats are exactly those: in the 2026-11-24 mining of 901 user messages, the largest class (8 of 88 corrections) was a mistake the user had already flagged, against a rule that already existed in prose. Sweep the transcripts as a second source:
+
+```sh
+python3 ~/.claude/skills/correct/mine-corrections.py <scratchpad>/corrections.json --since <YYYY-MM-DD>
+```
+
+- **`--since`** -- the date of the previous memory-review run, else 14 days before today, as an absolute date.
+- **What it writes** -- one record per user-typed message, `{project, session, date, text, prev}`, where `prev` is the agent turn the message answered. Harness wrappers, tool results, subagent transcripts and replays from forked sessions are already dropped, and credentials are redacted.
+- **Classify in parallel** -- split the records by date into three slices and send one read-only miner per slice at once. Each keeps only messages that push back on what the agent did, and returns a JSON array of `{class: string, quote: string (at most 160 chars of the user's words), date: string, project: string, what_agent_did: string}`.
+- **Cross-check** -- merge the slices and keep a class seen in 2+ slices or 2+ sessions; a lone sighting stays out of the report.
+- **Check the rules** -- grep `~/.claude/CLAUDE.md` and the project's own rules for each kept class, and file it as **Recurring correction** with or without a live rule.
+
+Add the kept classes to the step 4 table, one row each with the count, dates and one quote. Hand them to `correct`, which picks the enforcement rung and proves it; this skill only ranks.
 
 ---
 

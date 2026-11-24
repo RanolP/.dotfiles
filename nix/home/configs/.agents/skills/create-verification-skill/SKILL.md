@@ -1,6 +1,6 @@
 ---
 name: create-verification-skill
-description: Generate a project-local `verify-<app>` skill that launches the app from a clean state, drives it the way a user does (`agent-browser`, `agent-device`, a PTY, HTTP), captures evidence (screenshots, transcripts, logs, rendered output with numeric checks), and cleans up while keeping that evidence -- then run it end to end once, so "done" in that repo rests on a run. Use when a project has no scripted way to prove its UI, CLI, service, audio or rendering behavior; when a change was reported done without a runtime check and the user caught it; when the user says "/create-verification-skill", "make a verify skill for this repo", or "how do I check this works"; or when a repo's `verify-<app>` skill no longer matches the app.
+description: Generate a project-local `verify-<app>` skill that launches the app from a clean state, drives it the way a user does (`agent-browser`, `agent-device`, a PTY, HTTP), captures evidence (screenshots, transcripts, logs, rendered output with numeric checks), and cleans up while keeping that evidence -- then run it end to end once, so "done" in that repo rests on a run. Use when a project has no scripted way to prove its UI, CLI, service, audio or rendering behavior; when a change was reported done without a runtime check and the user caught it; when the user says "/create-verification-skill", "make a verify skill for this repo", or "how do I check this works"; when a repo's `verify-<app>` skill no longer matches the app; or when checking whether an existing PR or commit actually fixes a reported bug.
 ---
 
 # Create a verification skill
@@ -64,9 +64,14 @@ Follow the generated skill's own words: launch, doctor, drive ONE mapped feature
 
 A generated skill that never ran is a draft. When the run happened in a stand-in for the real target (a local stack for a remote one, a simulator for a device), list each step the stand-in covered that the target will not; those stay unverified.
 
+### Translate the environment before calling it blocked
+
+When the reported environment is out of reach, restate the defect without its platform nouns and ask whether the same behavior can be tested here: a named browser may mean any external browser, a named key the configured shortcut, a named remote host a delayed or disconnected target. Run the translated attempt only when it exercises the same underlying behavior, and label its evidence `translated` in the reply; when the missing environment is itself part of the defect, the result is not a reproduction. Hardware prompts, OS permission dialogs, device-only APIs and account states you cannot reach are real blocks -- name the one you hit.
+
 ## 5. Wire it in and keep it honest
 
 - Add one line to the repo's `AGENTS.md` or `CLAUDE.md`: the final gate for a change to <app> runs `verify-<app>`. Leave it and the skill in the working tree and report them; commit only when the user asks.
+- When the question is whether an existing PR or commit fixes a reported bug, follow `references/verify-existing-fix.md`: the generated skill drives the baseline and the patched build twice each, and the verdict is `confirmed`, `insufficient`, or `inconclusive`.
 - When a later drive disagrees with the map, triage it in that change: a wrong description is doc drift, so fix the map; working behavior the harness cannot drive is a harness gap, so fix the harness and re-drive it; broken app behavior is a product regression, so report it and leave the map describing the intended behavior.
 
 ## Reply
@@ -77,4 +82,4 @@ A generated skill that never ran is a draft. When the run happened in a stand-in
 
 ---
 
-*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `skills/create-verification-skill` with its `references/feature-map-example`, and the live-pass invariants and triage of `skills/maintain-verification-skill`.*
+*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `skills/create-verification-skill` with its `references/feature-map-example`, the live-pass invariants and triage of `skills/maintain-verification-skill`, and the environment-translation section of `automations/benny/skills/reproduce-and-fix-issues/references/control-adapter.md`.*

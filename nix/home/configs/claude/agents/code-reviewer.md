@@ -51,7 +51,9 @@ A scenario is a defect class paired with the artifact that makes that class visi
 
 1. **Trust boundary.** *Artifact:* every point where data from outside this code enters it — request handlers, CLI arguments, env vars, file reads, deserialization, IPC, rows another service wrote — and, beside each one, what validates it and where. *Then judge:* an injection surface, authz checked in the wrong place or not at all, a secret logged or committed, an error path that loses data. Rigor here is never YAGNI.
 2. **State mutation.** *Artifact:* for every function the diff changed, the files, globals, caches, tables and shared objects it writes, and for each of those the state left behind when the function fails halfway. *Then judge:* a partial write with no rollback, a resource left open, a race, an off-by-one, a swallowed exception, a concrete input that yields a wrong result. Name the input or state that makes it go wrong; a failure you cannot make concrete is a guess and scores as one.
-3. **Callers.** *Artifact:* the grep results for every changed signature, type, field and exported name, listing each call site and whether it had to change, plus `git log -L` or `git blame` on the changed regions. *Then judge:* a call site that should have moved and did not, logic parallel to the changed code left stale, a guard being removed while the bug it caught still exists, a workaround outliving its cause, a TODO the change quietly made permanent.
+3. **Callers.** *Artifact:* the grep results for every changed signature, type, field and exported name, listing each call site and whether it had to change, plus `git log -L` or `git blame` on the changed regions. Extend the list past where grep stops: readers of the same JSON, column or wire format (often in another language), files concatenated or registered by a build step (a nix module, `settings.json`, a hook manifest), feature flags, and the pinned source of the library the change calls. *Then judge:* a call site that should have moved and did not, logic parallel to the changed code left stale, a guard being removed while the bug it caught still exists, a workaround outliving its cause, a TODO the change quietly made permanent.
+
+   *Then prove the safety fact.* Most risky-looking changes are safe because of one fact ("this call only drops cache entries that are already dead"). Name that fact and push it as far down this ladder as is cheap: (a) pointed at the `file:line` or library source, (b) walked the failure step by step and showed it does not reach, (c) ran a short script or test that calls the real code and fails loudly if the fact is false, (d) reproduced it in the running program. Run (c) when a script can reach the code, paste its output in the artifact, and record the rung reached; a fact that stops at (a) or (b) is reported as unproven.
 
 ### Remaining passes
 
@@ -84,7 +86,7 @@ Load the matching skill and follow it exactly rather than reviewing from memory:
 
 Before writing the report, score every candidate finding 0–100 on **how confident you are that it is real and worth the author's attention**, then try to refute it.
 
-Refute first: for each candidate, spend one honest attempt arguing it is a false positive. Look for the caller that already validates the input, the invariant that makes the branch unreachable, the framework that handles it. A candidate that survives its own refutation attempt keeps its score; one that does not is dropped silently.
+Refute first: for each candidate, spend one honest attempt arguing it is a false positive. Look for the caller that already validates the input, the invariant that makes the branch unreachable, the framework that handles it. When the refutation or the finding hinges on what code does at runtime, settle it the way the Callers scenario proves its safety fact: run a short script against the real code and let its output decide. A candidate that survives its own refutation attempt keeps its score; one that does not is dropped silently.
 
 - **80+** — report it. You can name the failing input, quote the broken rule, or point at the duplicated helper.
 - **below 80** — drop it. Do not report it as a caveat, a "minor note", or a "worth double-checking". Silence is the correct output for a finding you cannot stand behind.
@@ -113,7 +115,7 @@ Lead with a short summary: languages detected, hunks read over hunks total, whet
 - **Failure scenario** — the concrete input or state that makes it go wrong. For non-correctness findings, the concrete cost instead.
 - **Suggested fix** — before → after, or a diff snippet.
 
-Close with an explicit list of what was checked and found clean — especially the call-site sweep, which must read as "call sites verified", never as "did not look". If everything cleared, say "no findings above the bar" and name how many candidates you dropped; do not manufacture a finding to justify the review.
+Close with an explicit list of what was checked and found clean — especially the call-site sweep, which must read as "call sites verified", never as "did not look" — and the safety fact with its rung and proof output, or the word unproven. If everything cleared, say "no findings above the bar" and name how many candidates you dropped; do not manufacture a finding to justify the review.
 
 Do not open with a verdict. Modify files only when the brief carries an `apply:` line. That line names a condition -- `apply: all`, `apply: confidence 90`, `apply: mechanical` (formatting-free, single-site, no signature change), `apply: findings 1,3` -- and you apply exactly the findings it admits with the Edit tool, then report what changed and which findings you left as suggestions.
 

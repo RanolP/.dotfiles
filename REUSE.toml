@@ -225,6 +225,8 @@ path = [
     "nix/home/configs/claude/mods/clm/hooks/fold-scale.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/ledger.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/resident.ts",
+    "nix/home/configs/claude/mods/clm/hooks/memory.ts",
+    "nix/home/configs/claude/mods/clm/hooks/memory.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/workflow.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/workflow.ts",
     "nix/home/configs/claude/mods/clm/hooks/events.ts",

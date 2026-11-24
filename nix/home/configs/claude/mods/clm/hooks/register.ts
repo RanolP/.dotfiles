@@ -26,6 +26,7 @@ import { backfillClausesChained, recordPromptIntent as classifyPrompt, isRequest
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
+import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes } from './memory'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
@@ -45,6 +46,7 @@ export { messageTokens, type Meta, type Opts }
 
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
 const RECALL_TOOL = 'mcp__clm__clm_recall'
+const NOTE_TOOL_ID = `mcp__clm__${NOTE_TOOL}`
 export { TASK_TOOL }
 
 type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value: unknown }> } }
@@ -1096,6 +1098,16 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
 
 export const report = foldJobReport
 
+/** clm_note: keeps one line for the ledger's facts, evicting the oldest past NOTE_KEEP. */
+export async function recordNote($: EngineInterface, key: string, text: unknown) {
+  const added = addNote(readNotes(await sessionStoreGet($, noteStoreKey(key))), text)
+  if ('error' in added) return { result: added.error, isError: true }
+  await sessionStoreSet($, noteStoreKey(key), added.notes)
+  await logEvent($, 'note', { reason: `kept ${added.notes.length}, evicted ${added.evicted.length}` })
+  const evicted = added.evicted.length ? ` Evicted the oldest: ${added.evicted.map(note => JSON.stringify(note)).join(', ')}.` : ''
+  return { result: `Noted (${added.notes.length} kept); it stays in the ledger's facts after every fold.${evicted}` }
+}
+
 const workflowIo = ($: EngineInterface): WorkflowIo => ({
   read: () => readWorkflow($),
   change: change => changeWorkflow($, change),
@@ -1123,6 +1135,7 @@ const GUIDE = [
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
   'A result shown as `[clm step … done: …]` was folded. Call clm_recall with its @step address to read the raw output instead of re-running the command or re-reading the file.',
+  'Record a fact, path or decision you will need after a fold with clm_note; the ledger keeps each note verbatim.',
 ].join('\n')
 
 export const register: Register = (on, options) => {
@@ -1174,6 +1187,15 @@ export const register: Register = (on, options) => {
       })
     } catch (err) {
       $.ui.log(`clm: clm_recall registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
+    }
+    try {
+      await $.tool.register({
+        name: NOTE_TOOL,
+        description: NOTE_DESCRIPTION,
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
+      })
+    } catch (err) {
+      $.ui.log(`clm: clm_note registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
     }
     try {
       await $.tool.register({
@@ -1301,6 +1323,8 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: RECALL_TOOL }, async ($, e) => recallAddress(addressIo($), transcriptKey(await sid($)), e.address))
+
+  on('tool.call', { tool: NOTE_TOOL_ID }, async ($, e) => recordNote($, transcriptKey(await sid($)), e.text))
 
   on('agent.spawn', async ($, e, next) => {
     const io = panelIo($)

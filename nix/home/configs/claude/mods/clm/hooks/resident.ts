@@ -4,6 +4,7 @@ import {
 } from './ledger'
 import { resourceLedgerForSession } from './resources'
 import { LEDGER_LINE_LIMIT } from './fold'
+import { noteLine, noteStoreKey, readNotes } from './memory'
 import { applyClauses, assumptionStatuses, clauseQuoteOverlaps, clauseStoreKey, emptyClauseStore, parseClause, pendingClauseIds, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
 
 export type InstructionIndex = { address: string; issue: string | null; text: string }
@@ -19,6 +20,8 @@ export type ResidentLedgerSections = {
   plan?: { objective?: { text: string; address: string }; revision: number; steps: readonly Issue[] }
   requests?: readonly ResidentLedgerRequest[]
   facts?: readonly string[]
+  /** clm_note lines, shown verbatim after the other facts so ledger trimming reaches them last. */
+  notes?: readonly string[]
   constraints?: readonly string[]
   questions?: readonly Issue[]
   uncertain?: readonly Issue[]
@@ -143,6 +146,7 @@ export async function residentLedger(
     ...(planRoot ? { plan: { objective: plannedObjective, revision: planRoot.planRevision ?? 0, steps: shownIssues.filter(issue => issue.parent === planRoot.id && visible(issue)) } } : {}),
     requests,
     facts,
+    notes: readNotes(await io.get(noteStoreKey(key))),
     questions: shownIssues.filter(issue => issue.status === 'question' && visible(issue)),
     uncertain: shownIssues.filter(issue => issue.status === 'uncertain' && visible(issue)),
     legacy: clauseStore.legacy,
@@ -199,6 +203,7 @@ export function residentLedgerText(
   const requests = (sections.requests ?? []).filter(request => request.status === 'open')
     .map(request => `- [${request.id}] ${oneLine(request.text)} — quote: ${JSON.stringify(oneLine(request.quote))}`)
   const facts = [...(sections.facts ?? []), ...(sections.constraints ?? []), ...(sections.learned ?? [])].map(oneLine).filter(Boolean).map(line => line.startsWith('- ') ? line : bullet(line))
+    .concat((sections.notes ?? []).map(note => noteLine(oneLine(note))))
   const questions = (sections.questions ?? []).filter(issue => issue.status === 'question')
     .map(issue => {
       const note = shownNote(issue)

@@ -235,6 +235,7 @@ let
     claude-hook-management = localSkill "claude-hook-management";
     memory-review = localSkill "memory-review";
     correct = localSkill "correct";
+    create-verification-skill = localSkill "create-verification-skill";
     # Nix store path names reject `:`, so the source directory is
     # `dotfiles-evolve` while the link the user types carries the colon.
     "dotfiles:evolve" = localSkill "dotfiles-evolve";

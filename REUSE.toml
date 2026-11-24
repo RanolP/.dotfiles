@@ -43,6 +43,7 @@ SPDX-License-Identifier = "MIT"
 [[annotations]]
 path = [
     "nix/home/configs/.agents/skills/correct/SKILL.md",
+    "nix/home/configs/.agents/skills/create-verification-skill/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 Lauren Tan", "2026 RanolP"]

@@ -247,6 +247,7 @@ let
     quint-verify = localSkill "quint-verify";
     evidence-store = localSkill "evidence-store";
     teardown = localSkill "teardown";
+    typescript-types = localSkill "typescript-types";
     reframe = localSkill "reframe";
     why = localSkill "why";
     apology = localSkill "apology";

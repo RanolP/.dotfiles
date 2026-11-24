@@ -215,6 +215,8 @@ path = [
     "nix/home/configs/claude/hooks/output-shape-reminder.py",
     "nix/home/configs/claude/hooks/rex-project-theme.py",
     "nix/home/configs/claude/hooks/resource-guard.py",
+    "nix/home/configs/claude/hooks/done-claim-guard.py",
+    "nix/home/configs/claude/hooks/test_done_claim_guard.py",
     "nix/home/configs/claude/hooks/repeat-correction-nudge.py",
     "nix/home/configs/claude/hooks/test_repeat_correction_nudge.py",
     "nix/home/configs/claude/resource-watchdog.py",

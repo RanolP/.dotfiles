@@ -473,6 +473,11 @@ in
         source = ./configs/claude/hooks/repeat-correction-nudge.py;
         executable = true;
       };
+      # Block a "done" reply when nothing ran after the turn's last code edit.
+      ".claude/hooks/done-claim-guard.py" = {
+        source = ./configs/claude/hooks/done-claim-guard.py;
+        executable = true;
+      };
       # Keep Claude Code's Rex pane tinted for the cwd or file it just touched.
       ".claude/hooks/rex-project-theme.py" = {
         source = ./configs/claude/hooks/rex-project-theme.py;
@@ -749,3 +754,4 @@ in
       };
   };
 }
+

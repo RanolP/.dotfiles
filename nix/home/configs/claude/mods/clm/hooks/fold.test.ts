@@ -301,6 +301,14 @@ test('a large result round-trips through the real step sidecar writer and recall
   expect(first + second).toContain('LAST-LINE')
 })
 
+// Regression caught: a fold kept only user rows addressable, so folded assistant and tool rows had nothing left to search.
+test('a fold archives its folded rows of every role', async () => {
+  const swapped = await swapStepResult(`original ${'x'.repeat(30_000)}`)
+  const archive = swapped.files.get(`${swapped.base}.archive.txt`) ?? ''
+  expect(archive).toContain('=== @fold:1.0 [user]\nold turn')
+  expect(archive).toContain('[assistant]\nold old')
+})
+
 // Regression caught: split parsing dropped model step spans or rejected replies from the pre-U3 shape.
 test('parseSplitAnswer keeps steps and accepts the old shape', () => {
   expect(parseSplitAnswer('{"split":2,"ops":[],"steps":[{"from":"a","to":"b"}]}')).toMatchObject({ steps: [{ from: 'a', to: 'b' }] })

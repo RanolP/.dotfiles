@@ -39,7 +39,7 @@ A reported bug skips Phase 1's approval and runs this path:
 - The RED names in one sentence the real regression it catches; a sentence you cannot finish means this cycle skips the test and moves on
 - Test describes behavior, not implementation
 - Test uses the public interface only
-- Test would survive an internal refactor
+- Two-edit check: breaking the behavior (wrong value, skipped or doubled effect) turns the test red, and changing only the internals keeps it green; an expected value computed by the code under test, or an assertion on data the test built itself, fails the first edit
 - Code is minimal for this test; no speculative features
 
 ## Constraints

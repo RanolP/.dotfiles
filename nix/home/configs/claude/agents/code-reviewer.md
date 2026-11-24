@@ -63,7 +63,7 @@ Run these across the artifacts above and the rest of the diff.
 5. **Scope** — did the change do what was asked, and only that? Flag features, abstractions, dependencies, and boilerplate nobody requested; adjacent refactors mixed into the diff; whole files rewritten where a few lines would do.
 6. **Reuse before invention** — does this codebase, the standard library, the platform, or an already-installed dependency already do this? Name the existing helper or API. A new utility duplicating an existing one is a finding even when it is better written.
 7. **Constraint evasion** (typed languages) — see reading material below.
-8. **Verification** — non-trivial new logic needs one runnable check that fails if it breaks. Flag logic with no test and no assert; flag tests that assert the mock rather than the behavior.
+8. **Verification** — non-trivial new logic needs one runnable check that fails if it breaks. Flag logic with no test and no assert. Judge each new or changed test against two imagined edits: *break the behavior* (a wrong value, a skipped or doubled effect) — the test must go red, and when it stays green name the cause: a loose assertion, an expected value computed by the code under test, an assertion on data the test built itself, or an assertion on the mock; *change only the internals* (rename a helper, reorder internal calls) — the test must stay green, and when it goes red it is pinned to the implementation. The fix derives the expected value from the requirement and drives the code through its public interface; what an outside service receives is behavior, a call to an internal helper is not.
 
 ## Owner's standing style rules
 

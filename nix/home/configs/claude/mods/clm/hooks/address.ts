@@ -3,6 +3,7 @@ import type { SessionMessage } from 'claude-code'
 import { fingerprint, stripReminders } from './fold'
 import { isRecord } from './tracker'
 import { clauseStoreKey, readClauseStore, recallClauses } from './clauses'
+import { archivePath, parseArchive, searchMemory } from './memory'
 
 // clm builds its own address index from the hooks it receives and never reads
 // the transcript file: the engine refuses large reads, and a long session is
@@ -112,8 +113,21 @@ export function recallRows(rows: readonly AddressRow[], address: string): { text
   return { text: rows.slice(first, last + 1).map(row => `[user ${row.address} ${row.at}] ${row.text}`).join('\n') }
 }
 
+/** clm_recall {query}: newest-first hits across the fold archive and the addressed user prompts. */
+export async function recallQuery(io: AddressIo, key: string, query: string): Promise<string[]> {
+  const archive = io.basePath && io.readFile ? (await io.readFile(archivePath(await io.basePath()))) ?? '' : ''
+  return searchMemory(query, parseArchive(archive), await addressRows(io, key))
+}
+
 export async function recallAddress(io: AddressIo, key: string, address: unknown) {
-  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d, @first..@last, @step:<id>, #C12 or clauses.' }
+  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d, @first..@last, @step:<id>, @fold:3.12, #C12 or clauses, or a query.' }
+  const folded = /^\s*(@fold:\d+\.\d+)\s*$/.exec(address)
+  if (folded?.[1]) {
+    const text = io.basePath && io.readFile ? await io.readFile(archivePath(await io.basePath())) : undefined
+    const block = parseArchive(text ?? '').find(candidate => candidate.address === folded[1])
+    if (!block) return { result: `folded row ${folded[1]} is not in the archive (it keeps the newest folds only)`, isError: true, isReadOnly: true }
+    return { result: `[${block.role} ${block.address}]\n${block.body}`, isReadOnly: true }
+  }
   const step = /^\s*@step:([\w-]+)(?:#(\d+))?\s*$/.exec(address)
   if (step?.[1]) {
     const page = step[2] === undefined ? 1 : Number(step[2])

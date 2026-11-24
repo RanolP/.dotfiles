@@ -25,7 +25,7 @@ import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktre
 import { backfillClausesChained, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
-import { addressRows, recallAddress, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
+import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes } from './memory'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
@@ -1135,6 +1135,7 @@ const GUIDE = [
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
   'A result shown as `[clm step … done: …]` was folded. Call clm_recall with its @step address to read the raw output instead of re-running the command or re-reading the file.',
+  'To find folded work you have no address for, call clm_recall with query (words that must all appear), then read a hit by its address.',
   'Record a fact, path or decision you will need after a fold with clm_note; the ledger keeps each note verbatim.',
 ].join('\n')
 
@@ -1182,8 +1183,8 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_recall',
-        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last, a folded step\'s raw tool results with @step:<id>, one stored instruction with #C12, or all stored instructions with clauses. Includes folded and rewound history.',
-        inputSchema: { type: 'object', properties: { address: { type: 'string' } }, required: ['address'], additionalProperties: false },
+        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last, a folded step\'s raw tool results with @step:<id>, one folded row with @fold:<seq>.<n>, one stored instruction with #C12, or all stored instructions with clauses. Includes folded and rewound history. To find something you no longer have an address for, pass query instead: words that must all appear (case-insensitive); each hit gives the address to read in full and a short snippet, newest first.',
+        inputSchema: { type: 'object', properties: { address: { type: 'string' }, query: { type: 'string' } }, additionalProperties: false },
       })
     } catch (err) {
       $.ui.log(`clm: clm_recall registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
@@ -1322,7 +1323,14 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('tool.call', { tool: RECALL_TOOL }, async ($, e) => recallAddress(addressIo($), transcriptKey(await sid($)), e.address))
+  on('tool.call', { tool: RECALL_TOOL }, async ($, e) => {
+    const key = transcriptKey(await sid($))
+    const query: unknown = (e as { query?: unknown }).query
+    if (typeof query !== 'string' || !query.trim()) return recallAddress(addressIo($), key, e.address)
+    const hits = await recallQuery(addressIo($), key, query)
+    await logEvent($, 'recall-query', { reason: `${hits.length} hits for ${query.trim().split(/\s+/).length} words` })
+    return { result: hits.length ? hits.join('\n') : `no folded row or prompt holds every word of ${JSON.stringify(query.trim())}`, isReadOnly: true }
+  })
 
   on('tool.call', { tool: NOTE_TOOL_ID }, async ($, e) => recordNote($, transcriptKey(await sid($)), e.text))
 

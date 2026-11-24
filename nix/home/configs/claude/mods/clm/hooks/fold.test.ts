@@ -14,7 +14,7 @@ import { buildCleared, estTokens, fingerprint, foldedRows, isLedgerRow, ledgerRo
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, resetRetiredQueued, setRewindFoldJob, transcriptKey, type FoldJobIo } from './fold-job'
 import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
 import { applyClauses, emptyClauseStore, parseClause } from './clauses'
-import { recallAddress } from './address'
+import { recallAddress, recallQuery } from './address'
 import { plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps } from './stepfold'
 import type { Opts } from './fold-runtime'
 import { readLedgerSnapshots, saveLedgerSnapshot, type RewindIo, type RewindPlan } from './rewind'
@@ -307,6 +307,17 @@ test('a fold archives its folded rows of every role', async () => {
   const archive = swapped.files.get(`${swapped.base}.archive.txt`) ?? ''
   expect(archive).toContain('=== @fold:1.0 [user]\nold turn')
   expect(archive).toContain('[assistant]\nold old')
+})
+
+// Regression caught: clm_recall read only by address, so folded work whose address the model never saw could not be found.
+test('clm_recall query finds a folded row and its address reads it whole', async () => {
+  const swapped = await swapStepResult(`original ${'x'.repeat(30_000)}`)
+  const io = { get: async () => undefined, set: async () => undefined, basePath: async () => swapped.base, readFile: async (path: string) => swapped.files.get(path) }
+  const hits = await recallQuery(io, 's1:main', 'OLD turn')
+  expect(hits[0]).toMatch(/^@fold:1\.0 \[user\] old turn/)
+  const read = await recallAddress(io, 's1:main', hits[0]!.split(' ')[0])
+  expect(read.result).toBe('[user @fold:1.0]\nold turn')
+  expect(await recallQuery(io, 's1:main', 'nowhere-to-be-found')).toEqual([])
 })
 
 // Regression caught: split parsing dropped model step spans or rejected replies from the pre-U3 shape.

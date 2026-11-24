@@ -229,6 +229,7 @@ path = [
     "nix/home/configs/claude/hooks/test_done_claim_guard.py",
     "nix/home/configs/claude/hooks/repeat-correction-nudge.py",
     "nix/home/configs/claude/hooks/test_repeat_correction_nudge.py",
+    "nix/home/configs/claude/hooks/bare-sleep-hint.py",
     "nix/home/configs/claude/resource-watchdog.py",
     "nix/home/configs/claude/test_resource_watchdog.py",
     "nix/home/configs/claude/mods/clm/.claude-plugin/plugin.json",

@@ -516,6 +516,7 @@ in
         source = ./configs/claude/hooks/missing-tool-hint.py;
         executable = true;
       };
+      ".claude/hooks/bare-sleep-hint.py" = { source = ./configs/claude/hooks/bare-sleep-hint.py; executable = true; };
       # Reuse the Claude policy scripts; the Codex adapter translates tool payloads.
       ".codex/hooks/claude-hook-adapter.py" = {
         source = ./configs/codex/hooks/claude-hook-adapter.py;

@@ -13,7 +13,8 @@ let resolvePath = value => {
 }
 const inside = (target, root) => target === root || target.startsWith(root.endsWith(separator) ? root : `${root}${separator}`)
 
-export const decidePermission = (toolCall, { writableRoots, tmpDir }) => {
+export const decidePermission = (toolCall, { sandbox, writableRoots, tmpDir }) => {
+  if (sandbox === 'read-only') return toolCall?.kind === 'read' || toolCall?.kind === 'search' ? 'allow' : 'deny'
   if (String(toolCall?.name ?? '').startsWith('mcp_')) return 'allow'
   if (toolCall?.kind === 'execute') return 'allow'
   if (toolCall?.kind !== 'edit') return 'deny'
@@ -266,8 +267,10 @@ async function main() {
     }
     bySessionId.set(session.sessionId, session)
     await rpc('session/set_model', { sessionId: session.sessionId, modelId: session.model })
-    try { await rpc('session/set_mode', { sessionId: session.sessionId, modeId: 'accept-edits' }) }
-    catch (error) { console.error('[acp-bridge] session/set_mode failed; continuing in default mode', String(error?.message ?? error)) }
+    if (session.sandbox !== 'read-only') {
+      try { await rpc('session/set_mode', { sessionId: session.sessionId, modeId: 'accept-edits' }) }
+      catch (error) { console.error('[acp-bridge] session/set_mode failed; continuing in default mode', String(error?.message ?? error)) }
+    }
     session.rootsAtSpawn = JSON.stringify(session.writableRoots)
     persisted.agents[session.key] = { type: session.agentType, cwd: session.cwd, writableRoots: session.writableRoots, threadId: session.sessionId }
     saveState()
@@ -291,6 +294,7 @@ async function main() {
       tmpDir: process.env.TMPDIR || os.tmpdir(),
       sessionId: body.threadId,
       model: body.model,
+      sandbox: body.sandbox ?? 'read-only',
       resumed: Boolean(body.threadId),
       developerInstructions: body.developerInstructions,
       instructionsSent: Boolean(body.threadId),

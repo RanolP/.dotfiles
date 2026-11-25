@@ -9,6 +9,7 @@ export function codexConfig(userConfig, modelAutoCompactTokenLimit) {
     'web_search = "disabled"',
     // hetero-subagents emits the target repo's AGENTS.md itself; codex's own load would repeat it.
     'project_doc_max_bytes = 0',
+    '[agents]', 'enabled = false',
     '[tools]', 'web_search = false',
     '[features]',
     ...['apps', 'plugins', 'memories', 'hooks', 'multi_agent', 'multi_agent_v2', 'image_generation', 'browser_use',

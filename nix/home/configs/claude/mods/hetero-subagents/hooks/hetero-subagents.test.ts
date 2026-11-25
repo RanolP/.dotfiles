@@ -1,13 +1,13 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
-import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, routingContext, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 import { codexConfig } from '../daemon/codex-config.mjs'
 import { beginAcpPrompt, decidePermission, finalAgentMessage, finalTurnText, handleAcpLine, installChildPending, interruptAcp, runAcpStep } from '../daemon/acp-bridge.mjs'
 
 const LUNA = 'codex:gpt-6-luna' as const
-const SOL = 'codex:gpt-5.6-sol' as const
+const SOL = 'codex:gpt-6.1-sol' as const
+const ASTRA = 'codex:gpt-6.2-astra' as const
 const NEON = 'agy:gemini-4-neon-high' as const
-const FLASH = 'agy:gemini-3.8-flash-medium' as const
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -34,7 +34,7 @@ test('pendingPrompt picks the newest real user message after the last answer', a
 test('typeOf claims only this plugin\'s registered types', async () => {
   expect(Object.keys(TYPES)).toContain('codex:gpt-6-luna')
   expect(typeOf('hetero-subagents:codex:gpt-6-luna')).toBe(LUNA)
-  expect(typeOf('hetero-subagents:codex:gpt-5.6-sol')).toBe(SOL)
+  expect(typeOf('hetero-subagents:codex:gpt-6.1-sol')).toBe(SOL)
   expect(typeOf('hetero-subagents:codex:other')).toBeUndefined()
   expect(typeOf('general-purpose')).toBeUndefined()
 })
@@ -59,12 +59,20 @@ test('decidePermission denies an unknown tool kind', () => {
   expect(decidePermission({ name: 'mystery', kind: 'other', locations: [] }, { writableRoots: ['/repo'], tmpDir: '/tmp/session' })).toBe('deny')
 })
 
-test('typeOf resolves agy models to ACP while the sol model stays on Codex', () => {
+test('read-only agy permission denies execute and edits and allows reads and searches', () => {
+  const session = { sandbox: 'read-only', writableRoots: ['/repo'], tmpDir: '/tmp/session' }
+  expect(decidePermission({ name: 'run_command', kind: 'execute' }, session)).toBe('deny')
+  expect(decidePermission({ name: 'write_file', kind: 'edit', locations: [{ path: '/repo/file.ts' }] }, session)).toBe('deny')
+  expect(decidePermission({ name: 'read_file', kind: 'read', locations: [{ path: '/repo/file.ts' }] }, session)).toBe('allow')
+  expect(decidePermission({ name: 'search_files', kind: 'search' }, session)).toBe('allow')
+})
+
+test('typeOf resolves agy models to ACP while reviewer and implementer models stay on Codex', () => {
   expect(typeOf('hetero-subagents:agy:gemini-4-neon-high')).toBe(NEON)
   expect(TYPES[NEON].backend).toBe('acp')
-  expect(typeOf('hetero-subagents:agy:gemini-3.8-flash-medium')).toBe(FLASH)
-  expect(TYPES[FLASH].backend).toBe('acp')
-  expect(typeOf('hetero-subagents:codex:gpt-5.6-sol')).toBe(SOL)
+  expect(typeOf('hetero-subagents:codex:gpt-6.2-astra')).toBe(ASTRA)
+  expect(TYPES[ASTRA].backend).toBe('codex')
+  expect(typeOf('hetero-subagents:codex:gpt-6.1-sol')).toBe(SOL)
   expect(TYPES[SOL].backend).toBe('codex')
 })
 
@@ -91,14 +99,22 @@ test('ACP line handling answers request_permission from decidePermission without
 })
 
 test('ACP registrations describe Antigravity tools and session continuity', () => {
-  expect(agentDescription(TYPES[NEON])).toBe("Runs the task on gemini-4-neon-high through Google Antigravity (agy's own shell and edit tools; no Claude-side tools relayed; Google Antigravity implementer using Gemini 4 Neon). SendMessage continues the same ACP session.")
+  expect(agentDescription(TYPES[NEON])).toBe("Runs the task on gemini-4-neon-high through Google Antigravity (read and search tools only; no edits, shell, or Claude-side tools; read-only long-context reader (256k+ tokens of input) and second security reviewer; each finding carries file:line and the quoted line, which the caller checks). SendMessage continues the same ACP session.")
   expect(agentPrompt(TYPES[NEON])).toContain('Google Antigravity over ACP')
   expect(agentDescription(TYPES[SOL])).toContain('through Codex')
+  expect(agentDescription(TYPES[ASTRA])).toContain("codex's own read-only shell")
+  expect(agentDescription(TYPES[ASTRA])).not.toContain('edit tools')
+})
+
+test('session.start routing context lists exactly the registered types', () => {
+  const lines = [...routingContext().matchAll(/^- `hetero-subagents:([^`]+)`: (.+)$/gm)].map(match => ({ name: match[1], blurb: match[2] }))
+  expect(lines.map(line => line.name)).toEqual(['codex:gpt-6.1-sol', 'codex:gpt-6-luna', 'codex:gpt-6.2-astra', 'agy:gemini-4-neon-high'])
+  expect(lines).toEqual(Object.entries(TYPES).map(([name, type]) => ({ name, blurb: type.blurb })))
 })
 
 test('ACP developer instructions omit Codex-only relayed tools and apply_patch', () => {
   const preamble = preambleFor('acp')
-  expect(preamble).toContain('Do file reads, edits and commands with your own tools. No Claude-side tools are relayed.')
+  expect(preamble).toContain('Do file reads and searches with your own tools. No edits, shell, or Claude-side tools are available.')
   expect(preamble).not.toContain('apply_patch')
   expect(preamble).not.toContain('tools.<name>')
 })
@@ -283,7 +299,7 @@ test("a codex agent's auto-compaction never reaches the Claude compactor and kee
   on('session.id', async () => ({ value: 'test-session' }))
   on('ui.log', async () => ({ value: undefined }))
   on('process.run', async () => ({ value: { exitCode: 0, stdout: '', stderr: '' } }))
-  on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-5.6-sol' }))
+  on('agent.spawn', async () => ({ agentId: 'spawned-codex', model: 'gpt-6.1-sol' }))
   on('agent.list', async () => ({ value: [{ id: 'claude-agent', type: 'general-purpose', status: 'running', description: '' }] }))
   on('process.spawn', async function* () {
     yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
@@ -295,7 +311,7 @@ test("a codex agent's auto-compaction never reaches the Claude compactor and kee
     return { messages: [row('user', 'CLAUDE COMPACTOR')] }
   })
 
-  await $.agent.spawn({ prompt: 'writable: /repo\nImplement it\nDone when: the test passes', subagentType: 'hetero-subagents:codex:gpt-5.6-sol', cwd: '/repo' } satisfies AgentSpawnArgs)
+  await $.agent.spawn({ prompt: 'writable: /repo\nImplement it\nDone when: the test passes', subagentType: 'hetero-subagents:codex:gpt-6.1-sol', cwd: '/repo' } satisfies AgentSpawnArgs)
   const messages = [
     row('user', 'initial request'),
     row('assistant', 'first relayed answer'),
@@ -351,9 +367,9 @@ test('a codex spawn rejects relative and nonexistent writable paths by name', as
 // codex model is not recognized as one and goes to Claude.
 test('typeForModel maps each Codex model back to its own type', async () => {
   expect(TYPES[LUNA].model).toBe('gpt-6-luna')
-  expect(TYPES[SOL].model).toBe('gpt-5.6-sol')
+  expect(TYPES[SOL].model).toBe('gpt-6.1-sol')
   expect(typeForModel('gpt-6-luna')).toBe(LUNA)
-  expect(typeForModel('gpt-5.6-sol')).toBe(SOL)
+  expect(typeForModel('gpt-6.1-sol')).toBe(SOL)
   expect(typeForModel('claude-opus-5-5')).toBeUndefined()
 })
 
@@ -1014,13 +1030,13 @@ test('a step for a codex model is never sent to Claude, even for an agent spawn 
     return { turnId: e.turnId, index: e.index, answer: 'claude', toolUses: [], stopReason: 'end_turn' as const, usage: null }
   })
 
-  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-5.6-sol', messageCount: api.length, agentId })
+  const stream = $.turn.step({ turnId: 'turn-1', index: 0, model: 'gpt-6.1-sol', messageCount: api.length, agentId })
   let r = await stream.next()
   while (!r.done) r = await stream.next()
 
   expect(claudeSteps).toBe(0)
   expect(steps).toHaveLength(1)
-  expect(steps[0]).toMatchObject({ key: agentId, agentType: SOL, model: 'gpt-5.6-sol', cwd: '/repo' })
+  expect(steps[0]).toMatchObject({ key: agentId, agentType: SOL, model: 'gpt-6.1-sol', cwd: '/repo' })
 })
 
 // Incident: a luna worker's first step ended with Anthropic's 404 for the
@@ -1246,9 +1262,11 @@ test('type keys pair each backend label with its model id', () => {
 // Regression caught: the limit left the generated codex config's top level, so codex never compacted before Claude's unknown-model window,
 // or codex's own AGENTS.md loading came back on and the target repo's AGENTS.md reached the thread twice.
 test('codex config carries the auto-compaction limit at top level', () => {
-  const topLevel = codexConfig('model = "m"\n[tools]\nweb_search = true\n', 150000).split(/^\[/m)[0]
+  const config = codexConfig('model = "m"\n[tools]\nweb_search = true\n', 150000)
+  const topLevel = config.split(/^\[/m)[0]
   expect(topLevel).toMatch(/^model_auto_compact_token_limit = 150000$/m)
   expect(topLevel).toMatch(/^project_doc_max_bytes = 0$/m)
+  expect(config).toMatch(/^\[agents\]\nenabled = false$/m)
 })
 
 // Regression caught: an edit to daemon/codex-config.mjs alone left the fingerprint unchanged, so a running bridge kept its old generated codex config.
@@ -1312,7 +1330,7 @@ test("a codex thread's developer instructions carry the style rules and the work
     return { value: { status: 404, ok: false, headers: {}, text: `no route ${route}` } }
   })
 
-  const stream = $.turn.step({ turnId: 'turn-instructions', index: 0, model: 'gpt-5.6-sol', messageCount: api.length, agentId })
+  const stream = $.turn.step({ turnId: 'turn-instructions', index: 0, model: 'gpt-6.1-sol', messageCount: api.length, agentId })
   let r = await stream.next()
   while (!r.done) r = await stream.next()
   const instructions = String(steps[0]?.developerInstructions)
@@ -1337,9 +1355,9 @@ test("a codex thread's developer instructions carry the style rules and the work
 test('a codex spawn whose brief writes code but names no Done when: line is denied with the brief fix', async ($, on) => {
   let spawnCalls = 0
   on('process.run', async (_$, e) => ({ value: { exitCode: e.argv[0] === 'test' ? 0 : 128, stdout: '', stderr: '' } }))
-  on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-5.6-sol' } })
+  on('agent.spawn', async () => { spawnCalls++; return { agentId: 'must-not-spawn', model: 'gpt-6.1-sol' } })
 
-  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repo\nImplement the change', subagentType: 'hetero-subagents:codex:gpt-5.6-sol', cwd: '/repo' } satisfies AgentSpawnArgs)
+  const result = await $.agent.spawn({ prompt: 'Budget: 20 min\nwritable: /repo\nImplement the change', subagentType: 'hetero-subagents:codex:gpt-6.1-sol', cwd: '/repo' } satisfies AgentSpawnArgs)
 
   expect(result.deny).toBe('Codex subagent spawn denied: prompt is missing the required Done when: line; add a line `Done when: <a failing test that must pass, or a concrete input -> output>` to the brief.')
   expect(spawnCalls).toBe(0)

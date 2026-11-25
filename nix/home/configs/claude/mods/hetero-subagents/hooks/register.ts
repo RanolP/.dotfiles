@@ -21,10 +21,10 @@ import type { ApiMessage, EngineInterface, Register, SessionMessage, Timer, Time
 // speaking HTTP on a unix socket to the mod and JSON-RPC on stdio to its CLI.
 
 export const TYPES = {
-  'codex:gpt-6-luna': { backend: 'codex', model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'slow but cheap implementer, only for a task that may run slow but must run cheap' },
-  'codex:gpt-5.6-sol': { backend: 'codex', model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'default implementer for code changes from a settled plan' },
-  'agy:gemini-4-neon-high': { backend: 'acp', model: 'gemini-4-neon-high', effort: 'high', sandbox: 'workspace-write', blurb: 'Google Antigravity implementer using Gemini 4 Neon' },
-  'agy:gemini-3.8-flash-medium': { backend: 'acp', model: 'gemini-3.8-flash-medium', effort: 'medium', sandbox: 'workspace-write', blurb: 'fast Google Antigravity implementer using Gemini 3.8 Flash' },
+  'codex:gpt-6.1-sol': { backend: 'codex', model: 'gpt-6.1-sol', effort: 'medium', sandbox: 'workspace-write', blurb: 'default implementer for multi-file code changes from a settled plan; its report lists every blocker and skipped step' },
+  'codex:gpt-6-luna': { backend: 'codex', model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'cheapest implementer, for mechanical bulk edits whose Done-when command the caller reruns; no web or MCP lookups' },
+  'codex:gpt-6.2-astra': { backend: 'codex', model: 'gpt-6.2-astra', effort: 'high', sandbox: 'read-only', blurb: 'read-only cross-vendor reviewer for a high-stakes diff a Claude worker wrote; each finding carries file:line and the quoted line' },
+  'agy:gemini-4-neon-high': { backend: 'acp', model: 'gemini-4-neon-high', effort: 'high', sandbox: 'read-only', blurb: 'read-only long-context reader (256k+ tokens of input) and second security reviewer; each finding carries file:line and the quoted line, which the caller checks' },
 } as const
 type TypeName = keyof typeof TYPES
 type Backend = typeof TYPES[TypeName]['backend']
@@ -204,7 +204,7 @@ const CODEX_PREAMBLE = `You are running as a subagent inside a Claude Code sessi
 The Claude session's context for this agent follows.`
 
 const ACP_PREAMBLE = `You are running as a subagent inside a Claude Code session; a Claude model delegated this task to you and reads your final message as the result.
-- Do file reads, edits and commands with your own tools. No Claude-side tools are relayed.
+- Do file reads and searches with your own tools. No edits, shell, or Claude-side tools are available.
 
 The Claude session's context for this agent follows.`
 
@@ -596,8 +596,16 @@ function diag(st: ModState, $: EngineInterface, line: string): void {
 }
 
 export const agentDescription = (type: (typeof TYPES)[TypeName]): string => type.backend === 'acp'
-  ? `Runs the task on ${type.model} through Google Antigravity (agy's own shell and edit tools; no Claude-side tools relayed; ${type.blurb}). SendMessage continues the same ACP session.`
-  : `Runs the task on OpenAI ${type.model} at ${type.effort} effort in the ${type.sandbox} sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; ${type.blurb}). SendMessage continues the same codex thread.`
+  ? `Runs the task on ${type.model} through Google Antigravity (read and search tools only; no edits, shell, or Claude-side tools; ${type.blurb}). SendMessage continues the same ACP session.`
+  : `Runs the task on OpenAI ${type.model} at ${type.effort} effort in the ${type.sandbox} sandbox through Codex (${type.sandbox === 'read-only' ? "codex's own read-only shell" : "codex's own shell and edit tools"}, plus this session's read-only MCP tools and skills relayed; ${type.blurb}). SendMessage continues the same codex thread.`
+
+export const routingContext = () => [
+  '## Non-Claude agent types (hetero-subagents)',
+  "- Pick by tool reach first: a codex type gets its own shell, apply_patch and this session's read-only MCP tools; a read-only type gets no edits; an agy type gets no Claude-side tools; device UI, Artifact and write-capable MCP work stays with a Claude worker.",
+  '- Send codex a unit worth its fixed ~25-30k-token thread cost (several files or 10+ tool calls); a smaller edit goes to a haiku or sonnet worker.',
+  ...Object.entries(TYPES).map(([name, type]) => `- \`hetero-subagents:${name}\`: ${type.blurb}`),
+  "- Verify each non-Claude report before adopting it: rerun its Done-when command, or open each quoted file:line; these models' cards record omitted obstacles in their reports.",
+].join('\n')
 
 export const agentPrompt = (type: (typeof TYPES)[TypeName]): string => type.backend === 'acp'
   ? 'This agent is served by Google Antigravity over ACP; this prompt is never sent to a Claude model.'
@@ -657,6 +665,7 @@ export const register: Register = (on) => {
   const stepKey = (e: { agentId?: string; turnId: string; index: number }) => `${e.agentId ?? ''}|${e.turnId}|${e.index}`
   // Agents a step has claimed for codex: the .catch handler reads it without awaiting.
   const claimed = new Set<string>()
+  let mainSession = false
 
   on('session.receive', async ($, e, next) => {
     const r = await next(e)
@@ -678,12 +687,19 @@ export const register: Register = (on) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    mainSession = e.agentId === undefined
     // The bridge's schema-harvest child is a `claude -p` that never reaches the
     // API; were this plugin installed there, it would start a bridge of its own.
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
     resetBridgeStates(bridges, await socketPath($, 'codex'))
     await ensureBridge($, 'codex', bridges.codex)
     return started
+  })
+
+  on('prompt.compose', { model: /.*/ }, async ($, e, next) => {
+    const result = await next(e)
+    if (!mainSession || e.traits.includes('bare')) return result
+    return { ...result, sections: [...result.sections, { id: 'hetero-subagents:routing', text: routingContext(), scope: 'session' as const }] }
   })
 
   on('agent.spawn', async ($, e, next) => {

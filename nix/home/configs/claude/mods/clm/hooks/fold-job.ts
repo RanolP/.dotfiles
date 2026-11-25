@@ -19,8 +19,6 @@ import type { LogEvent, LogFields, Payloads } from './events'
 import { fnv1a, type SentAt } from './address'
 import { applyFoldClauseOps, assumptionStatuses, clauseStoreKey, emptyClauseStore, livePredicates, readClauseStore, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
 import { appendArchive, archiveBlocks, archivePath } from './memory'
-import { evaluate } from './wayseeker/eval'
-import { readWayseekerLedger, renderInstructions, wayseekerKey } from './wayseeker/render'
 import { finalizeStepReplacements, plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps, type FoldStep } from './stepfold'
 
 type Pending = {
@@ -50,8 +48,8 @@ const STEP_FOLD_SYSTEM = [
 
 export type FoldJobIo = {
   loadedFrom?: string
-  /** userConfig "wayseeker": the handoff's [clm clauses] row renders from the wayseeker ledger. */
-  wayseeker?: boolean
+  /** userConfig "wayseeker": the handoff's [clm clauses] row is the wayseeker mod's section; undefined keeps the clause store's. */
+  wayseekerInstructions?: (key: string) => Promise<string | undefined>
   sessionId(): Promise<string>
   sessionMessages(): Promise<SessionMessage[]>
   stableAttachments(headKept: boolean): Promise<{ rows: SessionMessage[]; headKept: boolean }>
@@ -818,8 +816,8 @@ export async function handOff(io: FoldJobIo, key: string, handoff: () => Promise
   const store = readClauseStore(await persistStep(io, undefined, () => io.storeGet(clauseStoreKey(key)))) ?? emptyClauseStore()
   const issues = snapshot(typeof io.readAll === 'function' ? await persistStep<TrackerEvent[]>(io, [], () => io.readAll()) : [])
   const clauses = renderClauses(store, () => true, 40, ['instruction'], assumptionStatuses(store, issues))
-  const wayseeker = io.wayseeker ? readWayseekerLedger(await persistStep(io, undefined, () => io.storeGet(wayseekerKey(key)))) : undefined
-  const body = wayseeker ? renderInstructions(wayseeker, evaluate(wayseeker)) : clauses.join('\n') || '- (none)'
+  const wayseeker = io.wayseekerInstructions ? await persistStep<string | undefined>(io, undefined, () => io.wayseekerInstructions!(key)) : undefined
+  const body = wayseeker ?? (clauses.join('\n') || '- (none)')
   const messages = result.messages?.length
     ? [result.messages[0]!, { role: 'user' as const, text: `[clm clauses]\n${body}`, toolUses: [] }, ...result.messages.slice(1).filter(row => !row.text.startsWith('[clm clauses]'))]
     : result.messages

@@ -1,10 +1,9 @@
-import { stripReminders } from '../fold'
-import { isRecord } from '../tracker'
+import { isRecord, stripReminders } from './text'
 import { parseLiteral, printArgument, type Fact } from './syntax'
 import { append, emptyLedger, nextId, type Ledger } from './store'
 import type { EvalResult } from './eval'
 
-/** Session store key of the wayseeker Ledger, kept beside clauseStoreKey's `clauses:<key>`. */
+/** Session state key of the wayseeker Ledger for one transcript (`<session>:<agent or main>`). */
 export const wayseekerKey = (key: string) => `wayseeker:${key}`
 
 /** Which prompt address appended which utterances, so a rewind can cut that prompt's lines back out. */

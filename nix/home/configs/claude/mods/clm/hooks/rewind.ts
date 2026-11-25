@@ -5,7 +5,6 @@ import { isRecord, type Payload } from './tracker'
 import { instructionIndexKey, issueAddressKey } from './resident'
 import { addressRows } from './address'
 import { clauseBacklogKey, clauseStoreKey, dropClauses, isBacklogEntry, readClauseStore } from './clauses'
-import { dropWayseekerTurns, wayseekerKey } from './wayseeker/render'
 
 export type RewindTopic = { topic: string; summary: string; seq: number; sourceTokens?: number; focusIssue?: string | null }
 export type RewindMeta = {
@@ -23,7 +22,7 @@ export type RewindPlan = {
 // carry it; reads accept it and the next save strips it.
 export type LedgerSnapshot = {
   seq: number; ledgerFp: string; coveredRows?: string[]; ledger: string; topics?: RewindTopic[]; instructions?: unknown; addresses?: unknown
-  clauses?: unknown; clauseBacklog?: unknown; wayseeker?: unknown
+  clauses?: unknown; clauseBacklog?: unknown
 }
 export type RewindIo = {
   storeGet(key: string): Promise<unknown>
@@ -76,7 +75,6 @@ export async function saveLedgerSnapshot(
   const addresses = await io.storeGet(issueAddressKey(key))
   const clauses = await io.storeGet(clauseStoreKey(key))
   const clauseBacklog = await io.storeGet(clauseBacklogKey(key))
-  const wayseeker = await io.storeGet(wayseekerKey(key))
   const next: LedgerSnapshot = {
     seq, ledgerFp, ledger,
     ...(topics ? { topics } : {}),
@@ -84,7 +82,6 @@ export async function saveLedgerSnapshot(
     ...(addresses === undefined ? {} : { addresses }),
     ...(clauses === undefined ? {} : { clauses }),
     ...(clauseBacklog === undefined ? {} : { clauseBacklog }),
-    ...(wayseeker === undefined ? {} : { wayseeker }),
   }
   // Stripping the retired field from older snapshots shrinks a state that is already over the write limit.
   const kept = history.map(({ coveredRows: _retired, ...snapshot }) => snapshot)
@@ -102,7 +99,6 @@ async function restoreLedgerSnapshot(io: RewindIo, key: string, snapshot: Ledger
   // A snapshot taken before clauses existed says nothing about them; the caller still drops the rewound prompts' clauses.
   if (snapshot?.clauses !== undefined) await io.storeSet(clauseStoreKey(key), snapshot.clauses)
   if (snapshot?.clauseBacklog !== undefined) await io.storeSet(clauseBacklogKey(key), snapshot.clauseBacklog)
-  if (snapshot?.wayseeker !== undefined) await io.storeSet(wayseekerKey(key), snapshot.wayseeker)
 }
 
 /** Drops the clauses of rewound user prompts and revives what they retracted. */
@@ -117,12 +113,6 @@ async function dropRewoundClauses(io: RewindIo, key: string, removed: readonly s
     if (row) addresses.add(row.address)
   }
   if (!addresses.size) return
-  // Only a session with the wayseeker flag on has this key; without it nothing is read back or written.
-  const wayseeker = await io.storeGet(wayseekerKey(key))
-  if (wayseeker !== undefined) {
-    const trimmed = dropWayseekerTurns(wayseeker, addresses)
-    if (trimmed) await io.storeSet(wayseekerKey(key), trimmed)
-  }
   const backlog = await io.storeGet(clauseBacklogKey(key))
   if (Array.isArray(backlog)) await io.storeSet(clauseBacklogKey(key), backlog.filter(entry => isBacklogEntry(entry) && !addresses.has(entry.address)))
   const store = readClauseStore(await io.storeGet(clauseStoreKey(key)))

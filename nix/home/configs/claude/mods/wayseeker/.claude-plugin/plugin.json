@@ -1,0 +1,9 @@
+{
+  "name": "wayseeker",
+  "version": "0.1.0",
+  "description": "Extracts each user prompt into the wayseeker utterance ledger in the background, trims rewound prompts' lines, and serves the ledger's rendered user instructions and raises through $.wayseeker.instructions.",
+  "author": {
+    "name": "RanolP"
+  },
+  "types": "./types/index.d.ts"
+}

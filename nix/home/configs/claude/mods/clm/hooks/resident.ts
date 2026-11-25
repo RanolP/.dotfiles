@@ -5,8 +5,6 @@ import {
 import { resourceLedgerForSession } from './resources'
 import { LEDGER_LINE_LIMIT } from './fold'
 import { noteLine, noteStoreKey, readNotes } from './memory'
-import { evaluate } from './wayseeker/eval'
-import { readWayseekerLedger, renderInstructions, wayseekerKey } from './wayseeker/render'
 import { applyClauses, assumptionStatuses, clauseQuoteOverlaps, clauseStoreKey, emptyClauseStore, parseClause, pendingClauseIds, readClauseStore, renderClauses, type ClauseStore, type IncomingClause } from './clauses'
 
 export type InstructionIndex = { address: string; issue: string | null; text: string }
@@ -43,8 +41,11 @@ export type ResidentIo = {
   readMeta: () => Promise<{ seq: number }>
   readLegacyTopics: (notes: string, seq: number, key: string) => Promise<Topic[]>
   readRequests: (key: string) => Promise<ResidentLedgerRequest[]>
-  /** userConfig "wayseeker": render user instructions from the wayseeker ledger instead of the clause store. */
-  wayseeker?: boolean
+  /**
+   * userConfig "wayseeker": the "## user instructions" section the wayseeker mod renders for this key,
+   * or undefined when that mod is not loaded, which keeps the clause store's section.
+   */
+  wayseekerInstructions?: (key: string) => Promise<string | undefined>
 }
 
 type LedgerPreview = { notes?: string; topics?: Topic[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] }; clauses?: ClauseStore }
@@ -160,10 +161,8 @@ export async function residentLedger(
     pendingInvalid: [...shownIssues.filter(issue => issue.status !== 'dropped' && issue.resolution !== 'closed'
       && issueVisibility(issue) === 'invalid').map(issue => issue.id), ...pendingClauseIds(clauseStore, statuses)],
   }
-  if (io.wayseeker) {
-    const ledger = readWayseekerLedger(await io.get(wayseekerKey(key)))
-    sections.instructionsText = renderInstructions(ledger, evaluate(ledger))
-  }
+  const wayseekerText = await io.wayseekerInstructions?.(key)
+  if (wayseekerText !== undefined) sections.instructionsText = wayseekerText
   return residentLedgerText(top, top ? String(addresses[top.id] ?? '') || undefined : undefined, shownState.stack.length, shownState.pending.length, instructions, sections)
 }
 

@@ -497,6 +497,9 @@ in
       # directory is linked as one store path because Claude Code rejects a
       # hook module whose realpath escapes the plugin directory.
       ".claude/mods/clm".source = ./configs/claude/mods/clm;
+      # wayseeker keeps the user's instructions as a logic ledger per session;
+      # independent of clm, which only reads it through $.wayseeker.instructions.
+      ".claude/mods/wayseeker".source = ./configs/claude/mods/wayseeker;
       # hetero-subagents runs subagent types through Codex or Antigravity;
       # its hook starts the bridge as `node <root>/daemon/codex-bridge.mjs`.
       ".claude/mods/hetero-subagents".source = ./configs/claude/mods/hetero-subagents;

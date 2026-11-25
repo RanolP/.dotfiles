@@ -242,7 +242,7 @@ test('the newest step result event wins', () => {
   expect(snapshot(events)[0]?.result).toMatchObject({ intent: 'inspect new', finding: 'new finding', decision: 'new decision', files: ['hooks/panel.ts'], source: 'fold' })
 })
 
-// Regression caught: co-worker planning and ownership events were ignored when another session wrote them for the issue.
+// Regression caught: cross-session planning and ownership events were ignored when another session wrote them for the issue.
 test('snapshot applies plan and claim ops written by another session', () => {
   const owner = at('owner', 'github.com/o/r'), worker = at('worker', 'github.com/o/r')
   const created = toEvents([{ op: 'create', issue: 'owner-1', title: 'ship it', status: 'todo' }], owner, 0, '2026-10-06T01:00:00Z')

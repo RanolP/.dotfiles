@@ -122,10 +122,9 @@ export function stepReplacements(
       return !laterText.includes(result.tool_use_id) && !paths.some(path => laterText.includes(path))
     })
     for (const [index, result] of eligible.entries()) {
-      const address = `@step:${span.id}`
       const replacement = index === 0
-        ? `[clm step ${span.id} done: ${record.intent} → ${record.finding} → ${record.decision}; files: ${record.files.join(', ')}. Its raw tool results are stored: call clm_recall with {"address":"${address}"} before you re-run or re-read them.]`
-        : `[clm: folded into step ${span.id}; clm_recall {"address":"${address}"}]`
+        ? `[clm step ${span.id} done: ${record.intent} → ${record.finding} → ${record.decision}; files: ${record.files.join(', ')}.]`
+        : `[clm: folded into step ${span.id}]`
       replace[result.tool_use_id] = replacement
     }
     if (eligible.length) collapsed.push({ id: span.id, rows: tail.slice(start, end + 1) })

@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { planPromptContext } from './panel'
 import { INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
@@ -93,7 +93,7 @@ test('an unknown classifier target writes no tracker events', OPTS, async ($, on
   expect(seen.logs.some(line => line.includes('unknown target id ghost-1'))).toBe(true)
 })
 
-// Regression caught: a co-worker land closed the issue the classifier targeted while it ran, and "unknown target id" discarded the whole prompt's focus and deferrals.
+// Regression caught: another session closed the issue the classifier targeted while it ran, and "unknown target id" discarded the whole prompt's focus and deferrals.
 test('a classifier target that closed during classification keeps focus and still files deferrals', OPTS, async ($, on) => {
   const seen = bottoms(on, {
     rows: ROWS, replies: [],
@@ -167,22 +167,22 @@ test('a whole-message deferral creates exactly one issue', OPTS, async ($, on) =
   expect(issues[0]?.status).toBe('todo')
 })
 
-// Regression caught (e2e 2026-10-29): "끝나면 clm_coworker list 출력을 그대로 보여줘", an instruction for the same turn, was filed as a second deferred board issue.
+// Regression caught (e2e 2026-10-29): "끝나면 clm_resource list 출력을 그대로 보여줘", an instruction for the same turn, was filed as a second deferred board issue.
 test('a same-turn instruction beside a deferral files no board issue', OPTS, async ($, on) => {
-  const prompt = "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘. 지금은 하지 마. 끝나면 clm_coworker list 출력을 그대로 보여줘."
+  const prompt = "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘. 지금은 하지 마. 끝나면 clm_resource list 출력을 그대로 보여줘."
   const seen = bottoms(on, {
     rows: ROWS, replies: [],
     intentReplies: [intentReply({
-      intent: 'pending', title: "README.md 끝에 'hello from co-worker' 한 줄 추가",
+      intent: 'pending', title: "README.md 끝에 'hello from agent' 한 줄 추가",
       deferred: [
-        { text: "README.md 끝에 'hello from co-worker' 한 줄 추가", quote: "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘", when: 'later' },
-        { text: 'clm_coworker list 출력을 그대로 보여줘', quote: '끝나면 clm_coworker list 출력을 그대로 보여줘', when: 'now' },
+        { text: "README.md 끝에 'hello from agent' 한 줄 추가", quote: "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘", when: 'later' },
+        { text: 'clm_resource list 출력을 그대로 보여줘', quote: '끝나면 clm_resource list 출력을 그대로 보여줘', when: 'now' },
       ],
     })],
   })
   await $.prompt.submit(promptInput(prompt))
-  await waitForLog(seen, "clm: deferred issue s1-1: README.md 끝에 'hello from co-worker' 한 줄 추가")
-  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).map(issue => issue.title)).toEqual(["README.md 끝에 'hello from co-worker' 한 줄 추가"])
+  await waitForLog(seen, "clm: deferred issue s1-1: README.md 끝에 'hello from agent' 한 줄 추가")
+  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).map(issue => issue.title)).toEqual(["README.md 끝에 'hello from agent' 한 줄 추가"])
 })
 
 // Regression caught: a slow earlier classifier overwrote the focus chosen by a newer prompt.
@@ -756,10 +756,10 @@ test('a todo clm_task with no focus records the task for later without focusing 
 // Regression caught: a deferred prompt produced two board issues, one filed by the classifier and one the model created with clm_task under a reworded title.
 test('a clm_task create of work the classifier just deferred reuses the filed issue', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: [M('user', "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘. 지금은 하지 말고")], replies: [],
+    rows: [M('user', "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘. 지금은 하지 말고")], replies: [],
     intentReplies: [intentReply({
-      intent: 'pending', title: "README.md 끝에 'hello from co-worker' 추가",
-      deferred: [{ text: "README.md 끝에 'hello from co-worker' 추가", quote: "나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘", when: 'later' }],
+      intent: 'pending', title: "README.md 끝에 'hello from agent' 추가",
+      deferred: [{ text: "README.md 끝에 'hello from agent' 추가", quote: "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘", when: 'later' }],
     })],
     intentBlocks: [async () => { started(); await gate }],
   })
@@ -767,13 +767,13 @@ test('a clm_task create of work the classifier just deferred reuses the filed is
   let started!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   const classifying = new Promise<void>(resolve => { started = resolve })
-  await $.prompt.submit(promptInput("나중에 README.md 끝에 'hello from co-worker' 한 줄 추가해줘. 지금은 하지 말고"))
+  await $.prompt.submit(promptInput("나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘. 지금은 하지 말고"))
   await classifying
-  const call = $.tool.call({ tool: TASK_TOOL, title: "README.md 끝에 'hello from co-worker' 한 줄 추가", status: 'todo' } satisfies ToolCallInput)
+  const call = $.tool.call({ tool: TASK_TOOL, title: "README.md 끝에 'hello from agent' 한 줄 추가", status: 'todo' } satisfies ToolCallInput)
   release()
   const result = await call
   if ('deny' in result) throw new Error(result.deny)
-  await waitForLog(seen, "clm: deferred issue s1-1: README.md 끝에 'hello from co-worker' 추가")
+  await waitForLog(seen, "clm: deferred issue s1-1: README.md 끝에 'hello from agent' 추가")
   const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
   expect(issues.map(issue => issue.id)).toEqual(['s1-1'])
   expect(result.result).toContain('s1-1')

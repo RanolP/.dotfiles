@@ -3,7 +3,7 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { captureAppendedRow, chooseContinuation, clmStatus, mergeInstructions, isHeld, readOpts, resetUserWorkflow, restoreFailedContinuation, sessionIssues, storeQueuedMessage, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
+import { captureAppendedRow, chooseContinuation, clmStatus, mergeInstructions, isHeld, readOpts, resetUserWorkflow, restoreFailedContinuation, sessionIssues, storeQueuedMessage, submitWithRecovery, trackIssue, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
@@ -13,7 +13,6 @@ import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Paylo
 import { buildCleared, estTokens, fingerprint, foldedRows, isLedgerRow, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION, withQueuedMessages, type QueuedMessage } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, resetRetiredQueued, setRewindFoldJob, transcriptKey, type FoldJobIo } from './fold-job'
 import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
-import { recallAddress, recallQuery } from './address'
 import { plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps } from './stepfold'
 import type { Opts } from './fold-runtime'
 import { readLedgerSnapshots, saveLedgerSnapshot, type RewindIo, type RewindPlan } from './rewind'
@@ -290,35 +289,6 @@ test('a sidecar write failure keeps the original result in swapped messages', as
   expect(swapped.result.messages?.flatMap(row => row.toolResults?.map(result => result.text) ?? [])).toContain(raw)
 })
 
-// Regression caught: renderRange clipped the step sidecar, so recall after resume lost the end of a large result.
-test('a large result round-trips through the real step sidecar writer and recall pages', async () => {
-  const raw = `${'line '.repeat(14_000)}\nLAST-LINE`
-  const swapped = await swapStepResult(raw)
-  const recallIo = { get: async () => undefined, set: async () => undefined, basePath: async () => swapped.base, readFile: async (path: string) => swapped.files.get(path) }
-  const first = (await recallAddress(recallIo, 's1:main', '@step:s1-1')).result ?? ''
-  const second = (await recallAddress(recallIo, 's1:main', '@step:s1-1#2')).result ?? ''
-  expect(first + second).toContain('LAST-LINE')
-})
-
-// Regression caught: a fold kept only user rows addressable, so folded assistant and tool rows had nothing left to search.
-test('a fold archives its folded rows of every role', async () => {
-  const swapped = await swapStepResult(`original ${'x'.repeat(30_000)}`)
-  const archive = swapped.files.get(`${swapped.base}.archive.txt`) ?? ''
-  expect(archive).toContain('=== @fold:1.0 [user]\nold turn')
-  expect(archive).toContain('[assistant]\nold old')
-})
-
-// Regression caught: clm_recall read only by address, so folded work whose address the model never saw could not be found.
-test('clm_recall query finds a folded row and its address reads it whole', async () => {
-  const swapped = await swapStepResult(`original ${'x'.repeat(30_000)}`)
-  const io = { get: async () => undefined, set: async () => undefined, basePath: async () => swapped.base, readFile: async (path: string) => swapped.files.get(path) }
-  const hits = await recallQuery(io, 's1:main', 'OLD turn')
-  expect(hits[0]).toMatch(/^@fold:1\.0 \[user\] old turn/)
-  const read = await recallAddress(io, 's1:main', hits[0]!.split(' ')[0])
-  expect(read.result).toBe('[user @fold:1.0]\nold turn')
-  expect(await recallQuery(io, 's1:main', 'nowhere-to-be-found')).toEqual([])
-})
-
 // Regression caught: split parsing dropped model step spans or rejected replies from the pre-U3 shape.
 test('parseSplitAnswer keeps steps and accepts the old shape', () => {
   expect(parseSplitAnswer('{"split":2,"ops":[],"steps":[{"from":"a","to":"b"}]}')).toMatchObject({ steps: [{ from: 'a', to: 'b' }] })
@@ -345,15 +315,6 @@ test('swap-time tracker state resolves a newly completed step span', () => {
   expect(stepReplacements(rows, resolved.spans, resolved.records).replace.start).toContain('[clm step step-1 done:')
 })
 
-// Regression caught: @step recall returned the folded stub instead of the swap-time sidecar and could not page it.
-test('@step recall reads and pages the original sidecar', async () => {
-  const raw = `original output ${'z'.repeat(45_000)}`
-  const io = { get: async () => undefined, set: async () => undefined, basePath: async () => '/state/clm-s1', readFile: async (path: string) => path.endsWith('.step-step-1.txt') ? raw : undefined }
-  expect((await recallAddress(io, 's1:main', '@step:step-1')).result?.slice(0, 15)).toBe('original output')
-  expect((await recallAddress(io, 's1:main', '@step:step-1#2')).result).toBe(raw.slice(40_000, 80_000))
-  expect((await recallAddress(io, 's1:main', '@step:missing')).result).toContain('missing')
-})
-
 // Regression caught: one-turn no-plan folds paid for step extraction below the 20k-token threshold.
 test('one-turn no-plan step extraction starts only above 20k estimated tokens', () => {
   expect(shouldRequestSingleTurnSteps([M('user', 'x'.repeat(47_000))], false)).toBe(false)
@@ -365,7 +326,6 @@ test('one-turn no-plan step extraction starts only above 20k estimated tokens', 
 test('an oversized ledger with large facts and legacy sections is capped', () => {
   const maxTokens = 600
   const ledger = residentLedgerText(undefined, undefined, 0, 0, {
-    notes: Array.from({ length: 20 }, (_, i) => `note ${i} ${'f'.repeat(240)}`),
     legacy: Array.from({ length: 20 }, (_, i) => `legacy ${i} ${'l'.repeat(240)}`),
   })
   expect(estTokens(M('user', ledger))).toBeGreaterThan(maxTokens)
@@ -1514,26 +1474,6 @@ test('an uncalibrated background fold check reads messages and records its first
 })
 
 // Regression caught: queueTarget was checked only after turn completion, so long turns entered compact without a summary job.
-// Regression caught: a fold took older turns away with no warning, so the model had no turn left to record what it still needed.
-test('a tool call just under the fold point carries the wrap-up notice once per fold cycle', { options: { budget: 10000, tailTarget: 3000, queueTarget: 100000, ledgerTarget: 500, reserve: 1000 } }, async ($, on) => {
-  bottoms(on, { rows: [M('user', 'protected request'), M('assistant', 'working')], replies: [], usage: { startedAt: 0, context: { window: 200000, tokens: 8000 }, rateLimits: [] } })
-  on('tool.call', () => ({ result: { success: true } }))
-  const first = await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
-  const second = await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)
-  expect(first.context?.some(line => line.includes('clm_note'))).toBe(true)
-  expect(second.context ?? []).toEqual([])
-})
-
-// Regression caught: the wrap-up notice fired far from the fold point, or at and past it where the fold may already be running.
-test('the wrap-up notice stays silent outside the last stretch before the fold point', { options: { budget: 10000, tailTarget: 3000, queueTarget: 100000, ledgerTarget: 500, reserve: 1000 } }, async ($, on) => {
-  const usage = { startedAt: 0, context: { window: 200000, tokens: 3000 }, rateLimits: [] }
-  bottoms(on, { rows: [M('user', 'protected request'), M('assistant', 'working')], replies: [], usage })
-  on('tool.call', () => ({ result: { success: true } }))
-  expect((await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)).context ?? []).toEqual([])
-  usage.context.tokens = 9500
-  expect((await $.tool.call({ tool: 'Bash', command: 'true' } as ToolCallInput)).context ?? []).toEqual([])
-})
-
 // Regression caught: clm_fold waited for the usage and queue gates like the turn-end check, so a model asking to fold a
 // finished unit of work early got nothing.
 test('clm_fold starts the summary job below the fold point and queue target', { options: { budget: 100000, tailTarget: 3000, queueTarget: 100000, ledgerTarget: 500, reserve: 1000 } }, async ($, on) => {

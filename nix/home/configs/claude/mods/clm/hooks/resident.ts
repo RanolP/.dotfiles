@@ -4,7 +4,6 @@ import {
 } from './ledger'
 import { resourceLedgerForSession } from './resources'
 import { LEDGER_LINE_LIMIT } from './fold'
-import { noteLine, noteStoreKey, readNotes } from './memory'
 
 export type ResidentLedgerRequest = {
   id: string
@@ -18,8 +17,6 @@ export type ResidentLedgerSections = {
   plan?: { objective?: { text: string; address: string }; revision: number; steps: readonly Issue[] }
   requests?: readonly ResidentLedgerRequest[]
   facts?: readonly string[]
-  /** clm_note lines, shown verbatim after the other facts so ledger trimming reaches them last. */
-  notes?: readonly string[]
   constraints?: readonly string[]
   questions?: readonly Issue[]
   uncertain?: readonly Issue[]
@@ -80,7 +77,6 @@ export async function residentLedger(
   const sections: ResidentLedgerSections = {
     children: shownIssues.filter(issue => top !== undefined && issue.parent === top.id && isOpen(issue) && visible(issue)),
     ...(planRoot ? { plan: { objective: plannedObjective, revision: planRoot.planRevision ?? 0, steps: shownIssues.filter(issue => issue.parent === planRoot.id && visible(issue)) } } : {}),
-    notes: readNotes(await io.get(noteStoreKey(key))),
     questions: shownIssues.filter(issue => issue.status === 'question' && visible(issue)),
     uncertain: shownIssues.filter(issue => issue.status === 'uncertain' && visible(issue)),
     resources,
@@ -122,7 +118,7 @@ export function residentLedgerText(
     if (hiddenDone.has(issue.id)) {
       if (collapsedDone) return []
       collapsedDone = true
-      return [`- …+${hiddenDone.size} done (clm_recall @step:${issue.id})`]
+      return [`- …+${hiddenDone.size} done`]
     }
     const result = issue.status === 'done' ? issue.result : undefined
     const detail = result ? ` — ${oneLine(result.intent)} → ${oneLine(result.finding)} → ${oneLine(result.decision)}${result.files.length ? ` (files: ${result.files.map(oneLine).join(', ')})` : ''}` : ''
@@ -148,7 +144,6 @@ export function residentLedgerText(
     ...(plan ? ['## plan', body(planLines)] : ['## what to do', body(tasks)]),
     // Shown only while a question waits, so the common case pays nothing for it.
     ...(questions.length ? ['## open questions', questions.join('\n')] : []),
-    ...(sections.notes?.length ? ['## notes', body(sections.notes.map(note => noteLine(oneLine(note))))] : []),
     '## uncertain', body(uncertain),
     ...(legacy.length ? ['## legacy', legacy.join('\n')] : []),
     '## owned resources', body(resources),

@@ -51,7 +51,6 @@ export type ClmStatus = {
   openIssues: number
 }
 
-export type ClmRecallInput = { address: string }
 export type ClmTaskInput = {
   tool_use_id?: string
   id?: string
@@ -73,15 +72,6 @@ export type ClmResourceInput = {
   description?: string
 }
 
-export type ClmCoworkerInput = {
-  action: 'claim' | 'ready' | 'release' | 'plan' | 'revoke' | 'land' | 'list'
-  issue?: string
-  priority?: number
-  ready?: boolean
-  maxCoworkers?: number
-  to?: string
-}
-
 export type ClmStableAttachmentType = StableAttachmentType
 export type ClmStableAttachmentValue = { full?: string; inHead?: boolean; headDigest?: string; deltas: string[]; carriedAtSeq: number }
 export type ClmStableAttachmentSession = Partial<Record<ClmStableAttachmentType, ClmStableAttachmentValue>>
@@ -101,10 +91,8 @@ export type Clm = {
 
 declare module 'claude-code' {
   interface McpToolInputs {
-    'mcp__clm__clm_recall': ClmRecallInput
     'mcp__clm__clm_task': ClmTaskInput
     'mcp__clm__clm_resource': ClmResourceInput
-    'mcp__clm__clm_coworker': ClmCoworkerInput
   }
 
   interface PluginState {

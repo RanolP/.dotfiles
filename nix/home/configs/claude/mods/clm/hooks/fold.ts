@@ -308,10 +308,10 @@ const renderLedgerSections = (sections: readonly LedgerSection[]) => sections.ma
     const metadata = lines.findIndex(line => line.startsWith('- stack '))
     const before = metadata < 0 ? lines : lines.slice(0, metadata)
     const after = metadata < 0 ? [] : lines.slice(metadata)
-    before.push(`${LEDGER_MORE}${section.dropped} older, see clm_recall`)
+    before.push(`${LEDGER_MORE}${section.dropped} older`)
     return `## ${section.name}\n${[...before, ...after].join('\n')}`
   }
-  if (section.dropped) lines.push(`${LEDGER_MORE}${section.dropped} older, see clm_recall`)
+  if (section.dropped) lines.push(`${LEDGER_MORE}${section.dropped} older`)
   return `## ${section.name}\n${lines.length ? lines.join('\n') : LEDGER_NONE}`
 }).join('\n\n')
 const dropOldestLedgerItem = (section: LedgerSection | undefined) => {

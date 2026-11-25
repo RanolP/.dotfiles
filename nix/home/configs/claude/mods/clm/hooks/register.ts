@@ -25,16 +25,13 @@ import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktre
 import { recordPromptIntent as classifyPrompt, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
-import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
-import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes, WRAP_UP_NOTICE, wrapUpDue, wrapUpStoreKey } from './memory'
+import { addressRows, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
 import { registerResources } from './resources'
-import { coworkerIntent, registerCoworkers } from './coworker-runtime'
 
-export { recallRows } from './address'
 export { residentLedgerText } from './resident'
 export { chooseContinuation, resetUserWorkflow, restoreFailedContinuation } from './workflow'
 export { messageTokens, type Meta, type Opts }
@@ -44,8 +41,6 @@ export { messageTokens, type Meta, type Opts }
 // update persistent issues; withholding is used inside the job if summary fails.
 
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
-const RECALL_TOOL = 'mcp__clm__clm_recall'
-const NOTE_TOOL_ID = `mcp__clm__${NOTE_TOOL}`
 const FOLD_TOOL_ID = 'mcp__clm__clm_fold'
 export { TASK_TOOL }
 
@@ -960,7 +955,6 @@ const trackerView = ($: EngineInterface, origin: Origin, ops: readonly Payload[]
 
 const addressIo = ($: EngineInterface): AddressIo => ({
   get: key => sessionStoreGet($, key), set: (key, value) => sessionStoreSet($, key, value),
-  basePath: () => basePath($), readFile: async path => readText($, path),
 })
 const sentAt = async ($: EngineInterface): Promise<SentAt> => sentAtOf(addressIo($), transcriptKey(await sid($)))
 const nowIso = async ($: EngineInterface) => new Date(await $.clock.now()).toISOString()
@@ -998,8 +992,7 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   logEvent: (event, fields) => logEvent($, event, fields),
 })
 const recordPromptIntent = async ($: EngineInterface, text: string, promptSeq: number, address?: string) => {
-  const coworker = coworkerIntent(await sid($))
-  return classifyPrompt({ ...intentIo($), ...coworker }, text, promptSeq, address)
+  return classifyPrompt(intentIo($), text, promptSeq, address)
 }
 
 /** Options resolved against the live context window, so the threshold point follows the model in use. */
@@ -1089,18 +1082,6 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
 
 export const report = foldJobReport
 
-/** The pre-fold notice, once per ledger seq, while usage sits just under the fold point and no fold has started. */
-async function wrapUpNotice($: EngineInterface, opts: Opts): Promise<string | undefined> {
-  const key = transcriptKey(await sid($))
-  if (!foldJobIdle(key)) return undefined
-  const [meta, used, noticedSeq] = await Promise.all([readMeta($), usageReading($), sessionStoreGet($, wrapUpStoreKey(key))])
-  const due = wrapUpDue({ used, budget: opts.budget, reserve: opts.reserve, jobIdle: foldJobIdle(key), compactionDisabled: meta.compactionDisabled, seq: meta.seq, noticedSeq })
-  if (!due) return undefined
-  await sessionStoreSet($, wrapUpStoreKey(key), meta.seq)
-  await logEvent($, 'wrap-up-notice', { tokensBefore: used, reason: `seq ${meta.seq}, fold point ${opts.budget - opts.reserve}` })
-  return WRAP_UP_NOTICE
-}
-
 /** clm_fold: asks for a fold now; the swap itself waits for a turn end, where the host allows session.compact. */
 export async function foldOnRequest($: EngineInterface, opts: Opts) {
   let request: FoldRequest
@@ -1109,16 +1090,6 @@ export async function foldOnRequest($: EngineInterface, opts: Opts) {
   await logEvent($, 'model-fold', { outcome: request.outcome, reason: request.detail })
   if (request.outcome === 'refused') return { result: `Fold not requested: ${request.detail}.`, isError: true }
   return { result: `Fold requested: ${request.detail}. It applies at a turn end once the summary is ready; keep working meanwhile.` }
-}
-
-/** clm_note: keeps one line for the ledger's notes section, evicting the oldest past NOTE_KEEP. */
-export async function recordNote($: EngineInterface, key: string, text: unknown) {
-  const added = addNote(readNotes(await sessionStoreGet($, noteStoreKey(key))), text)
-  if ('error' in added) return { result: added.error, isError: true }
-  await sessionStoreSet($, noteStoreKey(key), added.notes)
-  await logEvent($, 'note', { reason: `kept ${added.notes.length}, evicted ${added.evicted.length}` })
-  const evicted = added.evicted.length ? ` Evicted the oldest: ${added.evicted.map(note => JSON.stringify(note)).join(', ')}.` : ''
-  return { result: `Noted (${added.notes.length} kept); it stays in the ledger's notes section after every fold.${evicted}` }
 }
 
 const workflowIo = ($: EngineInterface): WorkflowIo => ({
@@ -1147,9 +1118,7 @@ const GUIDE = [
   'That row carries the goal, what was done, what is left, open tracker questions. The turns they replaced are gone.',
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
-  'A result shown as `[clm step … done: …]` was folded. Call clm_recall with its @step address to read the raw output instead of re-running the command or re-reading the file.',
-  'To find folded work you have no address for, call clm_recall with query (words that must all appear), then read a hit by its address.',
-  'Record a fact, path or decision you will need after a fold with clm_note; the ledger keeps each note verbatim.',
+  'A result shown as `[clm step … done: …]` was folded.',
   'Call clm_fold when a unit of work is finished and its turns can leave the conversation; clm folds them at the end of this turn or the next.',
 ].join('\n')
 
@@ -1196,26 +1165,8 @@ export const register: Register = (on, options) => {
     for (const p of problems) $.ui.log(`clm: option ${p}`)
     try {
       await $.tool.register({
-        name: 'clm_recall',
-        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last, a folded step\'s raw tool results with @step:<id>, one folded row with @fold:<seq>.<n>. Includes folded and rewound history. To find something you no longer have an address for, pass query instead: words that must all appear (case-insensitive); each hit gives the address to read in full and a short snippet, newest first.',
-        inputSchema: { type: 'object', properties: { address: { type: 'string' }, query: { type: 'string' } }, additionalProperties: false },
-      })
-    } catch (err) {
-      $.ui.log(`clm: clm_recall registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
-    }
-    try {
-      await $.tool.register({
-        name: NOTE_TOOL,
-        description: NOTE_DESCRIPTION,
-        inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false },
-      })
-    } catch (err) {
-      $.ui.log(`clm: clm_note registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
-    }
-    try {
-      await $.tool.register({
         name: 'clm_fold',
-        description: 'Fold the older turns into the clm ledger now instead of waiting for the context budget. Call it when a unit of work is finished and the turns that produced it can leave the conversation; record anything you need verbatim with clm_note first. The summary runs in the background and the fold applies at a turn end.',
+        description: 'Fold the older turns into the clm ledger now instead of waiting for the context budget. Call it when a unit of work is finished and the turns that produced it can leave the conversation. The summary runs in the background and the fold applies at a turn end.',
         inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       })
     } catch (err) {
@@ -1242,7 +1193,7 @@ export const register: Register = (on, options) => {
     }
     await $.command.register({
       name: 'clm',
-      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board, while `clm_coworker` plans, claims, hands back, lands, reassigns, lists, and messages shared board work.',
+      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board.',
       immediate: true,
     })
     await $.command.register({ name: 'force-compact', description: 'Compact once with Claude Code\'s own summarizer instead of the clm fold; text after it becomes the summary instructions.', immediate: true })
@@ -1343,24 +1294,9 @@ export const register: Register = (on, options) => {
         finally { if (foldChecks.get(key) === check) foldChecks.delete(key) }
       })().catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
     }
-    const result = await next(e)
-    if (e.agentId !== undefined || result.deny !== undefined) return result
-    let notice: string | undefined
-    try { notice = await wrapUpNotice($, await liveOpts($, userOptions)) }
-    catch (err) { $.ui.log(`clm: wrap-up notice check failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
-    return notice ? { ...result, context: [...(result.context ?? []), notice] } : result
+    return next(e)
   })
 
-  on('tool.call', { tool: RECALL_TOOL }, async ($, e) => {
-    const key = transcriptKey(await sid($))
-    const query: unknown = (e as { query?: unknown }).query
-    if (typeof query !== 'string' || !query.trim()) return recallAddress(addressIo($), key, e.address)
-    const hits = await recallQuery(addressIo($), key, query)
-    await logEvent($, 'recall-query', { reason: `${hits.length} hits for ${query.trim().split(/\s+/).length} words` })
-    return { result: hits.length ? hits.join('\n') : `no folded row or prompt holds every word of ${JSON.stringify(query.trim())}`, isReadOnly: true }
-  })
-
-  on('tool.call', { tool: NOTE_TOOL_ID }, async ($, e) => recordNote($, transcriptKey(await sid($)), e.text))
   on('tool.call', { tool: FOLD_TOOL_ID }, async $ => foldOnRequest($, await liveOpts($, userOptions)))
 
   on('agent.spawn', async ($, e, next) => {
@@ -1390,8 +1326,6 @@ export const register: Register = (on, options) => {
     if (!isClmTaskInput(e)) return { deny: 'clm_task requires status and either an issue id or a new task title.' }
     const toolUseId = e.tool_use_id
     const result = await runPanelTask(panelIo($), e, e.agentId, toolUseId)
-    // A drop or done changes which board issues are ready for a co-worker.
-    void coworkerIntent(await sid($))?.dispatch()
     return result
   })
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
@@ -1478,5 +1412,4 @@ export const register: Register = (on, options) => {
   })
 
   registerResources(on, options)
-  registerCoworkers(on, options)
 }

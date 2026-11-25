@@ -17,7 +17,6 @@ import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type Rewind
 import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
 import { fnv1a, type SentAt } from './address'
-import { appendArchive, archiveBlocks, archivePath } from './memory'
 import { finalizeStepReplacements, plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps, type FoldStep } from './stepfold'
 
 type Pending = {
@@ -619,19 +618,6 @@ const renderStepSidecar = (rows: readonly SessionMessage[]): string => rows.flat
   ...(row.toolResults ?? []).map(result => `  <- [${result.tool_use_id}] ${result.isError ? 'error ' : ''}${result.text}`),
 ]).join('\n')
 
-// Every folded row, all roles, goes to the per-session archive that clm_recall {query} searches.
-async function archiveFolded(io: Pick<FoldJobIo, 'basePath' | 'readFile' | 'writeFile' | 'logEvent' | 'log'>, seq: number, rows: readonly SessionMessage[]): Promise<void> {
-  if (!rows.length) return
-  try {
-    const path = archivePath(await io.basePath())
-    const next = appendArchive((await io.readFile(path)) ?? '', archiveBlocks(seq, rows))
-    await io.writeFile(path, next)
-    io.log(`clm archive: fold #${seq} archived ${rows.length} rows to ${path} (${next.length} chars)`, { to: 'debug' })
-  } catch (error) {
-    await logPersistenceFailure(io, error)
-  }
-}
-
 async function applyFoldPlan(
   io: FoldJobIo, workingRows: readonly SessionMessage[], meta: Meta, first: number, use: Pending, escaped: boolean,
   startedAt: number, key: string, opts: Opts,
@@ -692,7 +678,6 @@ async function applyFoldPlan(
   await retireQueued(io, key, foldedQueued)
   return persistCompactResult(io, result, async () => {
     await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
-    await archiveFolded(io, use.seq, dropped)
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     else await io.storeDelete(topicKey)

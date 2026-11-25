@@ -172,8 +172,8 @@ export function parseRequests(raw: string): RequestClassification {
 }
 
 /**
- * `closedIds` are issues that closed after the classifier saw them open (a co-worker
- * land, a drop): a reply that targets one keeps the current focus as continue.
+ * `closedIds` are issues that closed after the classifier saw them open (a completion,
+ * a drop): a reply that targets one keeps the current focus as continue.
  */
 export function parseFocus(raw: string, knownIds: ReadonlySet<string>, closedIds: ReadonlySet<string> = new Set()): FocusClassification {
   const value = parseObject(raw)
@@ -322,8 +322,6 @@ export type PromptIntentIo = {
   serialize: <T>(session: string, run: () => Promise<T>) => Promise<T>
   syncPanel: (origin: Origin, events: readonly TrackerEvent[]) => Promise<void>
   log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
-  announce?: (ids: string[]) => void | Promise<void>
-  isCoworker?: boolean
   logEvent?: (event: LogEvent, fields: LogFields) => Promise<void>
 }
 
@@ -518,7 +516,7 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
       const createdId = payloads.find((payload): payload is Extract<Payload, { op: 'create' }> => payload.op === 'create')?.issue
       const deferredIssues: { id: string; title: string }[] = []
       const filed: string[] = []
-      if (!io.isCoworker) for (const [index, item] of deferred.entries()) {
+      for (const [index, item] of deferred.entries()) {
         const matchingOpen = currentIssues.find(issue => isOpen(issue) && issue.title.trim() === item.text.trim())
         if (matchingOpen) { filed.push(matchingOpen.id); continue }
         const reused = classification.intent === 'pending' && index === 0 ? createdId ?? classification.target : undefined
@@ -548,10 +546,6 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
       }
       filedDeferrals.set(origin.session, filed)
       for (const item of deferredIssues) io.log(`clm: deferred issue ${item.id}: ${item.title}`)
-      if (deferredIssues.length && io.announce) {
-        try { await io.announce(deferredIssues.map(item => item.id)) }
-        catch (err) { io.log(`clm deferred: announce failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
-      }
       try { for (const line of describe(written, allIssues)) io.log(line) }
       catch { /* display notices never block tracker writes */ }
       if (address) {

@@ -31,7 +31,7 @@ Each hypothesis names a specific mechanism from step 1 ("the judge prompt lists 
 
 ## 5. Loop, one hypothesis per iteration
 
-- Hand the change to a background worker with a tight scope: an `Agent` worker, or `hetero-subagents:codex:gpt-5.6-sol` for code (codex stages; you commit). Review its diff rather than typing it. Fan independent hypotheses out in parallel, each in its own worktree (`isolation: "worktree"`), and measure them one at a time against the same baseline.
+- Hand the change to a background worker with a tight scope: an `Agent` worker, or `hetero-subagents:codex:gpt-6.1-sol` for code (a workspace-write implementer; codex stages, you commit). Review its diff rather than typing it. Fan independent hypotheses out in parallel, each in its own worktree (`isolation: "worktree"`), and measure them one at a time against the same baseline.
 - Measure before and after with the frozen harness, and run the regression gate.
 - Keep a change only when the metric moves past the noise band and the gate stays green; otherwise revert it in full.
 - Land each kept change as its own commit, staging only its files, where the repo's commit rules allow; otherwise save it as `<id>.patch` beside the log. Log the row either way.

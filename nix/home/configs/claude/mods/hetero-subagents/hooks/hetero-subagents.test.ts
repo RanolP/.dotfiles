@@ -1,7 +1,7 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
 import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, routingContext, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
-import { codexConfig } from '../daemon/codex-config.mjs'
+import { codexConfig, writeConfigIfChanged } from '../daemon/codex-config.mjs'
 import { beginAcpPrompt, decidePermission, finalAgentMessage, finalTurnText, handleAcpLine, installChildPending, interruptAcp, readOnlyMode, runAcpStep } from '../daemon/acp-bridge.mjs'
 
 const LUNA = 'codex:gpt-6-luna' as const
@@ -1329,6 +1329,26 @@ test('codex config carries the auto-compaction limit at top level', () => {
   expect(topLevel).toMatch(/^model_auto_compact_token_limit = 150000$/m)
   expect(topLevel).toMatch(/^project_doc_max_bytes = 0$/m)
   expect(config).toMatch(/^\[agents\]\nenabled = false$/m)
+})
+
+// Regression caught: every bridge start rewrote the shared CODEX_HOME config.toml even when its content was unchanged, and codex 0.171.0
+// fails every later turn of a live custom-permissions-profile thread on another bridge with "failed to load workspace requirements: invalid input parameter".
+test('a bridge start leaves an unchanged codex config.toml unwritten and replaces a changed one atomically', () => {
+  const files = new Map<string, string>([['/home/config.toml', 'same\n']])
+  const writes: string[] = []
+  const fsApi = {
+    readFileSync: (p: string) => { const v = files.get(p); if (v === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return v },
+    writeFileSync: (p: string, v: string) => { writes.push(p); files.set(p, v) },
+    renameSync: (from: string, to: string) => { writes.push(`${from}->${to}`); files.set(to, files.get(from) ?? ''); files.delete(from) },
+  }
+  expect(writeConfigIfChanged(fsApi, '/home/config.toml', 'same\n', 7)).toBe(false)
+  expect(writes).toEqual([])
+  expect(writeConfigIfChanged(fsApi, '/home/config.toml', 'next\n', 7)).toBe(true)
+  expect(writes).toEqual(['/home/config.toml.7.tmp', '/home/config.toml.7.tmp->/home/config.toml'])
+  expect(files.get('/home/config.toml')).toBe('next\n')
+  files.clear(); writes.length = 0
+  expect(writeConfigIfChanged(fsApi, '/home/config.toml', 'first\n', 7)).toBe(true)
+  expect(files.get('/home/config.toml')).toBe('first\n')
 })
 
 // Regression caught: an edit to daemon/codex-config.mjs alone left the fingerprint unchanged, so a running bridge kept its old generated codex config.

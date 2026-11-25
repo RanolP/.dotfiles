@@ -23,7 +23,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import assert from 'node:assert/strict'
-import { codexConfig } from './codex-config.mjs'
+import { codexConfig, writeConfigIfChanged } from './codex-config.mjs'
 
 const textInput = text => [{ type: 'text', text, text_elements: [] }]
 const WORKSPACE_WRITE_PROFILE = 'codex-subagent-workspace-write'
@@ -212,10 +212,7 @@ let userConfig = ''
 try { userConfig = fs.readFileSync(path.join(userCodexHome, 'config.toml'), 'utf8') } catch {}
 const modelAutoCompactTokenLimit = Number(process.argv[4])
 const config = codexConfig(userConfig, modelAutoCompactTokenLimit)
-const configPath = path.join(codexHome, 'config.toml')
-const configTemp = `${configPath}.${process.pid}.tmp`
-fs.writeFileSync(configTemp, config, { mode: 0o600 })
-fs.renameSync(configTemp, configPath)
+writeConfigIfChanged(fs, path.join(codexHome, 'config.toml'), config, process.pid)
 
 const codex = spawn('codex', ['app-server', '--listen', 'stdio://'], {
   stdio: ['pipe', 'pipe', 'pipe'],

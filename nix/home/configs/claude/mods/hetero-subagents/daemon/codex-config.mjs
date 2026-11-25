@@ -18,3 +18,16 @@ export function codexConfig(userConfig, modelAutoCompactTokenLimit) {
     '',
   ].join('\n')
 }
+
+// Every bridge shares one CODEX_HOME, and codex app-server 0.171.0 treats any content write to config.toml (even identical
+// bytes) as a configuration change: each live thread holding a custom permissions profile then fails every later turn with
+// "failed to load workspace requirements: invalid input parameter". So a starting bridge writes only when the content differs.
+export function writeConfigIfChanged(fsApi, configPath, content, pid) {
+  let current
+  try { current = fsApi.readFileSync(configPath, 'utf8') } catch (err) { if (err?.code !== 'ENOENT') throw err }
+  if (current === content) return false
+  const temp = `${configPath}.${pid}.tmp`
+  fsApi.writeFileSync(temp, content, { mode: 0o600 })
+  fsApi.renameSync(temp, configPath)
+  return true
+}

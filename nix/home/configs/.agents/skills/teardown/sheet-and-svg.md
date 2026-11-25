@@ -56,6 +56,7 @@ Keep styles, patterns and markers inside the SVG. Avoid remote fonts, linked ima
 Set `fill="none"` on open paths and polylines, including leaders. SVG's default fill otherwise closes a bent leader into a black triangle.
 
 Include an SVG `title` and `desc` summarizing the subject and views.
+
 This shell establishes physical units and line roles without prescribing the sheet's composition:
 
 ```svg

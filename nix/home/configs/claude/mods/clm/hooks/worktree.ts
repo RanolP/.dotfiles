@@ -108,7 +108,7 @@ export async function startWorktree(io: WorktreeIo, input: StartWorktreeInput): 
 export async function checkpointCommit(io: WorktreeIo, worktree: Worktree, stepTitle: string): Promise<string> {
   if (!stepTitle.trim()) throw failure('checkpoint title must not be empty', JSON.stringify(stepTitle))
   await git(io, worktree.dir, ['add', '-A'])
-  await git(io, worktree.dir, ['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', `clm checkpoint: ${stepTitle}`])
+  await git(io, worktree.dir, ['commit', '--allow-empty', '-m', `clm checkpoint: ${stepTitle}`])
   const sha = await git(io, worktree.dir, ['rev-parse', 'HEAD'])
   worktree.headSha = sha
   return sha

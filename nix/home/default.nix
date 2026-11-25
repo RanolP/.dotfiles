@@ -146,6 +146,14 @@ let
   claudeUserRulesText =
     (builtins.readFile sharedAgentRules) + "\n" + (builtins.readFile claudeSpecificRules);
   claudeUserRulesLimit = 40000;
+  # The mod's test runtime cannot read files, so this build step is the guard
+  # that agents/*.md still match TYPES in hooks/register.ts.
+  heteroSubagentsMod =
+    pkgs.runCommand "hetero-subagents-mod" { nativeBuildInputs = [ pkgs.python3 ]; }
+      ''
+        python3 ${../../scripts/hetero-agents-check.py} ${./configs/claude/mods/hetero-subagents}
+        cp -r ${./configs/claude/mods/hetero-subagents} $out
+      '';
   claudeUserRules =
     let
       size = builtins.stringLength claudeUserRulesText;
@@ -502,7 +510,7 @@ in
       ".claude/mods/wayseeker".source = ./configs/claude/mods/wayseeker;
       # hetero-subagents runs subagent types through Codex or Antigravity;
       # its hook starts the bridge as `node <root>/daemon/codex-bridge.mjs`.
-      ".claude/mods/hetero-subagents".source = ./configs/claude/mods/hetero-subagents;
+      ".claude/mods/hetero-subagents".source = heteroSubagentsMod;
       # time-budget gates every tool on an estimate and stops the work at the
       # budget: checkpoint reports at 1/3, 1/2, 2/3, 5/6, then abort past 6/6.
       ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
@@ -519,7 +527,10 @@ in
         source = ./configs/claude/hooks/missing-tool-hint.py;
         executable = true;
       };
-      ".claude/hooks/bare-sleep-hint.py" = { source = ./configs/claude/hooks/bare-sleep-hint.py; executable = true; };
+      ".claude/hooks/bare-sleep-hint.py" = {
+        source = ./configs/claude/hooks/bare-sleep-hint.py;
+        executable = true;
+      };
       # Reuse the Claude policy scripts; the Codex adapter translates tool payloads.
       ".codex/hooks/claude-hook-adapter.py" = {
         source = ./configs/codex/hooks/claude-hook-adapter.py;

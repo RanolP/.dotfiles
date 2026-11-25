@@ -107,7 +107,7 @@ test('ACP registrations describe Antigravity tools and session continuity', () =
   expect(agentDescription(TYPES[ASTRA])).not.toContain('edit tools')
 })
 
-// The test runtime has no file access ($.fs is unmocked, node:fs and text imports are refused), so the on-disk agents/*.md files are checked outside it.
+// The test runtime has no file access ($.fs is unmocked, node:fs and text imports are refused), so agents/*.md drift is guarded at nix build time by scripts/hetero-agents-check.py (wired at nix/home/default.nix:154).
 test('every registered type has a name, model, description and prompt for its agents/ file', () => {
   for (const [name, type] of Object.entries(TYPES)) {
     expect(`${name.replace(':', '-')}.md`).toMatch(/^[a-z]+-[a-z0-9.-]+\.md$/)

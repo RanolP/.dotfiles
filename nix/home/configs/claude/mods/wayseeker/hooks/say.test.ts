@@ -1,7 +1,7 @@
 import { test, expect, type Engine } from 'claude-code/testing'
 
 import { readWayseekerLedger, wayseekerKey } from './render'
-import { isReadOnlyBash, SAY_TOOL_ID, type SayResult } from './say'
+import { isReadOnlyBash, replDoesWork, SAY_TOOL_ID, type SayResult } from './say'
 import { appendAll } from './store'
 
 const STATE = '/home/t/.claude-work/plans/wayseeker-s1.json'
@@ -65,11 +65,21 @@ test('an agent accepting its own proposal is rejected', async ($, on) => {
 })
 
 // Regression caught: an agent line sharing a user's @n, which eval ranks by its lowest speaker and so demotes the user's line.
-test('an agent line numbered onto an existing utterance is rejected with the id to use', async ($, on) => {
+test('an agent line numbered onto an existing utterance is renumbered, never demoting the user line', async ($, on) => {
   const { ledger } = world(on, [...DECLS, '@1 user: say(use(serving, sglang))'])
   const result = await say($, ['@1 agent: say(use(serving, vllm))'])
-  expect(result.rejected[0]?.error).toContain('@2')
-  expect(ledger().utterances.map(u => u.speaker)).toEqual(['user'])
+  expect(result.rejected).toEqual([])
+  expect(result.landed[0]).toContain('renumbered from @1')
+  expect(ledger().utterances.map(u => [u.id, u.speaker])).toEqual([[1, 'user'], [2, 'agent']])
+})
+
+// Regression caught: a stale or missing @n prefix costing a rejected round trip; bare lines now take the call's id and speaker, while another speaker is still rejected.
+test('a bare line lands with the call id and speaker, and a line naming another speaker is rejected', async ($, on) => {
+  const { ledger } = world(on, [...DECLS, '@1 user: say(use(serving, sglang))'])
+  const result = await say($, ['say(use(serving, vllm))', '@9 user: say(use(serving, x))'])
+  expect(result.landed).toEqual(['@2 agent: say(use(serving, vllm))'])
+  expect(result.rejected).toHaveLength(1)
+  expect(ledger().utterances.map(u => [u.id, u.speaker])).toEqual([[1, 'user'], [2, 'agent']])
 })
 
 // Regression caught: one invalid line costing the call its valid siblings.
@@ -161,6 +171,16 @@ test('the result next is the id a following line must use, and that line lands',
   const written = await say($, [line])
   expect(written.landed).toEqual([line])
   expect(written.next).toBe(probe.next + 1)
+})
+
+// Regression caught: the Stop nudge firing on read-only REPL turns because tput, readlink, tr and a $(readlink ...) substitution were not allowlisted.
+test('read-only REPL shell with tput, a substitution and /dev/null redirects is not work', () => {
+  const code = 'await $`tput cols 2>/dev/null; echo $COLUMNS`.nothrow().text(); await $`ls -la ~/.claude/mods 2>/dev/null | head; p=$(readlink -f ~/.claude/mods/clm 2>/dev/null); echo $p; ls $p/hooks 2>/dev/null | tr "\\n" " "`.nothrow().text()'
+  expect(replDoesWork(code)).toBe(false)
+  expect(replDoesWork('await $`echo x > f`')).toBe(true)
+  expect(replDoesWork('await $`git commit -m x`')).toBe(true)
+  expect(replDoesWork('await $`echo $(rm -rf x)`')).toBe(true)
+  expect(replDoesWork('await edit(p, "a", "b")')).toBe(true)
 })
 
 // Regression caught: a write disguised as a reader (redirect, substitution, find -delete) passing as read-only.

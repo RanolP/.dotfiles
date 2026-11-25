@@ -25,7 +25,7 @@ export const SAY_DESCRIPTION = [
   '',
   'Rules:',
   ...L1_RULES,
-  '- Number every line of one call with one new id: the next field of the latest say result. Before your first say in a session, call it with lines: [] to read next and the open list without writing anything. A line numbered at or below an existing utterance is rejected with the number to use.',
+  '- The tool assigns ids and the speaker: write each line bare, as kind(content) or a condition, with no "@n speaker:" prefix; every line of one call shares the call\'s id (the next field of the latest say result). A prefixed line whose @n is at or below an existing utterance is renumbered to the call\'s id, and the renumbering is reported in landed. Call with lines: [] to read next and the open list without writing anything.',
   '- Offer a choice as try(p) and let the user accept it: accept(@n) of a proposal your own speaker made is rejected, and so is reject(@n) of a line from a higher-ranked speaker (user > agent > worker).',
   WITHDRAWAL_RULE,
   '- Report finished work as say(done(x)), not want.',
@@ -66,11 +66,20 @@ export function sayLines(ledger: Ledger, lines: readonly unknown[], speaker: Say
   const rejected: SayResult['rejected'] = []
   for (const raw of lines) {
     if (typeof raw !== 'string' || !raw.trim()) { rejected.push({ line: String(raw), error: 'a line must be a non-empty string' }); continue }
-    const line = raw.trim()
+    let line = raw.trim()
+    let note = ''
+    // The tool owns numbering: a bare line gets the call's id and speaker, a stale @n the call's id.
+    const bare = parseLine(line)
+    if (!(bare.ok && (bare.entry.kind === 'declaration' || bare.entry.kind === 'gloss'))) {
+      const prefix = /^@(\d+)\s+(\w+):\s*/.exec(line)
+      if (!prefix) line = '@' + firstId + ' ' + speaker + ': ' + line
+      else if (Number(prefix[1]) < firstId) { note = '  (renumbered from @' + prefix[1] + ')'; line = '@' + firstId + line.slice(prefix[0].indexOf(' ')) }
+    }
     const parsed = parseLine(line)
     const errors = parsed.ok && parsed.entry.kind !== 'declaration' && parsed.entry.kind !== 'gloss' ? sayCheck(current, parsed.entry, speaker, firstId) : []
     const result = errors.length ? { ok: false, errors, ledger: current } : append(current, line)
-    if (result.ok) { current = result.ledger; landed.push(line) } else rejected.push({ line, error: result.errors.join('; ') })
+    if (result.ok) { current = result.ledger; landed.push(line + note) }
+    else rejected.push({ line, error: result.errors.map(e => e.includes('arguments are atoms') ? 'an argument must be an atom: write an atom and add a gloss line, name := "<text>"' : e).join('; ') })
   }
   return { ledger: current, landed, rejected }
 }
@@ -87,23 +96,37 @@ export function openItems(ledger: Ledger): SayResult['open'] {
   return { want, ask }
 }
 
-const READERS = new Set(['ls', 'cat', 'head', 'tail', 'rg', 'grep', 'find', 'fd', 'wc', 'jq', 'bat', 'eza', 'echo', 'pwd', 'which'])
+const READERS = new Set(['ls', 'cat', 'head', 'tail', 'rg', 'grep', 'find', 'fd', 'wc', 'jq', 'bat', 'eza', 'echo', 'pwd', 'which', 'tput', 'readlink', 'realpath', 'tr', 'sort', 'uniq', 'cut', 'basename', 'dirname', 'stat', 'date', 'true'])
 const GIT_READERS = new Set(['status', 'log', 'diff', 'show'])
 // Reader options that run or delete something.
 const RUNS = /^(?:-exec|-execdir|-ok|-okdir|-delete|-fprint\w*|-x|--exec|-X|--exec-batch)$/
 
-/** Splits a command on | || && ; & and newlines outside quotes; undefined when it substitutes a command or redirects into a file. */
+/** Splits a command on | || && ; & and newlines outside quotes, adding each $(...) body as segments of its own; undefined when it uses backticks or redirects into a file. */
 function segments(command: string): string[] | undefined {
   const out: string[] = []
   let current = ''
   let quote: string | undefined
   for (let i = 0; i < command.length; i++) {
     const c = command[i]!
-    if (quote !== "'" && (c === '\x60' || (c === '$' && command[i + 1] === '('))) return undefined
+    if (quote !== "'" && c === '\x60') return undefined
+    if (quote !== "'" && c === '$' && command[i + 1] === '(') {
+      let depth = 0
+      let end = i + 1
+      for (; end < command.length; end++) {
+        if (command[end] === '(') depth++
+        else if (command[end] === ')' && --depth === 0) break
+      }
+      const inner = segments(command.slice(i + 2, end))
+      if (!inner) return undefined
+      out.push(...inner)
+      current += 'SUB'
+      i = end
+      continue
+    }
     if (quote) { if (c === quote) quote = undefined; current += c; continue }
     if (c === '"' || c === "'") { quote = c; current += c; continue }
     if (c === '>' || (c === '&' && command[i + 1] === '>')) {
-      const redirect = /^&?>>?\s*(\S+)/.exec(command.slice(i))
+      const redirect = /^&?>>?\s*(&\d|[^\s;|&)]+)/.exec(command.slice(i))
       const target = redirect?.[1] ?? ''
       if (target !== '/dev/null' && !/^&\d$/.test(target)) return undefined
       current += redirect![0]
@@ -124,6 +147,8 @@ export function isReadOnlyBash(command: string): boolean {
   if (!parts?.length) return false
   return parts.every(part => {
     const words = part.split(/\s+/).map(w => w.replace(/^['"]|['"]$/g, ''))
+    // Leading NAME=value words only set a variable for what follows.
+    while (words.length && /^\w+=/.test(words[0]!)) words.shift()
     const [head] = words
     if (head === undefined) return true
     if (words.some(w => RUNS.test(w))) return false

@@ -1,5 +1,5 @@
 // Append-only wayseeker ledger. append validates one line against everything before it and returns a new Ledger.
-import { parseLine, type Condition, type Decl, type Fact, type Gloss, type Line, type Utterance } from './syntax'
+import { buildsTerms, parseLine, type Condition, type Decl, type Fact, type Gloss, type Line, type Utterance } from './syntax'
 import { isRecord } from './text'
 
 export type Ledger = { utterances: Utterance[]; decls: Decl[]; glosses: Gloss[] }
@@ -72,6 +72,51 @@ const validateUtterance = (ledger: Ledger, u: Utterance): string[] => {
   return errors
 }
 
+/**
+ * A dependency cycle through a term-building rule (weak acyclicity), as predicate names p -> q -> ... -> p; undefined
+ * when there is none. Edges run from each premise predicate of a live rule, or of a live premise append, to the rule's
+ * head predicate; an edge is term-building when its rule builds terms (buildsTerms). Without such a cycle every
+ * derivation reaches a finite set of terms, so n(?x) -> n(s(?x)) is refused while a(?x) -> b(f(?x)) alone is fine.
+ */
+const termCycle = (utterances: readonly Utterance[]): string[] | undefined => {
+  const live = liveIds(utterances)
+  const rules = utterances.filter(u => live.has(u.id) && u.act.kind === 'condition' && u.act.conclusion.kind === 'literal')
+  const edges: { from: string; to: string; building: boolean }[] = []
+  const add = (premises: Condition['premises'], rule: Utterance) => {
+    const act = rule.act as Condition
+    const to = act.conclusion.kind === 'literal' ? act.conclusion.fact.name : ''
+    for (const p of premises) edges.push({ from: p.fact.name, to, building: buildsTerms(act) })
+  }
+  for (const rule of rules) add((rule.act as Condition).premises, rule)
+  for (const u of utterances) {
+    const act = u.act
+    if (!live.has(u.id) || act.kind !== 'condition' || act.conclusion.kind !== 'reference') continue
+    const target = act.conclusion.id
+    for (const rule of rules) if (rule.id === target) add(act.premises, rule)
+  }
+  // Shortest path from one predicate back to another over every edge.
+  const path = (start: string, goal: string): string[] | undefined => {
+    const previous = new Map<string, string>([[start, start]])
+    const queue = [start]
+    while (queue.length) {
+      const at = queue.shift()!
+      if (at === goal) {
+        const out = [at]
+        while (out[0] !== start) out.unshift(previous.get(out[0]!)!)
+        return out
+      }
+      for (const e of edges) if (e.from === at && !previous.has(e.to)) { previous.set(e.to, at); queue.push(e.to) }
+    }
+    return undefined
+  }
+  for (const e of edges) {
+    if (!e.building) continue
+    const back = path(e.to, e.from)
+    if (back) return [e.from, ...back]
+  }
+  return undefined
+}
+
 export function append(ledger: Ledger, line: string): { ok: boolean; errors: string[]; ledger: Ledger } {
   const parsed = parseLine(line)
   if (!parsed.ok) return { ok: false, errors: [parsed.error], ledger }
@@ -87,7 +132,11 @@ export function append(ledger: Ledger, line: string): { ok: boolean; errors: str
   }
   const errors = validateUtterance(ledger, entry)
   if (errors.length > 0) return { ok: false, errors, ledger }
-  return { ok: true, errors: [], ledger: { ...ledger, utterances: [...ledger.utterances, entry] } }
+  const utterances = [...ledger.utterances, entry]
+  // Checked on every utterance, not only rule lines: a reject of a reject can revive a rule that closes a cycle.
+  const cycle = termCycle(utterances)
+  if (cycle) return { ok: false, errors: ['rule would build terms in a cycle: ' + cycle.join(' -> ')], ledger }
+  return { ok: true, errors: [], ledger: { ...ledger, utterances } }
 }
 
 /** Builds a ledger from lines, throwing on the first rejected one (tests and fixtures). */

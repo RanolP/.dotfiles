@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
 
-import { parseLine, printUtterance, type Utterance } from './syntax'
+import { buildsTerms, parseLine, printUtterance, type Condition, type Utterance } from './syntax'
 import { append, appendAll, emptyLedger, nextId } from './store'
 import { evaluate } from './eval'
 import { renderInstructions } from './render'
@@ -269,7 +269,6 @@ test('parser rejects bare ?, retract, nested kinds and sentence arguments', () =
   expect(parseError('@1 user: try(a -> guess(b))')).toContain('nested')
   expect(parseError('@1 user: say(severity(rule, "대안 문장"))')).toContain('atoms')
   expect(parseError('@1 user: say(severity(rule, 대안))')).toContain('sentences')
-  expect(parseError('@1 user: a(?x) -> b(f(?x))')).toContain('function symbol')
   expect(parseError('@1 user: a -> b(?y)')).toContain('?y')
   expect(parseError('@1 user: say(use(server, ?x))')).toContain('variables')
 })
@@ -343,5 +342,34 @@ test('key slots compare nested facts structurally', () => {
 test('variables inside a nested fact bind like top-level ones', () => {
   const r = run([...NESTED, 'decl done(topic) key(topic) "{topic} 끝"', '@1 user: review(replace(?x, clm_ledger)) -> done(?x)', '@2 user: say(review(replace(wayseeker, clm_ledger)))'])
   expect(r.facts.get('done(wayseeker)')?.value).toBe('true')
-  expect(parseError('@1 user: a(?x) -> b(f(?x))')).toContain('function symbol')
 })
+
+// Rules that build terms: allowed unless they close a dependency cycle, which could derive forever.
+const TERMS = ['decl a(x) key(x) "a {x}"', 'decl b(x) key(x) "b {x}"', 'decl n(x) key(x) "n {x}"', 'decl f(x) key(x) "f {x}"', 'decl g(x) key(x) "g {x}"', 'decl s(x) key(x) "s {x}"']
+const appendError = (lines: string[], line: string) => { const r = append(appendAll(lines), line); return r.ok ? undefined : r.errors.join('; ') }
+
+// Regression: copying or destructuring rules (bounded term size) refused or treated as term-building.
+test('a rule that copies or destructures its premise terms is not term-building', () => {
+  const rule = (line: string) => { const r = parseLine(line); if (!r.ok) throw new Error(r.error); return (r.entry as Utterance).act as Condition }
+  expect(buildsTerms(rule('@1 user: a(?x) -> b(?x)'))).toBe(false)
+  expect(buildsTerms(rule('@1 user: a(f(g(?x))) -> b(f(?x))'))).toBe(false)
+  expect(buildsTerms(rule('@1 user: a(?x) -> b(f(?x))'))).toBe(true)
+  expect(run([...TERMS, '@1 user: a(f(g(?x))) -> b(f(?x))', '@2 user: say(a(f(g(k))))']).facts.get('b(f(k))')?.value).toBe('true')
+})
+
+// Regression: an acyclic term-building rule refused, or its nested head left uninstantiated.
+test('a(?x) -> b(f(?x)) is accepted and derives b(f(k)) from a(k)', () => {
+  expect(run([...TERMS, '@1 user: a(?x) -> b(f(?x))', '@2 user: say(a(k))']).facts.get('b(f(k))')?.value).toBe('true')
+})
+
+// Regression: a self-feeding term-building rule entering the ledger and deriving n(s(s(...))) until fuel runs out.
+test('n(?x) -> n(s(?x)) is rejected as a term-building cycle', () => {
+  expect(appendError(TERMS, '@1 user: n(?x) -> n(s(?x))')).toBe('rule would build terms in a cycle: n -> n')
+})
+
+// Regression: a cycle closed by a second, copying rule slipping past a per-line check.
+test('a copying rule that closes a cycle with a term-building rule is rejected', () => {
+  const first = [...TERMS, '@1 user: a(?x) -> b(f(?x))']
+  expect(appendError(first, '@2 user: b(?y) -> a(?y)')).toBe('rule would build terms in a cycle: a -> b -> a')
+})
+

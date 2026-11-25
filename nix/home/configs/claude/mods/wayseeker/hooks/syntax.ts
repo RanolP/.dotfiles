@@ -225,10 +225,29 @@ const checkAct = (act: ContentAct): void => {
     const bound = new Set(condition.premises.flatMap(p => variablesOf(p.fact)))
     const free = variablesOf(condition.conclusion.fact).filter(v => !bound.has(v))
     if (free.length > 0) throw new Error('head variable ?' + free[0] + ' does not appear in any premise')
-    // A head that builds a new term from a variable (n(?x) -> n(s(?x))) could derive forever; heads only copy bound terms.
-    const built = condition.conclusion.fact.args.find(a => a.kind === 'fact' && variablesOf(a).length > 0)
-    if (built) throw new Error('function symbol ' + (built as Fact).name + '(...) with a variable is not allowed in a rule conclusion (Datalog)')
   }
+}
+
+const termSize = (argument: Argument): number => argument.kind === 'fact' ? 1 + argument.args.reduce((sum, a) => sum + termSize(a), 0) : 1
+const argVariables = (argument: Argument): string[] => argument.kind === 'variable' ? [argument.name] : argument.kind === 'fact' ? variablesOf(argument) : []
+const count = (names: string[]) => names.reduce((m, n) => m.set(n, (m.get(n) ?? 0) + 1), new Map<string, number>())
+
+/** Whether every instance of head is no larger than the same instance of premise: size(head) <= size(premise) and no variable occurs more often in head. */
+const noLarger = (head: Argument, premise: Argument): boolean => {
+  const have = count(argVariables(premise))
+  return termSize(head) <= termSize(premise) && [...count(argVariables(head))].every(([name, n]) => (have.get(name) ?? 0) >= n)
+}
+
+/**
+ * Whether a rule's conclusion can build a term larger than its premises hold: some conclusion argument with a variable
+ * is not bounded in size by a single premise argument. Copying (a(?x) -> b(?x)) and destructuring
+ * (a(f(g(?x))) -> b(f(?x))) keep every derived term within the size of terms already stated, so the term set stays
+ * finite; a term-building rule is safe only off a dependency cycle, which store.ts checks across the whole rule set.
+ */
+export const buildsTerms = (condition: Condition): boolean => {
+  if (condition.conclusion.kind !== 'literal') return false
+  const premiseArgs = condition.premises.flatMap(p => p.fact.args)
+  return condition.conclusion.fact.args.some(a => argVariables(a).length > 0 && !premiseArgs.some(p => noLarger(a, p)))
 }
 
 const contentOf = (act: ContentAct): Utterance['content'] => act.kind === 'accept' || act.kind === 'reject' ? { kind: 'reference', id: act.target } : act.kind === 'condition' ? act : act.content

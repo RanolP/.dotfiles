@@ -343,7 +343,7 @@ test('/clm drop drops one named issue, then every open issue of the session', OP
   expect(tracker()).toEqual(['todo', 'dropped', 'todo'])
   await runClm($, 'drop all')
   expect(tracker()).toEqual(['dropped', 'dropped', 'dropped'])
-  expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate' && c.status === 'deleted').length).toBe(0)
+  expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate' && c.status === 'deleted').length).toBe(3)
 })
 
 // Regression caught: `!` shell echoes, slash-command wrappers and bare go-aheads ("ㄱㄱ", "지금?") filled 30-40% of 사용자 지시.

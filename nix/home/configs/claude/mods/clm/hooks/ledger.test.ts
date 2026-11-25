@@ -367,7 +367,7 @@ test('a model TaskUpdate records retitle and note, and an unknown id is sent to 
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => ({ result: { task: { id: 'panel-1', subject: e.subject } } }))
   on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => ({ result: { success: true, taskId: e.taskId, updatedFields: [] } }))
   await $.tool.call({ tool: 'TaskCreate', subject: 'event task', description: 'created' })
-  const r = await $.tool.call({ tool: 'TaskUpdate', taskId: 's1-1', subject: 'renamed task', description: 'more detail' })
+  const r = await $.tool.call({ tool: 'TaskUpdate', taskId: 'panel-1', subject: 'renamed task', description: 'more detail' })
   if (!('deny' in r)) throw new Error('model TaskUpdate was not denied')
   expect(r.deny).toContain('clm이 트래커에 기록했다')
   expect(r.deny).toContain('renamed task')

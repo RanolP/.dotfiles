@@ -1,6 +1,6 @@
 import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields, type Payloads } from './events'
-import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, STEPPED_WORKTREE_CONTEXT, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, planPromptContext, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, STEPPED_WORKTREE_CONTEXT, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, planPromptContext, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
 
 import {
@@ -684,6 +684,7 @@ const eventsIo = ($: EngineInterface): EventsIo => ({
   trackerDirectory: async () => `${(await $.env.get('HOME')) ?? '.'}/.claude-work/tracker/events`,
   trackerLogPath: async session => `${(await $.env.get('HOME')) ?? '.'}/.claude-work/tracker/events/${session}.jsonl`,
   generalLogPath: () => logPath($),
+  project: (origin, events) => syncPanelDomain(panelIo($), origin, events),
 })
 const captureOrigin = ($: EngineInterface) => captureEventsOrigin(eventsIo($))
 const readAll = ($: EngineInterface) => readAllEvents(eventsIo($))
@@ -910,6 +911,8 @@ const clmStatusIo = ($: StatusReader) => ({
   readWorkflow: () => readWorkflow($), readMeta: () => readMeta($), readAll: () => readAll($),
   sessionId: () => $.session.id(), ledgerPath: () => ledgerPath($), storeGet: (key: string) => sessionStoreGet($, key),
 })
+const syncPanelSafely = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => syncPanelDomain(panelIo($), origin, events)
+const projectPanel = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => panelIo($).serialize(origin.session, () => syncPanelSafely($, origin, events))
 export const sessionIssues = ($: EngineInterface, query: { issue?: string; status?: Issue['status'] } = {}) => panelIssues(panelIo($), query)
 export const clmStatus = ($: StatusReader) => panelStatus(clmStatusIo($))
 export const trackIssue = ($: EngineInterface, input: { title: string; status: Issue['status']; issue?: string }) => trackPanelIssue(panelIo($), input)
@@ -990,7 +993,7 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   addressRows: key => addressRows(addressIo($), key),
   writeEvents: (payloads, origin) => writeEvents($, payloads, origin),
   serialize: (session, run) => serialized(session, run),
-  syncPanel: async () => undefined,
+  syncPanel: (origin, events) => syncPanelSafely($, origin, events),
   log: (text, options) => $.ui.log(text, options),
   logEvent: (event, fields) => logEvent($, event, fields),
 })
@@ -1075,7 +1078,7 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   updateHeld: (settled, hold) => updateHeld($, settled, hold),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
   append: (payloads, origin, project, knownTitles) => append($, payloads, origin, project, knownTitles),
-  projectPanel: async () => undefined,
+  projectPanel: (origin, events) => projectPanel($, origin, events),
   readRewindIo: () => rewindIo($),
   observeTranscript: (key, rows) => observeTranscript(rewindIo($), key, rows),
   fold: (opts, rows, meta, mustFold, reading, calibrate, prepared, transcript) => fold($, opts, rows, meta, mustFold, reading, calibrate, prepared, transcript),
@@ -1391,8 +1394,8 @@ export const register: Register = (on, options) => {
     void coworkerIntent(await sid($))?.dispatch()
     return result
   })
-  on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || (next.origin.plugin === 'clm' || next.origin.plugin === 'task-panel') ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
-  on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => (e.agentId !== undefined || (next.origin.plugin === 'clm' || next.origin.plugin === 'task-panel') ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
+  on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
+  on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => (e.agentId !== undefined || next.origin.plugin === 'clm' ? next(e) : denyPanelTask({ mirrorModelTask: event => mirrorModelTask(panelIo($), event), log: (text, options) => $.ui.log(text, options) }, e)))
   on('classic.Stop', async ($, e, next) => {
     const backgroundWorkers = e.background_tasks?.filter(task => task.type === 'subagent' || task.type === 'workflow') ?? []
     if (backgroundWorkers.length) {

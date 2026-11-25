@@ -1,6 +1,0 @@
-{
-  "name": "task-panel",
-  "version": "0.1.0",
-  "description": "Mirrors clm tracker issues into the native task list.",
-  "author": { "name": "RanolP" }
-}

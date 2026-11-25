@@ -214,6 +214,7 @@ path = [
     "nix/home/configs/claude/hooks/subagent-model-guard.py",
     "nix/home/configs/claude/hooks/ssh-guard.py",
     "nix/home/configs/claude/hooks/nsc-guard.py",
+    "nix/home/configs/claude/hooks/publish-guard.py",
     "nix/home/configs/claude/hooks/gui-launch-guard.py",
     "nix/home/configs/claude/hooks/agent-tooling-guard.py",
     "nix/home/configs/claude/hooks/gh-guard.py",

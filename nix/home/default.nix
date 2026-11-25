@@ -373,6 +373,11 @@ in
         source = ./configs/claude/hooks/nsc-guard.py;
         executable = true;
       };
+      # A registry publish is irreversible: the user runs it as `! <command>`.
+      ".claude/hooks/publish-guard.py" = {
+        source = ./configs/claude/hooks/publish-guard.py;
+        executable = true;
+      };
       ".claude/hooks/gui-launch-guard.py" = {
         source = ./configs/claude/hooks/gui-launch-guard.py;
         executable = true;

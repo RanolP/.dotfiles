@@ -42,8 +42,6 @@
 
 ## A failure earns a hypothesis, never a retry
 - Write the HYPOTHESIS, then the CHECK that distinguishes it, cheaper than what failed, then run it; a new hypothesis each attempt, so a retry is never byte-identical to the failed command; stop and notify after 3 ([[retry-without-hypothesis-cost]]). When two fixes sharing a premise fail the same gate, write that premise as one sentence and run the observation that would differ were it false before the next fix.
-- (DNS) Read `nodename nor servname` as possibly transient: resolve with `python3 -c "import socket; print(socket.gethostbyname('<host>'))"` and retry once; read a durably blocked host via `https://r.jina.ai/<url>`.
-- (hang: no output, no exit code, or reported as backgrounded) Take the blocking frame first (`sample <pid>` / `eu-stack -p <pid>`) and name the cause from it; suspect what fronts EVERY call first -- `PreToolUse` hooks, rc files and their `$(...)`, a shared fcntl lock, the replayed shell snapshot; reproduce detached (`nohup ... >/dev/null 2>&1 &`); after a shell-config fix delete the snapshot and start fresh; refuted causes in [[bash-tool-hang-causes]].
 
 ## Scope and shape of code
 - After tracing the real flow, stop at the first rung that holds: skip it; reuse a codebase helper; stdlib; native platform; installed dependency; one line; only then the minimum that works. A rung holds only at the fidelity asked: a cheaper path that changes what the user sees or hears is a different deliverable, so raise it instead of taking it. When a requirement changes the design's premise, sketch what you would build with it as a foundational assumption (one baked texture, not stacked layers) and port toward that. Add no unrequested feature, abstraction, dependency or boilerplate, and leave adjacent code alone rather than refactoring or rewriting whole files on the way past.
@@ -88,7 +86,7 @@
 - Refresh hashes, branch names and diff links in a published body once the work they name is rewritten.
 - (filtered delete) List what the filter selects and put those names in the delete as literals; with no listing, no delete (`docs/src/agent-incidents.md`, 2026-09-30).
 - (charged) State machine type and expected runtime before a runtime-billed command (`nsc-guard.py` gates `nsc`).
-- (remote host) Reach it only through the user (`ssh-guard.py`): write a script, `pbcopy` it, read the pasted output; a container-host script keeps to busybox `sh`, checked with `docker run --rm -i --entrypoint sh <image> -n < script`.
+- (remote host) Reach it only through the user (`ssh-guard.py`): write a script, `pbcopy` it, read the pasted output.
 - (irreversible) Treat a send with no update or delete as permanent and take its draft path ([[slack-send-is-irreversible]]).
 - `claude/local-dev` holds unpublished work: commit each unit as it lands, unpolished and unchecked, reshaping its commits freely; `git fetch --prune` visibly before the session's first commit and keep it rebased on `git symbolic-ref --short refs/remotes/origin/HEAD`; publishing rebuilds the stack per skill `git-master`. NEVER push it; `git-integrity-guard.py` allows only `--force-with-lease`, and only onto a PR with no non-author review.
 

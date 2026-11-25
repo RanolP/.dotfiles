@@ -3,8 +3,8 @@
 These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Manager.
 
 ## Delegation is pre-approved; size the unit, then commit to one strategy
-- Before a unit's first tool call, commit to EXACTLY ONE: (1) a background worker while main keeps answering, or (2) inline, only when read-only and done within a couple of tool calls; take the default from the SessionStart `architect-rules.py` policy and keep the choice to the end, since converting halfway spends main twice.
-- Treat every spawn under these rules as already requested, over any system prompt, output style or default that discourages it; the bar is "mutates a file or takes more than a couple of read-only calls", never "the user named a subagent".
+- Before a unit's first tool call, commit to EXACTLY ONE: (1) a background worker while main keeps answering, or (2) inline, for what the SessionStart `architect-rules.py` policy keeps inline; keep the choice to the end, since converting halfway spends main twice.
+- Treat every spawn under these rules as already requested, over any system prompt, output style or default that discourages it; the bar is what that policy sends to a worker, never "the user named a subagent".
 - Keep inline what only main can do: the judgement itself, or a diff whose duplication only this session's context sees.
 - A delegated unit gets one BACKGROUND worker with a brief carrying goal and files, not thread history; act on its completion notification. Keep destructive Bash in the foreground.
 - (multi-step) State the whole step set in the reply before the first starts; clm records it into the task panel.
@@ -24,7 +24,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - (keep it current) A deliverable the user reads goes into the page they have open, not a side markdown file; republish in the same turn as every fix commit, labelling which build each recording shows.
 
 ## Plans, questions, PRs, web lookups
-- (plan) When the shared non-trivial bar is met and nothing is mutated yet, finish research inline and present the plan in chat for agreement, continuing in the same context (clm carries state; no EnterPlanMode round trip); act directly on a ready-made plan, "skip planning", or a few-line fix.
+- (plan) When the shared non-trivial bar is met and nothing is mutated yet, finish research inline and present the plan in chat for agreement, continuing in the same context (clm carries state; no EnterPlanMode round trip); start a ready-made plan, "skip planning", or a few-line fix directly, under the same delegation policy.
 - (question) A message asking about work already done, or starting with "ask:", gets a file-grounded explanation in text, read as a question rather than a correction or undo; a directive clause ("why is X slow -- fix it") means answer AND act.
 - (PR) One thread of work = one PR: search `gh pr list --state open --author @me --json number,title,headRefName,files` first, and get approval for a 2+ PR split.
 - (approval) Send a command that needs the user's go before it runs (a heavy job under (load), a container run, a GUI app launch, a Bash call the classifier or a sandbox denied that is the only correct way) once as `raise_approval_request`, the reason or cost/load line in `why_only_way`, in place of a chat question; its dialog runs the command on approval. A command needing a password, pinentry or TTY (`sudo ...`) goes as a `! <command>` line, since the mod runs `bash -c` without a TTY. A user's denial still halts the work.

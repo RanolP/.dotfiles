@@ -1103,7 +1103,7 @@ export const submitWithRecovery = recoverWorkflowSubmit
 
 const mainTurnCompletionIo = ($: EngineInterface, opts: Opts): MainTurnCompletionIo => ({
   showChanges: answer => { void showFoldTurnChanges(foldJobIo($), answer).catch(err => $.ui.log(`clm: turn context refresh failed (${String(err).slice(0, 160)})`, { to: 'debug' })) },
-  maybeClear: () => maybeClearFoldJob(foldJobIo($), opts),
+  maybeClear: async () => {},
   arbitrate: turnId => arbitrateWorkflow(workflowIo($), turnId),
   clearActiveTurn: turnId => changeWorkflow($, current => ({
     next: current.activeTurnId === turnId ? { ...current, activeTurnId: null } : current,
@@ -1119,7 +1119,6 @@ const GUIDE = [
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
   'A result shown as `[clm step … done: …]` was folded.',
-  'Call clm_fold when a unit of work is finished and its turns can leave the conversation; clm folds them at the end of this turn or the next.',
 ].join('\n')
 
 export const register: Register = (on, options) => {
@@ -1163,15 +1162,6 @@ export const register: Register = (on, options) => {
       await clearStableAttachmentSession($, session)
     }
     for (const p of problems) $.ui.log(`clm: option ${p}`)
-    try {
-      await $.tool.register({
-        name: 'clm_fold',
-        description: 'Fold the older turns into the clm ledger now instead of waiting for the context budget. Call it when a unit of work is finished and the turns that produced it can leave the conversation. The summary runs in the background and the fold applies at a turn end.',
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-      })
-    } catch (err) {
-      $.ui.log(`clm: clm_fold registration failed (${String(err).slice(0, 120)})`, { to: 'debug' })
-    }
     try {
       await $.tool.register({
         name: 'clm_task',
@@ -1256,48 +1246,13 @@ export const register: Register = (on, options) => {
     return res
   })
 
-  // The engine and the turn-end check share one per-transcript job.
+  // Subagent compactions only: bg-compact answers the main thread's; the engine's summary of a subagent still gets its
+  // spawn reminders back.
   on('session.compact', async ($, e, next) => {
-    if (e.agentId !== undefined) {
-      const result = await next(e)
-      return Array.isArray(e.messages) && 'messages' in result && result.messages ? { ...result, messages: keepSpawnReminders(e.messages, result.messages) } : result
-    }
-    if (e.trigger === 'plugin' && forceCompacts.delete(transcriptKey(await sid($)))) {
-      const key = transcriptKey(await sid($))
-      return handOffFoldJob(foldJobIo($, loadedFromPath), key, () => next(e), 'force-compact requested')
-    }
-    if (e.trigger === 'precompute') return { skip: 'clm replaces compaction' }
-    if (loadedFromPath !== undefined) {
-      const loadedFrom = loadedFromPath
-      void resolveInstalledMod($)
-        .then(installedPath => detectStaleMod($, loadedFrom, installedPath, warnedStaleSessions))
-        .catch(error => logModLocationFailure($, loadedFrom, error))
-    }
-    if (!Array.isArray(e.messages)) return next(e)
-    return compactFoldJob(foldJobIo($, loadedFromPath), await liveOpts($, userOptions), e.messages, e.trigger, () => next(e))
+    const result = await next(e)
+    return e.agentId !== undefined && Array.isArray(e.messages) && 'messages' in result && result.messages ? { ...result, messages: keepSpawnReminders(e.messages, result.messages) } : result
   })
 
-  on('tool.call', async ($, e, next) => {
-    if (e.agentId === undefined) {
-      void (async () => {
-        const key = transcriptKey(await sid($))
-        if (foldChecks.has(key)) return
-        const check = (async () => {
-          // Read before the opts lookup: a check landing after a swap finished
-          // would fold the pre-swap rows again, and clm's own task-panel calls
-          // run inside that swap.
-          if (!foldJobIdle(key)) return
-          await maybeClearFoldJob(foldJobIo($), await liveOpts($, userOptions), false)
-        })()
-        foldChecks.set(key, check)
-        try { await check }
-        finally { if (foldChecks.get(key) === check) foldChecks.delete(key) }
-      })().catch(err => $.ui.log(`clm: background fold check failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
-    }
-    return next(e)
-  })
-
-  on('tool.call', { tool: FOLD_TOOL_ID }, async $ => foldOnRequest($, await liveOpts($, userOptions)))
 
   on('agent.spawn', async ($, e, next) => {
     const io = panelIo($)

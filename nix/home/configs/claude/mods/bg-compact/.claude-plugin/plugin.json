@@ -1,7 +1,7 @@
 {
   "name": "bg-compact",
   "version": "0.1.0",
-  "description": "Adds server-side context editing (clear_tool_uses_20250919) to every engine Messages request, merged into any edit and beta header already there.",
+  "description": "Adds server-side context editing (clear_tool_uses_20250919) to every engine Messages request, and pre-computes a summary before the auto-compact limit so the compaction is that summary plus every message after it.",
   "author": {
     "name": "RanolP"
   },
@@ -23,6 +23,18 @@
       "title": "Clear at least",
       "description": "Input tokens a clear must free, or the API skips it and the prompt cache stays intact. An integer of at least 0; 0 sends no minimum.",
       "default": 20000
+    },
+    "preCompactRatio": {
+      "type": "number",
+      "title": "Pre-compaction ratio",
+      "description": "Fraction of the auto-compact limit at which a turn end forks the first summary. Between 0 and 1.",
+      "default": 0.6
+    },
+    "extendRatio": {
+      "type": "number",
+      "title": "Extend ratio",
+      "description": "Fraction of the auto-compact limit the tokens after the stored summary may reach before a turn end forks an extended summary. Between 0 and 1.",
+      "default": 0.3
     }
   }
 }

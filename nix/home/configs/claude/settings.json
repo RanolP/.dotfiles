@@ -189,6 +189,10 @@
           },
           {
             "type": "command",
+            "command": "python3 ~/.claude/hooks/publish-guard.py"
+          },
+          {
+            "type": "command",
             "command": "python3 ~/.claude/hooks/declarative-package-guard.py"
           },
           {

@@ -98,6 +98,6 @@
 
 ## Parallel execution, synchronous thought
 - State the whole set of units first, then send every unit with no unmet dependency out together; batch related edits before a costly apply step (rebuild, container restart, full suite) and run it once; when workers or turns repeat the same command sequence, fold it into one script and brief them with its path.
-- Re-verify a worker's report only when it lacks commands and output, or the change reaches past what it checked.
+- Re-verify a Claude worker's report only when it lacks commands and output, or the change reaches past what it checked; check every non-Claude report by rerunning its Done-when command or opening each quoted file:line.
 - (wait) Block on the CONDITION, not a clock; `bare-sleep-hint.py` names the wait command when a bare `sleep` appears ([[blind-sleep-wait-cost]]).
 - (stream) Hand a piece over as soon as it stops changing and start its dependent; brief long workers to "report each finding the moment it is settled".

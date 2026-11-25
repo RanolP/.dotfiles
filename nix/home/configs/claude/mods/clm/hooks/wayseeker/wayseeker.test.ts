@@ -103,6 +103,13 @@ test('a rule older than the fact it negates is contested whatever the predicate 
   }
 })
 
+// Regression (review round 2): a stated value tied with its own derived twin was replaced by the derived copy, so a plain key update raised.
+test('a stated fact keeps its own support when a rule derives the same fact at the same time', () => {
+  const result = run([USE, 'decl done(task) key(task) "끝난 작업"', '@1 user: say(use(serving, vllm))', '@2 user: done(build) -> use(serving, sglang)', '@3 user: say(done(build))', '@3 user: say(use(serving, sglang))'])
+  expect(result.facts.get('use(serving, sglang)')).toEqual({ value: 'true', support: [3] })
+  expect(result.raises).toEqual([])
+})
+
 // Regression (review F2): an append to a multi-line @m bound only the first rule line's conclusion.
 test('a premise append binds the conclusion of every rule line under @m', () => {
   const lines = [

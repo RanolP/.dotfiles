@@ -39,6 +39,15 @@ const compare = (a: Cand, b: Cand): number => {
   return a.key < b.key ? -1 : a.key > b.key ? 1 : 0
 }
 
+/** Whether c should replace current, a copy of the same literal. On a rank/recency tie the stated copy stays,
+ *  so a fact also derivable keeps its own support (and its supersession exemption). */
+const keep = (c: Cand, current: Cand): boolean => {
+  const raiseOn = isRaiseOn(c.literal)
+  if (!raiseOn && c.rank !== current.rank) return c.rank > current.rank
+  if (c.latest !== current.latest) return c.latest > current.latest
+  return !c.derived && current.derived
+}
+
 const makeCand = (literal: Literal, support: Iterable<number>, ranks: Map<number, number>, derived: boolean, proof: Omit<ProofNode, 'fact' | 'support'>): Cand => {
   const ids = [...new Set(support)].sort((x, y) => x - y)
   const key = printLiteral(literal)
@@ -158,7 +167,7 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
       for (const c of [...direct, ...derive(store)]) {
         if (blocked(c)) continue
         const current = store.get(c.key)
-        if (!current || compare(c, current) > 0) { store.set(c.key, c); changed = true }
+        if (!current || keep(c, current)) { store.set(c.key, c); changed = true }
       }
       if (!changed) return store
     }

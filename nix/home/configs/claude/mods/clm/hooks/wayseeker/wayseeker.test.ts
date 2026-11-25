@@ -204,6 +204,23 @@ test('store rejects undeclared predicates and arity mismatches', () => {
   expect(append(ledger, '@1 user: say(use(server))').ok).toBe(false)
 })
 
+// Regression (R18): "일단 해봐" (report) and "잘되면 바로 ㄱㄱ" (proceed) encoded the same way.
+test('try(p) -> report and try(p) -> proceed give different policies', () => {
+  const base = [USE, '@1 agent: try(use(server, sglang))']
+  expect(run([...base, '@2 user: try(use(server, sglang)) -> report']).tryPolicy).toEqual([{ tryId: 1, fact: 'use(server, sglang)', policy: 'report' }])
+  expect(run([...base, '@2 user: try(use(server, ?x)) -> proceed']).tryPolicy).toEqual([{ tryId: 1, fact: 'use(server, sglang)', policy: 'proceed' }])
+  // A lower-ranked newer rule does not override the user's.
+  expect(run([...base, '@2 user: try(use(server, sglang)) -> report', '@3 agent: try(use(server, sglang)) -> proceed']).tryPolicy[0]?.policy).toBe('report')
+})
+
+// Regression: an ambiguous try defaulting to proceed, or an accepted/rejected try still awaiting a decision.
+test('a try with no policy rule defaults to report; accept or reject closes it', () => {
+  const base = [USE, '@1 agent: try(use(server, sglang))']
+  expect(run(base).tryPolicy).toEqual([{ tryId: 1, fact: 'use(server, sglang)', policy: 'report' }])
+  expect(run([...base, '@2 user: accept(@1)']).tryPolicy).toEqual([])
+  expect(run([...base, '@2 user: reject(@1)']).tryPolicy).toEqual([])
+})
+
 const parseError = (line: string) => { const r = parseLine(line); return r.ok ? undefined : r.error }
 
 // Regression (L6, F5, F6): the parser admits a bare ?, retract, a nested kind or a sentence argument.

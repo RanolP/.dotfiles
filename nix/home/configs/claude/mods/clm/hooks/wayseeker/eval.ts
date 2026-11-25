@@ -12,6 +12,7 @@ export type EvalResult = {
   flaggedTries: number[]
   raises: Raise[]
   fuelExhausted: boolean
+  tryPolicy: Array<{ tryId: number; fact: string; policy: 'report' | 'proceed' }>
   proof(fact: string): unknown
 }
 
@@ -251,8 +252,25 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
     }
   }
 
+  // try(p) -> report|proceed (R18): newest rule of the highest-ranked speaker wins; no rule means report.
+  const policyRules = liveLines.flatMap(u => {
+    const act = u.act
+    if (act.kind !== 'condition' || act.premises[0]?.kind !== 'try') return []
+    const c = act.conclusion
+    return c.kind === 'report' || c.kind === 'proceed' ? [{ id: u.id, rank: rankOf(u.speaker), pattern: act.premises[0].fact, policy: c.kind }] : []
+  })
+  const tryPolicy: EvalResult['tryPolicy'] = []
+  for (const u of liveLines) {
+    const act = u.act
+    if (act.kind !== 'try' || act.content.kind !== 'literal' || act.content.negated || accepted.has(u.id)) continue
+    const fact = act.content.fact
+    let best: (typeof policyRules)[number] | undefined
+    for (const r of policyRules) if (unify(r.pattern, fact, new Map()) && (!best || r.rank > best.rank || (r.rank === best.rank && r.id > best.id))) best = r
+    tryPolicy.push({ tryId: u.id, fact: factKey(fact), policy: best?.policy ?? 'report' })
+  }
+
   return {
-    facts, openQuestions, flaggedTries, raises, fuelExhausted,
+    facts, openQuestions, flaggedTries, raises, fuelExhausted, tryPolicy,
     proof(fact: string) {
       let key: string
       try { key = printLiteral(parseLiteral(fact)) } catch { return undefined }

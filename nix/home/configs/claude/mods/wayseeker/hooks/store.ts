@@ -1,7 +1,13 @@
 // Append-only wayseeker ledger. append validates one line against everything before it and returns a new Ledger.
 import { parseLine, type Condition, type Decl, type Fact, type Gloss, type Line, type Utterance } from './syntax'
+import { isRecord } from './text'
 
 export type Ledger = { utterances: Utterance[]; decls: Decl[]; glosses: Gloss[] }
+
+export const deliveredSectionKey = (key: string) => `delivered-section:${key}`
+export const readDeliveredSection = (value: unknown): { fingerprint: string; section: string } | undefined =>
+  isRecord(value) && typeof value.fingerprint === 'string' && typeof value.section === 'string'
+    ? { fingerprint: value.fingerprint, section: value.section } : undefined
 
 export const BASE_SPEAKERS = ['user', 'agent', 'worker'] as const
 

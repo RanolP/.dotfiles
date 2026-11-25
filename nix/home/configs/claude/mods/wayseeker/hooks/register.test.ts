@@ -29,9 +29,10 @@ function world(on: any) {
   // Core: the prompt's row lands once the submit chain settles, followed by a reply.
   on('prompt.submit', (_$: any, e: any) => {
     contexts.push(e.context)
-    rows.push({ role: 'user', text: e.text, toolUses: [] }, { role: 'assistant', text: 'ok', toolUses: [] })
+    rows.push({ role: 'user', text: [e.text, ...(e.context ?? [])].join('\n'), toolUses: [] }, { role: 'assistant', text: 'ok', toolUses: [] })
     return { text: e.text, context: e.context }
   })
+  on('tool.call', (_$: unknown, e: { tool: string }) => e.tool === 'Denied' ? { deny: 'blocked' } : { result: 'ok', context: ['existing context'] })
   // What $.wayseeker.instructions answers, rendered from wayseeker's own per-session file (a test's $ cannot call a plugin noun).
   const instructions = async () => {
     const ledger = readWayseekerLedger(JSON.parse(files['/home/t/.claude-work/plans/wayseeker-s1.json'] ?? '{}')[wayseekerKey('s1:main')])
@@ -75,4 +76,56 @@ test('a human turn gets the wayseeker instructions attachment even with clm abse
   await submit($, '다른 얘기')
   await settle()
   expect(contexts[1]).toEqual(['<system-reminder>\n## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)\n</system-reminder>'])
+})
+
+test('an unchanged section present in the transcript is not attached on the next human turn', async ($, on) => {
+  const { contexts } = world(on)
+  await submit($, 'sglang 써')
+  await settle()
+  await submit($, '다른 얘기')
+  await settle()
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts[1]?.[0]).toContain('sglang')
+  expect(contexts[2]).toBeUndefined()
+})
+
+test('a changed section lands on the next tool call in the same human turn', async ($, on) => {
+  const { rows } = world(on)
+  await submit($, 'sglang 써')
+  await settle()
+  const first = await $.tool.call({ tool: 'Read', file_path: '/test' })
+  expect(first.context).toEqual(['existing context', '<system-reminder>\n## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)\n</system-reminder>'])
+  rows.push({ role: 'assistant', text: (first.context ?? []).join('\n'), toolUses: [] })
+  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context).toEqual(['existing context'])
+  await submit($, 'vllm으로 바꿔')
+  await settle()
+  const changed = await $.tool.call({ tool: 'Read', file_path: '/test' })
+  expect(changed.context?.[1]).toContain('vllm')
+})
+
+test('a compacted section is delivered again on prompt submit and tool call', async ($, on) => {
+  const { rows, contexts } = world(on)
+  await submit($, 'sglang 써')
+  await settle()
+  await submit($, '다른 얘기')
+  await settle()
+  const stripSection = () => {
+    for (const row of rows) row.text = row.text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+  }
+  stripSection()
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts[2]).toEqual(contexts[1])
+  stripSection()
+  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context?.[1]).toBe(contexts[1]?.[0])
+})
+
+test('worker and denied tool calls leave changed instructions for the main agent', async ($, on) => {
+  world(on)
+  await submit($, 'sglang 써')
+  await settle()
+  expect((await $.tool.call({ tool: 'Read', file_path: '/test', agentId: 'worker' })).context).toEqual(['existing context'])
+  expect((await $.tool.call({ tool: 'Denied' })).context).toBeUndefined()
+  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context?.[1]).toContain('sglang')
 })

@@ -3,6 +3,7 @@ import { evaluate } from './eval'
 import { extractTurn } from './extract'
 import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { promptFingerprint, promptsKey, readPromptRows, reconcilePrompts } from './rewind'
+import { deliveredSectionKey, readDeliveredSection } from './store'
 import { isHarnessText, isRecord, stripReminders } from './text'
 import type { WayseekerInstructionsInput } from '../types'
 
@@ -119,6 +120,22 @@ async function instructions($: EngineInterface, input: WayseekerInstructionsInpu
   return renderInstructions(ledger, evaluate(ledger))
 }
 
+const instructionAttachment = async ($: EngineInterface): Promise<string | undefined> => {
+  const session = await $.session.id()
+  const key = transcriptKey(session)
+  const store = sessionStore($, session)
+  return serialized(session, async () => {
+    const ledger = readWayseekerLedger(await store.get(wayseekerKey(key)))
+    const section = renderInstructions(ledger, evaluate(ledger))
+    if (section === EMPTY_SECTION) return undefined
+    const fingerprint = promptFingerprint(section)
+    const delivered = readDeliveredSection(await store.get(deliveredSectionKey(key)))
+    if (delivered?.fingerprint === fingerprint && (await $.session.messages()).some(row => row.text.includes(delivered.section))) return undefined
+    await store.set(deliveredSectionKey(key), { fingerprint, section })
+    return `<system-reminder>\n${section}\n</system-reminder>`
+  })
+}
+
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const beneath = await next(e)
@@ -142,10 +159,9 @@ export const register: Register = on => {
       const userMessage = text && !isHarnessText(text) ? text : undefined
       const address = await serialized(session, () => observePrompt($, session, rows, userMessage))
       // Rendered after observePrompt so a rewind's cuts are already gone, and before the extraction starts so it
-      // cannot land ahead of this prompt's own row; this prompt's lines reach the next turn's attachment.
+      // cannot land ahead of this prompt's own row; this prompt's lines reach the next tool call's attachment.
       try {
-        const section = await instructions($)
-        if (section !== EMPTY_SECTION) attachment = `<system-reminder>\n${section}\n</system-reminder>`
+        attachment = await instructionAttachment($)
       } catch (err) {
         $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       }
@@ -159,5 +175,17 @@ export const register: Register = on => {
     }
     // Wrapped as a system-reminder so stripReminders keeps the prompt text equal to what was typed, if the engine folds context into the row.
     return next(attachment === undefined ? e : { ...e, context: [...(e.context ?? []), attachment] })
+  })
+
+  on('tool.call', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId !== undefined || result.deny !== undefined) return result
+    try {
+      const attachment = await instructionAttachment($)
+      return attachment === undefined ? result : { ...result, context: [...(result.context ?? []), attachment] }
+    } catch (err) {
+      $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      return result
+    }
   })
 }

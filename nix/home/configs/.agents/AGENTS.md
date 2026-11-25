@@ -82,7 +82,7 @@
 
 ## Mutations the outside world can see need an explicit go
 - `git commit` onto a shared branch only when the user asked for a commit in those words; everything else stops at the working tree. A checkpoint onto `claude/local-dev` is exempt.
-- PRs open as drafts unless told otherwise; get an explicit yes before creating a repo, service or other external resource; a granted permission stands for its whole class until withdrawn.
+- PRs open as drafts unless told otherwise; get an explicit yes before creating a repo, service or other external resource; a granted permission covers the action and target the user named until withdrawn; hand it to a worker only as the user's quoted sentence, never paraphrased or inferred.
 - (QA account) Create a QA test account on the product's QA MCP in any condition a scene needs, without asking.
 - (PR ready, Jira status) Run `gh pr ready` or a status transition only when the user asked for that move and named its target, and report state as fact rather than offering the move.
 - Refresh hashes, branch names and diff links in a published body once the work they name is rewritten.

@@ -134,15 +134,16 @@ export const EXTRACT_CASES: ExtractCase[] = [
   },
 ]
 
-export const EXTRACT_SYSTEM = [
-  'You convert one user chat message into wayseeker L1 ledger lines. Extract what the user means, read through the assistant reply the message answers.',
-  '',
+/** The L1 line forms; speakers names who may speak (extraction: the user's side; the say tool: the caller). */
+export const l1Forms = (speakers: string): string[] => [
   'Line forms:',
-  '- Utterance: @n speaker: kind(content). speaker is user, agent, or a pasted-material atom.',
+  '- Utterance: @n speaker: kind(content). ' + speakers,
   '- Condition utterance: @n speaker: p1, p2 -> q. The conclusion q is a fact, not(fact), report, proceed, or @m (adds premises to the live rule @m).',
   '- Declaration: decl name(col1, col2) key(col1) "sentence". The gloss is one Korean sentence that names every column as a {column} placeholder, e.g. decl use(role, tool) key(role) "{role}에 {tool}을 쓴다"; the ledger renders each fact by filling the placeholders with its atoms\' glosses. Key columns pick the slot: a new value with the same key replaces the old one. key() means one value for the whole predicate; listing every column makes a set.',
   '- Gloss: atom := "meaning". One gloss per atom; text lives only in glosses.',
-  '',
+]
+
+export const L1_KINDS: string[] = [
   'The seven kinds, used only as the outermost wrapper:',
   '- say(p): assertion. Also evaluations, preferences, corrections (a new say), and denials as say(not(p)).',
   '- ask(p): question. A blank is a named variable like ?x; with no variable it is a yes/no question.',
@@ -151,18 +152,33 @@ export const EXTRACT_SYSTEM = [
   '- guess(p): estimate or suspicion.',
   '- accept(@n): adopts the proposal in utterance n. Short replies such as "ㅇㅇ", "ok", "A." become accept of the proposal they pick.',
   '- reject(@n): withdraws utterance n.',
-  '',
-  'Rules:',
+]
+
+/** Rules for writing any L1 line, whoever speaks it. */
+export const L1_RULES: string[] = [
   '- Write a fact as name(arg, arg). An argument is a bare atom (lowercase snake_case, e.g. sglang, python), a named variable (?x, ?y), or another fact, which nests to any depth, e.g. want(review(replace(wayseeker, clm_ledger))). Give every variable a name.',
   '- Put a kind (say/ask/try/want/guess) only at the outermost position, and not(...) only directly inside it: kind(fact) or kind(not(fact)); when a guess belongs to a condition, write guess(p -> q).',
   '- An atom names one thing (a tool, a file, a feature). When a gloss would be a clause ("whether X replaces Y", "that X is slow"), write that clause as a nested fact with its own arguments, e.g. review(replace(x, y)), and declare its predicate like any other.',
   '- Reuse a declared predicate or a glossed atom whenever its meaning fits, even when the user words it differently. Add a new decl line only when no declared predicate fits, with its gloss written as a {column} sentence, and a gloss line for each new atom.',
   '- Put decl and gloss lines before the utterances that use them.',
+]
+
+export const WITHDRAWAL_RULE = '- Withdrawal is reject(@n) of the earlier utterance.'
+
+export const EXTRACT_SYSTEM = [
+  'You convert one user chat message into wayseeker L1 ledger lines. Extract what the user means, read through the assistant reply the message answers.',
+  '',
+  ...l1Forms('speaker is user, agent, or a pasted-material atom.'),
+  '',
+  ...L1_KINDS,
+  '',
+  'Rules:',
+  ...L1_RULES,
   '- Number the user message as @FIRST (given below); every line of that one message shares that number. When the message accepts, rejects or answers a proposal or question in the assistant reply that is not yet in the ledger, first record that assistant line as agent with @FIRST and give the user message @FIRST+1.',
   '- Read rhetorical, Socratic and sarcastic questions by their meaning: extract the claim they make with say, or the question they aim at.',
   '- "Try it" phrasing: try(p) -> report when the user wants results reported first; try(p) -> proceed only for an explicit "go ahead if it works". Choose report when the nuance is unclear.',
   '- Feedback about which conflicts to ask about becomes say(raise_on(key)) or say(not(raise_on(key))).',
-  '- Withdrawal is reject(@n) of the earlier utterance.',
+  WITHDRAWAL_RULE,
   '- A message reporting what the user already did (past tense, e.g. "rebuilt and resumed.", "pushed", "머지했어") states a fact: extract it as say, never want.',
   '- When the message carries no claim, question, proposal or directive, output an empty block.',
   '',

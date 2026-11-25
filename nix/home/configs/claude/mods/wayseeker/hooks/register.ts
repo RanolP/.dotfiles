@@ -1,9 +1,10 @@
 import type { EngineInterface, PromptOrigin, Register, SessionMessage } from 'claude-code'
 import { evaluate } from './eval'
 import { extractTurn } from './extract'
-import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, renderInstructions, turnIsLive, wayseekerKey } from './render'
+import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, readWayseekerTurns, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { promptFingerprint, promptsKey, readPromptRows, reconcilePrompts } from './rewind'
-import { deliveredSectionKey, readDeliveredSection } from './store'
+import { needsSayNudge, openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_NUDGE, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
+import { deliveredSectionKey, nextId, readDeliveredSection } from './store'
 import { isHarnessText, isRecord, stripReminders } from './text'
 import type { WayseekerInstructionsInput } from '../types'
 
@@ -166,6 +167,31 @@ async function markFolded($: EngineInterface, session: string, attachmentText: s
   })
 }
 
+/**
+ * The say tool's call: lands the caller's own lines in the session's main ledger, where its speaker (agent or worker)
+ * ranks against the user's. Waits for the session's pending extraction first, so the user's lines take their @n before
+ * the caller's and the two never share one. The lines join the latest prompt's turn, so rewinding that prompt cuts them.
+ */
+async function say($: EngineInterface, lines: readonly unknown[], agentId: string | undefined): Promise<SayResult> {
+  const session = await $.session.id()
+  await chains.get(session)
+  const key = transcriptKey(session)
+  const store = sessionStore($, session)
+  return serialized(session, async () => {
+    const stored = await store.get(wayseekerKey(key))
+    const ledger = readWayseekerLedger(stored)
+    const said = sayLines(ledger, lines, speakerOf(agentId))
+    if (said.landed.length) {
+      const firstId = nextId(ledger)
+      const address = readPromptRows(await store.get(promptsKey(key))).findLast(row => row.address !== undefined)?.address
+      const turns = readWayseekerTurns(stored)
+      const added = said.ledger.utterances.some(u => u.id >= firstId)
+      await store.set(wayseekerKey(key), { ...said.ledger, turns: added && address ? [...turns, { address, firstId }] : turns })
+    }
+    return { landed: said.landed, rejected: said.rejected, open: openItems(said.ledger) }
+  })
+}
+
 const EMPTY_LEDGER = readWayseekerLedger(undefined)
 // What the section reads with no instruction and no raise; the per-turn attachment skips it.
 const EMPTY_SECTION = renderInstructions(EMPTY_LEDGER, evaluate(EMPTY_LEDGER))
@@ -206,6 +232,37 @@ export const register: Register = on => {
   })
 
   on('wayseeker.instructions', async ($, e) => ({ value: await instructions($, e ?? {}) }))
+
+  on('session.start', async ($, e, next) => {
+    const started = await next(e)
+    try {
+      await $.tool.register({ name: SAY_TOOL, description: SAY_DESCRIPTION, inputSchema: SAY_INPUT_SCHEMA })
+    } catch (err) {
+      $.ui.log(`wayseeker: say registration failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return started
+  })
+
+  on('tool.call', { tool: SAY_TOOL_ID }, async ($, e) => {
+    const lines = (e as unknown as { lines?: unknown }).lines
+    if (!Array.isArray(lines)) return { result: `Call ${SAY_TOOL_ID} with lines: an array of L1 lines.`, isError: true }
+    const result = await say($, lines, e.agentId)
+    for (const line of landedActs(result.landed)) $.ui.log(line)
+    for (const { line, error } of result.rejected) $.ui.log(`wayseeker: say rejected ${JSON.stringify(line)} (${error.slice(0, 160)})`, { to: 'debug' })
+    return { result: JSON.stringify(result) }
+  })
+
+  // A turn that changed something and recorded nothing gets one nudge; stop_hook_active marks the turn it re-prompted.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (e.stop_hook_active || result.block !== undefined) return result
+    try {
+      if (needsSayNudge(await $.session.messages())) return { ...result, block: SAY_NUDGE }
+    } catch (err) {
+      $.ui.log(`wayseeker: say nudge check failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return result
+  })
 
   on('prompt.submit', async ($, e, next) => {
     if (!isHumanOrigin(e.origin)) return next(e)

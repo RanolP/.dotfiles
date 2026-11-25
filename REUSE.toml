@@ -248,6 +248,8 @@ path = [
     "nix/home/configs/claude/mods/wayseeker/hooks/register.ts",
     "nix/home/configs/claude/mods/wayseeker/hooks/register.test.ts",
     "nix/home/configs/claude/mods/wayseeker/hooks/rewind.ts",
+    "nix/home/configs/claude/mods/wayseeker/hooks/say.ts",
+    "nix/home/configs/claude/mods/wayseeker/hooks/say.test.ts",
     "nix/home/configs/claude/mods/wayseeker/hooks/text.ts",
     "nix/home/configs/claude/mods/wayseeker/hooks/eval.ts",
     "nix/home/configs/claude/mods/wayseeker/hooks/extract.test.ts",

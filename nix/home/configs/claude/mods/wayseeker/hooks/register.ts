@@ -116,6 +116,7 @@ function recordTurn($: EngineInterface, session: string, userMessage: string, ro
       return landing
     })
     // The attachment is a system-reminder the user cannot see, so a changed instruction list is also shown in the UI.
+    for (const line of landedActs(landed.landed)) $.ui.log(line)
     for (const line of instructionChanges(before, after)) $.ui.log(line)
     if (landed.rewound) $.ui.log(`wayseeker: prompt rewound during extraction; ${result.appended.length} line(s) not written`, { to: 'debug' })
     for (const { line, errors } of landed.dropped) $.ui.log(`wayseeker: dropped on replay ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })
@@ -129,6 +130,12 @@ function recordTurn($: EngineInterface, session: string, userMessage: string, ro
 
 const instructionLines = (section: string) => (section.split('\n\n## raises')[0] ?? '').split('\n').filter(line => line.startsWith('- ') && line !== '- (none yet)').map(line => line.slice(2))
 const MAX_NOTICES = 3
+/** One user-visible line per utterance that landed (declarations and glosses are not utterances), at most three, then a count. */
+export function landedActs(landed: readonly string[]): string[] {
+  const acts = landed.flatMap(line => { const m = /^@\d+ [^:\s]+: (.+)$/s.exec(line); return m ? [`wayseeker: ${m[1]}`] : [] })
+  return acts.length > MAX_NOTICES ? [...acts.slice(0, MAX_NOTICES), `… 외 ${acts.length - MAX_NOTICES}건`] : acts
+}
+
 /** One user-visible line per instruction that entered or left the section, at most three, then a count. */
 export function instructionChanges(before: string, after: string): string[] {
   const [was, now] = [instructionLines(before), instructionLines(after)]

@@ -349,7 +349,8 @@ If in a git repository, offer branch-based cleanup:
 git checkout -b env-cleanup/$(date +%Y%m%d)
 
 # After cleanup, changes can be reviewed via PR
-git add .env .env.local
+git add .env.example
+git check-ignore .env .env.local  # both must print; never stage them
 git commit -m "chore: remove unused environment variables
 
 Removed:

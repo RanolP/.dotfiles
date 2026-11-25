@@ -356,7 +356,7 @@ test('wrapper rows and short acknowledgements stay out of 사용자 지시', asy
 
 // Regression caught: the ledger header went back to a UTC ISO time the user cannot read at a glance, or a KST header stopped being recognized as a ledger row.
 test('the ledger header carries a KST time and is still read as a ledger row', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact'), ledger('fact')] }
+  const s: State = { rows: ROWS, replies: [ledger(), ledger()] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
@@ -378,7 +378,7 @@ test('short directives stay in 사용자 지시 and survive the next fold readin
 
 // Regression caught: a dropped issue is hidden from <issues>, so the next fold re-created its title as a fresh open issue and the abandoned work came back.
 test('a fold cannot re-create the title of an issue dropped in this session', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"build work","status":"todo"}]')] }
+  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"build work","status":"todo"}]')] }
   const seen = bottoms(on, s)
   panelHandlers(on, seen)
   await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })

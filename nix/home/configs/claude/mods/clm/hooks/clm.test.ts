@@ -196,7 +196,7 @@ test('clm status names the focus top, stack depth, pending and live subagent tas
 
 // Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.
 test('fold issues project to the task panel', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('fact 2', '[{"op":"status","issue":"s1-1","status":"done"}]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }])] }
+  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('[{"op":"status","issue":"s1-1","status":"done"}]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }])] }
   const seen = bottoms(on, s)
   let created = 0
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
@@ -225,7 +225,7 @@ test('fold issues project to the task panel', OPTS, async ($, on) => {
 
 // Regression caught: every done issue of the session stayed in the ledger's 한 일 and on the task panel forever, so a long session's context filled with old completions.
 test('a session with 8 done issues shows only the latest 5 in the ledger and panel', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact')] }
+  const s: State = { rows: ROWS, replies: [ledger()] }
   const seen = bottoms(on, s)
   let n = 0
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
@@ -249,7 +249,7 @@ test('a session with 8 done issues shows only the latest 5 in the ledger and pan
 
 // Regression caught: the merge model never saw archived done issues, re-created them from the folded turns, and each duplicate pushed a real recent completion off the ledger and panel.
 test('a fold over turns that finished an archived issue creates no duplicate done issue', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"done 1","status":"done","note":"again"}]')] }
+  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"done 1","status":"done","note":"again"}]')] }
   const seen = bottoms(on, s)
   await sixDone($, on, seen)
   await turnEnds($, s, seen)
@@ -300,7 +300,7 @@ test('model task calls are denied outside clm projection', OPTS, async ($, on) =
 
 // Regression caught: a fold creating several issues re-entered the projection and created duplicate panel tasks.
 test('several fold issues create one panel task each', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"A","status":"todo"},{"op":"create","title":"B","status":"done"},{"op":"create","title":"C","status":"todo"}]')] }
+  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"A","status":"todo"},{"op":"create","title":"B","status":"done"},{"op":"create","title":"C","status":"todo"}]')] }
   const seen = bottoms(on, s)
   let n = 0
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
@@ -318,7 +318,7 @@ test('several fold issues create one panel task each', OPTS, async ($, on) => {
 
 // Regression caught: a refused panel write blocked the fold or the tracker append.
 test('a refused TaskCreate still lets the fold complete', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact', '[{"op":"create","title":"clm 조사하기","status":"todo"}]')] }
+  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"clm 조사하기","status":"todo"}]')] }
   const seen = bottoms(on, s)
   on('tool.call', { tool: 'TaskCreate' }, () => ({ deny: 'refused in test' }))
   await turnEnds($, s, seen)
@@ -329,7 +329,7 @@ test('a refused TaskCreate still lets the fold complete', OPTS, async ($, on) =>
 
 // Regression caught: a `<changes>` block in the merge reply leaked into the ledger notes or was announced as a 맥락 갱신 line at fold time.
 test('a merge reply carrying a changes block folds without announcing it', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact')] }
+  const s: State = { rows: ROWS, replies: [ledger()] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   expect(storedLedger(seen)).toContain('## 목표')
@@ -339,7 +339,7 @@ test('a merge reply carrying a changes block folds without announcing it', OPTS,
 
 // Regression caught: the turn-time 맥락 갱신 lines were lost, capped above three, or leaked into the session transcript.
 test('turn-time context changes show at most three display-only notices', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact')], turnReplies: ['<changes>핵심 사실: 브리지 재시작 시 키 유실 확인\n미결 질문 추가: ui.log가 --resume 후 남는지\n셋째\n넷째</changes>'] }
+  const s: State = { rows: ROWS, replies: [ledger()], turnReplies: ['<changes>핵심 사실: 브리지 재시작 시 키 유실 확인\n미결 질문 추가: ui.log가 --resume 후 남는지\n셋째\n넷째</changes>'] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen, 'finished')
   expect(seen.turnPrompts.length).toBe(1)
@@ -351,7 +351,7 @@ test('turn-time context changes show at most three display-only notices', OPTS, 
 
 // Regression caught: a merge reply without the optional changes block must still apply its ledger fold.
 test('a merge without non-task changes still applies the fold', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fact')] }
+  const s: State = { rows: ROWS, replies: [ledger()] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   expect(storedLedger(seen)).toContain('## 목표')

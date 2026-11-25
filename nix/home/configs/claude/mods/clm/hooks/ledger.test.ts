@@ -395,7 +395,7 @@ test('two concurrent model TaskCreate calls keep both issues with distinct ids',
 
 // Regression caught: on the escape path the retry fold dropped the row holding the withheld pointer, the merge saw only the pointer, and the prune deleted the file, losing the tool output with no record.
 test('a tool result folded away on the escape path keeps its withheld file and a ledger pointer to it', OPTS, async ($, on) => {
-  const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
+  const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger()], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
   const seen = bottoms(on, s)
   const r = await $.session.compact({ trigger: 'auto', messages: handled(ESCAPE_ROWS) })
   if (!('messages' in r)) throw new Error('compaction returned no messages')
@@ -408,7 +408,7 @@ test('a tool result folded away on the escape path keeps its withheld file and a
 
 // Regression caught: the escape retry calibrated against the usage reading from before the results were withheld, inflating overhead so the next fold shrank the tail to one turn.
 test('an escape retry leaves meta.overhead as it was', OPTS, async ($, on) => {
-  const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
+  const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger()], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
   const seen = bottoms(on, s)
   seen.store['ledger:s1'] = { seq: 0, fails: 0, overhead: 100, ratio: 1, estimatorVersion: TOKEN_ESTIMATOR_VERSION }
   const r = await $.session.compact({ trigger: 'auto', messages: handled(ESCAPE_ROWS) })
@@ -470,7 +470,7 @@ test("a precompute compaction without messages still skips as 'clm replaces comp
 
 // Regression caught: every ledger row showed the latest fold's duration, deferred time leaked into it, expanded rows were hidden, and ledger-like user text was intercepted.
 test('each folded ledger renders its own compact duration and ledger-like user text passes through', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('FIRST-FACT'), ledger('FIRST-FACT; SECOND-FACT')], mergeDelays: [1200, 3400] }
+  const s: State = { rows: ROWS, replies: [ledger(), ledger()], mergeDelays: [1200, 3400] }
   const seen = bottoms(on, s)
   let passed = 0
   on('ui.render', { component: 'UserMessage' }, ($, e) => {
@@ -530,7 +530,7 @@ test('board page escapes a model-written title, so a <script> title cannot run i
 test('fold row renders /clear or ledger text instead of the compacted line', OPTS, async ($, on) => {
   const CLEAR = '<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>'
   const rows = [M('user', CLEAR), M('user', '<local-command-stdout></local-command-stdout>'), ...ROWS]
-  const s: State = { rows, replies: [ledger('fact')] }
+  const s: State = { rows, replies: [ledger()] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const out = seen.results[0].messages
@@ -546,7 +546,7 @@ test('fold row renders /clear or ledger text instead of the compacted line', OPT
 test('a fold over an older fold drops the /clear row and the stale ledger', OPTS, async ($, on) => {
   const CLEAR = '<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>'
   const OLD = '[clm ledger #3 · 2026-10-06T00:00:00.000Z] Earlier turns of this session were folded into these notes by the harness (file: x). They are your memory of that work.\n\n## 목표\n- old'
-  const s: State = { rows: [M('user', CLEAR), M('user', OLD), ...ROWS], replies: [ledger('fact')] }
+  const s: State = { rows: [M('user', CLEAR), M('user', OLD), ...ROWS], replies: [ledger()] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const out = seen.results[0].messages

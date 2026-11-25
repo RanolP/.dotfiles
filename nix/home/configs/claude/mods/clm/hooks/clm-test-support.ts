@@ -35,8 +35,8 @@ export const ROWS = [
 // fact and done claim here cites the first tool result of ROWS ("log: ..."),
 // which tests not about evidence rely on to pass the mechanical check.
 export const CITE = [{ ref: 'tu_a', quote: 'log: make fails at' }]
-export const ledger = (fact: string, ops = '[]', cite = CITE) => {
-  return JSON.stringify({ ops: [{ op: 'fact', kind: 'learned', text: fact, evidence: cite }, ...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))] })
+export const ledger = (ops = '[]', cite = CITE) => {
+  return JSON.stringify({ ops: [...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))] })
 }
 export const splitAnswer = (split = 2, topic = 'build', summary = 'build summary', note = 'build summary') => JSON.stringify({
   split, ops: [{ op: 'create', title: `${topic}: ${summary || note}`, status: 'todo' }],

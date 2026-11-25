@@ -14,6 +14,7 @@ const REPLIES: Record<string, string[]> = {
 function world(on: any) {
   const files: Record<string, string> = {}
   const rows: { role: 'user' | 'assistant'; text: string; toolUses: [] }[] = []
+  const contexts: (readonly string[] | undefined)[] = []
   mock.env(on, { HOME: '/home/t' })
   on('session.id', () => ({ value: 's1' }))
   on('session.messages', () => ({ value: rows.map(row => ({ ...row })) }))
@@ -27,6 +28,7 @@ function world(on: any) {
   })
   // Core: the prompt's row lands once the submit chain settles, followed by a reply.
   on('prompt.submit', (_$: any, e: any) => {
+    contexts.push(e.context)
     rows.push({ role: 'user', text: e.text, toolUses: [] }, { role: 'assistant', text: 'ok', toolUses: [] })
     return { text: e.text, context: e.context }
   })
@@ -35,7 +37,7 @@ function world(on: any) {
     const ledger = readWayseekerLedger(JSON.parse(files['/home/t/.claude-work/plans/wayseeker-s1.json'] ?? '{}')[wayseekerKey('s1:main')])
     return renderInstructions(ledger, evaluate(ledger))
   }
-  return { files, rows, instructions }
+  return { files, rows, contexts, instructions }
 }
 const submit = ($: Engine, text: string) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
 // The extraction runs after the submit resolves; a few timer turns let it land. setTimeout is reached through globalThis: the mod's types carry no DOM or Node globals.
@@ -62,4 +64,15 @@ test('a prompt rewound before the next submit loses its extracted lines', async 
   await submit($, '다른 얘기')
   await settle()
   expect(await instructions()).toBe('## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)')
+})
+
+// Regression caught: the instructions reaching the model only through clm's ledger, so they vanish once clm is removed.
+test('a human turn gets the wayseeker instructions attachment even with clm absent', async ($, on) => {
+  const { contexts } = world(on)
+  await submit($, 'sglang 써')
+  await settle()
+  expect(contexts[0]).toBeUndefined() // the ledger rendered empty: no attachment
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts[1]).toEqual(['<system-reminder>\n## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)\n</system-reminder>'])
 })

@@ -108,6 +108,10 @@ function recordTurn($: EngineInterface, session: string, userMessage: string, ro
   return job
 }
 
+const EMPTY_LEDGER = readWayseekerLedger(undefined)
+// What the section reads with no instruction and no raise; the per-turn attachment skips it.
+const EMPTY_SECTION = renderInstructions(EMPTY_LEDGER, evaluate(EMPTY_LEDGER))
+
 async function instructions($: EngineInterface, input: WayseekerInstructionsInput = {}): Promise<string> {
   const session = input.sessionId ?? await $.session.id()
   const stored = await serialized(session, () => sessionStore($, session).get(wayseekerKey(transcriptKey(session, input.agentId))))
@@ -130,12 +134,21 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     if (!isHumanOrigin(e.origin)) return next(e)
+    let attachment: string | undefined
     try {
       const session = await $.session.id()
       const rows = await $.session.messages()
       const text = stripReminders(e.text)
       const userMessage = text && !isHarnessText(text) ? text : undefined
       const address = await serialized(session, () => observePrompt($, session, rows, userMessage))
+      // Rendered after observePrompt so a rewind's cuts are already gone, and before the extraction starts so it
+      // cannot land ahead of this prompt's own row; this prompt's lines reach the next turn's attachment.
+      try {
+        const section = await instructions($)
+        if (section !== EMPTY_SECTION) attachment = `<system-reminder>\n${section}\n</system-reminder>`
+      } catch (err) {
+        $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      }
       if (userMessage !== undefined && address !== undefined) {
         void recordTurn($, session, userMessage, rows, address).catch(err => {
           $.ui.log(`wayseeker: extraction failed stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
@@ -144,6 +157,7 @@ export const register: Register = on => {
     } catch (err) {
       $.ui.log(`wayseeker: prompt observation failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }
-    return next(e)
+    // Wrapped as a system-reminder so stripReminders keeps the prompt text equal to what was typed, if the engine folds context into the row.
+    return next(attachment === undefined ? e : { ...e, context: [...(e.context ?? []), attachment] })
   })
 }

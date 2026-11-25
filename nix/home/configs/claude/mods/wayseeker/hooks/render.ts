@@ -1,8 +1,7 @@
 import { isRecord, stripReminders } from './text'
-import { parseLine, parseLiteral, printArgument, printFact, printLiteral, type Fact, type Literal, type Utterance } from './syntax'
+import { parseLiteral, printArgument, printFact, printLiteral, type Fact, type Literal } from './syntax'
 import { append, emptyLedger, liveIds, nextId, type Ledger } from './store'
 import type { EvalResult } from './eval'
-import { openItems } from './say'
 
 /** Session state key of the wayseeker Ledger for one transcript (`<session>:<agent or main>`). */
 export const wayseekerKey = (key: string) => `wayseeker:${key}`
@@ -144,30 +143,40 @@ const literalSentence = (ledger: Ledger, key: string) => {
 
 /**
  * The resident ledger's "## user instructions" section from a wayseeker Ledger:
- * every user want still open by say.openItems (the user's directives, goals and standing
- * preferences; their observations and reports stay facts in the ledger) and every proposal the
+ * every live user want whose done(p) does not hold (the user's directives, goals and standing
+ * preferences, conditional ones as "<premises>면 <conclusion>"; their observations and reports
+ * stay facts in the ledger) and every proposal the
  * user accepted that still holds and is not done, then a "## raises" block for conflicts
  * still waiting on a decision and contested facts. Paid on every prompt, so empty
  * blocks are left out.
  */
 export function renderInstructions(ledger: Ledger, result: EvalResult): string {
   const instructions: string[] = []
-  for (const line of openItems(ledger).want) {
-    const parsed = parseLine(line)
-    if (!parsed.ok) continue
-    const u = parsed.entry as Utterance
-    if (u.speaker === 'user' && u.act.kind === 'want' && u.act.content.kind === 'literal') instructions.push(`- ${sentence(ledger, u.act.content.fact, u.act.content.negated)} ${address([u.id])}`)
-  }
-  // An accepted try is the user's decision; it leaves once done(p) holds, as a want does in openItems.
   const live = liveIds(ledger.utterances)
   const holds = (literal: Literal) => result.facts.get(printLiteral(literal))?.value === 'true'
+  const done = (fact: Fact): Literal => ({ kind: 'literal', negated: false, fact: { kind: 'fact', name: 'done', args: [fact] } })
+  // A user want is a standing instruction: p holding (say an agent's say(p)) does not end it; done(p) or reject(@n) does.
+  // Unlike say.openItems, which closes any want once p holds.
+  for (const u of ledger.utterances) {
+    if (u.speaker !== 'user' || u.act.kind !== 'want' || !live.has(u.id)) continue
+    const content = u.act.content
+    if (content.kind === 'literal') {
+      if (!holds(done(content.fact))) instructions.push(`- ${sentence(ledger, content.fact, content.negated)} ${address([u.id])}`)
+      continue
+    }
+    const conclusion = content.conclusion
+    if (conclusion.kind !== 'literal' || holds(done(conclusion.fact))) continue
+    const premises = content.premises.map(p => p.kind === 'try' ? `${clause(ledger, p.fact)}를 시도한다` : p.negated ? `${clause(ledger, p.fact)}는 것이 아니라` : clause(ledger, p.fact))
+    instructions.push(`- ${premises.join(', ')}면 ${sentence(ledger, conclusion.fact, conclusion.negated)} ${address([u.id])}`)
+  }
+  // An accepted try is the user's decision; it leaves once done(p) holds, as a want does.
   for (const u of ledger.utterances) {
     if (u.speaker !== 'user' || u.act.kind !== 'accept' || !live.has(u.id)) continue
     const target = u.act.target
     for (const t of ledger.utterances) {
       if (t.id !== target || t.act.kind !== 'try' || t.act.content.kind !== 'literal') continue
       const p = t.act.content
-      if (holds(p) && !holds({ ...p, fact: { kind: 'fact', name: 'done', args: [p.fact] } })) instructions.push(`- ${sentence(ledger, p.fact, p.negated)} ${address([u.id])}`)
+      if (holds(p) && !holds(done(p.fact))) instructions.push(`- ${sentence(ledger, p.fact, p.negated)} ${address([u.id])}`)
     }
   }
   // Facts settled before fuel ran out still render above; this line says the rest are undecided.

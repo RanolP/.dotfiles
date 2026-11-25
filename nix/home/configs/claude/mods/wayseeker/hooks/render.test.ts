@@ -32,12 +32,15 @@ test('a raise-mode conflict appears under raises', () => {
 })
 
 // Regression caught: the user's observations and reports ("there's no panel", "rebuilt.") injected every turn as
-// instructions, and a want the agent already did (say(done(p))) staying there.
+// instructions, a want the agent already did (say(done(p))) staying there, a standing preference vanishing once the
+// agent reports following it (say(p)), and a conditional want (p -> want(q)) never rendering.
 test('only open user wants render as instructions', () => {
   const OBSERVED = ['decl exist(thing) key(thing) "{thing}이 존재한다"', 'decl done(task) key(task) "{task}이 완료되었다"', 'panel := "패널"']
   const said = ['@1 user: say(not(exist(panel)))', '@1 user: say(done(rebuild))', '@2 user: want(use(serving, vllm))']
   expect(render([...OBSERVED, ...said])).toBe('## user instructions\n\n- 서빙에 vllm을(를) 쓴다. (@2)')
+  expect(render([...OBSERVED, ...said, '@3 agent: say(use(serving, vllm))'])).toBe('## user instructions\n\n- 서빙에 vllm을(를) 쓴다. (@2)')
   expect(render([...OBSERVED, ...said, '@3 agent: say(done(use(serving, vllm)))'])).toBe('## user instructions\n\n- (none yet)')
+  expect(render([...OBSERVED, '@1 user: exist(panel) -> want(use(serving, vllm))'])).toBe('## user instructions\n\n- 패널이 존재한다면 서빙에 vllm을(를) 쓴다. (@1)')
 })
 
 // Regression caught: glosses written with one particle form rendered "작업 재개이", "문제을", "방식(과제 76)로".

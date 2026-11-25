@@ -78,8 +78,10 @@ test('a bare line lands with the call id and speaker, and a line naming another 
   const { ledger } = world(on, [...DECLS, '@1 user: say(use(serving, sglang))'])
   const result = await say($, ['say(use(serving, vllm))', '@9 user: say(use(serving, x))'])
   expect(result.landed).toEqual(['@2 agent: say(use(serving, vllm))'])
+  // Regression caught: a tab after @n mangling the renumbered line.
+  expect((await say($, ['@1\tagent: say(use(serving, x))'])).landed).toEqual(['@3 agent: say(use(serving, x))  (renumbered from @1)'])
   expect(result.rejected).toHaveLength(1)
-  expect(ledger().utterances.map(u => [u.id, u.speaker])).toEqual([[1, 'user'], [2, 'agent']])
+  expect(ledger().utterances.map(u => [u.id, u.speaker])).toEqual([[1, 'user'], [2, 'agent'], [3, 'agent']])
 })
 
 // Regression caught: one invalid line costing the call its valid siblings.
@@ -194,4 +196,9 @@ test('read-only Bash needs every segment to be an allowlisted reader', () => {
   expect(isReadOnlyBash('npm test')).toBe(false)
   expect(isReadOnlyBash('cd x && ls')).toBe(true)
   expect(isReadOnlyBash('cd x && rm y')).toBe(false)
+  // Regression caught: a quoted ')' ending the $( ) scan early hid a write; sort -o / uniq in out / date -s write too.
+  expect(isReadOnlyBash('echo $(echo ")"; rm -rf x)')).toBe(false)
+  expect(isReadOnlyBash('sort -o out in')).toBe(false)
+  expect(isReadOnlyBash('uniq in out')).toBe(false)
+  expect(isReadOnlyBash('date -s now')).toBe(false)
 })

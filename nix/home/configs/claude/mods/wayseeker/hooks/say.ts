@@ -73,7 +73,7 @@ export function sayLines(ledger: Ledger, lines: readonly unknown[], speaker: Say
     if (!(bare.ok && (bare.entry.kind === 'declaration' || bare.entry.kind === 'gloss'))) {
       const prefix = /^@(\d+)\s+(\w+):\s*/.exec(line)
       if (!prefix) line = '@' + firstId + ' ' + speaker + ': ' + line
-      else if (Number(prefix[1]) < firstId) { note = '  (renumbered from @' + prefix[1] + ')'; line = '@' + firstId + line.slice(prefix[0].indexOf(' ')) }
+      else if (Number(prefix[1]) < firstId) { note = '  (renumbered from @' + prefix[1] + ')'; line = '@' + firstId + ' ' + prefix[2] + ': ' + line.slice(prefix[0].length) }
     }
     const parsed = parseLine(line)
     const errors = parsed.ok && parsed.entry.kind !== 'declaration' && parsed.entry.kind !== 'gloss' ? sayCheck(current, parsed.entry, speaker, firstId) : []
@@ -96,7 +96,7 @@ export function openItems(ledger: Ledger): SayResult['open'] {
   return { want, ask }
 }
 
-const READERS = new Set(['ls', 'cat', 'head', 'tail', 'rg', 'grep', 'find', 'fd', 'wc', 'jq', 'bat', 'eza', 'echo', 'pwd', 'which', 'tput', 'readlink', 'realpath', 'tr', 'sort', 'uniq', 'cut', 'basename', 'dirname', 'stat', 'date', 'true'])
+const READERS = new Set(['ls', 'cat', 'head', 'tail', 'rg', 'grep', 'find', 'fd', 'wc', 'jq', 'bat', 'eza', 'echo', 'pwd', 'which', 'tput', 'readlink', 'realpath', 'tr', 'cut', 'basename', 'dirname', 'stat', 'true'])
 const GIT_READERS = new Set(['status', 'log', 'diff', 'show'])
 // Reader options that run or delete something.
 const RUNS = /^(?:-exec|-execdir|-ok|-okdir|-delete|-fprint\w*|-x|--exec|-X|--exec-batch)$/
@@ -116,7 +116,10 @@ function segments(command: string): string[] | undefined {
         if (command[end] === '(') depth++
         else if (command[end] === ')' && --depth === 0) break
       }
-      const inner = segments(command.slice(i + 2, end))
+      const body = command.slice(i + 2, end)
+      // The paren scan ignores quotes, so a body holding a quote or backslash is not trusted.
+      if (/["'\\]/.test(body)) return undefined
+      const inner = segments(body)
       if (!inner) return undefined
       out.push(...inner)
       current += 'SUB'

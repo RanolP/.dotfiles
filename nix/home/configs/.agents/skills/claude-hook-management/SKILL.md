@@ -59,7 +59,7 @@ Parallel sessions and subagents fire the same hooks, so give each writer its own
 | `plan-mode-guard.py` | PreToolUse `*` | plan mode distills only |
 | `git-push-guard.py` | PreToolUse Bash | push reaches `claude/*` only |
 | `ssh-guard.py` | PreToolUse Bash | no remote-device access (ssh, scp, sftp, remote rsync, ...) at any command position |
-| `gpg-commit-guard.py` | PreToolUse Bash | a signed commit needs an unlocked key |
+| `git-integrity-guard.py` | PreToolUse Bash | a commit stays signed and runs its hooks; no plain force-push, and no lease push over another reviewer's review |
 | `package-manager-guard.py` | PreToolUse Bash | use the manager the project declares |
 | `gh-guard.py` | PreToolUse Bash | inject the github-master guide before a mutating `gh` |
 | `leak-guard.py` | PreToolUse Bash | a commit to a public `RanolP/` repo adds no secret or denylisted private identifier |

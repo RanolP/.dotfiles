@@ -23,7 +23,7 @@ Format: `type(scope): subject`. Scope is optional but preferred when it sharpens
 - **Subject**: imperative mood ("add", not "added"/"adds"), capitalized, no trailing period, ≤50 chars (hard ceiling 72). It must complete "If applied, this commit will ___".
 - **Body** (when the change isn't self-evident): blank line after subject, wrap at 72, explain *why* and *what changed at a high level* — not how (the diff shows how).
 - **Breaking change**: append `!` after type/scope (`feat(api)!: ...`) and/or add a `BREAKING CHANGE: <description>` footer.
-- **Trailer**: keep `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` (mandated by CLAUDE.md).
+- **Trailer**: end the message with the attribution line the session's system reminder gives, copied exactly.
 - **Banned subjects**: `fix`, `wip`, `update`, `changes`, `stuff`, and other contentless words. Say what changed.
 
 ## Atomic commits

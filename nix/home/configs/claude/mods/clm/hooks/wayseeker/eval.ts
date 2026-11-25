@@ -33,7 +33,9 @@ const isRaiseOn = (literal: Literal): boolean => literal.fact.name === 'raise_on
 const compare = (a: Cand, b: Cand): number => {
   if (!(isRaiseOn(a.literal) && isRaiseOn(b.literal)) && a.rank !== b.rank) return a.rank - b.rank
   if (a.latest !== b.latest) return a.latest - b.latest
-  // Exact ties (two lines of one @n) need a deterministic winner; the larger printed literal wins.
+  // On a rank/recency tie a derived conclusion beats a stated fact, so a rule that negates its own premise is
+  // contested whatever the predicate is called; only then the printed literal decides (two lines of one @n).
+  if (a.derived !== b.derived) return a.derived ? 1 : -1
   return a.key < b.key ? -1 : a.key > b.key ? 1 : 0
 }
 
@@ -101,12 +103,13 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
   for (const u of liveLines) {
     const act = u.act
     if (act.kind !== 'condition' || act.conclusion.kind !== 'reference') continue
-    const target = rules.find(r => r.id === (act.conclusion as { id: number }).id)
-    if (!target) continue
+    const targetId = act.conclusion.id
+    // @m may hold several rule lines; the premise binds the conclusion of every one of them.
+    const heads = new Set(rules.filter(r => r.id === targetId).map(r => printLiteral(r.conclusion)))
+    if (heads.size === 0) continue
     // A lower-ranked speaker's append stays a proposal until accepted.
-    if (rankOf(u.speaker) < (ranks.get(target.id) ?? 0) && !accepted.has(u.id)) continue
-    const head = printLiteral(target.conclusion)
-    appends.set(head, [...(appends.get(head) ?? []), { id: u.id, premises: act.premises }])
+    if (rankOf(u.speaker) < (ranks.get(targetId) ?? 0) && !accepted.has(u.id)) continue
+    for (const head of heads) appends.set(head, [...(appends.get(head) ?? []), { id: u.id, premises: act.premises }])
   }
 
   const derive = (store: Store): Cand[] => {

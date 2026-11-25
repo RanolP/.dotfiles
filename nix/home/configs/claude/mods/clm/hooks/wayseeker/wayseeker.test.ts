@@ -94,6 +94,27 @@ test('premise append binds the conclusion, including a rule added later', () => 
   expect(value([...second, '@6 user: reject(@4)'], 'ready(release)')).toBe('true')
 })
 
+// Regression (review F1): the printed-key tie-break let the predicate name decide whether a rule-older self-defeating loop is contested.
+test('a rule older than the fact it negates is contested whatever the predicate is called', () => {
+  for (const name of ['done', 'pass', 'zeta']) {
+    const result = run(['decl ' + name + '(x) key(x) "p"', '@1 user: ' + name + '(a) -> not(' + name + '(a))', '@2 user: say(' + name + '(a))'])
+    expect(result.facts.get(name + '(a)')?.value).toBe('contested')
+    expect(result.raises.map(r => r.kind)).toEqual(['contested'])
+  }
+})
+
+// Regression (review F2): an append to a multi-line @m bound only the first rule line's conclusion.
+test('a premise append binds the conclusion of every rule line under @m', () => {
+  const lines = [
+    'decl done(task) key(task) "끝난 작업"', 'decl ready(task) key(task) "시작할 수 있는 작업"',
+    '@1 user: done(build) -> ready(release)', '@1 user: done(build) -> ready(deploy)',
+    '@2 user: say(done(build))', '@3 user: done(test) -> @1',
+  ]
+  expect(value(lines, 'ready(release)')).toBe('unknown')
+  expect(value(lines, 'ready(deploy)')).toBe('unknown')
+  expect(value([...lines, '@4 user: say(done(test))'], 'ready(deploy)')).toBe('true')
+})
+
 // Regression: the store accepts appends that point forward or stack on another append.
 test('store rejects a premise append to an append or to a later utterance', () => {
   const ledger = appendAll([...PLAN, '@4 user: done(test) -> @3'])

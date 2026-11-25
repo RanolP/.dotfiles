@@ -4,10 +4,10 @@ import {
 } from './fold'
 import { confirmQuestion, renderRange, type Evidence, type Source } from './evidence'
 import {
-  EMPTY_LEDGER, fallbackLedger, factLines, instructionKey, instructionValues, issueList,
+  EMPTY_LEDGER, fallbackLedger, instructionKey, instructionValues, issueList,
   MERGE_SYSTEM, legacyItems, mergeableNotes, normalizeLedger, notesOf, oversizeLines, parseMerge,
-  preservedLines, carryLegacyInstructions, rememberFacts, rememberOversize, rememberPreserved,
-  sectionBody, withheldLines, WITHDRAWN_PREFIX, type Fact,
+  preservedLines, carryLegacyInstructions, rememberOversize, rememberPreserved,
+  sectionBody, withheldLines, 
 } from './ledger'
 import { archivedDone, injected, isRecord, type FocusState, focusOf, snapshot, toEvents, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { Held, HeldClaims, ReviewInput, Reviewed } from './held'
@@ -33,7 +33,7 @@ export type FoldRuntimeIo = {
   trackerView: (origin: Origin, ops?: readonly Payload[]) => Promise<TrackerView>
   readHeld: () => Promise<Held[]>
   heldClaims: (held: readonly Held[], issues: readonly Issue[], session: string) => HeldClaims
-  gateMerge: (ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[]) => Promise<{ ops: Payload[]; evidence: Evidence[][]; facts: Fact[] }>
+  gateMerge: (ops: readonly Payload[], evidence: readonly Evidence[][], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[]) => Promise<{ ops: Payload[]; evidence: Evidence[][] }>
   reviewFold: (opts: Opts, input: ReviewInput) => Promise<Reviewed>
   residentLedger: (key: string, issues: readonly Issue[], state: FocusState, events: readonly TrackerEvent[], preview?: FoldPreview) => Promise<string>
   addressRows: (key: string) => Promise<AddressRow[]>
@@ -160,10 +160,8 @@ export async function fold(
   let notes = notesOf(previous)
   const kept = [...preservedLines(notes), ...withheldLines(plan.dropped)]
   const storedInstructions = instructionValues(notes)
-  const instructions = storedInstructions.filter(item => !item.startsWith(WITHDRAWN_PREFIX))
-  const priorFacts = factLines(notes)
   const range = renderRange(plan.dropped, undefined, undefined, await io.sentAt())
-  let ops: Payload[] = [], evidence: Evidence[][] = [], facts: Fact[] = [], retracted: string[] = []
+  let ops: Payload[] = [], evidence: Evidence[][] = []
   let fallback = false
   let promoted: Payload[] = [], hold: Held[] = [], claimed: Payload[] = []
   const held = io.heldClaims(await io.readHeld(), view.issues, here.session)
@@ -177,23 +175,21 @@ export async function fold(
         model: opts.model, system: MERGE_SYSTEM,
         prompt: [
           `<notes>\n${mergeableNotes(notes)}\n</notes>`,
-          `<instructions>\n${instructions.map(item => JSON.stringify(item)).join('\n') || '(none)'}\n</instructions>`,
-          `<facts>\n${priorFacts.join('\n') || '(none)'}\n</facts>`,
           `<issues>\n${issueList(modelIssues(view))}\n</issues>`,
           ...(view.finished.length ? [`<finished_earlier>\n${view.finished.map(issue => `- ${issue.title}`).join('\n')}\n</finished_earlier>`] : []),
           ...(legacy.length ? [`<legacy>\n${legacy.join('\n')}\n</legacy>`] : []),
           `<removed_turns>\n${range.text}\n</removed_turns>`,
         ].join('\n\n'), maxTokens: 4096, timeoutMs: 120_000,
       })
-    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id)), priorFacts) : `merge model gave no text (${response.reason})`
+    const merged = response.isAnswered ? parseMerge(response.text, new Set(modelIssues(view).map(issue => issue.id))) : `merge model gave no text (${response.reason})`
     const bad = typeof merged === 'string' ? merged : undefined
     if (typeof merged !== 'string') {
-      ;({ ops, evidence, facts, retracted } = merged)
+      ;({ ops, evidence } = merged)
       claimed = ops
       meta.fails = 0
       if (merged.rejected) await io.logEvent('ops-rejected', { ratio, reason: `${merged.rejected} op(s) failed validation; ${ops.length} kept` })
-      const gated = await io.gateMerge(ops, evidence, facts, range.sources, ratio, new Set(view.dropped.map(issue => issue.id)), view.issues)
-      ;({ ops, evidence, facts } = gated)
+      const gated = await io.gateMerge(ops, evidence, range.sources, ratio, new Set(view.dropped.map(issue => issue.id)), view.issues)
+      ;({ ops, evidence } = gated)
     } else {
       meta.fails += 1
       await io.logEvent(!response.isAnswered && response.reason === 'aborted' ? 'merge-timeout' : 'merge-invalid', { ratio, reason: `${bad} (failure ${meta.fails} in a row)` })
@@ -207,12 +203,10 @@ export async function fold(
       await io.logEvent('fallback', { ratio, reason: bad })
     }
     const reviewed = await io.reviewFold(opts, {
-      ops: fallback ? [] : ops, evidence: fallback ? [] : evidence, facts,
-      issues: modelIssues(view), claims: held.claims, heldFacts: held.facts, range, ratio,
+      ops: fallback ? [] : ops, evidence: fallback ? [] : evidence,
+      issues: modelIssues(view), claims: held.claims, range, ratio,
     })
     if (!fallback) ops = reviewed.ops
-    if (reviewed.failed) { retracted = [] }
-    facts = reviewed.facts
     promoted = reviewed.promoted
     hold = reviewed.hold
     settled = [...settled, ...reviewed.settled]

@@ -878,7 +878,7 @@ test('a planned objective keeps the address row text while merge drops a child r
   const child = issues.find(issue => issue.parent === objective.issue)
   expect(child).toBeDefined()
   if (!child) throw new Error('expected a child issue')
-  const gated = await gateMerge({ logEvent: async () => undefined }, [{ op: 'retitle', issue: child.id, title: 'paraphrased' }], [[]], [], new Map(), 1, new Set(), issues)
+  const gated = await gateMerge({ logEvent: async () => undefined }, [{ op: 'retitle', issue: child.id, title: 'paraphrased' }], [[]], new Map(), 1, new Set(), issues)
   expect(gated.ops).toEqual([])
   expect((seen.store['objective:s1:main'] as { text: string }).text).toBe(prompt)
 })

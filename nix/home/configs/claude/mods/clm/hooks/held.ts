@@ -1,17 +1,17 @@
 import { checkEvidence, describeOp, gateOps, withhold, isDoneClaim, isDropClaim, isReopenClaim, resolveRef, type Evidence, type Source } from './evidence'
-import { instructionKey, parseReview, REVIEW_SYSTEM, type Fact } from './ledger'
+import { parseReview, REVIEW_SYSTEM } from './ledger'
 import { isRecord, type Issue, type Payload } from './tracker'
 
-export type Held = { key: string; nonce: string; kind: 'drop' | 'fact'; factKind?: Fact['kind']; issue?: string; text?: string; evidence: Evidence[]; sources: Record<string, Source> }
+// kind 'fact' is only read back from holds stored before the facts section was removed; heldClaims settles them unreviewed.
+export type Held = { key: string; nonce: string; kind: 'drop' | 'fact'; issue?: string; evidence: Evidence[]; sources: Record<string, Source> }
 export type HeldClaim = { held: Extract<Held, { kind: 'drop' }>; issue: Issue; evidence: Evidence[] }
-export type HeldFactClaim = { held: Extract<Held, { kind: 'fact' }> & { text: string }; evidence: Evidence[] }
-export type HeldClaims = { claims: HeldClaim[]; facts: HeldFactClaim[]; settled: string[] }
-export type Gated = { ops: Payload[]; evidence: Evidence[][]; facts: Fact[] }
+export type HeldClaims = { claims: HeldClaim[]; settled: string[] }
+export type Gated = { ops: Payload[]; evidence: Evidence[][] }
 export type ReviewInput = {
-  ops: readonly Payload[]; evidence: readonly Evidence[][]; facts: readonly Fact[]; issues: readonly Issue[]
-  claims: readonly HeldClaim[]; heldFacts: readonly HeldFactClaim[]; range: { text: string; sources: ReadonlyMap<string, Source> }; ratio: number
+  ops: readonly Payload[]; evidence: readonly Evidence[][]; issues: readonly Issue[]
+  claims: readonly HeldClaim[]; range: { text: string; sources: ReadonlyMap<string, Source> }; ratio: number
 }
-export type Reviewed = { ops: Payload[]; facts: Fact[]; promoted: Payload[]; hold: Held[]; settled: string[]; failed: boolean }
+export type Reviewed = { ops: Payload[]; promoted: Payload[]; hold: Held[]; settled: string[]; failed: boolean }
 type HeldLogEvent = 'evidence-rejected' | 'review-dropped' | 'review-failed' | 'review-rejected'
 type HeldIo = {
   now: () => Promise<number>
@@ -25,13 +25,11 @@ export function isHeld(value: unknown): value is Held {
   if (!isRecord(value)) return false
   const item = value
   return typeof item.key === 'string' && typeof item.nonce === 'string' && (item.kind === 'drop' || item.kind === 'fact')
-    && (item.issue === undefined || typeof item.issue === 'string') && (item.text === undefined || typeof item.text === 'string')
-    && (item.factKind === undefined || item.factKind === 'constraint' || item.factKind === 'learned')
+    && (item.issue === undefined || typeof item.issue === 'string')
     && Array.isArray(item.evidence) && typeof item.sources === 'object' && item.sources !== null && !Array.isArray(item.sources)
 }
 const token = (held: Pick<Held, 'key' | 'nonce'>) => `${held.key}#${held.nonce}`
 const heldKey = (session: string) => `held:${session}`
-const factsMax = 20
 export const droppedIds = (issues: readonly Issue[]) => new Set(issues.filter(issue => issue.status === 'dropped').map(issue => issue.id))
 const reviewMaxTokens = (claims: number) => Math.min(16_384, Math.max(2048, 512 + 100 * claims))
 const landsUnreviewed = (op: Payload, dropped: ReadonlySet<string>) =>
@@ -48,13 +46,7 @@ export async function readHeld(io: Pick<HeldIo, 'get'>, session: string): Promis
 export async function updateHeld(io: HeldIo, session: string, settled: readonly string[], added: readonly Held[]): Promise<void> {
   if (!settled.length && !added.length) return
   const gone = new Set(settled), keys = new Set(added.map(item => item.key))
-  let list = [...(await readHeld(io, session)).filter(item => !gone.has(token(item)) && !keys.has(item.key)), ...added]
-  const facts = list.filter(item => item.kind === 'fact')
-  if (facts.length > factsMax) {
-    const dropped = new Set(facts.slice(0, facts.length - factsMax))
-    list = list.filter(item => !dropped.has(item))
-    await io.logEvent('review-dropped', { reason: `${dropped.size} held fact(s) settled unreviewed past the cap of ${factsMax}: ${[...dropped].map(item => item.text).join(' | ')}`.slice(0, 2000) })
-  }
+  const list = [...(await readHeld(io, session)).filter(item => !gone.has(token(item)) && !keys.has(item.key)), ...added]
   const key = heldKey(session)
   if (list.length) await io.set(key, list)
   else await io.delete(key)
@@ -65,19 +57,19 @@ async function heldDrop(io: HeldIo, issue: string, evidence: Evidence[], sources
 }
 
 export function heldClaims(list: readonly Held[], issues: readonly Issue[], session: string): HeldClaims {
-  const claims: HeldClaim[] = [], facts: HeldFactClaim[] = [], settled: string[] = []
+  const claims: HeldClaim[] = [], settled: string[] = []
   for (const item of list) {
-    const checked = checkEvidence(item.evidence, new Map(Object.entries(item.sources)), item.kind === 'drop' ? ['user'] : undefined)
-    const issue = item.kind === 'drop' ? issues.find(candidate => candidate.id === item.issue && candidate.origin.session === session) : undefined
-    if (!checked.held.length || (item.kind === 'drop' && (!issue || issue.status === 'done' || issue.status === 'dropped')) || (item.kind === 'fact' && !item.text)) settled.push(token(item))
-    else if (item.kind === 'fact' && item.text) facts.push({ held: { ...item, text: item.text }, evidence: checked.held })
-    else if (issue && item.kind === 'drop') claims.push({ held: item, issue, evidence: checked.held })
+    if (item.kind === 'fact') { settled.push(token(item)); continue }
+    const checked = checkEvidence(item.evidence, new Map(Object.entries(item.sources)), ['user'])
+    const issue = issues.find(candidate => candidate.id === item.issue && candidate.origin.session === session)
+    if (!checked.held.length || !issue || issue.status === 'done' || issue.status === 'dropped') settled.push(token(item))
+    else claims.push({ held: item, issue, evidence: checked.held })
   }
-  return { claims, facts, settled }
+  return { claims, settled }
 }
 
 export async function gateMerge(
-  io: Pick<HeldIo, 'logEvent'>, ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[],
+  io: Pick<HeldIo, 'logEvent'>, ops: readonly Payload[], evidence: readonly Evidence[][],
   sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[] = [],
 ): Promise<Gated> {
   const gated = gateOps(ops, evidence, sources, dropped)
@@ -86,15 +78,8 @@ export async function gateMerge(
   const keep = gated.ops.map(op => !(op.op === 'retitle' && byId.get(byId.get(op.issue)?.parent ?? '')?.planMode))
   const keptOps = gated.ops.filter((_, index) => keep[index])
   const keptEvidence = gated.evidence.filter((_, index) => keep[index])
-  const kept: Fact[] = []
-  for (const fact of facts) {
-    const checked = checkEvidence(fact.evidence, sources)
-    const hasToolEvidence = checked.held.some(item => sources.get(item.ref)?.kind === 'tool_result')
-    if (checked.held.length && (fact.kind !== 'constraint' || hasToolEvidence)) kept.push({ ...fact, evidence: checked.held })
-    else rejections.push(`fact "${fact.text}" dropped (${checked.problems.join('; ') || (fact.kind === 'constraint' ? 'constraint needs tool-result evidence' : 'no evidence')})`)
-  }
   if (rejections.length) await io.logEvent('evidence-rejected', { ratio, reason: rejections.join(' | ').slice(0, 2000) })
-  return { ops: keptOps, evidence: keptEvidence, facts: kept }
+  return { ops: keptOps, evidence: keptEvidence }
 }
 
 export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, input: ReviewInput): Promise<Reviewed> {
@@ -102,9 +87,7 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
   const withSource = (claim: HeldClaim) => Object.fromEntries(claim.evidence.map(item => [item.ref, claim.held.sources[item.ref]?.text ?? '']))
   const claims = [
     ...input.ops.map((op, index) => ({ id: `op${index + 1}`, claim: describeOp(op, 'issue' in op ? title(op.issue) : undefined), evidence: input.evidence[index] ?? [] })),
-    ...input.facts.map((fact, index) => ({ id: `fact${index + 1}`, claim: `fact (${fact.kind ?? 'learned'}): ${fact.text}`, kind: fact.kind ?? 'learned', evidence: fact.evidence })),
     ...input.claims.map((claim, index) => ({ id: `drop${index + 1}`, claim: describeOp({ op: 'status', issue: claim.issue.id, status: 'dropped' }, claim.issue.title), evidence: claim.evidence, source: withSource(claim) })),
-    ...input.heldFacts.map((claim, index) => ({ id: `held${index + 1}`, claim: `fact (${claim.held.factKind ?? 'learned'}): ${claim.held.text}`, kind: claim.held.factKind ?? 'learned', evidence: claim.evidence, source: withSource(claim) })),
   ]
   let review
   try {
@@ -129,9 +112,8 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
     const hold: Held[] = []
     for (const [index, op] of input.ops.entries()) if (op.op === 'status' && isDropClaim(op)) hold.push(await heldDrop(io, op.issue, input.evidence[index] ?? [], citedSources(input.evidence[index] ?? [], input.range.sources)))
     const drops = hold.length
-    for (const fact of input.facts) hold.push({ key: `fact:${instructionKey(fact.text)}`, nonce: `${await io.now()}-${Math.random().toString(36).slice(2, 10)}`, kind: 'fact', factKind: fact.kind, text: fact.text, evidence: fact.evidence, sources: citedSources(fact.evidence, input.range.sources) })
-    await io.logEvent('review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) held for the user's confirmation, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(op => describeOp(op)).join('; ')})` : ''}, ${drops} drop(s) held, retracts dropped, ${input.facts.length} fact(s) and ${input.claims.length + input.heldFacts.length} held claim(s) held for the next fold`.slice(0, 2000) })
-    return { ops: input.ops.filter(op => landsUnreviewed(op, dropped)).flatMap(op => isDoneClaim(op) ? withhold(op) : [op]), facts: [], promoted: [], hold, settled: [], failed: true }
+    await io.logEvent('review-failed', { ratio: input.ratio, reason: `${review}; ${dones} done(s) held for the user's confirmation, ${refused.length} unreviewed op(s) dropped${refused.length ? ` (${refused.map(op => describeOp(op)).join('; ')})` : ''}, ${drops} drop(s) held, ${input.claims.length} held claim(s) held for the next fold`.slice(0, 2000) })
+    return { ops: input.ops.filter(op => landsUnreviewed(op, dropped)).flatMap(op => isDoneClaim(op) ? withhold(op) : [op]), promoted: [], hold, settled: [], failed: true }
   }
   const verdict = new Map(review.map(item => [item.id, item]))
   const lines: string[] = []
@@ -143,11 +125,6 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
     lines.push(`op${index + 1} ${describeOp(op)}: ${isDoneClaim(op) ? 'done held for the user\'s confirmation' : 'dropped'} (${why})`)
     return isDoneClaim(op) ? withhold(op) : []
   })
-  const facts = input.facts.filter((fact, index) => {
-    const item = verdict.get(`fact${index + 1}`)
-    if (!item?.accept) lines.push(`fact${index + 1} "${fact.text}" dropped (${item ? item.reason : 'no verdict'})`)
-    return item?.accept === true
-  })
   const promoted: Payload[] = [], settled: string[] = []
   const judge = (id: string, held: Pick<Held, 'key' | 'nonce'>, land: () => void) => {
     const item = verdict.get(id)
@@ -157,7 +134,6 @@ export async function reviewFold(io: HeldIo, opts: { reviewModel: string }, inpu
     else lines.push(`${id} ${held.key}: settled unaccepted (${item.reason})`)
   }
   input.claims.forEach((claim, index) => judge(`drop${index + 1}`, claim.held, () => promoted.push({ op: 'status', issue: claim.issue.id, status: 'dropped' })))
-  input.heldFacts.forEach((claim, index) => judge(`held${index + 1}`, claim.held, () => facts.push({ text: claim.held.text, evidence: claim.evidence, kind: claim.held.factKind })))
   if (lines.length) await io.logEvent('review-rejected', { ratio: input.ratio, reason: lines.join(' | ').slice(0, 2000) })
-  return { ops, facts, promoted, hold: [], settled, failed: false }
+  return { ops, promoted, hold: [], settled, failed: false }
 }

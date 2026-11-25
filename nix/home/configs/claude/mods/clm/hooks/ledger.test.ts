@@ -9,26 +9,13 @@ import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 import { residentLedger } from './resident'
 
-import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, issueList, MERGE_SYSTEM, parseMerge, rememberFacts, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
+import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, issueList, MERGE_SYSTEM, parseMerge, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
 import { askedItems, CONFIRM_ITEMS, CONFIRM_PREFIX, confirmQuestion, renderRange } from './evidence'
 import { describe, focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { estTokens, fingerprint, ledgerRowText, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
-
-// Regression caught: a stale PR number survives a fold beside its newer keyed value.
-test('a keyed fact keeps only its newest value', () => {
-  const notes = '## 목표\n- g\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- pull_request=41 — quote: "PR 41"\n- ledger.ts:10 does one thing — quote: "line 10"\n- ledger.ts:20 does another thing — quote: "line 20"\n- unkeyed fact — quote: "keep me"'
-  const updated = rememberFacts(notes, [{ text: 'pull_request=42', evidence: [{ ref: 'tu_new', quote: 'PR 42' }] }])
-  expect(updated).not.toContain('pull_request=41')
-  expect(updated).toContain('pull_request=42 — quote: "PR 42"')
-  expect(updated).toContain('ledger.ts:10 does one thing')
-  expect(updated).toContain('ledger.ts:20 does another thing')
-  expect(updated).toContain('unkeyed fact — quote: "keep me"')
-})
-
-
 
 // Regression caught: a long instruction was truncated before the model could retrieve its source.
 test('a long instruction remains whole behind its transcript address', async () => {
@@ -177,7 +164,7 @@ test('the resident ledger renders compact metadata, marked clipping, bullets and
 test('a note on an issue the user rejected does not appear in the next resident ledger', async () => {
   const rejected = { ...confirmIssue('I-H', 'server-log hypothesis', 'dropped'), notes: ['서버 로그에서 확인해야 함'] }
   const row = await residentLedger({
-    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
+    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
   }, 's1:main', [rejected], { stack: [rejected.id], pending: [] }, [])
   expect(row).not.toContain('server-log hypothesis')
   expect(row).not.toContain('서버 로그에서 확인해야 함')
@@ -188,7 +175,7 @@ test('rejecting a parent hypothesis makes a child with no other environment pend
   const parent: Issue = { ...confirmIssue('I-H', '기각된 서버 기록 가정', 'dropped'), hypothesis: true }
   const child = { ...confirmIssue('I-C', '파생 추론', 'todo'), parent: parent.id }
   const row = await residentLedger({
-    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
+    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
   }, 's1:main', [parent, child], { stack: [parent.id], pending: [] }, [])
   expect(row.match(/보류: 기각된 가정에 기댄 추론 1개가 결정을 기다린다 — 사용자에게 닫을지 살릴지 묻는다 \[I-C\]/g)).toHaveLength(1)
   expect(row).not.toContain('기각된 서버 기록 가정')
@@ -202,7 +189,7 @@ test('a question or uncertain issue under an open non-focused plain parent remai
   const uncertain: Issue = { ...confirmIssue('I-U', 'plain child uncertainty', 'uncertain'), parent: parent.id }
   const focus = confirmIssue('I-F', 'other focus', 'doing')
   const row = await residentLedger({
-    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
+    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
   }, 's1:main', [parent, question, uncertain, focus], { stack: [focus.id], pending: [] }, [])
   expect(row).toContain('plain child question')
   expect(row).toContain('plain child uncertainty')
@@ -213,7 +200,7 @@ test('a dropped plain plan root with a done child emits no pending-decision line
   const root: Issue = { ...confirmIssue('I-P', 'plain plan', 'dropped'), planMode: 'planner' }
   const child: Issue = { ...confirmIssue('I-C', 'completed child', 'done'), parent: root.id }
   const row = await residentLedger({
-    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
+    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
   }, 's1:main', [root, child], { stack: [root.id], pending: [] }, [])
   expect(row).not.toContain('보류:')
 })

@@ -36,7 +36,6 @@ export type ResidentIo = {
   readLedger: () => Promise<string | undefined>
   readMeta: () => Promise<{ seq: number }>
   readLegacyTopics: (notes: string, seq: number, key: string) => Promise<Topic[]>
-  readRequests: (key: string) => Promise<ResidentLedgerRequest[]>
 }
 
 type LedgerPreview = { notes?: string; topics?: Topic[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } }

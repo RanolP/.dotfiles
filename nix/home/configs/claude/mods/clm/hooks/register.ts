@@ -12,9 +12,9 @@ import {
   type Evidence, type Source,
 } from './evidence'
 import {
-  composeLedger, EMPTY_LEDGER, factLine, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, withdrawnInstructionKeys, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
-  parseChanges, parseMerge, parseReview, preservedLines, rememberFacts, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
-  WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective, type Fact,
+  composeLedger, EMPTY_LEDGER, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, withdrawnInstructionKeys, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
+  parseChanges, parseMerge, parseReview, preservedLines, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
+  WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective,
 } from './ledger'
 import {
   archivedDone, injected, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
@@ -22,7 +22,7 @@ import {
 } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
-import { recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
+import { recordPromptIntent as classifyPrompt, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
@@ -160,7 +160,6 @@ const topicsKey = async ($: EngineInterface, key?: string) => {
   const session = await sid($)
   return `topics:${key && key !== `${session}:main` ? key : session}`
 }
-const requestsKey = (key: string) => `requests:${key}`
 
 const SESSION_STORE_PREFIXES = new Set([
   'address-index', 'agent-task-roots', 'agent-task-step-claims', 'headAttachments', 'held', 'issue-addresses',
@@ -929,8 +928,8 @@ const heldIo = ($: EngineInterface): HeldIo => ({
 })
 const readHeld = async ($: EngineInterface) => readHeldStore(heldIo($), await sid($))
 const updateHeld = async ($: EngineInterface, settled: readonly string[], added: readonly Held[]) => updateHeldStore(heldIo($), await sid($), settled, added)
-const gateMerge = ($: EngineInterface, ops: readonly Payload[], evidence: readonly Evidence[][], facts: readonly Fact[], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[]) =>
-  gateHeldMerge(heldIo($), ops, evidence, facts, sources, ratio, dropped, issues)
+const gateMerge = ($: EngineInterface, ops: readonly Payload[], evidence: readonly Evidence[][], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[]) =>
+  gateHeldMerge(heldIo($), ops, evidence, sources, ratio, dropped, issues)
 const reviewFold = ($: EngineInterface, opts: Opts, input: import('./held').ReviewInput) => reviewHeldFold(heldIo($), opts, input)
 
 const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
@@ -940,7 +939,7 @@ const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
   trackerView: (origin, ops) => trackerViewDomain({ readAll: () => readAll($) }, origin, ops),
   readHeld: () => readHeld($),
   heldClaims: (held, issues, session) => heldClaims(held, issues, session),
-  gateMerge: (ops, evidence, facts, sources, ratio, dropped, issues) => gateMerge($, ops, evidence, facts, sources, ratio, dropped, issues),
+  gateMerge: (ops, evidence, sources, ratio, dropped, issues) => gateMerge($, ops, evidence, sources, ratio, dropped, issues),
   reviewFold: (opts, input) => reviewFold($, opts, input),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
   addressRows: key => addressRows(addressIo($), key),
@@ -966,11 +965,6 @@ const addressIo = ($: EngineInterface): AddressIo => ({
 const sentAt = async ($: EngineInterface): Promise<SentAt> => sentAtOf(addressIo($), transcriptKey(await sid($)))
 const nowIso = async ($: EngineInterface) => new Date(await $.clock.now()).toISOString()
 
-async function readRequests($: EngineInterface, key: string): Promise<RequestRecord[]> {
-  const value = await sessionStoreGet($, requestsKey(key))
-  return Array.isArray(value) ? value.filter(isRequestRecord) : []
-}
-
 async function readLegacyTopics($: EngineInterface, notes: string, seq: number, key?: string): Promise<Topic[]> {
   const resolvedKey = key ?? transcriptKey(await sid($))
   return readLegacyTopicsDomain({ topics: async target => sessionStoreGet($, await topicsKey($, target)) }, notes, seq, resolvedKey)
@@ -983,7 +977,6 @@ const residentIo = ($: EngineInterface): ResidentIo => ({
   readLedger: async () => readText($, await ledgerPath($)),
   readMeta: () => readMeta($),
   readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
-  readRequests: key => readRequests($, key),
 })
 const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } } = {}) =>
   renderResidentLedger(residentIo($), key, issues, state, events, preview)
@@ -1118,14 +1111,14 @@ export async function foldOnRequest($: EngineInterface, opts: Opts) {
   return { result: `Fold requested: ${request.detail}. It applies at a turn end once the summary is ready; keep working meanwhile.` }
 }
 
-/** clm_note: keeps one line for the ledger's facts, evicting the oldest past NOTE_KEEP. */
+/** clm_note: keeps one line for the ledger's notes section, evicting the oldest past NOTE_KEEP. */
 export async function recordNote($: EngineInterface, key: string, text: unknown) {
   const added = addNote(readNotes(await sessionStoreGet($, noteStoreKey(key))), text)
   if ('error' in added) return { result: added.error, isError: true }
   await sessionStoreSet($, noteStoreKey(key), added.notes)
   await logEvent($, 'note', { reason: `kept ${added.notes.length}, evicted ${added.evicted.length}` })
   const evicted = added.evicted.length ? ` Evicted the oldest: ${added.evicted.map(note => JSON.stringify(note)).join(', ')}.` : ''
-  return { result: `Noted (${added.notes.length} kept); it stays in the ledger's facts after every fold.${evicted}` }
+  return { result: `Noted (${added.notes.length} kept); it stays in the ledger's notes section after every fold.${evicted}` }
 }
 
 const workflowIo = ($: EngineInterface): WorkflowIo => ({

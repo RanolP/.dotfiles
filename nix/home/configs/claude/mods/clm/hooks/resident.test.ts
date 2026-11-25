@@ -3,7 +3,7 @@ import { test, expect } from 'claude-code/testing'
 import { residentLedger, type ResidentIo } from './resident'
 
 const io = (store: Record<string, unknown>): ResidentIo => ({
-  get: async key => store[key], readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
+  get: async key => store[key], readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
 })
 
 // Regression caught: a clause store left in session storage by an older clm reappearing as user instructions beside the wayseeker mod's own.

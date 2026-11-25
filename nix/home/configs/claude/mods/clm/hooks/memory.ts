@@ -14,7 +14,7 @@ export const NOTE_TOOL = 'clm_note'
 export const noteStoreKey = (key: string) => `model-notes:${key}`
 export const NOTE_DESCRIPTION = [
   'Record one fact, path or decision that must survive when clm folds older turns.',
-  `Each note is one line of at most ${NOTE_CHARS} characters, kept verbatim in the ledger's facts section after every fold.`,
+  `Each note is one line of at most ${NOTE_CHARS} characters, kept verbatim in the ledger's notes section after every fold.`,
   `clm keeps the newest ${NOTE_KEEP} notes; recording a thirteenth evicts the oldest, and recording an existing note again moves it to newest.`,
 ].join(' ')
 

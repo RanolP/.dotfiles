@@ -10,7 +10,6 @@ const residentIoWith = (store: Record<string, unknown>): ResidentIo => ({
   readLedger: async () => undefined,
   readMeta: async () => ({ seq: 1 }),
   readLegacyTopics: async () => [],
-  readRequests: async () => [],
 })
 
 // Regression caught: a clm_note line is missing from the ledger row a fold writes, so the fact the model saved is lost with the folded turns.

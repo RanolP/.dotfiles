@@ -57,9 +57,9 @@ export const oversizeLines = (tail: readonly SessionMessage[], cuts: Record<stri
     .map(u => `- ${OVERSIZE_MARK} ${clip(oneLine(`${u.tool} ${JSON.stringify(u.input ?? {})}`), 70)}`)
 
 // The merged half of the ledger: the sections the merge model rewrites, 목표
-// alone. Legacy 사용자 지시 and 핵심 사실·경로 are carried by
-// rememberFacts, so each of their lines traces to a quote; the other three
-// sections come from the tracker.
+// alone. Legacy 사용자 지시 and 핵심 사실·경로 lines are carried verbatim by
+// carryLegacyInstructions; nothing adds to them. The other three sections come
+// from the tracker.
 const INSTRUCTIONS = '사용자 지시'
 const FACTS = '핵심 사실·경로'
 export const NOTE_SECTIONS = SECTIONS.filter(s => !isTrackerSection(s) && s !== INSTRUCTIONS && s !== FACTS)
@@ -121,10 +121,8 @@ function withSection(notes: string, name: string, body: string): string {
   return STORED_SECTIONS.map(s => (s === name ? `## ${s}\n${body}` : (sectionOf(notes, s)?.trimEnd() ?? `## ${s}\n- (none yet)`))).join('\n\n')
 }
 
-// --- key facts -------------------------------------------------------------
+// --- key facts (legacy, read-only) ------------------------------------------
 
-export const FACT_KEEP = 25
-export type Fact = { text: string; evidence: Evidence[]; kind?: 'constraint' | 'learned' }
 const CONSTRAINT_FACT = '[constraint] '
 const isMarked = (line: string) => line.includes(OVERSIZE_MARK) || line.includes(PRESERVED_MARK) || line.includes(FOLDED_MARK)
 const factBody = (line: string) => line.trim().replace(/^-\s*/, '')
@@ -133,38 +131,6 @@ export const factLines = (notes: string) =>
   (sectionOf(notes, FACTS) ?? '').split('\n').slice(1).filter(l => /^\s*- /.test(l) && l.trim() !== '- (none yet)' && !isMarked(l)).map(factBody)
 export const constraintFactLines = (notes: string) => factLines(notes).filter(line => line.startsWith(CONSTRAINT_FACT))
 export const learnedFactLines = (notes: string) => factLines(notes).filter(line => !line.startsWith(CONSTRAINT_FACT))
-/** One fact line: the claim, then the quote that carries it. */
-export const factLine = (f: Fact) => `${f.kind === 'constraint' ? CONSTRAINT_FACT : ''}${f.text} — quote: ${JSON.stringify(clip(f.evidence[0]?.quote.replace(/\s+/g, ' ').trim() ?? '', 120))}`
-const factAssignmentKey = (line: string): string | undefined =>
-  /^(?:\[constraint\] )?([A-Za-z][A-Za-z0-9_.-]{0,31})=/.exec(line)?.[1]
-/**
- * Owns 핵심 사실·경로: the facts already there minus `retracted` (matched by
- * instructionKey), then `added`; a leading key assignment keeps only its newest
- * value. The newest FACT_KEEP learned facts survive, and the harness's marked
- * lines stay after them for rememberOversize and rememberPreserved.
- */
-export function rememberFacts(notes: string, added: readonly Fact[], retracted: readonly string[] = []): string {
-  const gone = new Set(retracted.map(r => instructionKey(factBody(r))))
-  const marked = (sectionOf(notes, FACTS) ?? '').split('\n').slice(1).filter(isMarked)
-  const prior = factLines(notes).filter(line => !gone.has(instructionKey(line)))
-  const candidates = [...prior, ...added.map(factLine)]
-  const seenKeys = new Set<string>()
-  const current: string[] = []
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    const line = candidates[i]!
-    const key = factAssignmentKey(line)
-    if (key !== undefined && seenKeys.has(key)) continue
-    if (key !== undefined) seenKeys.add(key)
-    current.push(line)
-  }
-  current.reverse()
-  const constraints = current.filter(line => line.startsWith(CONSTRAINT_FACT))
-  const learned = current.filter(line => !line.startsWith(CONSTRAINT_FACT)).slice(-FACT_KEEP)
-  const facts = [...new Set([...constraints, ...learned])]
-  const lines = [...facts.map(f => `- ${f}`), ...marked]
-  return withSection(notes, FACTS, lines.length ? lines.join('\n') : '- (none yet)')
-}
-
 // A prompt that carries no instruction: the harness's echo of a `!` shell
 // command or a slash command, and a bare go-ahead. It stays in the transcript
 // and stays citable; it just has nothing to keep under 사용자 지시. Length is no
@@ -285,12 +251,12 @@ export const MERGE_SYSTEM = [
   `  {"op":"assumption","id":"<issue-or-assumption-id>","status":"merged|rejected",${EVIDENCE_FIELD}}`,
   '  {"op":"label","issue":"<issue id>","label":[["<assumption id>"]]}',
   '  {"op":"resolve","id":"<pending issue-id>","decision":"close|keep","onto":"<optional parent issue id>"}',
-  'Every done (a create with status done, or a status op to done) and every fact carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
+  'Every done (a create with status done, or a status op to done) carries evidence: the ref of one user message or tool result, and a quote copied character for character from that row.',
   'A done needs a row showing the state-changing action ran and its outcome: a tool result (the merge output, the passing test count, the written file) or the user saying it happened. A step the assistant proposed, recommended or asked about, and a read-only check of the current state, is todo or question.',
   'Every id, number and date in one claim comes from the same row and names the same object as that row; a `(=...)` date beside a relative expression comes from that row\'s header time plus the expression.',
   'Create an issue for each step finished (done, with evidence), each step still ahead (todo), and each question the user asked or must answer (question, the note naming who must answer). A check the assistant planned for itself is a todo under the focused task.',
   'For each existing issue changed by the turns, write an update using its existing id so its history stays attached. Omit an op for each unchanged issue. Items listed under <legacy> have no issue yet: create one for each that still holds.',
-  'The tracker renders the objective and the step list. Write ops only for issue changes the removed turns show, and keep the objective text out of notes and facts.',
+  'The tracker renders the objective and the step list. Write ops only for issue changes the removed turns show, and keep the objective text out of notes.',
   'When the user abandons or suspends a direction, or redirects the session to another goal, move every open issue that served only that direction to dropped, citing as evidence the user message that redirects.',
   'When the user resumes a dropped direction, move that dropped issue back to todo or doing by its id; it keeps its id and history that way.',
   'When a folded user message rejects a hypothesis issue, emit {"op":"assumption","id":...,"status":"rejected"} citing that message; when the user objects to a note, emit retract-note for that issue.',
@@ -298,7 +264,7 @@ export const MERGE_SYSTEM = [
   'When an issue holds only while certain assumptions hold, give it label: a list of alternatives, each listing the existing issue ids that together support it.',
   'When the user decides a pending dependent, emit a resolve op that closes it or keeps it unconditionally, using onto only when the user names its new parent.',
   'Keep the recorded state of each step listed under <finished_earlier>.',
-  'An open option the user must choose between becomes a tracker create op with status question, not a fact.',
+  'An open option the user must choose between becomes a tracker create op with status question.',
   'Write {"ops":[]} when nothing changed. Write titles and notes in Korean, keeping code identifiers, paths and commands verbatim.',
   'Reply with the JSON object and nothing else.',
 ].join('\n')
@@ -357,32 +323,22 @@ export function parseChanges(reply: string): string[] {
   return body.split('\n').map(line => line.trim()).filter(line => line && !/[<>]/.test(line)).slice(0, 3).map(line => clip(line, 80))
 }
 const isOp = (o: unknown, op: string): o is Record<string, unknown> => typeof o === 'object' && o !== null && 'op' in o && o.op === op
-export type Merge = { ops: Payload[]; evidence: Evidence[][]; facts: Fact[]; retracted: string[]; rejected: number }
+export type Merge = { ops: Payload[]; evidence: Evidence[][]; rejected: number }
 /**
  * Splits a merge reply into validated tracker ops (with the evidence each
- * cited), proposed facts and retracted facts, or says why it is unusable.
- * A retract naming no line of `facts` and a fact with no text are dropped and
- * counted as rejected. Evidence is only read here; the caller checks it.
+ * cited), or says why it is unusable. Evidence is only read here; the caller
+ * checks it.
  */
-export function parseMerge(reply: string, known: ReadonlySet<string>, facts: readonly string[] = []): Merge | string {
+export function parseMerge(reply: string, known: ReadonlySet<string>): Merge | string {
   let rawOps: unknown
   try {
     const value: unknown = JSON.parse(normalizeLedger(reply))
     rawOps = typeof value === 'object' && value !== null && 'ops' in value ? value.ops : undefined
   } catch (err) { return 'reply is not JSON (' + String(err).slice(0, 80) + ')' }
   if (!Array.isArray(rawOps)) return 'ops are not a JSON array'
-  const factOps = rawOps.filter(o => isOp(o, 'fact'))
-  const proposed = factOps.flatMap(o => (typeof o.text === 'string' && o.text.trim() ? [{
-    text: oneLine(o.text.trim()).slice(0, 300), evidence: readEvidence(o.evidence),
-    kind: o.kind === 'constraint' ? 'constraint' as const : 'learned' as const,
-  }] : []))
-  const knownFacts = new Set(facts.map(instructionKey))
-  const retractOps = rawOps.filter(o => isOp(o, 'retract'))
-  const retracted = retractOps.flatMap(o => (typeof o.fact === 'string' && knownFacts.has(instructionKey(o.fact.replace(/^\s*-\s*/, ''))) ? [o.fact] : []))
-  const ops = parseOps(JSON.stringify(rawOps.filter(o => !isOp(o, 'fact') && !isOp(o, 'retract'))), known, known)
+  const ops = parseOps(JSON.stringify(rawOps), known, known)
   if (typeof ops === 'string') return ops
-  const rejected = ops.rejected + factOps.length - proposed.length + retractOps.length - retracted.length
-  return { ops: ops.ops, evidence: ops.evidence, facts: proposed, retracted, rejected }
+  return { ops: ops.ops, evidence: ops.evidence, rejected: ops.rejected }
 }
 
 // --- review -------------------------------------------------------------------

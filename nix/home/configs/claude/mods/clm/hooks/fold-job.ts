@@ -315,7 +315,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       if (attempt === 1) io.log(`clm: split summary rejected (${retryRule}); the next turn end may retry`, { to: 'debug' })
       continue
     }
-    const merge = parseMerge(answer.mergeReply, known, factLines(notesOf(previous)))
+    const merge = parseMerge(answer.mergeReply, known)
     if (typeof merge === 'string') {
       retryRule = `The previous summary failed validation: ${merge}. Return the required {"split","ops"} JSON object.`
       if (attempt === 1) io.log(`clm: split summary rejected (${merge}); the next turn end may retry`, { to: 'debug' })

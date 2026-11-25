@@ -88,6 +88,14 @@ test('the result open list contains a want just added', async ($, on) => {
   expect(result.open.ask).toEqual([])
 })
 
+// Regression caught: a user want(p) stayed open after the agent reported say(done(p)).
+test('want(p) leaves the open list once done(p) holds', async ($, on) => {
+  world(on, [...DECLS, 'decl done(task) key(task) "끝난 작업"', '@1 user: want(use(serving, sglang))'])
+  const result = await say($, ['@2 agent: say(done(use(serving, sglang)))'])
+  expect(result.rejected).toEqual([])
+  expect(result.open.want).toEqual([])
+})
+
 // Regression caught: a turn that edited files ending without a ledger record, or the nudge re-blocking its own re-prompt forever.
 test('Stop blocks once after an Edit with no say', async ($, on) => {
   const { rows } = world(on)

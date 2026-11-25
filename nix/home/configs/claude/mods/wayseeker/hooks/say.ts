@@ -3,7 +3,7 @@
 import { evaluate } from './eval'
 import { L1_KINDS, L1_RULES, l1Forms, WITHDRAWAL_RULE } from './extract'
 import { append, liveIds, nextId, type Ledger } from './store'
-import { parseLine, printLine, printLiteral, type Utterance } from './syntax'
+import { parseLine, printLine, printLiteral, type Literal, type Utterance } from './syntax'
 import { isHarnessText, stripReminders } from './text'
 
 export const SAY_TOOL = 'say'
@@ -79,8 +79,10 @@ export function sayLines(ledger: Ledger, lines: readonly unknown[], speaker: Say
 export function openItems(ledger: Ledger): SayResult['open'] {
   const result = evaluate(ledger)
   const live = liveIds(ledger.utterances)
+  const holds = (literal: Literal) => result.facts.get(printLiteral(literal))?.value === 'true'
+  const done = (literal: Literal): Literal => ({ ...literal, fact: { kind: 'fact', name: 'done', args: [literal.fact] } })
   const want = ledger.utterances.filter(u => live.has(u.id) && u.act.kind === 'want' && u.act.content.kind === 'literal'
-    && result.facts.get(printLiteral(u.act.content))?.value !== 'true').map(u => printLine(u))
+    && !holds(u.act.content) && !holds(done(u.act.content))).map(u => printLine(u))
   const ask = ledger.utterances.filter(u => result.openQuestions.includes(u.id) && u.act.kind === 'ask').map(u => printLine(u))
   return { want, ask }
 }

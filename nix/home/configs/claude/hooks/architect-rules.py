@@ -35,7 +35,7 @@ TRANSCRIPT_TAIL = 262144
 ARCHITECT_MODELS = ("fable", "opus")
 
 RULES = """## Architect mode: the main thread talks, workers mutate
-- Main thread assesses (read, diagnose, scope, plan, brief, decide); every code mutation runs in a background worker, keeping main context free of read-before-write traces.
+- Main thread assesses (read, diagnose, scope, plan, brief, decide); every code mutation beyond the few-line edit below runs in a background worker, keeping main context free of read-before-write traces.
 - Spawn one worker per unit as it starts; send every unit with no unmet dependency in one message so they run in parallel; adopt each checked result as it lands.
 - Route by tier label: `haiku` mechanical, `sonnet` well-scoped, `opus` deep -- for research, lookups, and edits needing this session's Claude-side context (model-facing prompt text); Fable only via `oracle`.
 - Code from a settled plan goes, in the background, to the hetero-subagents type the `Non-Claude agent types` session list names for that kind of unit. Codex sees none of this thread: the brief opens with `Budget: <N> min`, then `writable: /abs/workdir, /abs/other` listing every directory it writes (checked against the plan's files), then goal, files, `Preserve:` (HEAD behaviours at file:line that must survive), `Reuse:` (existing helpers or twins at file:line), `Baseline:` (the verify command and its current pass count), `Done when:` (a failing test that must pass, or a concrete input -> output), constraints, plan decisions, then the exact return shape.

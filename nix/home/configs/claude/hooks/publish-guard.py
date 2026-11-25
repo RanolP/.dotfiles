@@ -11,9 +11,12 @@ Denied, at any command position (after operators, NAME=val assignments, the
 usual wrappers, `sh -c`/`eval` strings and `$(...)`/backtick bodies):
   npm publish, pnpm publish, yarn publish, yarn npm publish, bun publish,
   cargo publish, twine upload, uv publish, poetry publish, gem push
-and the same reached through corepack, mise exec/x, uv run, uvx, pipx run and
-`python -m twine`. A `--dry-run` (cargo also `-n`) passes, since it
-uploads nothing. `gh release create` is out of scope: it is not a registry.
+and the same reached through corepack, npx, bunx, npm/pnpm/yarn exec, pnpm/yarn
+dlx, bun x, mise exec/x, uv run, uvx, pipx run and `python -m twine`. A
+`--dry-run` (cargo also `-n`) or `--help`/`-h` passes, since it uploads
+nothing. A heredoc body is data: a quoted delimiter's body is never read, an
+unquoted one is scanned only for `$(...)`/backtick substitutions. Shell
+comments are skipped. `gh release create` is out of scope: it is not a registry.
 
 On a parse error, or a command over 64KB, the guard fails closed when a raw-text
 regex finds a publish without `--dry-run`, and allows otherwise. A malformed
@@ -86,6 +89,15 @@ FALLBACK_RE = re.compile(
 DRY_RE = re.compile(r"(?<![\w-])--dry-run(?![\w-]|=(?:false|0)\b)")
 PREFILTER_RE = re.compile(r"publish|upload|push")
 MAX_LEX_CHARS = 64 * 1024
+# npx/bunx and the exec/dlx subcommands: options that take a value.
+RUNNER_ARG_OPTS = {"-p", "--package", "--prefix", "-w", "--workspace", "-C", "--dir",
+                   "--filter", "-F", "--cwd"}
+RUNNER_SUBCOMMANDS = {"npm": {"exec"}, "pnpm": {"exec", "dlx"}, "yarn": {"exec", "dlx"},
+                      "bun": {"x"}}
+YARN_FOREACH_ARG_OPTS = {"--from", "--include", "--exclude", "-j", "--jobs", "-W", "--worktree"}
+HEREDOC_RE = re.compile(
+    r"(?<!<)<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|(\\?)([A-Za-z_][\w.-]*))")
+COMMENT_START = set(" \t\n;&|()")
 
 
 def is_env_assign(tok):
@@ -113,8 +125,41 @@ def lex(cmd):
     return list(lx)
 
 
-def substitutions(cmd):
-    """Bodies of `$(...)` and backtick substitutions outside single quotes."""
+def strip_heredocs(cmd):
+    """(cmd with every heredoc body removed, bodies of the unquoted ones).
+
+    A quoted delimiter (`<<'EOF'`, `<<"EOF"`, `<<\\EOF`) makes the body literal
+    text; an unquoted one still expands `$(...)`, so its body is returned for a
+    substitution-only scan. An unterminated body runs to the end, as in bash."""
+    if "<<" not in cmd:
+        return cmd, []
+    lines = cmd.split("\n")
+    out, bodies, i = [], [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        for m in HEREDOC_RE.finditer(line):
+            tabs = m.group(1) == "-"
+            if m.group(2) is not None or m.group(3) is not None:
+                delim, quoted = m.group(2) if m.group(2) is not None else m.group(3), True
+            else:
+                delim, quoted = m.group(5), bool(m.group(4))
+            body = []
+            while i < len(lines):
+                cur = lines[i]
+                i += 1
+                if (cur.lstrip("\t") if tabs else cur) == delim:
+                    break
+                body.append(cur)
+            if not quoted:
+                bodies.append("\n".join(body))
+    return "\n".join(out), bodies
+
+
+def substitutions(cmd, shell_quoting=True):
+    """Bodies of `$(...)` and backtick substitutions outside single quotes and
+    comments. With shell_quoting off (a heredoc body), quotes and `#` are text."""
     out, i, n = [], 0, len(cmd)
     in_dq = False
     while i < n:
@@ -122,7 +167,13 @@ def substitutions(cmd):
         if c == "\\":
             i += 2
             continue
-        if c == "'" and not in_dq:
+        if shell_quoting and c == "#" and not in_dq and (i == 0 or cmd[i - 1] in COMMENT_START):
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if not shell_quoting:
+            pass
+        elif c == "'" and not in_dq:
             j = cmd.find("'", i + 1)
             i = n if j < 0 else j + 1
             continue
@@ -152,7 +203,7 @@ def is_dry_run(program, args):
     for a in args:
         if a == "--":
             break
-        if a == "--dry-run" or a in ("--dry-run=true", "--dry-run=1"):
+        if a in ("--dry-run", "--dry-run=true", "--dry-run=1", "--help", "-h"):
             return True
         if program == "cargo" and a == "-n":
             return True
@@ -228,6 +279,28 @@ def check_segment(words, depth):
             continue
         name = w.rsplit("/", 1)[-1]
         rest = words[i + 1:]
+        if name in ("npx", "bunx"):
+            j = i + 1
+            while j < len(words) and words[j].startswith("-") and len(words[j]) > 1:
+                if words[j] in ("-c", "--call") and j + 1 < len(words):
+                    return publish_command(words[j + 1], depth + 1)
+                j += 2 if words[j] in RUNNER_ARG_OPTS else 1
+            i = j
+            continue
+        if name == "yarn":
+            pos = positionals("yarn", rest)
+            if pos[:2] == ("workspaces", "foreach"):
+                j = rest.index("foreach", rest.index("workspaces")) + 1
+                i = i + 1 + skip_opts(rest, j, YARN_FOREACH_ARG_OPTS)
+                continue
+            if pos[:1] == ("workspace",) and len(pos) == 2:
+                i = i + 1 + rest.index(pos[1], rest.index("workspace") + 1) + 1
+                continue
+        if name in RUNNER_SUBCOMMANDS:
+            pos = positionals(name, rest)
+            if pos[:1] and pos[0] in RUNNER_SUBCOMMANDS[name]:
+                i = i + 1 + skip_opts(rest, rest.index(pos[0]) + 1, RUNNER_ARG_OPTS)
+                continue
         if name in PUBLISH:
             if name == "uv" and positionals("uv", rest)[:1] == ("run",):
                 j = rest.index("run") + 1
@@ -283,6 +356,12 @@ def publish_command(cmd, depth=0):
     """Name of a registry publish run anywhere in `cmd`, else None."""
     if depth > MAX_DEPTH or not PREFILTER_RE.search(cmd):
         return None
+    cmd, heredoc_bodies = strip_heredocs(cmd)
+    for body in heredoc_bodies:
+        for sub in substitutions(body, shell_quoting=False):
+            hit = publish_command(sub, depth + 1)
+            if hit:
+                return hit
     try:
         if len(cmd) > MAX_LEX_CHARS:
             raise ValueError("too long to lex")
@@ -382,6 +461,45 @@ def selftest():
     # an oversized command is judged by the raw-text regex
     assert p("npm publish " + "x" * 100_000) == "npm publish"
     assert p("echo " + "x" * 100_000) is None
+    # runners that wrap a publisher (review 2026-11-26: `npx npm publish` passed)
+    for cmd in ("npx npm publish", "npx -y npm publish", "npx --yes pnpm publish",
+                "npx -p npm@10 npm publish", "bunx npm publish", "pnpm dlx npm publish",
+                "pnpm exec npm publish", "yarn dlx npm publish", "npm exec -- npm publish",
+                "bun x npm publish", "npx -c 'npm publish'"):
+        assert p(cmd), cmd
+    for cmd in ("npx prettier --write .", "pnpm dlx create-vite app", "bunx tsc",
+                "npx npm publish --dry-run", "pnpm exec vitest"):
+        assert p(cmd) is None, cmd
+    # a quoted heredoc body is text, even with an apostrophe in it
+    assert p("git commit -F - <<'EOF'\ncargo publish\nEOF") is None
+    assert p("cat <<'EOF'\nDon't run npm publish.\nEOF") is None
+    assert p('cat <<"EOF"\nnpm publish\nEOF') is None
+    assert p("cat <<\\EOF\nnpm publish\nEOF") is None
+    assert p("cat <<-'EOF'\n\tnpm publish\n\tEOF") is None
+    assert p("cat <<EOF\nnpm publish is the step\nEOF") is None
+    # an unquoted heredoc still runs its substitutions; commands after it still count
+    assert p("cat <<EOF\nDon't $(npm publish)\nEOF")
+    assert p("cat <<'EOF'\ntext\nEOF\nnpm publish")
+    assert p("cat <<< 'npm publish'") is None
+    # a comment is not run
+    assert p("echo ok # $(npm publish)") is None
+    assert p("echo ok\n# npm publish") is None
+    assert p("echo a#$(npm publish)")
+    # yarn's workspace runners (code-reviewer 2026-11-26)
+    for cmd in ("yarn workspaces foreach -A npm publish", "yarn workspaces foreach --all -pt npm publish",
+                "yarn workspaces foreach --from 'pkg-*' -R npm publish", "yarn workspace pkg npm publish",
+                "yarn workspaces foreach -A exec npm publish"):
+        assert p(cmd), cmd
+    for cmd in ("yarn workspaces foreach -A run build", "yarn workspace pkg add lodash",
+                "yarn workspaces list", "yarn workspaces foreach -A npm publish --dry-run"):
+        assert p(cmd) is None, cmd
+    # a quoted heredoc inside a substitution, or feeding a file, is text
+    assert p("git commit -m \"$(cat <<'EOF'\nchore: release\n\nnpm publish\nEOF\n)\"") is None
+    assert p("cat > release.sh <<'EOF'\nnpm run build\nnpm publish\nEOF") is None
+    assert p("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\" && npm publish")
+    # help uploads nothing
+    for cmd in ("npm publish --help", "cargo publish --help", "uv publish -h", "gem push --help"):
+        assert p(cmd) is None, cmd
     print("publish-guard selftest ok")
 
 

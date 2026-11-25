@@ -8,6 +8,7 @@ const DECLS = ['decl use(role, tool) key(role) "{role}에 {tool}을 쓴다"', 's
 const REPLIES: Record<string, string[]> = {
   'sglang 써': [...DECLS, '@1 user: say(use(serving, sglang))'],
   'vllm으로 바꿔': ['@2 user: say(use(serving, vllm))'],
+  '아니 vllm으로': ['@2 user: say(use(serving, vllm))'],
   '다른 얘기': [],
 }
 
@@ -27,10 +28,11 @@ function world(on: any, rowsKeepContext = true) {
     const prompt = /<user_message>\n([\s\S]*?)\n<\/user_message>/.exec(e.prompt)?.[1]
     return { value: { isAnswered: true, text: `\`\`\`\n${(REPLIES[prompt ?? ''] ?? []).join('\n')}\n\`\`\`` } }
   })
-  // Core: the prompt's row lands once the submit chain settles, followed by a reply.
+  // Core: the prompt's row lands once the submit chain settles, followed by a reply. A prompt submitted over a
+  // running turn (turnId) gets no row: the engine folds it in as a queued_command attachment, which messages() never lists.
   on('prompt.submit', (_$: any, e: any) => {
     contexts.push(e.context)
-    rows.push({ role: 'user', text: [e.text, ...(rowsKeepContext ? e.context ?? [] : [])].join('\n'), toolUses: [] }, { role: 'assistant', text: 'ok', toolUses: [] })
+    if (e.turnId === undefined) rows.push({ role: 'user', text: [e.text, ...(rowsKeepContext ? e.context ?? [] : [])].join('\n'), toolUses: [] }, { role: 'assistant', text: 'ok', toolUses: [] })
     return { text: e.text, context: e.context }
   })
   on('tool.call', (_$: unknown, e: { tool: string }) => e.tool === 'Denied' ? { deny: 'blocked' } : { result: 'ok', context: ['existing context'] })
@@ -160,4 +162,24 @@ test('the user is shown an added instruction, and nothing when the section is un
   await submit($, '다른 얘기')
   await settle()
   expect(logs).toHaveLength(1)
+})
+
+// Regression caught: a prompt typed mid-turn, which reaches the transcript only as a queued_command attachment, was
+// read as rewound: its extraction was dropped at landing and the next submit cut its address from the prompt list.
+test('a prompt folded into the running turn as an attachment lands and is not read as a rewind', async ($, on) => {
+  const { files, instructions } = world(on)
+  await submit($, 'sglang 써')
+  await settle()
+  await $.prompt.submit({ text: '아니 vllm으로', wait: false, origin: { kind: 'composer' }, turnId: 't1' })
+  await $.session.append({
+    door: 'attachment', origin: { kind: 'engine' }, uuid: 'queued-1',
+    message: { type: 'attachment', name: 'queued_command', role: 'user', content: [{ type: 'text', text: 'The user sent a new message while you were working:\n아니 vllm으로\n\nAddress the message above.' }] },
+  })
+  await settle()
+  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 vllm을 쓴다. (@2)')
+  await submit($, '다른 얘기')
+  await settle()
+  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 vllm을 쓴다. (@2)')
+  const prompts = JSON.parse(files['/home/t/.claude-work/plans/wayseeker-s1.json']!)['prompts:s1:main'] as { address?: string; midTurn?: true }[]
+  expect(prompts.map(row => [row.address, row.midTurn ?? false])).toEqual([['@w1', false], ['@w2', true], ['@w3', false]])
 })

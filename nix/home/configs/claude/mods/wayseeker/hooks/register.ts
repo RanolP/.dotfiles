@@ -52,11 +52,16 @@ const promptTexts = (rows: readonly SessionMessage[]) => rows
 /**
  * Cuts the turns of prompts a rewind removed, then records the submitted prompt under a fresh turn
  * address. Returns that address, or undefined for a prompt that is not the user's own words.
+ *
+ * A prompt submitted over a running turn (`overTurn`) skips the cut: prompts queued in that turn have no
+ * row yet, and one the engine folds in never gets one until session.append marks it, so the running turn
+ * would read as a rewind of them. No rewind lands mid-turn; the next idle submit reconciles.
  */
-async function observePrompt($: EngineInterface, session: string, rows: readonly SessionMessage[], userMessage: string | undefined): Promise<string | undefined> {
+async function observePrompt($: EngineInterface, session: string, rows: readonly SessionMessage[], userMessage: string | undefined, overTurn: boolean): Promise<string | undefined> {
   const key = transcriptKey(session)
   const store = sessionStore($, session)
-  const { rows: prompts, rewound } = reconcilePrompts(readPromptRows(await store.get(promptsKey(key))), promptTexts(rows).map(promptFingerprint))
+  const stored = readPromptRows(await store.get(promptsKey(key)))
+  const { rows: prompts, rewound } = overTurn ? { rows: stored, rewound: [] } : reconcilePrompts(stored, promptTexts(rows).map(promptFingerprint))
   if (rewound.length) {
     const trimmed = dropWayseekerTurns(await store.get(wayseekerKey(key)), new Set(rewound))
     if (trimmed) {
@@ -78,12 +83,15 @@ async function observePrompt($: EngineInterface, session: string, rows: readonly
 // One extraction at a time per session, so each appends onto the ledger the one before it wrote.
 const chains = new Map<string, Promise<void>>()
 /** Extracts this prompt's utterances into the session's wayseeker ledger. */
-function recordTurn($: EngineInterface, session: string, userMessage: string, rows: readonly SessionMessage[], address: string): Promise<void> {
+function recordTurn($: EngineInterface, session: string, userMessage: string, rows: readonly SessionMessage[], address: string, overTurn: boolean): Promise<void> {
   const key = transcriptKey(session)
   const prevAssistant = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
   // `rows` was read in prompt.submit before next(e); the engine adds the prompt's row only after the
   // prompt.submit chain settles its text, so it is not in `rows` and +1 counts it.
   const seen = countUserRows(rows, userMessage) + 1
+  // Over a running turn the prompt may never get a row of its own (turnIsLive): its liveness is the running turn's prompt's.
+  const hostText = overTurn ? promptTexts(rows).at(-1) : undefined
+  const host = hostText === undefined ? undefined : { text: hostText, seen: countUserRows(rows, hostText) }
   const store = sessionStore($, session)
   const run = async () => {
     const ledger = readWayseekerLedger(await serialized(session, () => store.get(wayseekerKey(key))))
@@ -102,7 +110,7 @@ function recordTurn($: EngineInterface, session: string, userMessage: string, ro
       before = sectionOf(await store.get(wayseekerKey(key)))
       const landing = await landWayseekerTurn({
       get: store.get, set: store.set,
-      isLive: async () => turnIsLive(await $.session.messages(), userMessage, seen),
+      isLive: async () => turnIsLive(await $.session.messages(), userMessage, seen, host),
     }, key, result.appended, address)
       after = sectionOf(await store.get(wayseekerKey(key)))
       return landing
@@ -129,6 +137,26 @@ export function instructionChanges(before: string, after: string): string[] {
     ...was.filter(line => !now.includes(line)).map(line => `wayseeker: 지시 제외: ${line}`),
   ]
   return notices.length > MAX_NOTICES ? [...notices.slice(0, MAX_NOTICES), `… 외 ${notices.length - MAX_NOTICES}건`] : notices
+}
+
+// Prompts submitted over a running turn and not yet folded into it, per session, oldest first: what session.append matches
+// a `queued_command` attachment against. Module memory: a reload in that window leaves the prompt unmarked, read as before.
+const awaitingFold = new Map<string, { address: string; text: string }[]>()
+
+/** Marks the prompt a `queued_command` attachment carries as midTurn, so reconcilePrompts rides it with its host row. */
+async function markFolded($: EngineInterface, session: string, attachmentText: string): Promise<void> {
+  const waiting = awaitingFold.get(session) ?? []
+  const index = waiting.findIndex(item => attachmentText.includes(item.text))
+  if (index < 0) return
+  const [{ address }] = waiting.splice(index, 1) as [{ address: string; text: string }]
+  if (!waiting.length) awaitingFold.delete(session)
+  const key = transcriptKey(session)
+  const store = sessionStore($, session)
+  await serialized(session, async () => {
+    const prompts = readPromptRows(await store.get(promptsKey(key)))
+    if (!prompts.some(row => row.address === address)) return
+    await store.set(promptsKey(key), prompts.map(row => row.address === address ? { ...row, midTurn: true as const } : row))
+  })
 }
 
 const EMPTY_LEDGER = readWayseekerLedger(undefined)
@@ -180,7 +208,9 @@ export const register: Register = on => {
       const rows = await $.session.messages()
       const text = stripReminders(e.text)
       const userMessage = text && !isHarnessText(text) ? text : undefined
-      const address = await serialized(session, () => observePrompt($, session, rows, userMessage))
+      const overTurn = e.turnId !== undefined
+      const address = await serialized(session, () => observePrompt($, session, rows, userMessage, overTurn))
+      if (overTurn && address !== undefined && userMessage !== undefined) awaitingFold.set(session, [...(awaitingFold.get(session) ?? []), { address, text: userMessage }])
       // Rendered after observePrompt so a rewind's cuts are already gone, and before the extraction starts so it
       // cannot land ahead of this prompt's own row; this prompt's lines reach the next tool call's attachment.
       try {
@@ -189,7 +219,7 @@ export const register: Register = on => {
         $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       }
       if (userMessage !== undefined && address !== undefined) {
-        void recordTurn($, session, userMessage, rows, address).catch(err => {
+        void recordTurn($, session, userMessage, rows, address, overTurn).catch(err => {
           $.ui.log(`wayseeker: extraction failed stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
         })
       }
@@ -210,6 +240,21 @@ export const register: Register = on => {
       await serialized(session, () => sessionStore($, session).set(deliveredSectionKey(transcriptKey(session)), undefined))
     } catch (err) {
       $.ui.log(`wayseeker: clearing delivered section failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return result
+  })
+
+  // A prompt typed mid-turn reaches the transcript as a `queued_command` attachment, a row $.session.messages() never lists.
+  on('session.append', { door: 'attachment' }, async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId !== undefined || e.message.name !== 'queued_command') return result
+    try {
+      const session = await $.session.id()
+      if (!awaitingFold.has(session)) return result
+      const text = stripReminders(e.message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n'))
+      await markFolded($, session, text)
+    } catch (err) {
+      $.ui.log(`wayseeker: marking a mid-turn prompt failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }
     return result
   })

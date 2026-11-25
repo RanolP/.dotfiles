@@ -66,9 +66,16 @@ export const countUserRows = (messages: readonly { role: string; text: string }[
  * transcript held at submit time, this prompt included; a rewind drops it below that. The baseline comes
  * from the transcript, not the address index, because the index keeps rewound rows: "ok", rewound,
  * then resent would otherwise demand two rows where only the live resend remains.
+ *
+ * `host` is given for a prompt submitted over a running turn: the engine may fold it into that turn as an
+ * attachment, which `$.session.messages()` never lists, or hold it queued, so it has no row of its own. Such a
+ * prompt is live while the prompt whose turn it was delivered into is; the next submit's reconcilePrompts cuts
+ * it if it was in fact withdrawn or rewound.
  */
-export const turnIsLive = (messages: readonly { role: string; text: string }[], userMessage: string, seen: number): boolean =>
-  countUserRows(messages, userMessage) >= seen
+export const turnIsLive = (
+  messages: readonly { role: string; text: string }[], userMessage: string, seen: number, host?: { text: string; seen: number },
+): boolean =>
+  countUserRows(messages, userMessage) >= seen || (host !== undefined && countUserRows(messages, host.text) >= host.seen)
 
 /** A stored value read back as a Ledger; anything malformed reads as the empty ledger. */
 export function readWayseekerLedger(value: unknown): Ledger {

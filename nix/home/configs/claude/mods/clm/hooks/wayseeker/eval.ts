@@ -20,6 +20,7 @@ type Cand = { literal: Literal; key: string; support: number[]; rank: number; la
 type Rule = { id: number; premises: Premise[]; conclusion: Literal }
 type Env = Map<string, string>
 type Store = Map<string, Cand>
+type World = { best: Store; all: Cand[] }
 
 class FuelExhausted extends Error {}
 
@@ -156,45 +157,52 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
   }
 
   // Γ(P): least fixpoint where a candidate is blocked by any conflicting candidate in P that beats it.
-  const gamma = (blockers: Store): Store => {
-    const rivals = [...blockers.values()]
-    const blocked = (c: Cand) => rivals.some(r => conflicts(r, c) && compare(r, c) > 0)
-    const store: Store = new Map()
+  // best holds the copy of each literal that carries support (keep()); all holds every unblocked copy of the
+  // final pass, because a tied derived twin must still block and win conflicts even when the stated copy is shown.
+  const gamma = (blockers: World): World => {
+    const blocked = (c: Cand) => blockers.all.some(r => conflicts(r, c) && compare(r, c) > 0)
+    const best: Store = new Map()
     for (;;) {
       if (fuel.left <= 0) throw new FuelExhausted()
       fuel.left--
       let changed = false
-      for (const c of [...direct, ...derive(store)]) {
+      const all: Cand[] = []
+      for (const c of [...direct, ...derive(best)]) {
         if (blocked(c)) continue
-        const current = store.get(c.key)
-        if (!current || keep(c, current)) { store.set(c.key, c); changed = true }
+        all.push(c)
+        const current = best.get(c.key)
+        if (!current || keep(c, current)) { best.set(c.key, c); changed = true }
       }
-      if (!changed) return store
+      if (!changed) return { best, all }
     }
   }
 
-  const sameKeys = (a: Store, b: Store) => a.size === b.size && [...a.keys()].every(k => b.has(k))
-  let universe: Store = new Map(direct.map(c => [c.key, c]))
-  let truth: Store = new Map()
-  let possible: Store = new Map()
+  const sameKeys = (a: World, b: World) => a.best.size === b.best.size && [...a.best.keys()].every(k => b.best.has(k))
+  const EMPTY: World = { best: new Map(), all: [] }
+  let universeWorld: World = { best: new Map(direct.map(c => [c.key, c])), all: direct }
+  let truthWorld: World = EMPTY
+  let possibleWorld: World = EMPTY
   let fuelExhausted = false
   try {
-    universe = gamma(new Map())
-    possible = universe
-    truth = gamma(possible)
+    universeWorld = gamma(EMPTY)
+    possibleWorld = universeWorld
+    truthWorld = gamma(possibleWorld)
     for (;;) {
-      const nextPossible = gamma(truth)
+      const nextPossible = gamma(truthWorld)
       const nextTruth = gamma(nextPossible)
-      const stable = sameKeys(nextTruth, truth) && sameKeys(nextPossible, possible)
-      possible = nextPossible
-      truth = nextTruth
+      const stable = sameKeys(nextTruth, truthWorld) && sameKeys(nextPossible, possibleWorld)
+      possibleWorld = nextPossible
+      truthWorld = nextTruth
       if (stable) break
     }
   } catch (error) {
     if (!(error instanceof FuelExhausted)) throw error
     fuelExhausted = true
-    possible = truth // only the last completed underestimate stays settled
+    possibleWorld = truthWorld // only the last completed underestimate stays settled
   }
+  const universe = universeWorld.best
+  const truth = truthWorld.best
+  const possible = possibleWorld.best
   const undefinedKeys = new Set([...possible.keys()].filter(k => !truth.has(k)))
 
   // Fact table over every ground literal mentioned or derivable.
@@ -202,9 +210,10 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
   const mention = (l: Literal) => { if (l.fact.args.every(a => a.kind === 'atom')) mentioned.set(printLiteral(l), l) }
   for (const u of utterances) for (const l of literalsOf(u)) mention(l)
   for (const c of universe.values()) mention(c.literal)
+  const beating = (c: Cand): Cand[] => truthWorld.all.filter(w => conflicts(w, c) && compare(w, c) > 0)
   const strongestBeating = (c: Cand): Cand | undefined => {
     let best: Cand | undefined
-    for (const w of truth.values()) if (conflicts(w, c) && compare(w, c) > 0 && (!best || compare(w, best) > 0)) best = w
+    for (const w of beating(c)) if (!best || compare(w, best) > 0) best = w
     return best
   }
   const facts: EvalResult['facts'] = new Map()
@@ -237,7 +246,8 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
       const mode = modeFor(key)
       // A newer stated value from an equal-or-higher speaker is a plain key update, not a contradiction;
       // it surfaces only when raise_on(K) asks for every change on K.
-      const supersession = !winner.derived && !loser.derived && !winner.literal.negated && !loser.literal.negated && winner.latest > loser.latest && winner.rank >= loser.rank
+      // Any stated copy that beats the loser this way makes it an update, even if a derived twin also beats it.
+      const supersession = !loser.derived && !loser.literal.negated && beating(loser).some(w => !w.derived && !w.literal.negated && w.latest > loser.latest && w.rank >= loser.rank)
       if (supersession && mode !== 'raise') continue
       raises.push({ kind: 'conflict', key, facts: [winner.key, loser.key], winner: winner.key, loser: loser.key, mode })
     }

@@ -110,6 +110,14 @@ test('a stated fact keeps its own support when a rule derives the same fact at t
   expect(result.raises).toEqual([])
 })
 
+// Regression (review round 3): keeping the stated copy hid its tied derived twin, so whether p vs not(p) raised depended on predicate names.
+test('a contradiction between derived twins raises whatever the predicates are called', () => {
+  for (const [a, y] of [['aa', 'yy'], ['zz', 'bb']]) {
+    const result = run(['decl ' + a + '(x) key(x) "a"', 'decl ' + y + '(x) key(x) "y"', '@1 user: ' + a + '(k) -> ' + y + '(k)', '@1 user: ' + a + '(k) -> not(' + y + '(k))', '@2 user: say(' + a + '(k))', '@2 user: say(' + y + '(k))'])
+    expect(result.raises.filter(r => r.kind === 'conflict').length).toBe(1)
+  }
+})
+
 // Regression (review F2): an append to a multi-line @m bound only the first rule line's conclusion.
 test('a premise append binds the conclusion of every rule line under @m', () => {
   const lines = [

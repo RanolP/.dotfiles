@@ -1,29 +1,11 @@
 {
   "name": "bg-compact",
   "version": "0.1.0",
-  "description": "Adds server-side context editing (clear_tool_uses_20250919) to every engine Messages request, and pre-computes a summary before the auto-compact limit so the compaction is that summary plus every message after it.",
+  "description": "Pre-computes a summary before the auto-compact limit so the compaction is that summary plus every message after it.",
   "author": {
     "name": "RanolP"
   },
   "userConfig": {
-    "triggerTokens": {
-      "type": "number",
-      "title": "Trigger tokens",
-      "description": "Input tokens at which the API starts clearing old tool results. An integer of at least 1.",
-      "default": 100000
-    },
-    "keepToolUses": {
-      "type": "number",
-      "title": "Kept tool uses",
-      "description": "Most recent tool use/result pairs the API keeps whole. An integer of at least 0.",
-      "default": 3
-    },
-    "clearAtLeastTokens": {
-      "type": "number",
-      "title": "Clear at least",
-      "description": "Input tokens a clear must free, or the API skips it and the prompt cache stays intact. An integer of at least 0; 0 sends no minimum.",
-      "default": 20000
-    },
     "preCompactRatio": {
       "type": "number",
       "title": "Pre-compaction ratio",

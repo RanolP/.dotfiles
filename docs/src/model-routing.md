@@ -59,7 +59,7 @@ The comparison has Opus 5.5, `gpt-5.6-sol`, `gpt-6.1-sol`, `gemini-4-argon` and 
 ## Where the guidance lives
 
 - When to pick each type: the `TYPES` blurbs in `nix/home/configs/claude/mods/hetero-subagents/hooks/register.ts`.
-- The type list each session sees: that mod's `session.start` context, generated from `TYPES`.
+- The type list the main session sees: the hetero-subagents mod's prompt.compose section `hetero-subagents:routing`, generated from `TYPES`; subagents do not see it.
 - Claude tier routing and the codex brief format: `nix/home/configs/claude/hooks/architect-rules.py`.
 - Dated numbers: this doc.
 

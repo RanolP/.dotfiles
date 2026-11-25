@@ -104,21 +104,31 @@ test('a changed section lands on the next tool call in the same human turn', asy
   expect(changed.context?.[1]).toContain('vllm')
 })
 
+// Regression caught: the stored transcript keeps pre-compact rows, so the section still "found" there was never delivered again after /compact or a clm fold.
 test('a compacted section is delivered again on prompt submit and tool call', async ($, on) => {
   const { rows, contexts } = world(on)
+  let skip: string | undefined
+  const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
+  on('session.compact', () => skip === undefined ? { messages: [summary] } : { skip })
   await submit($, 'sglang 써')
   await settle()
   await submit($, '다른 얘기')
   await settle()
-  const stripSection = () => {
-    for (const row of rows) row.text = row.text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
-  }
-  stripSection()
+  expect(contexts[1]?.[0]).toContain('sglang')
   await submit($, '다른 얘기')
   await settle()
-  expect(contexts[2]).toEqual(contexts[1])
-  stripSection()
+  expect(contexts[2]).toBeUndefined()
+  const rowCount = rows.length
+  await $.session.compact({ trigger: 'manual', messages: [summary] })
+  expect(rows).toHaveLength(rowCount)
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts[3]).toEqual(contexts[1])
+  await $.session.compact({ trigger: 'manual', messages: [summary] })
   expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context?.[1]).toBe(contexts[1]?.[0])
+  skip = 'nothing to do'
+  await $.session.compact({ trigger: 'manual', messages: [summary] })
+  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context).toEqual(['existing context'])
 })
 
 test('worker and denied tool calls leave changed instructions for the main agent', async ($, on) => {

@@ -177,6 +177,20 @@ export const register: Register = on => {
     return next(attachment === undefined ? e : { ...e, context: [...(e.context ?? []), attachment] })
   })
 
+  // The stored transcript keeps rows from before a compaction (a clm fold arrives as this same event), so the
+  // delivered-section scan alone would still find the old section; a landed compaction forgets the record instead.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId !== undefined || (result as { skip?: unknown }).skip !== undefined) return result
+    try {
+      const session = await $.session.id()
+      await serialized(session, () => sessionStore($, session).set(deliveredSectionKey(transcriptKey(session)), undefined))
+    } catch (err) {
+      $.ui.log(`wayseeker: clearing delivered section failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    }
+    return result
+  })
+
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId !== undefined || result.deny !== undefined) return result

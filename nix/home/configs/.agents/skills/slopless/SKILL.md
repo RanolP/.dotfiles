@@ -13,6 +13,7 @@ Use this skill when asked to review English Markdown prose for AI slop, human sl
 - Slopless emits JSON only.
 - Slopless reports findings. It does not rewrite prose.
 - Do not use Slopless as a fact checker.
+- This workflow governs a lint run the user asked for; inside a `prose-editor` review, follow that agent's own slopless steps.
 
 ## Required Workflow
 

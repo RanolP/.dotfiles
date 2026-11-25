@@ -1,8 +1,0 @@
-{
-  "name": "dash",
-  "version": "0.1.0",
-  "description": "A unified status dashboard pane: usage, subagents, and clm.",
-  "author": { "name": "RanolP" },
-  "types": "./types/index.d.ts",
-  "dependencies": ["clm"]
-}

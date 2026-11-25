@@ -127,6 +127,10 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/output-shape-reminder.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/repeat-correction-nudge.py"
           }
         ]
       }
@@ -306,6 +310,14 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/done-claim-guard.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/korean-reply-guard.py"
           }
         ]
       }

@@ -29,7 +29,7 @@ import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampM
 import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes, WRAP_UP_NOTICE, wrapUpDue, wrapUpStoreKey } from './memory'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { extractTurn } from './wayseeker/extract'
-import { landWayseekerTurn, readWayseekerLedger, turnIsLive, wayseekerKey } from './wayseeker/render'
+import { countUserRows, landWayseekerTurn, readWayseekerLedger, turnIsLive, wayseekerKey } from './wayseeker/render'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
@@ -1019,13 +1019,15 @@ let wayseekerEnabled = false
 // One extraction at a time per session, so each appends onto the ledger the one before it wrote.
 const wayseekerChains = new Map<string, Promise<void>>()
 /** Extracts this prompt's utterances into the wayseeker ledger stored beside the clause store. */
-async function recordWayseekerTurn($: EngineInterface, text: string, address?: string): Promise<void> {
+async function recordWayseekerTurn($: EngineInterface, text: string, rows: readonly SessionMessage[], address?: string): Promise<void> {
   const userMessage = stripReminders(text)
   if (!userMessage || isHarnessText(userMessage)) return
   const session = await sid($)
   const key = transcriptKey(session)
-  const rows = await $.session.messages()
   const prevAssistant = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
+  // `rows` was read in prompt.submit before next(e); the engine adds the prompt's row only after the
+  // prompt.submit chain settles its text, so it is not in `rows` and +1 counts it.
+  const seen = countUserRows(rows, userMessage) + 1
   const run = async () => {
     const ledger = readWayseekerLedger(await sessionStoreGet($, wayseekerKey(key)))
     const result = await extractTurn({ complete: request => $.model.complete(request) }, ledger, userMessage, prevAssistant)
@@ -1033,7 +1035,7 @@ async function recordWayseekerTurn($: EngineInterface, text: string, address?: s
     // The model call takes seconds; landing re-reads the store so a rewind in that window is not overwritten.
     const landed = await serialized(session, () => landWayseekerTurn({
       get: k => sessionStoreGet($, k), set: (k, v) => sessionStoreSet($, k, v),
-      isLive: async () => turnIsLive(await addressRows(addressIo($), key), await $.session.messages(), address, userMessage),
+      isLive: async () => turnIsLive(await $.session.messages(), userMessage, seen),
     }, key, result.appended, address))
     if (landed.rewound) $.ui.log(`clm wayseeker: prompt rewound during extraction; ${result.appended.length} line(s) not written`, { to: 'debug' })
     for (const { line, errors } of landed.dropped) $.ui.log(`clm wayseeker: dropped on replay ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })
@@ -1499,10 +1501,12 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     let promptSeq: number | undefined
     let address: string | undefined
+    let before: SessionMessage[] = []
     if (isHumanOrigin(e.origin)) {
       try {
         const key = transcriptKey(await sid($))
-        await observeTranscript(rewindIo($), key, await $.session.messages())
+        before = await $.session.messages()
+        await observeTranscript(rewindIo($), key, before)
         await changeWorkflow($, current => ({ next: resetUserWorkflow(current, e.origin), result: undefined }))
         promptSeq = await stampHumanPrompt($)
         address = await recordPrompt(addressIo($), key, e.text, await nowIso($), promptSeq)
@@ -1515,7 +1519,7 @@ export const register: Register = (on, options) => {
         $.ui.log(`clm intent: classifier failed issue=unknown argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
       })
       if (wayseekerEnabled) {
-        void recordWayseekerTurn($, e.text, address).catch(err => {
+        void recordWayseekerTurn($, e.text, before, address).catch(err => {
           $.ui.log(`clm wayseeker: extraction failed stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
         })
       }

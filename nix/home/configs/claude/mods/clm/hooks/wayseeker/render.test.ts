@@ -2,7 +2,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { appendAll } from './store'
 import { evaluate } from './eval'
-import { landWayseekerTurn, renderInstructions, turnIsLive, wayseekerKey } from './render'
+import { countUserRows, landWayseekerTurn, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { residentLedger, type ResidentIo } from '../resident'
 import { observeTranscript, transcriptRowsKey, type RewindIo } from '../rewind'
 import { fingerprint } from '../fold'
@@ -107,10 +107,16 @@ test('fuel exhaustion is raised while the settled facts still render', () => {
 
 // Regression caught: a rewound repeated prompt ("ok") counted as live because an earlier prompt had the same text.
 test('of two equal-text prompts, the rewound later one is not live', () => {
-  const rows = [{ address: '@00000001', text: 'ok' }, { address: '@00000002', text: '다음' }, { address: '@00000003', text: 'ok' }]
-  const afterRewind = [{ role: 'user', text: 'ok' }, { role: 'assistant', text: 'done' }, { role: 'user', text: '다음' }]
-  expect(turnIsLive(rows, afterRewind, '@00000003', 'ok')).toBe(false)
-  expect(turnIsLive(rows, afterRewind, '@00000001', 'ok')).toBe(true)
-  expect(turnIsLive(rows, [...afterRewind, { role: 'user', text: 'ok' }], '@00000003', 'ok')).toBe(true)
-  expect(turnIsLive(rows, afterRewind, undefined, 'ok')).toBe(false)
+  const before = [{ role: 'user', text: 'ok' }, { role: 'assistant', text: 'done' }, { role: 'user', text: '다음' }]
+  const seen = countUserRows(before, 'ok') + 1 // the later "ok" at submit time
+  expect(turnIsLive(before, 'ok', seen)).toBe(false) // rewound: only the earlier "ok" remains
+  expect(turnIsLive([...before, { role: 'user', text: 'ok' }], 'ok', seen)).toBe(true)
+})
+
+// Regression caught: a resent prompt's extraction dropped as rewound because the address index kept the rewound row.
+test('a prompt rewound and then resent is live', () => {
+  // "ok" was sent and rewound; the transcript at the resend's submit no longer holds it.
+  const atResend = [{ role: 'user', text: '시작' }, { role: 'assistant', text: 'done' }]
+  const seen = countUserRows(atResend, 'ok') + 1
+  expect(turnIsLive([...atResend, { role: 'user', text: 'ok' }], 'ok', seen)).toBe(true)
 })

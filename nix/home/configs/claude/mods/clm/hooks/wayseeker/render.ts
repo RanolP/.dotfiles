@@ -58,21 +58,18 @@ export async function landWayseekerTurn(
   return { landed, dropped, rewound: false }
 }
 
+/** User rows whose stripped text equals `userMessage`. */
+export const countUserRows = (messages: readonly { role: string; text: string }[], userMessage: string) =>
+  messages.filter(row => row.role === 'user' && stripReminders(row.text) === userMessage).length
+
 /**
- * Whether the prompt at `address` is still in the live transcript. Positional, not by text: a short
- * prompt ("ok") said twice is live only while the transcript still holds as many user rows with that
- * text as the address index has up to and including this address. False when the address is unknown.
+ * Whether a prompt is still in the live transcript. `seen` is how many user rows with this text the
+ * transcript held at submit time, this prompt included; a rewind drops it below that. The baseline comes
+ * from the transcript, not the address index, because the index keeps rewound rows: "ok", rewound,
+ * then resent would otherwise demand two rows where only the live resend remains.
  */
-export function turnIsLive(
-  addressRows: readonly { address: string; text: string }[], messages: readonly { role: string; text: string }[],
-  address: string | undefined, userMessage: string,
-): boolean {
-  const upto = address === undefined ? -1 : addressRows.findIndex(row => row.address === address)
-  if (upto < 0) return false
-  const need = addressRows.slice(0, upto + 1).filter(row => stripReminders(row.text) === userMessage).length
-  const have = messages.filter(row => row.role === 'user' && stripReminders(row.text) === userMessage).length
-  return have >= need
-}
+export const turnIsLive = (messages: readonly { role: string; text: string }[], userMessage: string, seen: number): boolean =>
+  countUserRows(messages, userMessage) >= seen
 
 /** A stored value read back as a Ledger; anything malformed reads as the empty ledger. */
 export function readWayseekerLedger(value: unknown): Ledger {

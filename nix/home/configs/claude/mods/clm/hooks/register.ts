@@ -28,6 +28,8 @@ import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSe
 import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
 import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes, WRAP_UP_NOTICE, wrapUpDue, wrapUpStoreKey } from './memory'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
+import { extractTurn } from './wayseeker/extract'
+import { readWayseekerLedger, readWayseekerTurns, wayseekerKey } from './wayseeker/render'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
@@ -986,6 +988,7 @@ const residentIo = ($: EngineInterface): ResidentIo => ({
   readMeta: () => readMeta($),
   readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
   readRequests: key => readRequests($, key),
+  ...(wayseekerEnabled ? { wayseeker: true } : {}),
 })
 const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] }; clauses?: import('./clauses').ClauseStore } = {}) =>
   renderResidentLedger(residentIo($), key, issues, state, events, preview)
@@ -1009,6 +1012,36 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
 const recordPromptIntent = async ($: EngineInterface, text: string, promptSeq: number, address?: string) => {
   const coworker = coworkerIntent(await sid($))
   return classifyPrompt({ ...intentIo($), ...coworker }, text, promptSeq, address)
+}
+
+// userConfig "wayseeker", set once by register; off keeps every path on the clause store.
+let wayseekerEnabled = false
+// One extraction at a time per session, so each appends onto the ledger the one before it wrote.
+const wayseekerChains = new Map<string, Promise<void>>()
+/** Extracts this prompt's utterances into the wayseeker ledger stored beside the clause store. */
+async function recordWayseekerTurn($: EngineInterface, text: string, address?: string): Promise<void> {
+  const userMessage = stripReminders(text)
+  if (!userMessage || isHarnessText(userMessage)) return
+  const session = await sid($)
+  const key = transcriptKey(session)
+  const rows = await $.session.messages()
+  const prevAssistant = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
+  const run = async () => {
+    const stored = await sessionStoreGet($, wayseekerKey(key))
+    const ledger = readWayseekerLedger(stored)
+    const turns = readWayseekerTurns(stored)
+    const firstId = ledger.utterances.reduce((max, u) => Math.max(max, u.id), 0) + 1
+    const result = await extractTurn({ complete: request => $.model.complete(request) }, ledger, userMessage, prevAssistant)
+    for (const { line, errors } of result.rejected) $.ui.log(`clm wayseeker: rejected ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })
+    if (!result.appended.length) return
+    const added = result.ledger.utterances.some(u => u.id >= firstId)
+    await sessionStoreSet($, wayseekerKey(key), { ...result.ledger, turns: added && address ? [...turns, { address, firstId }] : turns })
+  }
+  const job = (wayseekerChains.get(session) ?? Promise.resolve()).then(run)
+  const tail = job.catch(() => undefined)
+  wayseekerChains.set(session, tail)
+  void tail.then(() => { if (wayseekerChains.get(session) === tail) wayseekerChains.delete(session) })
+  return job
 }
 
 /** Options resolved against the live context window, so the threshold point follows the model in use. */
@@ -1049,6 +1082,7 @@ const rewindIo = ($: EngineInterface): RewindIo => ({
 
 const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   loadedFrom: loadedFromPath,
+  ...(wayseekerEnabled ? { wayseeker: true } : {}),
   sessionId: () => $.session.id(),
   sessionMessages: () => $.session.messages(),
   stableAttachments: headKept => stableAttachmentRows($, headKept),
@@ -1167,6 +1201,7 @@ export const register: Register = (on, options) => {
   const forceCompacts = new Set<string>()
   const { problems } = readOpts(options as Record<string, unknown>)
   const userOptions = options as Record<string, unknown>
+  wayseekerEnabled = userOptions.wayseeker === true
   let loadedFromPath: string | undefined
   const warnedStaleSessions = new Set<string>()
 
@@ -1478,6 +1513,11 @@ export const register: Register = (on, options) => {
       void recordPromptIntent($, e.text, promptSeq, address).catch(err => {
         $.ui.log(`clm intent: classifier failed issue=unknown argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
       })
+      if (wayseekerEnabled) {
+        void recordWayseekerTurn($, e.text, address).catch(err => {
+          $.ui.log(`clm wayseeker: extraction failed stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
+        })
+      }
     }
     return next(e)
   })

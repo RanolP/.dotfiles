@@ -10,6 +10,7 @@
     "tailTarget": { "type": "number", "title": "Tail target", "description": "Tokens the first request, the ledger and the kept newest turns may fill after a fold. 0 means half the budget.", "default": 0 },
     "reserve": { "type": "number", "title": "Reserve", "description": "A fold starts this many tokens before the budget is reached. Must be under the budget. 0 means 2048, or a quarter of a budget under 8192.", "default": 0 },
     "model": { "type": "string", "title": "Summarizer model", "description": "Model that folds the older turns into the ledger.", "default": "haiku" },
-    "reviewModel": { "type": "string", "title": "Reviewer model", "description": "Model that audits each fold's claims against their quotes. Empty means the summarizer model.", "default": "" }
+    "reviewModel": { "type": "string", "title": "Reviewer model", "description": "Model that audits each fold's claims against their quotes. Empty means the summarizer model.", "default": "" },
+    "wayseeker": { "type": "boolean", "title": "Wayseeker ledger", "description": "Extract each user message into the wayseeker utterance ledger in the background and render the ledger's user instructions and raises from it instead of the clause store.", "default": false }
   }
 }

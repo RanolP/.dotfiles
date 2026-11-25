@@ -197,11 +197,11 @@ export function inheritedContext(api: readonly ApiMessage[]): string {
   return texts.slice(0, -1).join('\n\n')
 }
 
-const CODEX_PREAMBLE = `You are running as a subagent inside a Claude Code session; a Claude model delegated this task to you and reads your final message as the result.
-- Do file reads, edits and commands with your own shell and apply_patch tools.
+const codexPreamble = (readOnly: boolean): string => `You are running as a subagent inside a Claude Code session; a Claude model delegated this task to you and reads your final message as the result.
+${readOnly ? '- Read files and run read-only commands with your own shell; this sandbox rejects edits, so put any proposed change in your final message.' : '- Do file reads, edits and commands with your own shell and apply_patch tools.'}
 - The Claude session's other tools are relayed to you as dynamic tools: read-only mcp__<server>__<tool> as claude_mcp__<server>__<tool>, Skill (load a skill from the listing below by name, then follow what it returns), WebFetch and WebSearch. Call them through tools.<name> in exec. Claude Code runs them with its own permissions and returns the result.
 - Never call spawn_agent, followup_task, send_message, wait_agent, interrupt_agent or list_agents: this task runs in one agent, you.
-- Where the instructions below name Claude tools you do not have (Read, Edit, Write, Bash, Grep, Glob, Agent, Task*), use your shell or apply_patch for the same effect, or skip the step.
+- Where the instructions below name Claude tools you do not have (Read, Edit, Write, Bash, Grep, Glob, Agent, Task*), use your shell${readOnly ? '' : ' or apply_patch'} for the same effect, or skip the step.
 
 The Claude session's context for this agent follows.`
 
@@ -210,7 +210,7 @@ const ACP_PREAMBLE = `You are running as a subagent inside a Claude Code session
 
 The Claude session's context for this agent follows.`
 
-export const preambleFor = (backend: Backend): string => backend === 'acp' ? ACP_PREAMBLE : CODEX_PREAMBLE
+export const preambleFor = (type: { backend: Backend; sandbox: string }): string => type.backend === 'acp' ? ACP_PREAMBLE : codexPreamble(type.sandbox === 'read-only')
 
 // Of the main session's first-message context, an implementer acts on the
 // environment, the model and date lines, and the skill listing it loads through
@@ -340,9 +340,9 @@ const sharedRules = async ($: EngineInterface, rel: string, what: string, log: L
 // The first step's developer instructions: tool mapping, the implementer's
 // share of the inherited context, the role, the owner's agent rules, the style
 // rules the reviewer grades against, and the rules of every repo the agent writes.
-const developerInstructions = async ($: EngineInterface, api: readonly ApiMessage[], roots: readonly string[], backend: Backend, log: Log): Promise<string> => {
+const developerInstructions = async ($: EngineInterface, api: readonly ApiMessage[], roots: readonly string[], type: { backend: Backend; sandbox: string }, log: Log): Promise<string> => {
   const parts = [
-    preambleFor(backend),
+    preambleFor(type),
     implementerContext(api),
     IMPLEMENTER_ROLE,
     await sharedRules($, AGENT_RULES_PATH, "the owner's agent rules", log),
@@ -962,7 +962,7 @@ export const register: Register = (on) => {
         if (!prompt) throw new Error(`agent ${agentId} has neither a pending prompt nor the tool_result for ${agent.waiting?.toolUseId ?? '(none)'}`)
         if (!agent.threadId) {
           body.dynamicTools = agent.relay.tools
-          body.developerInstructions = await developerInstructions($, api, [...new Set([...agent.writableRoots, agent.cwd])], backend, line => diag(st, $, line))
+          body.developerInstructions = await developerInstructions($, api, [...new Set([...agent.writableRoots, agent.cwd])], type, line => diag(st, $, line))
         }
         body.prompt = prompt
       }

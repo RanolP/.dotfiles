@@ -24,6 +24,9 @@ for m in re.finditer(
     types[m[1]] = dict(backend=m[2], model=m[3], effort=m[4], sandbox=m[5], blurb=m[6])
 if not types:
     sys.exit("hetero-agents-check: no TYPES entries parsed from hooks/register.ts")
+unparsed = [k for k in re.findall(r"^\s*'([^']+)': \{", block, re.M) if k not in types]
+if unparsed:
+    sys.exit("hetero-agents-check: TYPES keys the strict parse missed (fix the entry's shape): " + ", ".join(unparsed))
 
 
 def description(t):

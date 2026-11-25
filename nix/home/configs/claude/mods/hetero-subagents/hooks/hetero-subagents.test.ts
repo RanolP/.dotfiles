@@ -8,7 +8,6 @@ const LUNA = 'codex:gpt-6-luna' as const
 const SOL = 'codex:gpt-6.1-sol' as const
 const ASTRA = 'codex:gpt-6.2-astra' as const
 const NEON = 'agy:gemini-4-neon-high' as const
-const isTypeName = (value: string): value is keyof typeof TYPES => Object.hasOwn(TYPES, value)
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -108,12 +107,6 @@ test('ACP registrations describe Antigravity tools and session continuity', () =
 })
 
 // The test runtime has no file access ($.fs is unmocked, node:fs and text imports are refused), so agents/*.md drift is guarded at nix build time by scripts/hetero-agents-check.py (wired at nix/home/default.nix:154).
-test('every registered type has a name, model, description and prompt for its agents/ file', () => {
-  for (const [name, type] of Object.entries(TYPES)) {
-    expect(`${name.replace(':', '-')}.md`).toMatch(/^[a-z]+-[a-z0-9.-]+\.md$/)
-    expect({ model: type.model !== '', description: agentDescription(type) !== '', body: agentPrompt(type) !== '' }).toEqual({ model: true, description: true, body: true })
-  }
-})
 
 test('session.start routing context lists exactly the registered types', () => {
   const lines = [...routingContext().matchAll(/^- `hetero-subagents:([^`]+)`: (.+)$/gm)].map(match => ({ name: match[1], blurb: match[2] }))
@@ -152,10 +145,15 @@ test('read-only ACP mode is selected from the modes advertised by agy', () => {
 })
 
 test('ACP developer instructions omit Codex-only relayed tools and apply_patch', () => {
-  const preamble = preambleFor('acp')
+  const preamble = preambleFor(TYPES[NEON])
   expect(preamble).toContain('Do file reads and searches with your own tools. No edits, shell, or Claude-side tools are available.')
   expect(preamble).not.toContain('apply_patch')
   expect(preamble).not.toContain('tools.<name>')
+})
+
+test('a read-only codex preamble omits apply_patch and a workspace-write one keeps it', () => {
+  expect(preambleFor(TYPES[ASTRA])).not.toContain('apply_patch')
+  expect(preambleFor(TYPES[SOL])).toContain('apply_patch')
 })
 
 test('session start discards both backend bridge states for the new session socket', () => {

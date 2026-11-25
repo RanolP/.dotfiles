@@ -28,7 +28,6 @@ export type EventsIo = {
   trackerDirectory: () => Promise<string>
   trackerLogPath: (session: string) => Promise<string>
   generalLogPath: () => Promise<string>
-  project: (origin: Origin, events: readonly TrackerEvent[]) => Promise<void>
 }
 
 const trackerCache = new Map<string, { size: number; mtimeMs: number; events: TrackerEvent[] }>()
@@ -108,7 +107,6 @@ export async function append(
     try {
       for (const line of describe(events, before)) io.log(line)
     } catch { /* display notices never block tracker writes */ }
-    if (project) await io.project(captured, events)
     return events
   })
 }

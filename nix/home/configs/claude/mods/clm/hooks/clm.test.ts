@@ -194,54 +194,12 @@ test('clm status names the focus top, stack depth, pending and live subagent tas
   }])
 })
 
-// Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.
-test('fold issues project to the task panel', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('[{"op":"status","issue":"s1-1","status":"done"}]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }])] }
-  const seen = bottoms(on, s)
-  let created = 0
-  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { task: { id: `panel-${++created}`, subject: e.subject } } }
-  })
-  let stale = true
-  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    if (stale && e.taskId === 'panel-1') {
-      stale = false
-      return { result: { success: false, message: 'stale task id' }, isError: true }
-    }
-    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
-  })
-  await turnEnds($, s, seen)
-  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'complete the investigation'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'completed'), M('user', 'push'), M('assistant', 'pushed')]
-  await turnEnds($, s, seen)
-  const create = seen.taskCalls.find(c => c.tool === 'TaskCreate')
-  const updates = seen.taskCalls.filter(c => c.tool === 'TaskUpdate')
-  expect(create.subject).toBe('clm 조사하기')
-  expect(create.description).toBe('조사 메모')
-  expect(updates.some(u => u.taskId === 'panel-2' && u.status === 'completed')).toBe(true)
-  expect(logEvents(seen).some(e => e.event === 'panel-relink')).toBe(true)
-})
 
-// Regression caught: every done issue of the session stayed in the ledger's 한 일 and on the task panel forever, so a long session's context filled with old completions.
-test('a session with 8 done issues shows only the latest 5 in the ledger and panel', OPTS, async ($, on) => {
+// Regression caught: old completions crowded the ledger's recent history.
+test('a session with 8 done issues shows only the latest 5 in the ledger', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger()] }
   const seen = bottoms(on, s)
-  let n = 0
-  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { task: { id: `panel-${++n}`, subject: e.subject } } }
-  })
-  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
-  })
-  for (let i = 1; i <= 8; i++) await $.tool.call({ tool: 'TaskCreate', subject: `done ${i}`, description: `d${i}` })
-  for (let i = 1; i <= 8; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: `panel-${i}`, status: 'completed' })
-  const last = new Map<string, string>()
-  for (const c of seen.taskCalls) if (c.tool === 'TaskUpdate' && c.status) last.set(c.taskId, c.status)
-  expect([1, 2, 3].map(i => last.get(`panel-${i}`))).toEqual(['deleted', 'deleted', 'deleted'])
-  expect([4, 5, 6, 7, 8].map(i => last.get(`panel-${i}`))).toEqual(Array(5).fill('completed'))
+  seedTracker(seen, Array.from({ length: 8 }, (_, i) => ({ op: 'create', title: `done ${i + 1}`, status: 'done' })))
   await turnEnds($, s, seen)
   const done = /## 한 일\n([\s\S]*?)\n\n/.exec(seen.files[LEDGER_FILE] ?? '')?.[1] ?? ''
   expect(done.split('\n').map(l => /^- (done \d)/.exec(l)?.[1])).toEqual(['done 4', 'done 5', 'done 6', 'done 7', 'done 8'])
@@ -251,7 +209,7 @@ test('a session with 8 done issues shows only the latest 5 in the ledger and pan
 test('a fold over turns that finished an archived issue creates no duplicate done issue', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"done 1","status":"done","note":"again"}]')] }
   const seen = bottoms(on, s)
-  await sixDone($, on, seen)
+  seedTracker(seen, Array.from({ length: 6 }, (_, i) => ({ op: 'create', title: `done ${i + 1}`, status: 'done' })))
   await turnEnds($, s, seen)
   expect(seen.prompts[0]).toContain('<finished_earlier>\n- done 1\n</finished_earlier>')
   const done = /## 한 일\n([\s\S]*?)\n\n/.exec(seen.files[LEDGER_FILE] ?? '')?.[1] ?? ''
@@ -259,17 +217,6 @@ test('a fold over turns that finished an archived issue creates no duplicate don
   expect(seen.files[LEDGER_FILE]).not.toContain('<finished_earlier>')
 })
 
-// Regression caught: a TaskUpdate answered with success: false and no isError counted as success, so a missing panel task was never relinked.
-test('a TaskUpdate answered success false relinks the issue to a new panel task', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [] }
-  const seen = bottoms(on, s)
-  panelHandlers(on, seen, id => (id === 'panel-1' ? { success: false, error: 'Task not found' } : { success: true }))
-  await $.tool.call({ tool: 'TaskCreate', subject: 'lost task', description: 'd' })
-  await $.tool.call({ tool: 'TaskUpdate', taskId: 'panel-1', status: 'in_progress' })
-  expect(seen.taskCalls.filter(c => c.tool === 'TaskCreate').map(c => c.subject)).toEqual(['lost task', 'lost task'])
-  expect(seen.taskCalls.some(c => c.tool === 'TaskUpdate' && c.taskId === 'panel-2' && c.status === 'in_progress')).toBe(true)
-  expect(logEvents(seen).some(e => e.event === 'panel-relink' && e.reason.includes('Task not found'))).toBe(true)
-})
 
 // Regression caught: a completed TaskUpdate notice was delayed until session.compact and then could be repeated by the pending fold.
 test('a TaskUpdate to completed logs its notice before any fold and is not repeated', OPTS, async ($, on) => {
@@ -278,7 +225,7 @@ test('a TaskUpdate to completed logs its notice before any fold and is not repea
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => ({ result: { task: { id: 'panel-1', subject: e.subject } } }))
   on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => ({ result: { success: true, taskId: e.taskId, updatedFields: [] } }))
   await $.tool.call({ tool: 'TaskCreate', subject: 'event task', description: 'created in the turn' })
-  await $.tool.call({ tool: 'TaskUpdate', taskId: 'panel-1', status: 'completed' })
+  await $.tool.call({ tool: 'TaskUpdate', taskId: 's1-1', status: 'completed' })
   expect(seen.logs.filter(l => l === "작업 'event task' 완수").length).toBe(1)
   await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) })
   expect(seen.logs.filter(l => l === "작업 'event task' 완수").length).toBe(1)
@@ -294,27 +241,10 @@ test('model task calls are denied outside clm projection', OPTS, async ($, on) =
   })
   const r = await $.tool.call({ tool: 'TaskCreate', subject: 'model task', description: 'should be denied' })
   expect('deny' in r).toBe(true)
-  expect(seen.taskCalls.some(c => c.tool === 'TaskCreate' && c.subject === 'model task')).toBe(true)
+  expect(seen.taskCalls.some(c => c.tool === 'TaskCreate' && c.subject === 'model task')).toBe(false)
   expect(seen.logs).toContain("작업 'model task' 추가")
 })
 
-// Regression caught: a fold creating several issues re-entered the projection and created duplicate panel tasks.
-test('several fold issues create one panel task each', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"A","status":"todo"},{"op":"create","title":"B","status":"done"},{"op":"create","title":"C","status":"todo"}]')] }
-  const seen = bottoms(on, s)
-  let n = 0
-  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { task: { id: `panel-${++n}`, subject: e.subject } } }
-  })
-  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
-  })
-  await turnEnds($, s, seen)
-  expect(seen.taskCalls.filter(c => c.tool === 'TaskCreate').map(c => c.subject)).toEqual(['A', 'B', 'C'])
-  expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate').map(c => [c.taskId, c.status])).toEqual([['panel-2', 'completed']])
-})
 
 // Regression caught: a refused panel write blocked the fold or the tracker append.
 test('a refused TaskCreate still lets the fold complete', OPTS, async ($, on) => {

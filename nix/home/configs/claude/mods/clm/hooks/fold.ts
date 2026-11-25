@@ -336,8 +336,8 @@ export const ledgerRowText = (seq: number, at: string, _path: string, ledger: st
   const fits = () => estTokens({ role: 'user', text: render(), toolUses: [] }) <= maxTokens
   if (fits()) return render()
   const byName = (name: string) => sections.find(section => section.name === name)
-  // The plan and user instructions stay whole; every other resident section yields oldest entries first.
-  const trimOrder = ['legacy', 'where we are', 'owned resources', 'uncertain', 'facts', 'open questions', 'what to do', 'what to request']
+  // The plan stays whole; every other resident section yields oldest entries first.
+  const trimOrder = ['legacy', 'where we are', 'owned resources', 'uncertain', 'notes', 'open questions', 'what to do']
   while (!fits()) {
     const trimmed = trimOrder.some(name => dropOldestLedgerItem(byName(name)))
     if (!trimmed) break

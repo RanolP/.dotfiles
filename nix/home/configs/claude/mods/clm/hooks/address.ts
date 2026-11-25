@@ -2,7 +2,6 @@ import type { SessionMessage } from 'claude-code'
 
 import { fingerprint, stripReminders } from './fold'
 import { isRecord } from './tracker'
-import { clauseStoreKey, readClauseStore, recallClauses } from './clauses'
 import { archivePath, parseArchive, searchMemory } from './memory'
 
 // clm builds its own address index from the hooks it receives and never reads
@@ -120,7 +119,7 @@ export async function recallQuery(io: AddressIo, key: string, query: string): Pr
 }
 
 export async function recallAddress(io: AddressIo, key: string, address: unknown) {
-  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d, @first..@last, @step:<id>, @fold:3.12, #C12 or clauses, or a query.' }
+  if (typeof address !== 'string') return { deny: 'clm_recall requires an address such as @c130a62d, @first..@last, @step:<id>, @fold:3.12, or a query.' }
   const folded = /^\s*(@fold:\d+\.\d+)\s*$/.exec(address)
   if (folded?.[1]) {
     const text = io.basePath && io.readFile ? await io.readFile(archivePath(await io.basePath())) : undefined
@@ -140,9 +139,7 @@ export async function recallAddress(io: AddressIo, key: string, address: unknown
     if (start >= text.length && page > 1) return { result: `folded step ${step[1]} has no page #${page}`, isError: true, isReadOnly: true }
     return { result: text.slice(start, start + 40_000), isReadOnly: true }
   }
-  const recalled = /^\s*(?:#C\d+|clauses)\s*$/i.test(address)
-    ? recallClauses(readClauseStore(await io.get(clauseStoreKey(key))), address)
-    : recallRows(await addressRows(io, key), address)
+  const recalled = recallRows(await addressRows(io, key), address)
   if (recalled.error) return { result: recalled.error, isError: true, isReadOnly: true }
   return { result: recalled.text ?? '', isReadOnly: true }
 }

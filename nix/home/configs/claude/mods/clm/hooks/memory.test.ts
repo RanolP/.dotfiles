@@ -19,7 +19,7 @@ test('a recorded note reaches the folded ledger row verbatim', async () => {
   const store = { [noteStoreKey(key)]: ['deploy target is /srv/app-v2 (not /srv/app)'] }
   const ledger = await residentLedger(residentIoWith(store), key, [], { stack: [], pending: [] }, [])
   const row = ledgerRowText(2, 'now', '', ledger, 4000)
-  expect(row).toContain('## facts\n- [note] deploy target is /srv/app-v2 (not /srv/app)')
+  expect(row).toContain('## notes\n- [note] deploy target is /srv/app-v2 (not /srv/app)')
 })
 
 // Regression caught: note storage grows without bound or evicts the newest note instead of the oldest.

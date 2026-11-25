@@ -85,8 +85,8 @@ const carry = {
   rows: [M('user', text('prompt', 'p0', 400)), M('assistant', text('reply', 'a0', 200))] as SessionMessage[],
   files: {} as Record<string, string>, engineStore: {} as Record<string, unknown>, now: 0, consumed: '', refusals: 0,
 }
-// One goal per fold, as eb5734aa's store held 45 clauses after 32 folds (36,838 B).
-const ops = (n: number) => [{ clause: `goal('I-focus', 'topic${n}').`, kind: 'goal', text: `topic${n}: ${text('summary', `s${n}`, 200)}`, evidence: [] }]
+// A fold reply with no tracker changes: the state file grows only from the ledger, snapshots and address index.
+const ops = (_n: number) => []
 
 for (let first = 1; first <= FOLDS; first += PER_TEST) {
   const last = Math.min(FOLDS, first + PER_TEST - 1)
@@ -144,7 +144,7 @@ for (let first = 1; first <= FOLDS; first += PER_TEST) {
       // Bound: 64 KiB + 80 KiB per fold, and 3 MiB overall. With this generator the fixed code
       // grew 75.4 KB per fold once the 32-snapshot cap held (folds 32-42; 1.46 MB at fold 32,
       // against 1.44 MB for eb5734aa's state less its coveredRows), because every kept snapshot
-      // copies the ledger, clause store and address index, which grow a little each fold. The
+      // copies the ledger and address index, which grow a little each fold. The
       // copied coveredRows made it 2.3 MB by fold 25 and 4 MB by fold 34.
       const size = utf8(seen.files[STATE_FILE('s1')])
       expect({ fold: n, bounded: size <= 64 * 1024 + 80 * 1024 * n && size < 3 * 1024 * 1024, size }).toEqual({ fold: n, bounded: true, size })

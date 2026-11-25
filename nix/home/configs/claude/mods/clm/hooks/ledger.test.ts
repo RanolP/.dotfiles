@@ -7,8 +7,7 @@ import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailed
 import type { Held, Meta } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
-import { migrateLegacyLedger, residentLedger } from './resident'
-import { emptyClauseStore, parseClause } from './clauses'
+import { residentLedger } from './resident'
 
 import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, issueList, MERGE_SYSTEM, parseMerge, rememberFacts, renderTurns, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { recordPrompt, sentAtOf, stampMessages } from './address'
@@ -17,19 +16,6 @@ import { describe, focusOf, parseLog, snapshot, toEvents, type Issue, type Paylo
 import { estTokens, fingerprint, ledgerRowText, TOKEN_ESTIMATOR_VERSION } from './fold'
 import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
-
-test('a merge prompt never asks for a clause kind the validator rejects', () => {
-  const accepted = new Set(['fact', 'goal'])
-  for (const prompt of [MERGE_SYSTEM, SPLIT_MERGE_SYSTEM]) {
-    const named = [...prompt.matchAll(/\bkind ([a-z-]+)/g)].map(match => match[1])
-    expect(named.every(kind => accepted.has(kind!))).toBe(true)
-  }
-})
-
-// Regression caught: the prompt allowed issue labels to cite same-batch clause text that their parser rejects.
-test('an issue label cites existing assumption ids only', () => {
-  expect(MERGE_SYSTEM).toContain('a clause may cite an assume clause from this reply by its clause text; an issue label cites existing assumption ids only.')
-})
 
 // Regression caught: a stale PR number survives a fold beside its newer keyed value.
 test('a keyed fact keeps only its newest value', () => {
@@ -40,13 +26,6 @@ test('a keyed fact keeps only its newest value', () => {
   expect(updated).toContain('ledger.ts:10 does one thing')
   expect(updated).toContain('ledger.ts:20 does another thing')
   expect(updated).toContain('unkeyed fact — quote: "keep me"')
-})
-
-// Regression caught: the clause-only merge contract accidentally required a prose instruction section.
-test('a clause merge reply needs no prose instruction section', async () => {
-  const ok = parseMerge('{"ops":[]}', new Set())
-  expect(typeof ok).not.toBe('string')
-  if (typeof ok !== 'string') expect(ok.clauseOps).toEqual([])
 })
 
 
@@ -85,7 +64,7 @@ test('a dropped built-in compact summary is not preserved as a user instruction'
 })
 
 // Regression caught: the compact row exposed every task instead of the scoped sections, including owned resources.
-test('the eight-section ledger keeps actions under the focused task and resources separate', async () => {
+test('the ledger keeps actions under the focused task and resources separate', async () => {
   const issue = (id: string, title: string, status: Issue['status'], parent?: string, notes: string[] = []) => ({
     id, title, status, ...(parent ? { parent } : {}), notes, linked: [],
     origin: { session: 's1', repo: 'github.com/o/r', cwd: '/w' }, updated: '2026-10-15T00:00:00Z',
@@ -94,24 +73,19 @@ test('the eight-section ledger keeps actions under the focused task and resource
   const child = issue('s1-2', 'run focused tests', 'todo', top.id)
   const unrelated = issue('s1-3', 'unrelated docs', 'todo')
   const uncertain = issue('s1-4', 'verify package checksum', 'uncertain', undefined, ['check the release digest'])
-  const row = residentLedgerText(top, '@e330c1ab', 2, 1, [], {
+  const row = residentLedgerText(top, '@e330c1ab', 2, 1, {
     where: ['Build verification: tests are next.'], children: [child, unrelated],
-    requests: [{ id: 'R1', text: 'Rebuild the package.', quote: 'Please rebuild the package', status: 'open' }],
-    constraints: ['- preserve generated outputs — quote: "build tool generated this file" @aabbccdd'],
-    uncertain: [uncertain], learned: ['- the build tool failed once — quote: "exit code 1"'], resources: ['- metro :8081', '- mutex ipad held'],
+    uncertain: [uncertain], resources: ['- metro :8081', '- mutex ipad held'],
   })
   expect([...row.matchAll(/^## (.+)$/gm)].map(match => match[1])).toEqual([
-    'where we are', 'what to do', 'what to request', 'user instructions', 'facts', 'uncertain', 'owned resources',
+    'where we are', 'what to do', 'uncertain', 'owned resources',
   ])
   expect(row).toContain('focused build — last build note @e330c1ab')
   expect(row).toContain('Build verification: tests are next.')
   expect(row).toContain('run focused tests')
   expect(row).not.toContain('unrelated docs')
-  expect(row).toContain('[R1] Rebuild the package.')
-  expect(row).toContain('preserve generated outputs')
   expect(row).toContain('verify package checksum — settling check: check the release digest')
   expect(row).toContain('## owned resources\n\n- metro :8081\n- mutex ipad held')
-  expect(row).toContain('the build tool failed once')
   expect(row).toContain('- stack 2 · pending 1')
 })
 
@@ -139,17 +113,8 @@ test('a done planned child renders its result in the plan section', () => {
     origin: root.origin, updated: root.updated,
     result: { intent: 'inspect validation', finding: 'result was missing', decision: 'store it on done', files: ['hooks/panel.ts'], source: 'model', ts: root.updated },
   } satisfies Issue
-  const row = residentLedgerText(root, '@abcd1234', 1, 0, [], { plan: { revision: 1, steps: [child] } })
+  const row = residentLedgerText(root, '@abcd1234', 1, 0, { plan: { revision: 1, steps: [child] } })
   expect(row).toContain('- [x] change panel — inspect validation → result was missing → store it on done (files: hooks/panel.ts) [s1-step]')
-})
-
-test('a legacy prose ledger migrates without losing a line', () => {
-  const notes = '## 목표\n- old work\n\n## 사용자 지시\n- (none yet)\n\n## 핵심 사실·경로\n- [constraint] keep generated files\n- lint failed before the fix'
-  const store = migrateLegacyLedger(emptyClauseStore(), notes, [{ topic: 'old work', summary: 'tests remain', seq: 1, focusIssue: 's1-1' }], 3, '2026-10-27T00:00:00Z')
-  expect(store.clauses.filter(clause => clause.status === 'live').map(clause => clause.text).sort()).toEqual([
-    'keep generated files', 'lint failed before the fix', 'old work: tests remain',
-  ])
-  expect(store.legacy ?? []).toEqual([])
 })
 
 // Regression caught: the merge model received B and moved it into the summary even though the swap keeps B verbatim.
@@ -169,35 +134,6 @@ test('the merge and review inputs exclude the verbatim tail after split selectio
   expect(seen.reviewPrompts[0]).not.toContain('B-TAIL-ONLY secret details')
   expect(result.slice(2)).toEqual(rows.slice(3))
 })
-
-// Regression caught: an unverified constraint disappeared after the next fold because it was stored with decaying lessons.
-test('a quoted tool constraint survives two folds without entering topic decay', OPTS, async ($, on) => {
-  const first = JSON.stringify({ ops: [{ op: 'fact', kind: 'constraint', text: 'The build tool requires generated artifacts to stay checked in.', evidence: [{ ref: 'tu_a', quote: 'log: make fails at' }] }] })
-  const second = '{"ops":[]}'
-  const s: State = { rows: ROWS, replies: [first, second] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('generated artifacts to stay checked in')
-  const firstMessages = seen.results[0].messages
-  s.rows = [...ROWS, ...firstMessages, ...ROWS.slice(4)]
-  await turnEnds($, s, seen)
-  expect(section(seen.results[1].messages[1].text, 'facts')).toContain('generated artifacts to stay checked in')
-})
-
-// Regression caught: an assume clause was copied into an unconditional legacy fact and survived rejection.
-test('folding then rejecting an assume clause removes its text from the resident ledger', OPTS, async ($, on) => {
-  const text = '서버 로그를 확인해야 한다는 가정'
-  const assume = JSON.stringify({ ops: [{ clause: 'hypothesis(server_log).', kind: 'assume', text, evidence: CITE }] })
-  const reject = JSON.stringify({ ops: [{ op: 'assumption', id: 'C1', status: 'rejected', evidence: CITE }] })
-  const s: State = { rows: ROWS, replies: [assume, reject] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  const firstMessages = seen.results[0].messages
-  s.rows = [...ROWS, ...firstMessages, ...ROWS.slice(4)]
-  await turnEnds($, s, seen)
-  expect(seen.results[1].messages.map(message => message.text).join('\n')).not.toContain(text)
-})
-
 const confirmIssue = (id: string, title: string, status: Issue['status']): Issue =>
   ({ id, title, status, origin: { session: 's1', repo: 'r', cwd: '/' }, notes: [], linked: [], updated: '' })
 
@@ -221,79 +157,20 @@ test('the resident ledger lists open questions without the stored item list', ()
   const [made] = confirmQuestion([{ op: 'create', title: 'tag the release', status: 'done' }], [], [], new Set())
   if (made?.op !== 'create') throw new Error('expected a create')
   const q = { ...confirmIssue('s1-q', made.title, 'question'), notes: [made.note ?? ''] }
-  const row = residentLedgerText(undefined, undefined, 0, 0, [], { questions: [q, confirmIssue('s1-z', 'answered before', 'done')] })
+  const row = residentLedgerText(undefined, undefined, 0, 0, { questions: [q, confirmIssue('s1-z', 'answered before', 'done')] })
   expect(row).toContain(`## open questions\n\n- ${made.title} [s1-q]`)
   expect(row).not.toContain('answered before')
   expect(row).not.toContain(CONFIRM_ITEMS)
 })
 
-// Regression caught: resident metadata was four bare lines, long instructions were silently cut, and empty or fact sections rendered blank/unbulleted lines.
+// Regression caught: resident metadata was four bare lines, and empty sections rendered blank/unbulleted lines.
 test('the resident ledger renders compact metadata, marked clipping, bullets and placeholders', () => {
-  const long = 'x'.repeat(81)
-  const row = residentLedgerText(undefined, undefined, 2, 1, [`- ${long} (C1 @abcd1234)`], {
-    where: [''], constraints: ['keep it'], learned: [''], resources: ['port 8080'],
+  const row = residentLedgerText(undefined, undefined, 2, 1, {
+    where: [''], resources: ['port 8080'],
   })
   expect(section(row, 'where we are')).toContain('- stack 2 · pending 1')
   expect(row).not.toContain('Stack size')
-  expect(section(row, 'user instructions')).toContain(`- ${long} (C1 @abcd1234)`)
-  expect(section(row, 'facts').trim()).toBe('- keep it')
   expect(section(row, 'owned resources').trim()).toBe('- port 8080')
-})
-
-// Regression caught: after the clause store replaced the instruction index, live sessions showed no user instructions and repeated them as open requests.
-test('the resident ledger shows the live clause text and hides the retracted one', async () => {
-  const store: Record<string, unknown> = {
-    'clauses:s1:main': {
-      version: 1, nextId: 3, predicates: { benchmark: { key: 1, example: 'benchmark(stylelint, cache_patch_only).' } }, clauses: [
-        { id: 'C1', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'upgrade' }] }, neg: false, body: [], source: 'benchmark(stylelint, upgrade).', text: 'stylelint 업그레이드 상태로 벤치마크한다.', quote: '업그레이드했을 때 벤치마크', address: '@00000001', promptSeq: 1, issue: null, at: '2026-10-27T00:00:00Z', status: 'retracted', retraction: { at: '2026-10-27T00:00:01Z', by: 'C2', bySource: 'benchmark(stylelint, cache_patch_only).', reason: 'conflict' } },
-        { id: 'C2', head: { name: 'benchmark', args: [{ atom: 'stylelint' }, { atom: 'cache_patch_only' }] }, neg: false, body: [], source: 'benchmark(stylelint, cache_patch_only).', text: 'stylelint 벤치마크는 캐시만 패치한 상태로 잰다.', quote: '캐시만 패치해서 벤치마크 해봐', address: '@00000002', promptSeq: 2, issue: null, at: '2026-10-27T00:00:01Z', status: 'live' },
-      ],
-    },
-  }
-  const row = await residentLedger({
-    get: async key => store[key],
-    readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
-    readRequests: async () => [
-      { id: 'R1', text: 'Run the cache-only benchmark.', quote: '캐시만 패치해서 벤치마크 해봐', status: 'open' },
-      { id: 'R2', text: 'Publish the report.', quote: '리포트를 올려줘', status: 'open' },
-    ],
-  }, 's1:main', [], { stack: [], pending: [] }, [])
-  expect(section(row, 'user instructions')).toContain('- stylelint 벤치마크는 캐시만 패치한 상태로 잰다. (C2 @00000002)')
-  expect(row).not.toContain('업그레이드 상태로')
-  expect(section(row, 'what to request')).not.toContain('[R1]')
-  expect(section(row, 'what to request')).toContain('[R2]')
-})
-
-test('an open request stays visible when a goal clause covers the same topic', async () => {
-  const clauseStore = emptyClauseStore()
-  clauseStore.clauses = [{
-    id: 'C1', ...parseClause("goal('I-1', publish_report)."), source: "goal('I-1', publish_report).", text: 'Publish the report.', quote: '리포트를 올려줘', address: '@goal', promptSeq: 1, sources: [], issue: null, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'goal',
-  }]
-  clauseStore.nextId = 2
-  const row = await residentLedger({
-    get: async () => clauseStore, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [],
-    readRequests: async () => [{ id: 'R1', text: 'Publish the report.', quote: '리포트를 올려줘', status: 'open' }],
-  }, 's1:main', [], { stack: [], pending: [] }, [])
-  expect(section(row, 'what to request')).toContain('[R1]')
-})
-
-test("with a focus, where we are shows only the focus chain's goals", async () => {
-  const focus = confirmIssue('I-1', 'focused issue', 'doing')
-  const sibling = confirmIssue('I-2', 'open sibling', 'todo')
-  const clauseStore = emptyClauseStore()
-  clauseStore.migratedLedger = true
-  clauseStore.clauses = [
-    { id: 'C1', ...parseClause("goal('I-1', focused)."), source: "goal('I-1', focused).", text: 'focused goal', quote: '', address: '@focus', promptSeq: 1, sources: [], issue: focus.id, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'goal' },
-    { id: 'C2', ...parseClause("goal('I-2', sibling)."), source: "goal('I-2', sibling).", text: 'sibling goal', quote: '', address: '@sibling', promptSeq: 1, sources: [], issue: sibling.id, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'goal' },
-  ]
-  clauseStore.nextId = 3
-  const row = await residentLedger({
-    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [focus, sibling], { stack: [focus.id], pending: [] }, [], { clauses: clauseStore })
-  const where = section(row, 'where we are')
-  expect(where).toContain('\n- focused goal (')
-  expect(where).not.toContain('- - ')
-  expect(where).not.toContain('sibling goal')
 })
 
 // Regression caught: a rejected hypothesis's free-text note was re-injected by every later resident ledger.
@@ -301,7 +178,7 @@ test('a note on an issue the user rejected does not appear in the next resident 
   const rejected = { ...confirmIssue('I-H', 'server-log hypothesis', 'dropped'), notes: ['서버 로그에서 확인해야 함'] }
   const row = await residentLedger({
     get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [rejected], { stack: [rejected.id], pending: [] }, [], { clauses: emptyClauseStore() })
+  }, 's1:main', [rejected], { stack: [rejected.id], pending: [] }, [])
   expect(row).not.toContain('server-log hypothesis')
   expect(row).not.toContain('서버 로그에서 확인해야 함')
 })
@@ -312,43 +189,10 @@ test('rejecting a parent hypothesis makes a child with no other environment pend
   const child = { ...confirmIssue('I-C', '파생 추론', 'todo'), parent: parent.id }
   const row = await residentLedger({
     get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [parent, child], { stack: [parent.id], pending: [] }, [], { clauses: emptyClauseStore() })
+  }, 's1:main', [parent, child], { stack: [parent.id], pending: [] }, [])
   expect(row.match(/보류: 기각된 가정에 기댄 추론 1개가 결정을 기다린다 — 사용자에게 닫을지 살릴지 묻는다 \[I-C\]/g)).toHaveLength(1)
   expect(row).not.toContain('기각된 서버 기록 가정')
   expect(row).not.toContain('파생 추론')
-})
-
-// Regression caught: one rejected justification hid a conclusion even though another confirmed justification survived.
-test('a dependent with a second surviving environment stays visible', async () => {
-  const rejected = confirmIssue('I-R', 'rejected', 'dropped')
-  const merged = confirmIssue('I-M', 'confirmed', 'done')
-  const store = emptyClauseStore()
-  store.migratedLedger = true
-  store.clauses = [{
-    id: 'C1', ...parseClause('found(subject, state, visible).'), source: 'found(subject, state, visible).', text: 'surviving conclusion', quote: 'proof', address: '@fact', promptSeq: 1, sources: [], issue: null, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'fact', evidence: { ref: 'm1', quote: 'proof' }, label: [[rejected.id], [merged.id]],
-  }]
-  store.nextId = 2
-  const row = await residentLedger({
-    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [rejected, merged], { stack: [], pending: [] }, [], { clauses: store })
-  expect(section(row, 'facts')).toContain('surviving conclusion')
-  expect(row).not.toContain('보류:')
-})
-
-// Regression caught: a dropped ordinary issue was absent from assumption statuses, so its dependent never reached the pending line.
-test('a fact labelled with a dropped ordinary issue goes to the 보류 line', async () => {
-  const dropped = confirmIssue('I-D', 'ordinary rejected support', 'dropped')
-  const store = emptyClauseStore()
-  store.migratedLedger = true
-  store.clauses = [{
-    id: 'C1', ...parseClause('found(subject, state, pending).'), source: 'found(subject, state, pending).', text: 'dependent fact', quote: 'proof', address: '@fact', promptSeq: 1, sources: [], issue: null, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'fact', evidence: { ref: 'm1', quote: 'proof' }, label: [[dropped.id]],
-  }]
-  store.nextId = 2
-  const row = await residentLedger({
-    get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [dropped], { stack: [], pending: [] }, [], { clauses: store })
-  expect(row).toContain('보류: 기각된 가정에 기댄 추론 1개가 결정을 기다린다 — 사용자에게 닫을지 살릴지 묻는다 [C1]')
-  expect(row).not.toContain('dependent fact')
 })
 
 // Regression caught: a plain open parent accidentally became an implicit branch and hid its question children.
@@ -359,7 +203,7 @@ test('a question or uncertain issue under an open non-focused plain parent remai
   const focus = confirmIssue('I-F', 'other focus', 'doing')
   const row = await residentLedger({
     get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [parent, question, uncertain, focus], { stack: [focus.id], pending: [] }, [], { clauses: emptyClauseStore() })
+  }, 's1:main', [parent, question, uncertain, focus], { stack: [focus.id], pending: [] }, [])
   expect(row).toContain('plain child question')
   expect(row).toContain('plain child uncertainty')
 })
@@ -370,21 +214,8 @@ test('a dropped plain plan root with a done child emits no pending-decision line
   const child: Issue = { ...confirmIssue('I-C', 'completed child', 'done'), parent: root.id }
   const row = await residentLedger({
     get: async () => undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [root, child], { stack: [root.id], pending: [] }, [], { clauses: emptyClauseStore() })
+  }, 's1:main', [root, child], { stack: [root.id], pending: [] }, [])
   expect(row).not.toContain('보류:')
-})
-
-// Regression caught: adding labels made version-1 stores written before labels disappear from the ledger.
-test('an old store without labels renders unchanged', async () => {
-  const legacy = {
-    version: 1, nextId: 2, predicates: { 'found/3': { key: 2, example: 'found(subject, state, old).', kind: 'fact' } }, clauses: [{
-      id: 'C1', ...parseClause('found(subject, state, old).'), source: 'found(subject, state, old).', text: 'old unconditional fact', quote: 'proof', address: '@old', promptSeq: 1, issue: null, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'fold', kind: 'fact', evidence: { ref: 'm1', quote: 'proof' },
-    }],
-  }
-  const row = await residentLedger({
-    get: async key => key === 'clauses:s1:main' ? legacy : undefined, readLedger: async () => undefined, readMeta: async () => ({ seq: 0 }), readLegacyTopics: async () => [], readRequests: async () => [],
-  }, 's1:main', [], { stack: [], pending: [] }, [])
-  expect(section(row, 'facts')).toContain('- old unconditional fact (C1 @old)')
 })
 
 // Regression caught: a malformed note carrying the item prefix sent the re-read to the clipped title, losing the items behind "외 N건" and keeping that tail as an item.
@@ -575,14 +406,6 @@ test('two concurrent model TaskCreate calls keep both issues with distinct ids',
   expect(new Set(issues.map(i => i.id)).size).toBe(2)
 })
 
-// Regression caught: instruction lines from a ledger written before JSON-quoted instructions failed to parse and were deleted for good on the first fold after the upgrade.
-test('legacy free-form instruction lines survive clause migration verbatim', async () => {
-  const legacy = ['"headless only, no visible windows, no input events" (UI 검증)', 'PR 병합에 대해: "ㅇ 일단 다 머지하고 생각해보자"']
-  const notes = `## 목표\n- g\n\n## 사용자 지시\n${legacy.map(l => `- ${l}`).join('\n')}\n- "quoted one"\n- [additional user instructions in /ledger.md]\n\n## 핵심 사실·경로\n- f`
-  const out = carryLegacyInstructions(notes, instructionValues(notes), [], '/ledger.md')
-  expect(instructionValues(out.fullNotes)).toEqual([...legacy, 'quoted one'])
-})
-
 // Regression caught: on the escape path the retry fold dropped the row holding the withheld pointer, the merge saw only the pointer, and the prune deleted the file, losing the tool output with no record.
 test('a tool result folded away on the escape path keeps its withheld file and a ledger pointer to it', OPTS, async ($, on) => {
   const s: State = { rows: ESCAPE_ROWS, replies: [new Error('merge down'), ledger('x')], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 6000 } } }
@@ -613,7 +436,7 @@ test('a failed escape retry hands off to exactly one engine summary', OPTS, asyn
   const seen = bottoms(on, s)
   const messages = compactedMessages(await $.session.compact(compactInput('auto', handled(ESCAPE_ROWS))))
   expect(seen.engineCompactions).toBe(1)
-  expect(messages.map(m => m.text)).toEqual(['ENGINE SUMMARY', '[clm clauses]\n- (none)'])
+  expect(messages.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
   expect(seen.files[WITHHELD_FILE]).toBe('r'.repeat(4000))
 })
 
@@ -728,7 +551,6 @@ test('fold row renders /clear or ledger text instead of the compacted line', OPT
   expect(out[0].text).toBe('please investigate the build')
   const row = out.find((m: any) => m.text.startsWith('[clm ledger'))
   expect(row.text).not.toContain('## 핵심 사실·경로')
-  expect(section(row.text, 'facts')).toContain('fact')
   const drawn = await $.ui.mount({ plugin: 'clm', surface: 'terminal', component: 'UserMessage', props: { text: row.text, origin: { kind: 'composer' }, isExpanded: false } })
   expect((await drawn.drawn()).children[0]).toMatch(/^\* clm compacted/)
 })
@@ -771,15 +593,12 @@ test('a row built from oversized sections no longer exceeds ledgerTarget', async
   const ledger = [
     section('where we are', ['- focused task @aabbccdd', ...items('old topic', 12), '- stack 2 · pending 0']),
     section('what to do', items('child task', 6)),
-    section('what to request', items('open request', 5)),
-    section('user instructions', ['- keep the migration constraint']),
     section('uncertain', items('uncertain issue', 5)),
-    section('facts', items('old learned', 25)),
+    section('notes', items('old learned', 25)),
     section('owned resources', items('owned resource', 8)),
   ].join('\n\n')
   const row = ledgerRowText(9, '2026-10-16 09:00 KST', '/ledger.md', ledger, 400)
   expect(estTokens({ role: 'user', text: row, toolUses: [] })).toBeLessThanOrEqual(400)
-  expect(row).toContain('keep the migration constraint')
   expect(row).not.toContain('old learned 0')
   expect(row).not.toContain('old learned 1')
 })

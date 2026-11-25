@@ -143,8 +143,7 @@ function world(id: string) {
     pendingKey: async (k: string) => `pending:${k}`, topicsKey: async (k: string) => `topics:${k}`,
     captureOrigin: async () => ({ session: sid, repo: 'example.invalid/repo', cwd: '/work/repo' }),
     readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set<string>() }),
-    updateHeld: async () => undefined, backfillClauses: async () => undefined,
-    residentLedger: async (_key: string, _issues: unknown, _state: unknown, _events: unknown, preview?: { notes: string }) => preview?.notes ?? '',
+    updateHeld: async () => undefined,    residentLedger: async (_key: string, _issues: unknown, _state: unknown, _events: unknown, preview?: { notes: string }) => preview?.notes ?? '',
     append: async () => [], projectPanel: async () => undefined, readRewindIo: () => rewind, observeTranscript: async () => undefined,
     fold: (_opts: Opts, rows: readonly SessionMessage[], foldMeta: Meta, mustFold: boolean, _reading?: number, _calibrate?: boolean, prepared?: unknown) =>
       gate<Fold | string>('fold', { mustFold, prepared: prepared !== undefined, rows: [...rows], meta: { ...foldMeta } }),

@@ -12,8 +12,7 @@ import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMer
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { buildCleared, estTokens, fingerprint, foldedRows, isLedgerRow, ledgerRowText, planClear, protectedIndex, stableAttachmentOf, stableAttachmentRow, TOKEN_ESTIMATOR_VERSION, withQueuedMessages, type QueuedMessage } from './fold'
 import { applyReadyIfAtThreshold, clearFoldJob, handleSessionCompact, maybeClear, resetRetiredQueued, setRewindFoldJob, transcriptKey, type FoldJobIo } from './fold-job'
-import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldClausePromptSeq, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
-import { applyClauses, emptyClauseStore, parseClause } from './clauses'
+import { atFoldPoint, boundedOverhead, calibrateFirstReading, foldableTokens, parseSplitAnswer, readLegacyTopics } from './fold-runtime'
 import { recallAddress, recallQuery } from './address'
 import { plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps } from './stepfold'
 import type { Opts } from './fold-runtime'
@@ -30,7 +29,7 @@ const readStateFile = (files: Record<string, string>, path: string): Record<stri
 
 const readyPlan: RewindPlan = { notes: '', fullNotes: '', ops: [], seq: 1, keepFrom: 0, dropFps: [], cuts: {}, keptTurns: 0, fallback: false }
 const thresholdOpts: Opts = { budget: 2000, reserve: 100, tailTarget: 1200, queueTarget: 100000, ledgerTarget: 300, model: '', reviewModel: '' }
-const ENGINE_SUMMARY_TEXTS = ['ENGINE SUMMARY', '[clm clauses]\n- (none)']
+const ENGINE_SUMMARY_TEXTS = ['ENGINE SUMMARY']
 const queuedSource = (message: QueuedMessage) => {
   const row = withQueuedMessages([], [message], () => undefined)[0]
   if (row === undefined) throw new Error('queued source was not inserted')
@@ -363,22 +362,15 @@ test('one-turn no-plan step extraction starts only above 20k estimated tokens', 
 })
 
 // Regression caught: facts and legacy were absent from the trim order, so a ledger row could ship over its token cap.
-test('an oversized ledger with large facts and legacy sections is capped without trimming user instructions', () => {
+test('an oversized ledger with large facts and legacy sections is capped', () => {
   const maxTokens = 600
-  const instruction = '- keep this standing instruction intact'
-  const ledger = residentLedgerText(undefined, undefined, 0, 0, [instruction], {
-    facts: Array.from({ length: 20 }, (_, i) => `fact ${i} ${'f'.repeat(240)}`),
+  const ledger = residentLedgerText(undefined, undefined, 0, 0, {
+    notes: Array.from({ length: 20 }, (_, i) => `note ${i} ${'f'.repeat(240)}`),
     legacy: Array.from({ length: 20 }, (_, i) => `legacy ${i} ${'l'.repeat(240)}`),
   })
   expect(estTokens(M('user', ledger))).toBeGreaterThan(maxTokens)
   const row = ledgerRowText(1, '2026-11-03 00:00 KST', '', ledger, maxTokens)
   expect(estTokens(M('user', row))).toBeLessThanOrEqual(maxTokens)
-  expect(section(row, 'user instructions').trim()).toBe(instruction)
-})
-
-test('a fact from an address row recorded without promptSeq does not lose to an older fact', () => {
-  const older = applyClauses(emptyClauseStore(), [{ ...parseClause('measured(lint_css_ci, seconds, 48).'), text: '48 seconds', quote: '48 seconds', address: '@old', issue: null, origin: 'fold', kind: 'fact', evidence: { ref: 'tu_old', quote: '48 seconds' } }], 9, '2026-10-27T00:00:00Z').next
-  expect(foldClausePromptSeq(undefined, 0, older)).toBe(9)
 })
 
 // Regression caught: a session kept running the old store copy after a rebuild and its autocompact silently failed 40 times.
@@ -433,7 +425,7 @@ test('a plugin compaction with no clm plan returns the engine summary and logs i
     loadedFrom: '/nix/store/current-hm_clm', sessionId: async () => 'compact-log-plugin', now: async () => time += 5,
     readMeta: async () => ({ seq: 0, fails: 0 }), writeMeta: async () => undefined, observeTranscript: async () => undefined,
     storeGet: async () => undefined, storeDelete: async () => undefined, storeSet: async () => undefined, pendingKey: async () => 'pending:s1',
-    backfillClauses: async () => undefined,
+   
     queuedMessages: async () => [], markQueuedMessagesFolded: async () => undefined,
     logEvent: async (event: string, fields: Record<string, unknown>) => { events.push({ event, fields }); logged.resolve() }, log: () => undefined,
   } as unknown as FoldJobIo
@@ -484,7 +476,7 @@ test('a ready plan whose stable rows grow total context leaves the ledger, its s
     writeFile: async (path: string, text: string) => { files[path] = text },
     readRewindIo: () => ({ storeGet: async (key: string) => stored[key], storeSet: async (key: string, value: unknown) => { stored[key] = value } }),
     captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
-    append: async () => [], updateHeld: async () => undefined, backfillClauses: async () => undefined, readAll: async () => [],
+    append: async () => [], updateHeld: async () => undefined, readAll: async () => [],
     trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
     residentLedger: async (_key: string, _issues: unknown, _focus: unknown, _events: unknown, ledger: { notes: string }) => ledger.notes,
     stableAttachments: async (headKept: boolean) => ({ rows: [stableAttachmentRow('output_style_instructions', 's'.repeat(20_000))], headKept }),
@@ -661,7 +653,7 @@ test('after one unhandled session.compact, clm requests no further compaction in
     writeFile: async () => undefined, appendFile: async () => undefined, lessonsPath: async () => '', fileExists: async () => false, fileList: async () => [],
     run: async () => ({ exitCode: 0, stderr: '' }), captureOrigin: async () => ({ session, repo: '', cwd: '' }), readAll: async () => [],
     trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }), updateHeld: async () => undefined,
-    backfillClauses: async () => undefined, residentLedger: async () => '', append: async () => [], projectPanel: async () => undefined,
+    residentLedger: async () => '', append: async () => [], projectPanel: async () => undefined,
     readRewindIo: () => rewind, observeTranscript: async () => undefined,
     fold: async () => { foldStarts++; return 'disabled fold unexpectedly started' },
     complete: async () => ({ isAnswered: false, text: '', reason: 'unused' }),
@@ -743,7 +735,7 @@ test('a compact returns folded messages when store persistence exceeds its limit
     storeDelete: async () => undefined, pendingKey: async () => 'pending:s1', topicsKey: async () => 'topics:s1:main',
     captureOrigin: async () => ({ session: 's1', repo: 'example.invalid/repo', cwd: '/work/repo' }),
     readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set() }),
-    updateHeld: async () => { throw new Error('held store full') }, backfillClauses: async () => undefined,
+    updateHeld: async () => { throw new Error('held store full') },
     residentLedger: async () => { throw new Error('resident index write failed') },
     append: async () => { throw new Error('tracker write failed') }, projectPanel: async () => undefined, readRewindIo: () => rewind,
     observeTranscript: async () => { throw new Error('transcript write failed') }, fold: async () => { throw new Error('ready plan should bypass fold summary') },
@@ -808,7 +800,7 @@ test('a queued message placed by maybeClear lands at the same index when handleS
     serialize: async <T>(_session: string, run: () => Promise<T>) => run(), pendingKey: async () => 'pending:queued-plan', topicsKey: async () => 'topics:queued-plan',
     captureOrigin: async () => ({ session: 'queued-plan', repo: 'example.invalid/repo', cwd: '/work/repo' }),
     readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set<string>() }),
-    updateHeld: async () => undefined, backfillClauses: async () => undefined,
+    updateHeld: async () => undefined,
     residentLedger: async (_key: string, _issues: readonly Issue[], _state: { stack: string[]; pending: string[] }, _events: readonly never[], preview?: { notes: string }) => preview?.notes ?? '',
     append: async () => [], projectPanel: async () => undefined, readRewindIo: () => rewind, observeTranscript: async () => undefined,
     fold: async (_opts: Opts, working: readonly SessionMessage[]) => {
@@ -861,7 +853,7 @@ test('a queued message whose retire write failed stays retired after a rewind cl
     serialize: async <T>(_session: string, run: () => Promise<T>) => run(), pendingKey: async () => 'pending:retire-fails', topicsKey: async () => 'topics:retire-fails',
     captureOrigin: async () => ({ session: 'retire-fails', repo: 'example.invalid/repo', cwd: '/work/repo' }),
     readAll: async () => [], trackerView: async () => ({ issues: [], dropped: [], finished: [], doneTitles: new Set<string>() }),
-    updateHeld: async () => undefined, backfillClauses: async () => undefined,
+    updateHeld: async () => undefined,
     residentLedger: async (_key: string, _issues: readonly Issue[], _state: { stack: string[]; pending: string[] }, _events: readonly never[], preview?: { notes: string }) => preview?.notes ?? '',
     append: async () => [], projectPanel: async () => undefined, readRewindIo: () => rewind, observeTranscript: async () => undefined,
     fold: async (_opts: Opts, working: readonly SessionMessage[]) => {
@@ -993,7 +985,6 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   const out = seen.results[0].messages
   expect(out[0].text).toBe('please investigate the build')
   expect(out[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(section(out[1].text, 'facts')).toContain('a.ts:12 is the bad import')
   expect(shape(out.slice(2))).toEqual(['run tests', 'tu_c', 'tu_c', 'tests pass', 'commit it', 'done'])
   expect(out[0].handle).toBe('h0')
   expect(out.slice(1).some((m: any) => m.handle !== undefined)).toBe(false)
@@ -1001,14 +992,6 @@ test('over budget, a fold keeps [first request, ledger, newest turns] with tool 
   expect(seen.prompts[0]).not.toContain('tests pass')
   expect(seen.files[LEDGER_FILE]).toContain('## 핵심 사실·경로')
   expect(seen.engineCompactions).toBe(0)
-})
-
-// Regression caught: every fold rewrote the retired instruction index after clauses became authoritative.
-test('a fold leaves the retired instruction index absent', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('fold without a legacy index')] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  expect(seen.store['instruction-index:s1:main']).toBeUndefined()
 })
 
 // Regression caught: the harness moved stable attachments behind the ledger after compact, invalidating the cached prompt prefix.
@@ -1330,11 +1313,10 @@ test('the ledger round-trips through its file and survives a second fold', OPTS,
   // The stored transcript keeps the pre-fold chain in front of the live one.
   s.rows = [...ROWS, ...after1, M('user', 'add docs'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'docs added'), M('user', 'push'), M('assistant', 'pushed')]
   await turnEnds($, s, seen)
-  expect(seen.prompts[1]).toContain('FIRST-FACT')
+  expect(seen.prompts[1]).toContain('## 목표')
   const out = seen.results[1].messages
   expect(out.filter((m: any) => m.text.startsWith('[clm ledger')).length).toBe(1)
   expect(out[1].text).toMatch(/^\[clm ledger #2 · /)
-  expect(section(out[1].text, 'facts')).toContain('SECOND-FACT')
   expect(out.map((m: any) => m.text).filter(Boolean)).toEqual(['please investigate the build', out[1].text, 'push', 'pushed'])
 })
 
@@ -1360,7 +1342,7 @@ test('/clm prints the ledger, a budget line counting only post-boundary rows, an
   const text = seen.logs.at(-1)!
   const expected = after.reduce((n: number, m: any) => n + est(m), 0)
   expect(text.split('\n')[0]).toBe(`clm budget: ${expected}/2000 tokens (${Math.round(expected / 20)}%); escape at 1900, queue target 100000, tail target 1200, ledger target 300, ratio 1`)
-  expect(text).toContain('LEDGER-ONLY-FACT')
+  expect(text).toContain('## where we are')
   expect(text).toContain('"event":"clear"')
 })
 
@@ -1430,11 +1412,6 @@ test('a compact whose background summary never finishes folds mechanically at th
   let summaryStarted = false
   const s: State = { rows, replies: [], splitBlock: () => { summaryStarted = true; return new Promise<void>(() => {}) } }
   const seen = bottoms(on, s)
-  seen.store['clauses:s1:main'] = {
-    version: 1, nextId: 2, predicates: { preserve: { key: 0, example: 'preserve(instruction).' } }, clauses: [
-      { id: 'C1', head: { name: 'preserve', args: [{ atom: 'instruction' }] }, neg: false, body: [], source: 'preserve(instruction).', text: instruction, quote: instruction, address: '@00000001', promptSeq: 1, issue: null, at: '2026-10-27T00:00:00Z', status: 'live' },
-    ],
-  }
   seen.files[LEDGER_FILE] = `## 목표\n- keep goal\n\n## 사용자 지시\n- ${JSON.stringify(instruction)}\n\n## 한 일\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
   await $.turn.complete(TURN)
   for (let i = 0; i < 50 && !summaryStarted; i++) await new Promise(resolve => setTimeout(resolve, 2))
@@ -1450,7 +1427,6 @@ test('a compact whose background summary never finishes folds mechanically at th
   const result = compactedMessages(outcome.result)
   expect(result.reduce((total, row) => total + est(row), 0)).toBeLessThan(rows.reduce((total, row) => total + est(row), 0))
   expect(result[1]?.text).toMatch(/^\[clm ledger #1 · /)
-  expect(result[1]?.text).toContain(instruction)
   expect(storedLedger(seen)).toContain(JSON.stringify(instruction))
   expect(seen.store['ledger-snapshots:s1:main']).toHaveLength(1)
 })
@@ -1706,17 +1682,8 @@ test('a ready fold swaps on the next compaction even below the escape threshold'
   expect(crossed[1]?.text).toMatch(/^\[clm ledger #1 · /)
   expect(seen.engineCompactions).toBe(0)
   expect(seen.store['pending:s1']).toBeUndefined()
-  expect(section(crossed[1]!.text, 'where we are')).toContain('build summary')
+  expect(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl']).toContain('build: build summary')
   expect(seen.splitPrompts).toHaveLength(1)
-})
-
-test('a split fold prompt carries live_clauses', { options: { budget: 3000, tailTarget: 2200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [], splitReplies: [splitAnswer(2)], usage: { startedAt: 0, rateLimits: [], context: { window: 200000, tokens: 11_000 } } }
-  const seen = bottoms(on, s)
-  await $.turn.complete(TURN)
-  await waitForPending(seen)
-  expect(seen.splitPrompts[0]).toContain('<predicates>')
-  expect(seen.splitPrompts[0]).toContain('<live_clauses>')
 })
 
 // Regression caught: rewinding across an applied fold never restored the prior ledger snapshot.
@@ -1728,21 +1695,18 @@ test('a real rewind restores the prior folded ledger without another summary cal
   await $.turn.complete(TURN)
   await waitForPending(seen)
   const first = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
-  expect(section(first[1]?.text ?? '', 'where we are')).toContain('A outcome')
+  expect(first[1]?.text).toMatch(/^\[clm ledger #1 · /)
   s.rows = [...first, M('user', 'continue with C'), M('assistant', 'C'.repeat(11_000))]
   await $.turn.complete(turnInput('second-fold'))
   await waitForPending(seen)
   const second = compactedMessages(await $.session.compact(compactInput('auto', handled(s.rows))))
-  expect(section(second[1]?.text ?? '', 'where we are')).toContain('B outcome')
+  expect(second[1]?.text).toMatch(/^\[clm ledger #2 · /)
   expect(seen.store['ledger-snapshots:s1:main']).toHaveLength(2)
 
   s.rows = [...first]
   const calls = seen.splitPrompts.length + seen.prompts.length + seen.compressionPrompts.length
   const restored = compactedMessages(await $.session.compact(compactInput('plugin', handled(s.rows))))
   expect(restored.some(row => row.text.startsWith('[clm ledger #'))).toBe(true)
-  const restoredWhere = section(restored[1]?.text ?? '', 'where we are')
-  expect(restoredWhere).toContain('A outcome')
-  expect(restoredWhere).not.toContain('B outcome')
   expect(seen.splitPrompts.length + seen.prompts.length + seen.compressionPrompts.length).toBe(calls)
 })
 
@@ -1763,8 +1727,8 @@ test('a duplicated short prompt rewind leaves the ledger intact', { options: { b
   expect(seen.logs.some(line => line.includes('restored ledger snapshot'))).toBe(false)
 })
 
-// Regression caught: replacing topic recompression with goal clauses discarded an exact user instruction.
-test('goal migration retires topic recompression and preserves each user instruction verbatim', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 250, reserve: 100 } }, async ($, on) => {
+// Regression caught: replacing topic recompression with goal rows kept the old topic text in the ledger.
+test('goal migration retires topic recompression', { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 250, reserve: 100 } }, async ($, on) => {
   const instruction = 'Keep the public API stable while changing the parser.'
   const oldSummary = 'T1 '.repeat(160)
   const oldLedger = `[clm ledger #1 · 2026-10-14 09:00 KST] Earlier turns of this session were folded into these notes by a Haiku summary (file: ${LEDGER_FILE}).\n\n## 목표\n- T1: ${oldSummary}\n\n## 사용자 지시\n- (none yet)\n\n## 한 일\n- (none yet)\n\n## 할 일\n- (none yet)\n\n## 미결 질문\n- (none yet)\n\n## 핵심 사실·경로\n- (none yet)`
@@ -1777,24 +1741,18 @@ test('goal migration retires topic recompression and preserves each user instruc
   seen.files[LEDGER_FILE] = oldLedger
   seen.store['ledger:s1'] = { seq: 1, fails: 0 }
   seen.store['topics:s1'] = [{ topic: 'T1', summary: oldSummary, seq: 1 }]
-  seen.store['clauses:s1:main'] = {
-    version: 1, nextId: 2, predicates: { preserve: { key: 0, example: 'preserve(public_api).' } }, clauses: [
-      { id: 'C1', head: { name: 'preserve', args: [{ atom: 'public_api' }] }, neg: false, body: [], source: 'preserve(public_api).', text: instruction, quote: instruction, address: '@00000001', promptSeq: 1, sources: [], issue: null, at: '2026-10-27T00:00:00Z', status: 'live', origin: 'user', kind: 'instruction' },
-    ],
-  }
   await $.turn.complete(TURN)
   await waitForPending(seen)
   const result = compactedMessages(await $.session.compact(compactInput('plugin', handled(rows))))
   const ledgerRow = result[1]?.text ?? ''
   expect(seen.compressionPrompts).toHaveLength(0)
-  expect(section(ledgerRow, 'where we are')).not.toContain('T1:')
-  expect(section(ledgerRow, 'where we are')).toContain('T2: new topic summary')
+  expect(ledgerRow).not.toContain('T1:')
+  expect(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl']).toContain('T2: new topic summary')
   expect(ledgerRow).not.toContain('T1: T1 closed outcome')
   expect(ledgerRow).not.toContain(oldSummary)
   const ledgerMessage = result[1]
   if (!ledgerMessage) throw new Error('fold omitted the ledger message')
   expect(est(ledgerMessage)).toBeLessThanOrEqual(250)
-  expect(section(ledgerRow, 'user instructions')).toContain(instruction)
 })
 
 // Regression caught (guards 2 and 6): a fold cut the tool result of the newest turn while that command was still in progress.
@@ -1955,12 +1913,11 @@ test('auto compaction with no pending plan produces a clm ledger instead of an e
   const seen = bottoms(on, s)
   const auto = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
   expect(auto[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(section(auto[1].text, 'facts')).toContain('INLINE-FACT')
+  expect(storedLedger(seen)).toContain('## 목표')
   expect(seen.engineCompactions).toBe(0)
   // Nothing is left for clm to fold here, so the engine summary is the only way the context still shrinks.
-  const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
+  const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), M('assistant', 'ok')]))))
   expect(manual[0]?.text).toBe('ENGINE SUMMARY')
-  expect(manual[1]?.text).not.toContain('INLINE-FACT')
   expect(seen.engineCompactions).toBe(1)
 })
 
@@ -1974,19 +1931,6 @@ test('a non-shrinking auto job hands off to the engine summary after its escape 
   expect(r.messages?.map(m => m.text)).toEqual(ENGINE_SUMMARY_TEXTS)
   expect(seen.engineCompactions).toBe(1)
   expect(logEvents(seen).find(e => e.event === 'escape')).toBeDefined()
-})
-
-// Regression caught: engine handoff discarded the clause store from the live context, so the next turn had no user instructions.
-test('an engine handoff keeps the user clauses as a [clm clauses] row', OPTS, async ($, on) => {
-  const rows = [M('user', 'start')]
-  const seen = bottoms(on, { rows, replies: [] })
-  seen.store['clauses:s1:main'] = {
-    version: 1, nextId: 2, predicates: { forbid: { key: 0, example: 'forbid(push).' } }, clauses: [
-      { id: 'C1', head: { name: 'forbid', args: [{ atom: 'push' }] }, neg: false, body: [], source: 'forbid(push).', text: 'origin에 push하지 않는다.', quote: 'Never push to origin.', address: '@00000001', promptSeq: 1, issue: null, at: '2026-10-27T00:00:00Z', status: 'live' },
-    ],
-  }
-  const out = compactedMessages(await $.session.compact(compactInput('manual', handled(rows))))
-  expect(out.map(row => row.text)).toEqual(['ENGINE SUMMARY', '[clm clauses]\n- origin에 push하지 않는다. (C1 @00000001)'])
 })
 
 const FOLD_ROWS = [M('user', 'protected request'), M('user', 'finished A'), M('assistant', 'A'.repeat(6000)), M('user', 'active B'), M('assistant', 'B result')]
@@ -2043,11 +1987,9 @@ test('a handoff after a clm fold keeps the ledger', OPTS, async ($, on) => {
   const s: State = { rows: ROWS, replies: [ledger('INLINE-FACT'), 'not a ledger'] }
   const seen = bottoms(on, s)
   const auto = compactedMessages(await $.session.compact(compactInput('auto', handled(ROWS))))
-  expect(section(auto[1].text, 'facts')).toContain('INLINE-FACT')
-  const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), use('tu_f', 'Bash'), res('tu_f', BIG), M('assistant', 'ok')]))))
+  expect(storedLedger(seen)).toContain('## 목표')
+  const manual = compactedMessages(await $.session.compact(compactInput('manual', handled([...auto, M('user', 'more'), M('assistant', 'ok')]))))
   expect(manual[0]?.text).toBe('ENGINE SUMMARY')
-  expect(manual[1]?.text).not.toContain('INLINE-FACT')
   s.rows = [...manual, M('user', 'next'), M('assistant', 'done')]
   await $.session.compact(compactInput('plugin', handled(s.rows)))
-  expect(manual.some(row => row.text.includes('INLINE-FACT'))).toBe(false)
 })

@@ -17,14 +17,12 @@ import { readLedgerSnapshots, saveLedgerSnapshot, transcriptRowsKey, type Rewind
 import { xmlText } from './intent'
 import type { LogEvent, LogFields, Payloads } from './events'
 import { fnv1a, type SentAt } from './address'
-import { applyFoldClauseOps, assumptionStatuses, clauseStoreKey, emptyClauseStore, livePredicates, readClauseStore, renderClauses, type ClauseStore, type FoldClauseOp } from './clauses'
 import { appendArchive, archiveBlocks, archivePath } from './memory'
 import { finalizeStepReplacements, plannedStepSpans, shouldRequestSingleTurnSteps, stepReplacements, validateFoldSteps, type FoldStep } from './stepfold'
 
 type Pending = {
   notes: string; fullNotes: string; ops: Payload[]; asks?: Payload[]; seq: number; keepFp?: string; keepFrom: number; dropFps: string[]
   cuts: Record<string, number>; keptTurns: number; fallback: boolean; summaryMs?: number; topics?: TopicState[]
-  clauseOps?: FoldClauseOp[]
   steps?: FoldStep[]
   rewindOnly?: boolean; promoted?: Payload[]; hold?: Held[]; settled?: string[]
 }
@@ -48,8 +46,6 @@ const STEP_FOLD_SYSTEM = [
 
 export type FoldJobIo = {
   loadedFrom?: string
-  /** userConfig "wayseeker": the handoff's [clm clauses] row is the wayseeker mod's section; undefined keeps the clause store's. */
-  wayseekerInstructions?: (key: string) => Promise<string | undefined>
   sessionId(): Promise<string>
   sessionMessages(): Promise<SessionMessage[]>
   stableAttachments(headKept: boolean): Promise<{ rows: SessionMessage[]; headKept: boolean }>
@@ -83,7 +79,6 @@ export type FoldJobIo = {
   readAll(): Promise<TrackerEvent[]>
   trackerView(origin: Origin, ops?: readonly Payload[]): Promise<TrackerView>
   updateHeld(settled: readonly string[], hold: readonly Held[]): Promise<void>
-  backfillClauses(key: string): Promise<void>
   residentLedger(key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview?: FoldPreview): Promise<string>
   append(payloads: Payloads, origin: Origin, project: boolean, knownTitles: boolean): Promise<TrackerEvent[]>
   projectPanel(origin: Origin, events: readonly TrackerEvent[]): Promise<void>
@@ -226,7 +221,7 @@ function queueTurns(rows: readonly SessionMessage[], first: number): QueueTurn[]
   })
 }
 
-function splitPrompt(previous: string, turns: readonly QueueTurn[], retryRule: string, sentAt: SentAt, clauses: ClauseStore): string {
+function splitPrompt(previous: string, turns: readonly QueueTurn[], retryRule: string, sentAt: SentAt): string {
   let refOffset = 0
   const numbered = turns.map(turn => {
     const citable = turn.rows.filter(message => !isSystemRow(message) && !isLedgerRow(message))
@@ -236,8 +231,6 @@ function splitPrompt(previous: string, turns: readonly QueueTurn[], retryRule: s
   }).join('\n')
   return [
     `<current_ledger>\n${xmlText(previous)}\n</current_ledger>`,
-    `<predicates>\n${livePredicates(clauses, 40).map(xmlText).join('\n') || '(none)'}\n</predicates>`,
-    `<live_clauses>\n${renderClauses(clauses, () => true, 60).map(xmlText).join('\n') || '(none)'}\n</live_clauses>`,
     `<queue_turns>\n${numbered}\n</queue_turns>`,
     retryRule ? `<retry_rule>\n${xmlText(retryRule)}\n</retry_rule>` : '',
   ].filter(Boolean).join('\n\n')
@@ -290,7 +283,6 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
   const previous = (await io.readLedger()) ?? EMPTY_LEDGER
   const here = await io.captureOrigin()
   const view = await io.trackerView(here)
-  const clauses = readClauseStore(await io.storeGet(clauseStoreKey(key))) ?? emptyClauseStore()
   const known = new Set([...view.issues, ...view.dropped].map(issue => issue.id))
   const sentAt = await io.sentAt()
   // fold() stores overhead = reading - estimate, so a later fold over the same rows and reading would calibrate
@@ -299,7 +291,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
   const restoreCalibration = () => Object.assign(meta, { fails, ratio, overhead, lastObserved, estimatorVersion })
   let retryRule = ''
   for (let attempt = 0; attempt < 2; attempt++) {
-    const response = await io.complete({ model: opts.model, system: SPLIT_MERGE_SYSTEM, prompt: splitPrompt(previous, turns, retryRule, sentAt, clauses), maxTokens: 8192, timeoutMs: 120_000 })
+    const response = await io.complete({ model: opts.model, system: SPLIT_MERGE_SYSTEM, prompt: splitPrompt(previous, turns, retryRule, sentAt), maxTokens: 8192, timeoutMs: 120_000 })
     const answer = response.isAnswered ? parseSplitAnswer(response.text) : `split model gave no text (${response.reason})`
     if (typeof answer === 'string') {
       retryRule = `The previous reply failed: ${answer}. Return the required JSON object and choose a whole-turn split.`
@@ -323,7 +315,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       if (attempt === 1) io.log(`clm: split summary rejected (${retryRule}); the next turn end may retry`, { to: 'debug' })
       continue
     }
-    const merge = parseMerge(answer.mergeReply, known, factLines(notesOf(previous)), new Set(clauses.clauses.map(clause => clause.id)))
+    const merge = parseMerge(answer.mergeReply, known, factLines(notesOf(previous)))
     if (typeof merge === 'string') {
       retryRule = `The previous summary failed validation: ${merge}. Return the required {"split","ops"} JSON object.`
       if (attempt === 1) io.log(`clm: split summary rejected (${merge}); the next turn end may retry`, { to: 'debug' })
@@ -358,7 +350,7 @@ async function prepareBackgroundFold(io: FoldJobIo, opts: Opts, rows: readonly S
       ...(folded.plan.tail[0] ? { keepFp: fingerprint(folded.plan.tail[0]) } : {}),
       keepFrom: rows.length - folded.plan.tail.length,
       dropFps: dropFpsOf(folded.plan.dropped),
-      cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauseOps: folded.clauseOps,
+      cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics,
       promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
       ...(steps.length ? { steps } : {}),
     }
@@ -375,7 +367,7 @@ function pendingFromFold(folded: Fold, rows: readonly SessionMessage[], summaryM
     notes: folded.notes, fullNotes: folded.fullNotes, ops: folded.ops, asks: folded.asks, seq: folded.seq,
     ...(keptRow ? { keepFp: fingerprint(keptRow) } : {}), keepFrom,
     dropFps: dropFpsOf(folded.plan.dropped),
-    cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics, clauseOps: folded.clauseOps,
+    cuts: folded.plan.cuts, keptTurns: folded.plan.keptTurns, fallback: folded.fallback, summaryMs, topics: folded.topics,
     promoted: folded.promoted, hold: folded.hold, settled: folded.settled,
     ...(steps.length ? { steps } : {}),
   }
@@ -653,10 +645,8 @@ async function applyFoldPlan(
   const currentView = await io.trackerView(here)
   const liveIssues = snapshot(stateEvents).filter(issue => issue.origin.session === here.session)
   const liveFocus = focusOf(stateEvents, here.session)
-  const liveClauseStore = readClauseStore(await io.storeGet(clauseStoreKey(key))) ?? emptyClauseStore()
-  const previewClauses = use.clauseOps?.length ? applyFoldClauseOps(liveClauseStore, use.clauseOps, new Date().toISOString()) : liveClauseStore
   const fileLedger = composeLedger(use.fullNotes, currentView.issues)
-  const ledger = await persistStep(io, fileLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus, clauses: previewClauses }))
+  const ledger = await persistStep(io, fileLedger, () => io.residentLedger(key, liveIssues, liveFocus, stateEvents, { notes: use.fullNotes, topics: use.topics, issues: liveIssues, state: liveFocus }))
   const text = ledgerRowText(use.seq, kst(), await io.ledgerPath(), ledger, opts.ledgerTarget)
   const ledgerRow: SessionMessage = { role: 'user', text, toolUses: [] }
   const headGroup = keepsHeadGroup(workingRows, first)
@@ -703,10 +693,6 @@ async function applyFoldPlan(
   return persistCompactResult(io, result, async () => {
     await io.writeFile(await io.ledgerPath(), fileLedger + '\n')
     await archiveFolded(io, use.seq, dropped)
-    if (use.clauseOps?.length) await io.serialize(here.session, async () => {
-      const live = readClauseStore(await io.storeGet(clauseStoreKey(key))) ?? emptyClauseStore()
-      await io.storeSet(clauseStoreKey(key), applyFoldClauseOps(live, use.clauseOps ?? [], new Date().toISOString()))
-    })
     const topicKey = await io.topicsKey(key)
     if (use.topics) await io.storeSet(topicKey, use.topics)
     else await io.storeDelete(topicKey)
@@ -809,21 +795,11 @@ async function awaitOrFallback(
 // until it reported thrashing. Every decline goes to the engine summarizer.
 export async function handOff(io: FoldJobIo, key: string, handoff: () => Promise<SessionCompactResult>, why: string): Promise<SessionCompactResult> {
   try { io.log(`clm: ${why}; the engine summarizer compacts instead`, { to: 'debug' }) } catch { /* logging never blocks compaction */ }
-  await persistStep<void>(io, undefined, () => io.backfillClauses(key))
   const result = await handoff()
   // A retire that throws must not skip adopting the engine summary below.
   await retireQueued(io, key, await persistStep<QueuedMessage[]>(io, [], () => queuedMessages(io, key)))
-  const store = readClauseStore(await persistStep(io, undefined, () => io.storeGet(clauseStoreKey(key)))) ?? emptyClauseStore()
-  const issues = snapshot(typeof io.readAll === 'function' ? await persistStep<TrackerEvent[]>(io, [], () => io.readAll()) : [])
-  const clauses = renderClauses(store, () => true, 40, ['instruction'], assumptionStatuses(store, issues))
-  const wayseeker = io.wayseekerInstructions ? await persistStep<string | undefined>(io, undefined, () => io.wayseekerInstructions!(key)) : undefined
-  const body = wayseeker ?? (clauses.join('\n') || '- (none)')
-  const messages = result.messages?.length
-    ? [result.messages[0]!, { role: 'user' as const, text: `[clm clauses]\n${body}`, toolUses: [] }, ...result.messages.slice(1).filter(row => !row.text.startsWith('[clm clauses]'))]
-    : result.messages
-  const kept = messages ? { ...result, messages } : result
-  await adoptEngineSummary(io, key, messages)
-  return kept
+  await adoptEngineSummary(io, key, result.messages)
+  return result
 }
 
 export async function handleSessionCompact(

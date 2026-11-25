@@ -22,7 +22,7 @@ import {
 } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
-import { backfillClausesChained, recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
+import { recordPromptIntent as classifyPrompt, isRequestRecord, type RequestRecord, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
 import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
@@ -33,7 +33,6 @@ import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopics
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
 import { registerResources } from './resources'
 import { coworkerIntent, registerCoworkers } from './coworker-runtime'
-import { clauseStoreKey, emptyClauseStore, readClauseStore } from './clauses'
 
 export { recallRows } from './address'
 export { residentLedgerText } from './resident'
@@ -164,7 +163,7 @@ const topicsKey = async ($: EngineInterface, key?: string) => {
 const requestsKey = (key: string) => `requests:${key}`
 
 const SESSION_STORE_PREFIXES = new Set([
-  'address-index', 'agent-task-roots', 'agent-task-step-claims', 'clause-backlog', 'clauses', 'headAttachments', 'held', 'instruction-index', 'issue-addresses',
+  'address-index', 'agent-task-roots', 'agent-task-step-claims', 'headAttachments', 'held', 'issue-addresses',
   'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows',
 ])
 const SESSION_STATE_MAX_BYTES = 4_194_304
@@ -944,7 +943,6 @@ const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
   gateMerge: (ops, evidence, facts, sources, ratio, dropped, issues) => gateMerge($, ops, evidence, facts, sources, ratio, dropped, issues),
   reviewFold: (opts, input) => reviewFold($, opts, input),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
-  clauseStore: async key => readClauseStore(await sessionStoreGet($, clauseStoreKey(key))) ?? emptyClauseStore(),
   addressRows: key => addressRows(addressIo($), key),
   nowIso: () => nowIso($),
   readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
@@ -986,9 +984,8 @@ const residentIo = ($: EngineInterface): ResidentIo => ({
   readMeta: () => readMeta($),
   readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
   readRequests: key => readRequests($, key),
-  ...(wayseekerEnabled ? { wayseekerInstructions: (key: string) => wayseekerInstructions($, key) } : {}),
 })
-const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] }; clauses?: import('./clauses').ClauseStore } = {}) =>
+const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } } = {}) =>
   renderResidentLedger(residentIo($), key, issues, state, events, preview)
 
 const intentIo = ($: EngineInterface): PromptIntentIo => ({
@@ -1010,25 +1007,6 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
 const recordPromptIntent = async ($: EngineInterface, text: string, promptSeq: number, address?: string) => {
   const coworker = coworkerIntent(await sid($))
   return classifyPrompt({ ...intentIo($), ...coworker }, text, promptSeq, address)
-}
-
-// userConfig "wayseeker", set once by register; off keeps every path on the clause store.
-let wayseekerEnabled = false
-type WayseekerNoun = { instructions(input?: { sessionId?: string; agentId?: string }): Promise<string> }
-/**
- * The wayseeker mod's rendered user instructions for a transcript key, or undefined when that mod is not
- * loaded or fails, so the caller keeps the clause store's section. clm only reads wayseeker; it never depends on it.
- */
-// The host refuses $.wayseeker read as a value, so presence is tested by the call itself: without the wayseeker mod it throws.
-async function wayseekerInstructions($: EngineInterface & { wayseeker?: WayseekerNoun }, key: string): Promise<string | undefined> {
-  const split = key.lastIndexOf(':')
-  const agent = key.slice(split + 1)
-  try {
-    return await $.wayseeker!.instructions({ sessionId: key.slice(0, split), ...(agent === 'main' ? {} : { agentId: agent }) })
-  } catch (err) {
-    $.ui.log(`clm wayseeker: instructions unavailable, using the clause store (${String(err).slice(0, 160)})`, { to: 'debug' })
-    return undefined
-  }
 }
 
 /** Options resolved against the live context window, so the threshold point follows the model in use. */
@@ -1069,7 +1047,6 @@ const rewindIo = ($: EngineInterface): RewindIo => ({
 
 const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   loadedFrom: loadedFromPath,
-  ...(wayseekerEnabled ? { wayseekerInstructions: (key: string) => wayseekerInstructions($, key) } : {}),
   sessionId: () => $.session.id(),
   sessionMessages: () => $.session.messages(),
   stableAttachments: headKept => stableAttachmentRows($, headKept),
@@ -1106,7 +1083,6 @@ const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
   readAll: () => readAll($),
   trackerView: (origin, ops) => trackerView($, origin, ops),
   updateHeld: (settled, hold) => updateHeld($, settled, hold),
-  backfillClauses: key => backfillClausesChained(intentIo($), key.split(':', 1)[0] ?? key, key),
   residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
   append: (payloads, origin, project, knownTitles) => append($, payloads, origin, project, knownTitles),
   projectPanel: (origin, events) => projectPanel($, origin, events),
@@ -1175,7 +1151,7 @@ const mainTurnCompletionIo = ($: EngineInterface, opts: Opts): MainTurnCompletio
 // clm-prompt
 const GUIDE = [
   'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
-  'That row carries the goal, live user instructions as plaintext clauses with C-ids, what was done, what is left, open questions and key facts. An engine summary is followed by a "[clm clauses]" row with the same live instructions. The turns they replaced are gone.',
+  'That row carries the goal, what was done, what is left, open tracker questions. The turns they replaced are gone.',
   'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
   'Describe task changes in the conversation; clm records them in the tracker and task panel.',
   'A result shown as `[clm step … done: …]` was folded. Call clm_recall with its @step address to read the raw output instead of re-running the command or re-reading the file.',
@@ -1188,7 +1164,6 @@ export const register: Register = (on, options) => {
   const forceCompacts = new Set<string>()
   const { problems } = readOpts(options as Record<string, unknown>)
   const userOptions = options as Record<string, unknown>
-  wayseekerEnabled = userOptions.wayseeker === true
   let loadedFromPath: string | undefined
   const warnedStaleSessions = new Set<string>()
 
@@ -1229,7 +1204,7 @@ export const register: Register = (on, options) => {
     try {
       await $.tool.register({
         name: 'clm_recall',
-        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last, a folded step\'s raw tool results with @step:<id>, one folded row with @fold:<seq>.<n>, one stored instruction with #C12, or all stored instructions with clauses. Includes folded and rewound history. To find something you no longer have an address for, pass query instead: words that must all appear (case-insensitive); each hit gives the address to read in full and a short snippet, newest first.',
+        description: 'Read original transcript rows by address @xxxxxxxx or an ancestor range @first..@last, a folded step\'s raw tool results with @step:<id>, one folded row with @fold:<seq>.<n>. Includes folded and rewound history. To find something you no longer have an address for, pass query instead: words that must all appear (case-insensitive); each hit gives the address to read in full and a short snippet, newest first.',
         inputSchema: { type: 'object', properties: { address: { type: 'string' }, query: { type: 'string' } }, additionalProperties: false },
       })
     } catch (err) {

@@ -6,8 +6,7 @@ import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, recallRows, residentLedgerText, TASK_TOOL } from './register'
 import type { Held, Meta } from './register'
 import { planPromptContext } from './panel'
-import { backfillClausesChained, INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
-import { applyClauses, emptyClauseStore, parseClause, readClauseStore, renderClauses } from './clauses'
+import { INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
 import { observeTranscript, transcriptRowsKey, type RewindIo } from './rewind'
 import type { ClmWorkflow } from '../types'
 
@@ -366,23 +365,6 @@ test('the ledger header carries a KST time and is still read as a ledger row', O
   await turnEnds($, s, seen)
   expect(seen.results[1].messages.filter((m: any) => m.text.startsWith('[clm ledger')).length).toBe(1)
 })
-
-// Regression caught: short pieces scattered across a row ("push…to…origin…main") each matched somewhere, so a quote the row never says held as evidence.
-test('a quote of short pieces scattered across a row is refused, a long piece ending in the clip ellipsis holds', OPTS, async ($, on) => {
-  const rows = [...ROWS]
-  rows[2] = res('tu_a', 'error: failed to push some refs to origin; branch main is behind its remote counterpart' + 'x'.repeat(4000))
-  const ops = [
-    { op: 'fact', text: 'FACT-SCATTERED', evidence: [{ ref: 'tu_a', quote: 'push…to…origin…main' }] },
-    { op: 'fact', text: 'FACT-ONE-PIECE', evidence: [{ ref: 'tu_a', quote: 'failed to push some refs to origin…' }] },
-  ]
-  const s: State = { rows, replies: [JSON.stringify({ ops })] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  const facts = section(seen.results[0].messages[1].text, 'facts')
-  expect(facts).not.toContain('FACT-SCATTERED')
-  expect(facts).toContain('FACT-ONE-PIECE')
-})
-
 // Regression caught: a length cutoff filed short directives (하지마, push, 멈춰) as noise, and since stored lines pass the same filter the next fold deleted them for good.
 test('short directives stay in 사용자 지시 and survive the next fold reading them back', async () => {
   const prev = '## 목표\n- g\n\n## 사용자 지시\n- "ㄱ"\n\n## 핵심 사실·경로\n- f'
@@ -827,8 +809,12 @@ test('an uncited clm_task done stays done', OPTS, async ($, on) => {
 test('a fold after an earlier clm_task update still applies its own ops', { options: { ...BG_OPTS.options, tailTarget: 2500 } }, async ($, on) => {
   const rows = [...ROWS]
   rows[2] = res('tu_a', 'log: make fails at a.ts:12 ' + 'x'.repeat(24_000))
+  // Hold the background split until turn.complete has returned: a ready plan would otherwise be swapped inside turn.complete, which this engine mock cannot compact without rows.
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
   const s: State = {
     rows, replies: [], splitReplies: [JSON.stringify({ split: 2, ops: [{ op: 'create', title: 'fold-created issue', status: 'todo' }] })],
+    splitBlock: () => gate,
   }
   const seen = bottoms(on, s)
   panelHandlers(on, seen)
@@ -837,21 +823,15 @@ test('a fold after an earlier clm_task update still applies its own ops', { opti
     { op: 'focus', stack: ['s1-focus'], pending: [], intent: 'handoff' },
   ])
   await $.tool.call({ tool: TASK_TOOL, id: 's1-focus', status: 'doing', note: 'started in this turn' } satisfies ToolCallInput)
-  await turnEnds($, s, seen)
+  await $.turn.complete(TURN)
+  release()
+  seen.results.push(await $.session.compact({ trigger: 'manual', messages: handled(s.rows) }))
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).map(issue => issue.title)).toContain('fold-created issue')
 })
 
 const until = async (check: () => boolean) => {
   for (let i = 0; i < 300 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 2))
 }
-const storedClauses = (seen: Seen) => readClauseStore(seen.store['clauses:s1:main'])?.clauses ?? []
-const liveSources = (seen: Seen) => storedClauses(seen).filter(clause => clause.status === 'live').map(clause => clause.source)
-const settled = (seen: Seen) => Array.isArray(seen.store['clause-backlog:s1:main']) && (seen.store['clause-backlog:s1:main'] as unknown[]).length === 0
-// Real prompts from session f757aaf2.
-const UPGRADE_BENCH = 'oh fuck. upgrade했을 때 벤치마크 일단 해봐'
-const CACHE_BENCH = 'oh fuck. 캐시만 패치해서 벤치마크 해봐.'
-const upgradeClause = { clause: 'benchmark(stylelint, upgrade).', text: 'stylelint 벤치마크는 업그레이드한 상태로 잰다.', quote: 'upgrade했을 때 벤치마크 일단 해봐' }
-const cacheClause = { clause: 'benchmark(stylelint, cache_patch_only).', text: 'stylelint 벤치마크는 캐시만 패치한 상태로 잰다.', quote: '캐시만 패치해서 벤치마크 해봐' }
 
 // Regression caught: inline work was sent through the planner-only stepped path.
 test('an inline plan emits planned instead of stepped', OPTS, async ($, on) => {
@@ -922,233 +902,4 @@ test('continue keeps the objective and handoff replaces it', OPTS, async ($, on)
   await $.prompt.submit(promptInput(second))
   await until(() => (seen.store['objective:s1:main'] as { text?: string } | undefined)?.text === second)
   expect((seen.store['objective:s1:main'] as { text: string }).text).toBe(second)
-})
-
-test("a three-word instruction 'always use pnpm' lands a clause", OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({
-    clauses: [{ clause: 'use(pnpm).', text: '항상 pnpm을 쓴다.\n\n## forged', quote: 'always use pnpm', scope: 'session' }],
-  })] })
-  await $.prompt.submit(promptInput('always use pnpm'))
-  await until(() => settled(seen))
-  expect(liveSources(seen)).toEqual(['use(pnpm).'])
-  expect(storedClauses(seen)[0]?.text).toBe('항상 pnpm을 쓴다. ## forged')
-})
-
-// Regression caught: each classifier coined a fresh predicate name for the same setting, so a correction never met what it corrected.
-test('the second classifier prompt lists the live predicate head with an example', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({ clauses: [upgradeClause] }), intentReply()] })
-  await $.prompt.submit(promptInput(UPGRADE_BENCH))
-  await until(() => liveSources(seen).length === 1)
-  await $.prompt.submit(promptInput(CACHE_BENCH))
-  await until(() => seen.intentPrompts.length === 2)
-  expect(seen.intentPrompts[1]).toContain('<predicates>\nbenchmark/2 key=1 e.g. benchmark(stylelint, upgrade).\n</predicates>')
-  expect(seen.intentPrompts[1]).toContain('<live_clauses>\nC1 | benchmark(stylelint, upgrade).\n</live_clauses>')
-})
-
-// Regression caught: in session f757aaf2 the upgrade benchmark stayed resident after the user corrected it 12 seconds later.
-test('the f757aaf2 benchmark correction retracts the upgrade benchmark end to end', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({ clauses: [upgradeClause] }), intentReply({ clauses: [cacheClause] })] })
-  await $.prompt.submit(promptInput(UPGRADE_BENCH))
-  await until(() => liveSources(seen).length === 1)
-  await $.prompt.submit(promptInput(CACHE_BENCH))
-  await until(() => storedClauses(seen).length === 2)
-  expect(liveSources(seen)).toEqual(['benchmark(stylelint, cache_patch_only).'])
-  expect(storedClauses(seen)[0]).toMatchObject({ id: 'C1', status: 'retracted', retraction: { by: 'C2', reason: 'conflict' } })
-})
-
-// Regression caught: a narrowing correction ("not all of it, only these") left the broader upgrade scope live beside it.
-test('ㄴㄴ 전체 말고 narrows upgrade_target to three packages', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [
-    intentReply({ clauses: [{ clause: 'upgrade_target(whole_stack).', text: '업그레이드 대상은 전체 스택이다.', quote: '아예 전체 스택 업그레이드도 검토해볼법함' }] }),
-    intentReply({
-      clauses: [{ clause: "upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint']).", text: '업그레이드 대상은 stylelint, typescript, typescript-eslint 셋뿐이다.', quote: 'ㄴㄴ 전체 말고 stylelint, typescript, typescript-eslint만 대상.' }],
-      retract: [{ id: 'C1', quote: 'ㄴㄴ 전체 말고' }],
-    }),
-  ] })
-  await $.prompt.submit(promptInput('typescript 7 stable 안나옴? 아예 전체 스택 업그레이드도 검토해볼법함'))
-  await until(() => liveSources(seen).length === 1)
-  await $.prompt.submit(promptInput('ㄴㄴ 전체 말고 stylelint, typescript, typescript-eslint만 대상.'))
-  await until(() => storedClauses(seen).length === 2)
-  expect(liveSources(seen)).toEqual(["upgrade_target(X) :- member(X, [stylelint, typescript, 'typescript-eslint'])."])
-})
-
-// Regression caught: a side request that also set a policy lost one of the two, since focus and instructions shared one field.
-test('ㅈㅁ format warn yields one error-policy clause alongside an interleave intent', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({
-    intent: 'interleave', title: 'format 규칙 warn으로 낮추기',
-    clauses: [{ clause: 'lint_severity(format, warn).', text: 'format 규칙 위반은 warn으로 둔다.', quote: 'format 에러는 warn으로 내려줘' }],
-  })] })
-  await $.prompt.submit(promptInput('ㅈㅁ format 에러는 warn으로 내려줘'))
-  await until(() => settled(seen) && (seen.files[TRACKER] ?? '').includes('"focus"'))
-  expect(liveSources(seen)).toEqual(['lint_severity(format, warn).'])
-  const events = parseLog(seen.files[TRACKER] ?? '')
-  expect(events.filter(event => event.op === 'focus').map(event => event.op === 'focus' && event.intent)).toEqual(['interleave'])
-})
-
-// Regression caught: a question about a tool choice was stored as an order to use that tool.
-test('a question stores no clause even when the model proposes one ("tsgo는 왜 적용함? 해도 돼?")', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({
-    intent: 'question', clauses: [{ clause: 'use(tsgo).', text: 'tsgo를 쓴다.', quote: 'tsgo는 왜 적용함? 해도 돼?' }],
-  })] })
-  await $.prompt.submit(promptInput('tsgo는 왜 적용함? 해도 돼?'))
-  await until(() => settled(seen))
-  expect(settled(seen)).toBe(true)
-  expect(storedClauses(seen)).toEqual([])
-})
-
-// Regression caught: a clause the model invented, quoting words the user never typed, became a standing instruction.
-test('a clause whose quote is absent from the prompt is dropped', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({
-    clauses: [{ clause: 'forbid(push).', text: 'push는 하지 않는다.', quote: '절대로 push는 하지 말 것' }],
-  })] })
-  await $.prompt.submit(promptInput(UPGRADE_BENCH))
-  await until(() => settled(seen))
-  expect(storedClauses(seen)).toEqual([])
-  expect(seen.logs.some(line => line.startsWith('clm clause: dropped forbid(push).'))).toBe(true)
-})
-
-// Regression caught: a classifier timeout lost the prompt's instruction for good.
-test('a classifier timeout leaves the prompt in the backlog and the next job backfills it', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: ROWS, replies: [], intentReplies: [new Error('timeout'), intentReply()],
-    backfillReplies: [JSON.stringify({ clauses: [{ prompt: 1, ...upgradeClause }] })],
-  })
-  await $.prompt.submit(promptInput(UPGRADE_BENCH))
-  await until(() => seen.logs.some(line => line.includes('model did not answer (timeout)')))
-  expect((seen.store['clause-backlog:s1:main'] as { text: string }[]).map(entry => entry.text)).toEqual([UPGRADE_BENCH])
-  await $.prompt.submit(promptInput('stylelint부터 해줘'))
-  await until(() => settled(seen))
-  expect(seen.backfillPrompts).toHaveLength(1)
-  expect(seen.backfillPrompts[0]).toContain(`1. ${UPGRADE_BENCH}`)
-  expect(liveSources(seen)).toEqual(['benchmark(stylelint, upgrade).'])
-})
-
-test('an unparseable backfill reply keeps the legacy instructions in the backlog', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: ROWS, replies: [], intentReplies: [intentReply()], backfillReplies: ['not json'],
-  })
-  seen.store['instruction-index:s1:main'] = [{ address: '@11111111', issue: null, text: '앞으로 push는 하지 말 것' }]
-  await $.prompt.submit(promptInput('stylelint부터 해줘'))
-  await until(() => settled(seen) || (seen.store['clause-backlog:s1:main'] as { attempts?: number }[] | undefined)?.some(entry => entry.attempts === 1) === true)
-  expect(seen.store['clause-backlog:s1:main']).toContainEqual(expect.objectContaining({ address: '@11111111', text: '앞으로 push는 하지 말 것', attempts: 1 }))
-})
-
-test('a task-scoped instruction given with a handoff shows under the new task', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [intentReply({
-    intent: 'handoff', title: 'B 작업',
-    clauses: [{ clause: 'forbid(commit).', text: '이 작업에서는 커밋하지 않는다.', quote: '이 작업에선 커밋하지 마', scope: 'task' }],
-  })] })
-  await $.prompt.submit(promptInput('이제 B 하자. 이 작업에선 커밋하지 마'))
-  await until(() => settled(seen) && (seen.files[TRACKER] ?? '').includes('"focus"'))
-  const events = parseLog(seen.files[TRACKER] ?? '')
-  const focus = focusOf(events, 's1').stack.at(-1)
-  const store = readClauseStore(seen.store['clauses:s1:main'])
-  expect(focus).toBeDefined()
-  expect(store?.clauses[0]?.issue).toBe(focus)
-  expect(renderClauses(store ?? emptyClauseStore(), issue => issue === null || issue === focus).some(line => line.startsWith('- 이 작업에서는 커밋하지 않는다. (C1 @'))).toBe(true)
-})
-
-test('an engine handoff backfill waits for the session classifier chain', async () => {
-  const values = new Map<string, unknown>()
-  let release!: () => void
-  let started!: () => void
-  const gate = new Promise<void>(resolve => { release = resolve })
-  const classifierStarted = new Promise<void>(resolve => { started = resolve })
-  let calls = 0
-  const io: PromptIntentIo = {
-    captureOrigin: async () => ({ session: 's1', repo: 'o/repo', cwd: '/work/repo' }),
-    readAll: async () => [], readWorkflow: async () => workflow(),
-    changeWorkflow: async change => change(workflow()).result, sessionMessages: async () => [],
-    complete: async () => {
-      calls++
-      if (calls === 1) { started(); await gate; return { isAnswered: true, text: intentReply(), reason: '' } }
-      return { isAnswered: true, text: '{"clauses":[]}', reason: '' }
-    },
-    get: async key => values.get(key), set: async (key, value) => { values.set(key, value) },
-    writeEvents: async () => [], serialize: async (_session, run) => run(), syncPanel: async () => undefined, log: () => undefined,
-  }
-  const classify = recordPromptIntent(io, 'do the work', 1, '@00000001')
-  await classifierStarted
-  let finished = false
-  const handoffBackfill = backfillClausesChained(io, 's1', 's1:main').then(() => { finished = true })
-  await new Promise(resolve => setTimeout(resolve, 0))
-  expect(finished).toBe(false)
-  expect(calls).toBe(1)
-  release()
-  await Promise.all([classify, handoffBackfill])
-  expect(calls).toBe(1)
-})
-
-// Regression caught: the focus guard that drops an older prompt's focus also dropped the instruction it carried.
-test('an older focus result still lands its clauses', async () => {
-  const values = new Map<string, unknown>()
-  const logs: string[] = []
-  const io: PromptIntentIo = {
-    captureOrigin: async () => ({ session: 's1', repo: 'o/repo', cwd: '/work/repo' }),
-    readAll: async () => [],
-    readWorkflow: async () => workflow({ promptSeq: 3, focusAppliedSeq: 3 }),
-    changeWorkflow: async change => change(workflow({ promptSeq: 3, focusAppliedSeq: 3 })).result,
-    sessionMessages: async () => [],
-    complete: async () => ({ isAnswered: true, text: intentReply({ clauses: [cacheClause] }), reason: '' }),
-    get: async key => values.get(key), set: async (key, value) => { values.set(key, value) },
-    writeEvents: async () => [], serialize: async (_session, run) => run(), syncPanel: async () => undefined,
-    log: text => { logs.push(text) },
-  }
-  await recordPromptIntent(io, CACHE_BENCH, 2, '@f304e1f3')
-  expect(logs).toContain('clm intent: dropped older focus result 2 (applied 3)')
-  expect(readClauseStore(values.get('clauses:s1:main'))?.clauses.map(clause => [clause.source, clause.address, clause.status]))
-    .toEqual([['benchmark(stylelint, cache_patch_only).', '@f304e1f3', 'live']])
-})
-
-// Regression caught: a request that only restated a corrected instruction stayed open after the correction.
-test('a retracted clause closes the open request it duplicated', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: ROWS, replies: [], intentReplies: [
-    intentReply({ clauses: [upgradeClause], raised: [{ text: 'stylelint 업그레이드 상태로 벤치마크해.', quote: 'upgrade했을 때 벤치마크 일단 해봐' }] }),
-    intentReply({ clauses: [cacheClause] }),
-  ] })
-  await $.prompt.submit(promptInput(UPGRADE_BENCH))
-  await until(() => Array.isArray(seen.store['requests:s1:main']))
-  await $.prompt.submit(promptInput(CACHE_BENCH))
-  await until(() => (seen.store['requests:s1:main'] as { status: string }[]).every(request => request.status !== 'open'))
-  expect(seen.store['requests:s1:main']).toEqual([expect.objectContaining({ id: 'R1', status: 'skipped' })])
-})
-
-// Regression caught: a rewound correction left its replacement live and the clause it had replaced retracted.
-test('rewinding the correcting prompt revives the retracted benchmark clause', async () => {
-  const values = new Map<string, unknown>()
-  const at = '2026-10-27T00:00:00.000Z'
-  const incoming = (source: string, quote: string, address: string) => ({ ...parseClause(source), text: source, quote, address, issue: null })
-  const first = applyClauses(emptyClauseStore(), [incoming('benchmark(stylelint, upgrade).', upgradeClause.quote, '@979cd619')], 1, at).next
-  values.set('clauses:s1:main', applyClauses(first, [incoming('benchmark(stylelint, cache_patch_only).', cacheClause.quote, '@f304e1f3')], 2, at).next)
-  values.set('address-index:s1:main', { rows: [{ address: '@979cd619', text: UPGRADE_BENCH, at }, { address: '@f304e1f3', text: CACHE_BENCH, at }], stamps: {} })
-  const kept = [M('user', UPGRADE_BENCH), M('assistant', 'ok')]
-  values.set(transcriptRowsKey('s1:main'), [...kept, M('user', CACHE_BENCH), M('assistant', 'ok')].map(fingerprint))
-  const io = {
-    storeGet: async (key: string) => values.get(key), storeSet: async (key: string, value: unknown) => { values.set(key, value) },
-    storeDelete: async (key: string) => { values.delete(key) }, readMeta: async () => ({ seq: 0, fails: 0 }),
-    readyFoldDropFps: () => undefined, log: () => undefined,
-  } as unknown as RewindIo
-  await observeTranscript(io, 's1:main', kept)
-  const store = readClauseStore(values.get('clauses:s1:main'))
-  expect(store?.clauses.map(clause => [clause.source, clause.status])).toEqual([['benchmark(stylelint, upgrade).', 'live']])
-})
-
-// Regression caught: a session started before clauses existed lost its standing instructions on upgrade.
-test('a session with only a legacy instruction index backfills it once into clauses, keeping addresses', OPTS, async ($, on) => {
-  const seen = bottoms(on, {
-    rows: ROWS, replies: [], intentReplies: [intentReply(), intentReply()],
-    backfillReplies: [JSON.stringify({ clauses: [{ prompt: 1, clause: 'forbid(push).', text: 'push는 하지 않는다.', quote: 'push는 하지 말 것' }] })],
-  })
-  seen.store['instruction-index:s1:main'] = [
-    { address: '@11111111', issue: null, text: '앞으로 push는 하지 말 것' },
-    { address: '@22222222', issue: null, text: '(withdrawn) 커밋 메시지는 영어로 쓸 것' },
-  ]
-  await $.prompt.submit(promptInput('stylelint부터 해줘'))
-  await until(() => settled(seen) && liveSources(seen).length === 1)
-  await $.prompt.submit(promptInput('typescript도 해줘'))
-  await until(() => seen.intentPrompts.length === 2 && settled(seen))
-  expect(seen.backfillPrompts).toHaveLength(1)
-  expect(seen.backfillPrompts[0]).not.toContain('커밋 메시지')
-  expect(storedClauses(seen).map(clause => [clause.source, clause.address])).toEqual([['forbid(push).', '@11111111']])
-  expect(readClauseStore(seen.store['clauses:s1:main'])?.migratedLegacy).toBe(true)
 })

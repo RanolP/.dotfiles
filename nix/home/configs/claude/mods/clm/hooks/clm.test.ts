@@ -332,7 +332,7 @@ test('a merge reply carrying a changes block folds without announcing it', OPTS,
   const s: State = { rows: ROWS, replies: [ledger('fact')] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('fact')
+  expect(storedLedger(seen)).toContain('## 목표')
   expect(seen.results[0].messages[1].text).not.toContain('<changes>')
   expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
 })
@@ -354,6 +354,6 @@ test('a merge without non-task changes still applies the fold', OPTS, async ($, 
   const s: State = { rows: ROWS, replies: [ledger('fact')] }
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
-  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('fact')
+  expect(storedLedger(seen)).toContain('## 목표')
   expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
 })

@@ -70,7 +70,6 @@ test('a fabricated quote is rejected for a fact', OPTS, async ($, on) => {
   const seen = bottoms(on, s)
   await turnEnds($, s, seen)
   const row = seen.results[0].messages[1].text
-  expect(section(row, 'facts')).toContain('the build log is long')
   expect(row).not.toContain('the build passes')
   expect(logEvents(seen).find(e => e.event === 'evidence-rejected')?.reason).toContain('"the build passed cleanly" is not in tu_a')
 })
@@ -118,8 +117,6 @@ test('a reviewer failure records no done, holds the facts out of the ledger, and
   s.replies.push(ledger('third', '[]', [{ ref: 'tu_e', quote: 'w ' + 'x'.repeat(40) }]))
   await turnEnds($, s, seen)
   const third = seen.results[2].messages[1].text
-  expect(section(third, 'facts')).toContain('HELD-FACT-ONE')
-  expect(section(third, 'facts')).toContain('HELD-FACT-TWO')
   expect(seen.store['held:s1']).toBeUndefined()
 })
 
@@ -149,14 +146,11 @@ test('a failed review drops the merge\'s retracts and note ops instead of applyi
   await turnEnds($, s, seen)
   const tracker = () => snapshot(parseLog(seen.files['/home/t/.claude-work/tracker/events/s1.jsonl'] ?? ''))
   const issue = tracker().find(i => i.title === 'PR 정리')!
-  expect(section(seen.results[0].messages[1].text, 'facts')).toContain('ACCEPTED-FACT')
   s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'more'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'ok'), M('user', 'push'), M('assistant', 'pushed')]
-  const factLine = section(seen.results[0].messages[1].text, 'facts').split('\n').find(l => l.includes('ACCEPTED-FACT'))!.replace(/^- /, '')
-  const ops = [{ op: 'retract', fact: factLine }, { op: 'note', issue: issue.id, text: 'PR #<pr> closed' }, { op: 'retitle', issue: issue.id, title: 'PR #<pr> 닫힘' }]
+  const ops = [{ op: 'note', issue: issue.id, text: 'PR #<pr> closed' }, { op: 'retitle', issue: issue.id, title: 'PR #<pr> 닫힘' }]
   s.replies.push(JSON.stringify({ ops }))
   s.reviewReplies = [new Error('review down')]
   await turnEnds($, s, seen)
-  expect(section(seen.results[1].messages[1].text, 'facts')).toContain('ACCEPTED-FACT')
   const after = tracker().find(i => i.id === issue.id)!
   expect(after.title).toBe('PR 정리')
   expect(after.notes).not.toContain('PR #<pr> closed')
@@ -252,7 +246,7 @@ test('a small transcript with no fold plan hands off to the engine summary', OPT
   const seen = bottoms(on, s)
   const result = compactedMessages(await $.session.compact(compactInput('auto', handled(rows))))
   expect(seen.engineCompactions).toBe(1)
-  expect(result.map(m => m.text)).toEqual(['ENGINE SUMMARY', '[clm clauses]\n- (none)'])
+  expect(result.map(m => m.text)).toEqual(['ENGINE SUMMARY'])
 })
 
 // Regression caught (round 3, finding 1): a hand-back excluded from turn boundaries left a coordinator session (one typed prompt, then hand-backs) with a single turn, so it never folded and always escaped to the engine summarizer.
@@ -288,22 +282,6 @@ test('a hand-back that opens with a system-reminder is neither a user ref nor an
   expect(seen.prompts[0]).toContain('[harness 2026-10-06 09:00 KST] Another Claude session sent a message:')
   expect(seen.prompts[0]).not.toContain('[user m4]')
 })
-
-test('a quote ending in the clip ellipsis or taken from past the clip still holds', OPTS, async ($, on) => {
-  const rows = [...ROWS]
-  rows[2] = res('tu_a', 'log: make fails at a.ts:12 ' + BIG + ' linker exit code 2 at stage three')
-  const ops = [
-    { op: 'fact', text: 'FACT-PAST-CLIP', evidence: [{ ref: 'tu_a', quote: 'linker exit code 2 at stage three' }] },
-    { op: 'fact', text: 'FACT-ELLIPSIS', evidence: [{ ref: 'tu_a', quote: 'make fails at a.ts:12 xxxx…' }] },
-  ]
-  const s: State = { rows, replies: [JSON.stringify({ ops })] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  const facts = section(seen.results[0].messages[1].text, 'facts')
-  expect(facts).toContain('FACT-PAST-CLIP')
-  expect(facts).toContain('FACT-ELLIPSIS')
-})
-
 // Regression caught: a drop with no quote of the user abandoning that direction reached the tracker, or a failed review landed a user-quoted drop no reviewer had matched to its issue, or lost it instead of holding it.
 test('a drop lands only on a user quote, and a failed review holds it for the next review', OPTS, async ($, on) => {
   const rows = [...ROWS]

@@ -7,7 +7,7 @@ import { describeOp } from './evidence'
 
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
   | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost' | 'ledger-over-budget' | 'rewind'
-  | 'fold-job' | 'fold-persist-failed' | 'session-state-migration' | 'session-compact' | 'mod-stale' | 'clause-retract'
+  | 'fold-job' | 'fold-persist-failed' | 'session-state-migration' | 'session-compact' | 'mod-stale'
   | 'note' | 'recall-query' | 'wrap-up-notice' | 'model-fold'
 export type LogFields = {
   tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; durationMs?: number; summaryMs?: number; reason?: string

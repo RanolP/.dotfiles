@@ -309,6 +309,8 @@ path = [
     "nix/home/configs/claude/mods/hetero-subagents/agents/agy-gemini-4-neon-high.md",
     "nix/home/configs/claude/mods/hetero-subagents/agents/codex-gpt-6.2-astra.md",
     "nix/home/configs/claude/mods/hetero-subagents/agents/codex-gpt-6-luna.md",
+    "nix/home/configs/claude/mods/hetero-subagents/agents/codex-gpt-5.6-sol.md",
+    "nix/home/configs/claude/mods/hetero-subagents/agents/agy-gemini-4-argon-high.md",
     "nix/home/configs/claude/mods/hetero-subagents/hooks/hooks.json",
     "nix/home/configs/claude/mods/hetero-subagents/hooks/register.ts",
     "nix/home/configs/claude/mods/hetero-subagents/hooks/hetero-subagents.test.ts",

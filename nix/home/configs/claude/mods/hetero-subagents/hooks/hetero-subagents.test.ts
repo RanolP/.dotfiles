@@ -117,7 +117,7 @@ test('every registered type has a name, model, description and prompt for its ag
 
 test('session.start routing context lists exactly the registered types', () => {
   const lines = [...routingContext().matchAll(/^- `hetero-subagents:([^`]+)`: (.+)$/gm)].map(match => ({ name: match[1], blurb: match[2] }))
-  expect(lines.map(line => line.name)).toEqual(['codex:gpt-6.1-sol', 'codex:gpt-6-luna', 'codex:gpt-6.2-astra', 'agy:gemini-4-neon-high'])
+  expect(lines.map(line => line.name)).toEqual(['codex:gpt-6.1-sol', 'codex:gpt-6-luna', 'codex:gpt-6.2-astra', 'agy:gemini-4-neon-high', 'codex:gpt-5.6-sol', 'agy:gemini-4-argon-high'])
   expect(lines).toEqual(Object.entries(TYPES).map(([name, type]) => ({ name, blurb: type.blurb })))
   expect(routingContext()).toContain("a workspace-write codex type gets its own shell, apply_patch and this session's read-only MCP tools; a read-only codex type gets a read-only shell")
 })

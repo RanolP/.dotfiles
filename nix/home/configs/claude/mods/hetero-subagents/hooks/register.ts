@@ -25,6 +25,8 @@ export const TYPES = {
   'codex:gpt-6-luna': { backend: 'codex', model: 'gpt-6-luna', effort: 'xhigh', sandbox: 'workspace-write', blurb: 'cheapest implementer, for mechanical bulk edits whose Done-when command the caller reruns; no web or MCP lookups' },
   'codex:gpt-6.2-astra': { backend: 'codex', model: 'gpt-6.2-astra', effort: 'high', sandbox: 'read-only', blurb: 'read-only cross-vendor reviewer for a high-stakes diff a Claude worker wrote; each finding carries file:line and the quoted line' },
   'agy:gemini-4-neon-high': { backend: 'acp', model: 'gemini-4-neon-high', effort: 'high', sandbox: 'read-only', blurb: 'read-only long-context reader (256k+ tokens of input) and second security reviewer; each finding carries file:line and the quoted line, which the caller checks' },
+  'codex:gpt-5.6-sol': { backend: 'codex', model: 'gpt-5.6-sol', effort: 'medium', sandbox: 'read-only', blurb: 'read-only writer for a Korean PR body from given facts (short problem, two-line solution); the caller fact-checks every claim against the repo' },
+  'agy:gemini-4-argon-high': { backend: 'acp', model: 'gemini-4-argon-high', effort: 'high', sandbox: 'read-only', blurb: 'read-only writer for a short team announcement such as a Slack post (one claim per top-level bullet, numbers nested under it); the caller fixes its tone and fact-checks every claim' },
 } as const
 type TypeName = keyof typeof TYPES
 type Backend = typeof TYPES[TypeName]['backend']

@@ -158,7 +158,7 @@ test('the user is shown an added instruction, and nothing when the section is un
   const { logs } = world(on)
   await submit($, 'sglang 써')
   await settle()
-  expect(logs).toEqual(['wayseeker: say(use(serving, sglang))', 'wayseeker: 지시 추가: 서빙에 sglang을 쓴다. (@1)'])
+  expect(logs).toEqual(['say(use(serving, sglang))', '지시 추가: 서빙에 sglang을 쓴다. (@1)'])
   await submit($, '다른 얘기')
   await settle()
   expect(logs).toHaveLength(2)
@@ -170,7 +170,7 @@ test('an ask-only prompt shows the landed act', async ($, on) => {
   REPLIES['sglang 있어?'] = ['decl have(thing) key(thing) "{thing}이 있다"', '@1 user: ask(have(sglang))']
   await submit($, 'sglang 있어?')
   await settle()
-  expect(logs).toEqual(['wayseeker: ask(have(sglang))'])
+  expect(logs).toEqual(['ask(have(sglang))'])
 })
 
 // Regression caught: a prompt typed mid-turn, which reaches the transcript only as a queued_command attachment, was

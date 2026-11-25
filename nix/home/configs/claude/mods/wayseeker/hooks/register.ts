@@ -133,7 +133,7 @@ const instructionLines = (section: string) => (section.split('\n\n## raises')[0]
 const MAX_NOTICES = 3
 /** One user-visible line per utterance that landed (declarations and glosses are not utterances), at most three, then a count. */
 export function landedActs(landed: readonly string[]): string[] {
-  const acts = landed.flatMap(line => { const m = /^@\d+ [^:\s]+: (.+)$/s.exec(line); return m ? [`wayseeker: ${m[1]}`] : [] })
+  const acts = landed.flatMap(line => { const m = /^@\d+ [^:\s]+: (.+)$/s.exec(line); return m ? [m[1]!] : [] })
   return acts.length > MAX_NOTICES ? [...acts.slice(0, MAX_NOTICES), `… 외 ${acts.length - MAX_NOTICES}건`] : acts
 }
 
@@ -141,8 +141,8 @@ export function landedActs(landed: readonly string[]): string[] {
 export function instructionChanges(before: string, after: string): string[] {
   const [was, now] = [instructionLines(before), instructionLines(after)]
   const notices = [
-    ...now.filter(line => !was.includes(line)).map(line => `wayseeker: 지시 추가: ${line}`),
-    ...was.filter(line => !now.includes(line)).map(line => `wayseeker: 지시 제외: ${line}`),
+    ...now.filter(line => !was.includes(line)).map(line => `지시 추가: ${line}`),
+    ...was.filter(line => !now.includes(line)).map(line => `지시 제외: ${line}`),
   ]
   return notices.length > MAX_NOTICES ? [...notices.slice(0, MAX_NOTICES), `… 외 ${notices.length - MAX_NOTICES}건`] : notices
 }
@@ -188,7 +188,7 @@ async function say($: EngineInterface, lines: readonly unknown[], agentId: strin
       const added = said.ledger.utterances.some(u => u.id >= firstId)
       await store.set(wayseekerKey(key), { ...said.ledger, turns: added && address ? [...turns, { address, firstId }] : turns })
     }
-    return { landed: said.landed, rejected: said.rejected, open: openItems(said.ledger) }
+    return { landed: said.landed, rejected: said.rejected, open: openItems(said.ledger), next: nextId(said.ledger) }
   })
 }
 
@@ -236,7 +236,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     try {
-      await $.tool.register({ name: SAY_TOOL, description: SAY_DESCRIPTION, inputSchema: SAY_INPUT_SCHEMA })
+      await $.tool.register({ name: SAY_TOOL, description: SAY_DESCRIPTION, inputSchema: SAY_INPUT_SCHEMA, isDeferred: false })
     } catch (err) {
       $.ui.log(`wayseeker: say registration failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }

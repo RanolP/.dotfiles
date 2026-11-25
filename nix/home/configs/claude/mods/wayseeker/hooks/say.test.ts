@@ -117,6 +117,44 @@ test('Stop does not block when stop_hook_active', async ($, on) => {
   expect((await stop($, true)).block).toBeUndefined()
 })
 
+// Regression caught: the nudge never firing in REPL-driven sessions, where files change through edit()/write() inside a script.
+test('a REPL call with edit( and no say triggers the nudge', async ($, on) => {
+  const { rows } = world(on)
+  rows.push(human('fix it'), acting(['REPL', { code: "await edit(H+'say.ts', 'a', 'b')" }]))
+  expect((await stop($)).block).toContain(SAY_TOOL_ID)
+})
+
+// Regression caught: a REPL script that only reads (git status, cd + ls with an interpolated dir) being nudged as work.
+test('a REPL call running only read-only shell does not trigger the nudge', async ($, on) => {
+  const { rows } = world(on)
+  rows.push(human('look'), acting(['REPL', { code: 'const s = await $\x60git status\x60.text(); const l = await $\x60cd ${D} && ls hooks\x60; $(\'pwd\')' }]))
+  expect((await stop($)).block).toBeUndefined()
+})
+
+// Regression caught: a REPL script hiding a mutation behind a shell template, an interpolated head, or a tools.Bash call.
+test('REPL shell outside the allowlist counts as work', async ($, on) => {
+  const { rows } = world(on)
+  rows.push(human('a'), acting(['REPL', { code: 'await $\x60git commit -m ${msg}\x60' }]))
+  expect((await stop($)).block).toBeDefined()
+  rows.push(human('b'), acting(['REPL', { code: 'await $\x60${cmd} status\x60' }]))
+  expect((await stop($)).block).toBeDefined()
+  rows.push(human('c'), acting(['REPL', { code: "await tools.Bash({ command: 'ls' })" }]))
+  expect((await stop($)).block).toBeDefined()
+  rows.push(human('d'), acting(['REPL', { code: "await edit(p, 'a', 'b'); await tools['" + SAY_TOOL_ID + "']({ lines: [] })" }]))
+  expect((await stop($)).block).toBeUndefined()
+})
+
+// Regression caught: the first say of a session rejected for numbering because nothing told the agent which id comes next.
+test('the result next is the id a following line must use, and that line lands', async ($, on) => {
+  world(on, [...DECLS, '@1 user: say(use(serving, sglang))', '@2 user: want(use(serving, vllm))'])
+  const probe = await say($, [])
+  expect(probe).toMatchObject({ landed: [], rejected: [], next: 3 })
+  const line = '@' + probe.next + ' agent: try(use(serving, vllm))'
+  const written = await say($, [line])
+  expect(written.landed).toEqual([line])
+  expect(written.next).toBe(probe.next + 1)
+})
+
 // Regression caught: a write disguised as a reader (redirect, substitution, find -delete) passing as read-only.
 test('read-only Bash needs every segment to be an allowlisted reader', () => {
   expect(isReadOnlyBash('git log --oneline -5 | cat')).toBe(true)
@@ -126,4 +164,6 @@ test('read-only Bash needs every segment to be an allowlisted reader', () => {
   expect(isReadOnlyBash('find . -name x -delete')).toBe(false)
   expect(isReadOnlyBash('ls && git commit -m x')).toBe(false)
   expect(isReadOnlyBash('npm test')).toBe(false)
+  expect(isReadOnlyBash('cd x && ls')).toBe(true)
+  expect(isReadOnlyBash('cd x && rm y')).toBe(false)
 })

@@ -169,3 +169,27 @@ test('a main-thread turn end past the ratio forks once and stores the record; a 
   expect(forks.length).toBe(1)
   expect(JSON.parse(files['/data/bg-compact/precompact-s1.json']!)).toEqual({ summary: 'SUMMARY', ...boundaryOf(AT_FORK)!, createdAt: 5, tokens: 61000 })
 })
+
+// Regression: /compact with instructions returned early and left the record, so the next turn end saw a stored record
+// and waited for 'extend' instead of forking a fresh 'first' at 60%.
+test('after /compact with instructions the record is cleared and the next turn end forks a first summary', async () => {
+  const { io, files, forks } = fake({ stored: stored(), tokens: 65000 })
+  const { seen, next } = nextRecorder()
+  const c = new PreCompactor(S)
+  await c.compact(io, { trigger: 'manual', instructions: 'focus on tests', messages: handled([...AT_FORK, ...AFTER]) }, next)
+  expect(seen.length).toBe(1)
+  expect(files.s1).toBe(undefined)
+  const { started } = await c.turnEnd(io)
+  await started
+  expect(forks.length).toBe(1)
+  expect(forks[0].includes('earlier-summary')).toBe(false)
+})
+
+// Regression: a record whose tokens exceed the current tokens (the transcript shrank) blocked pre-compaction until 90%.
+test('a record above the current token count is ignored', async () => {
+  const { io, forks } = fake({ stored: { ...stored(), tokens: 90000 }, tokens: 65000 })
+  const { started } = await new PreCompactor(S).turnEnd(io)
+  await started
+  expect(forks.length).toBe(1)
+  expect(forks[0].includes('earlier-summary')).toBe(false)
+})

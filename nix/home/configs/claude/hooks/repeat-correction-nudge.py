@@ -51,9 +51,9 @@ PATTERNS = [
 ]
 MARKER = re.compile("|".join(PATTERNS), re.IGNORECASE)
 
-# Injected prompts that quote other text: a side agent's note, a clm ledger.
+# Injected prompts that quote other text: a side agent's note.
 # A marker inside them is not the user repeating themselves.
-QUOTED_PREFIXES = ("<", "Here is a note offered by a side agent", "[clm ledger")
+QUOTED_PREFIXES = ("<", "Here is a note offered by a side agent")
 
 NUDGE = (
     "This prompt reads as a repeated correction. Fix this instance first. "

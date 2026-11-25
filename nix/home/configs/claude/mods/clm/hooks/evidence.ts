@@ -35,9 +35,6 @@ const tooShort = (quote: string) => quote.split(' ').length < MIN_WORDS && !(CJK
 // A subagent's report or a message relay is another model's prose, so it proves no step done.
 const RELAY_TOOLS = new Set(['Agent', 'Task', 'SendMessage'])
 
-
-/** ` 2026-10-15 14:03 KST` when the row's send time is known, '' otherwise. */
-
 /** The ref of a user row: its 1-based position in the rendered range. */
 export const rowRef = (i: number) => `m${i + 1}`
 
@@ -53,16 +50,15 @@ export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refO
   }] as const)))
   const rendered = rows.map((m, i) => {
     const sources: [string, Source][] = []
-    const at = ''
-    let head = `[${m.role}${at}]`
+    let head = `[${m.role}]`
     const shown = m.role === 'user' ? stripReminders(m.text) : m.text
     if (shown) {
       const { text, full } = clippedSource(shown, TEXT_CLIP)
-      if (m.role === 'assistant') head = `[assistant${at}] ${text}`
+      if (m.role === 'assistant') head = `[assistant] ${text}`
       else if (isUserTyped(m)) {
-        head = `[user ${rowRef(i + refOffset)}${at}] ${text}`
+        head = `[user ${rowRef(i + refOffset)}] ${text}`
         sources.push([rowRef(i + refOffset), { kind: 'user', text, ...(full ? { full } : {}) }])
-      } else head = `[harness${at}] ${text}`
+      } else head = `[harness] ${text}`
     }
     const parts = [head]
     for (const u of m.toolUses) parts.push(`  -> ${u.tool} ${clip(JSON.stringify(u.input ?? {}), INPUT_CLIP)}`)

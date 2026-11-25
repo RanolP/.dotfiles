@@ -88,7 +88,8 @@ export function summaryPrompt(previous?: string): string {
 // What the turn end does: fork a first summary, extend the stored one, or nothing.
 export function plan(tokens: number | undefined, limit: number | undefined, pre: PreCompaction | undefined, s: PreSettings): 'first' | 'extend' | undefined {
   if (tokens === undefined || limit === undefined || !(limit > 0)) return undefined
-  if (!pre) return tokens >= s.ratio * limit ? 'first' : undefined
+  // A record above the current tokens belongs to a transcript that has since shrunk.
+  if (!pre || tokens < pre.tokens) return tokens >= s.ratio * limit ? 'first' : undefined
   return tokens - pre.tokens > s.extendRatio * limit ? 'extend' : undefined
 }
 
@@ -151,26 +152,30 @@ export class PreCompactor {
     if (!at) { await io.log('pre-compaction skipped: no user row to anchor a boundary'); return }
     const reply = await io.fork(summaryPrompt(previous?.summary))
     if (!reply.text?.trim()) { await io.log(`pre-compaction fork gave no summary (${reply.why ?? 'empty'})`); return }
+    const createdAt = await io.now()
     if ((this.generation.get(session) ?? 0) !== gen) { await io.log('pre-compaction dropped: the conversation compacted while it ran'); return }
-    await io.write(session, { summary: reply.text.trim(), ...at, createdAt: await io.now(), tokens })
+    await io.write(session, { summary: reply.text.trim(), ...at, createdAt, tokens })
     await io.log(`pre-compaction ${previous ? 'extended' : 'stored'} at ${tokens} tokens`)
   }
 
   // The session.compact hook body for the main thread.
   async compact(io: PreIo, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>): Promise<SessionCompactResult> {
     if (e.agentId !== undefined || !Array.isArray(e.messages)) return next(e)
-    // Instructions typed after /compact ask for a summary the stored one was not written to.
-    if (e.instructions?.trim()) return next(e)
     const session = await io.sessionId()
     let pre = await io.read(session)
     if (!pre || findBoundary(e.messages, pre.boundary) < 0) {
       for (const other of await io.readAll()) if (findBoundary(e.messages, other.boundary) >= 0) { pre = other; break }
     }
+    // Any compaction but the precompute probe makes a new transcript: the stored record has served or no longer applies,
+    // even when instructions send the compaction to the engine.
+    if (e.trigger !== 'precompute') {
+      this.generation.set(session, (this.generation.get(session) ?? 0) + 1)
+      await io.write(session, undefined)
+    }
+    // Instructions typed after /compact ask for a summary the stored one was not written to.
+    if (e.instructions?.trim()) return next(e)
     if (e.trigger === 'precompute') return pre && findBoundary(e.messages, pre.boundary) >= 0 ? { skip: 'bg-compact holds a pre-compaction' } : next(e)
-    this.generation.set(session, (this.generation.get(session) ?? 0) + 1)
     const done = pre ? concat(e.messages, pre) : { miss: 'no pre-compaction stored' }
-    // The transcript after any compaction is a new one: the stored boundary has served or no longer applies.
-    await io.write(session, undefined)
     if ('miss' in done) { await io.log(`compaction handed to the engine: ${done.miss}`); return next(e) }
     await io.log(`compaction answered from the pre-compaction: summary + ${done.messages.length - 1} messages`)
     return { messages: done.messages }

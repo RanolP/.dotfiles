@@ -1,5 +1,0 @@
-{
-  "fixture": "release",
-  "model": "hand-authored",
-  "reply": "{\"split\":5,\"ops\":[{\"retract\":\"C3\"},{\"clause\":\"found(release_audit, artifact, manifest).\",\"kind\":\"fact\",\"text\":\"s3://acme-archive/release/SYNTH-417/manifest.json\",\"evidence\":[{\"ref\":\"tool-release-scan\",\"quote\":\"s3://acme-archive/release/SYNTH-417/manifest.json\"}]},{\"clause\":\"goal('SYNTH-417', release_audit).\",\"kind\":\"goal\",\"text\":\"Use UTC timestamps for the release report.\",\"evidence\":[]}]}"
-}

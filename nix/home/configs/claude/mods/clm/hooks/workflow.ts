@@ -96,8 +96,6 @@ export async function queueResume(
 }
 
 export type MainTurnCompletionIo = {
-  showChanges(answer: string): void
-  maybeClear(): Promise<void>
   arbitrate(turnId: string): Promise<unknown>
   clearActiveTurn(turnId: string): Promise<void>
   log(message: string): void
@@ -112,14 +110,8 @@ export async function markActiveTurn(io: Pick<WorkflowIo, 'change' | 'log'>, tur
 }
 
 export async function completeMainTurn(
-  io: MainTurnCompletionIo, turnId: string, isAborted: boolean, answer: string,
+  io: MainTurnCompletionIo, turnId: string, isAborted: boolean,
 ): Promise<void> {
-  try {
-    io.showChanges(answer)
-    await io.maybeClear()
-  } catch (err) {
-    io.log(`clm: fold failed, ${String(err).slice(0, 200)}`)
-  }
   if (!isAborted) {
     try { await io.arbitrate(turnId) }
     catch (err) { io.log(`clm: continuation arbitration failed (${String(err).slice(0, 160)})`) }

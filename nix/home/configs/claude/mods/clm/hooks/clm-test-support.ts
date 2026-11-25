@@ -3,14 +3,11 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, register, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, residentLedgerText, TASK_TOOL } from './register'
-import type { Held, Meta } from './register'
+import { chooseContinuation, clmStatus, register, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, LESSON_SYSTEM, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, isRecord, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { estTokens, fingerprint } from './fold'
 
 export const M = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] } satisfies SessionMessage)
@@ -48,7 +45,6 @@ export const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
 export const LOG_FILE = '/home/t/.claude-work/plans/clm-s1.log.jsonl'
 export const storedLedger = (seen: { files: Record<string, string> }) => seen.files[LEDGER_FILE] ?? ''
 export const ids = (m: any) => [...m.toolUses.map((u: any) => u.tool_use_id), ...(m.toolResults ?? []).map((r: any) => r.tool_use_id)]
-export const est = (m: any) => estTokens(m)
 export const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
 export const handled = (rows: readonly SessionMessage[]): SessionMessage[] => rows.map((m, i) => ({ ...m, handle: `h${i}` } satisfies SessionMessage))
 export const compactInput = (trigger: SessionCompactInput['trigger'], messages: readonly SessionMessage[], extra: Pick<SessionCompactInput, 'agentId' | 'instructions'> = {}) =>
@@ -64,53 +60,7 @@ export const workflow = (fields: Partial<ClmWorkflow> = {}): ClmWorkflow => ({
   resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null,
   promptSeq: 0, focusAppliedSeq: 0, ...fields,
 })
-export const heldIn = (seen: { store: Record<string, unknown> }): Held[] => {
-  const value = seen.store['held:s1']
-  return Array.isArray(value) ? value.filter(isHeld) : []
-}
-export const isMetaValue = (value: unknown): value is Meta => typeof value === 'object' && value !== null && 'seq' in value && typeof value.seq === 'number' && 'fails' in value && typeof value.fails === 'number'
-export const metaIn = (seen: { store: Record<string, unknown> }): Meta => {
-  const value = seen.store['ledger:s1']
-  if (!isMetaValue(value)) throw new Error('ledger metadata is missing')
-  return value
-}
-
 export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; sessionMessagesBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; nextSessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined; fsWriteBlock?: (path: string, text: string) => Promise<void>; promptDrops?: string[]; sendResult?: (to: unknown) => { isDelivered: true } | { isDelivered: false; reason: string } }
-export function modDetectionHarness(realpaths: { exitCode: number; stdout: string; stderr: string }[], env: Record<string, string | undefined>) {
-  const hooks: Record<string, unknown> = {}
-  const capture: Parameters<typeof register>[0] = (event, matcherOrHook, hook) => { hooks[event] = hook ?? matcherOrHook }
-  register(capture, OPTS.options)
-  const files: Record<string, string> = {}
-  const logs: string[] = []
-  const runs: string[][] = []
-  const engine = {
-    env: { get: async (name: string) => env[name] },
-    process: { run: async (argv: string[]) => {
-      runs.push(argv)
-      const result = realpaths.shift()
-      return result ?? { exitCode: 0, stdout: `${argv[1]}\n`, stderr: '' }
-    } },
-    fs: {
-      exists: async (path: string) => path in files,
-      read: async (path: string) => files[path] ?? '',
-      write: async (path: string, text: string) => { files[path] = text },
-    },
-    ui: { log: (text: string) => { logs.push(text) } },
-    session: { id: async () => 's1' },
-  }
-  const create = hooks['engine.create']
-  const compact = hooks['session.compact']
-  if (typeof create !== 'function' || typeof compact !== 'function') throw new Error('mod detection hooks were not registered')
-  return {
-    files, logs, runs,
-    initialize: () => create(engine, {}, async () => engine),
-    compact: () => compact(engine, { trigger: 'manual' }, async () => ({ messages: [M('user', 'ENGINE SUMMARY')] })),
-    settle: async () => {
-      for (let i = 0; i < 50 && !files[LOG_FILE]?.includes('"event":"mod-stale"'); i++)
-        await new Promise(resolve => setTimeout(resolve, 1))
-    },
-  }
-}
 const readFixtureState = (files: Record<string, string>, path: string): Record<string, unknown> => {
   try {
     const value: unknown = JSON.parse(files[path] ?? '{}')
@@ -237,7 +187,6 @@ export function bottoms(on: any, s: State) {
   on('ui.panes', () => ({ value: [] }))
   on('fs.read', (_$: any, e: any) => { seen.fileReads[e.path] = (seen.fileReads[e.path] ?? 0) + 1; return { value: seen.files[e.path] } })
   on('fs.write', async (_$: any, e: any) => { await s.fsWriteBlock?.(e.path, e.text); seen.files[e.path] = e.text; return { value: undefined } })
-  // The merge call answers from s.replies, the turn-time change call from s.turnReplies.
   on('model.complete', async (_$: any, e: any) => {
     if (e.system === INTENT_SYSTEM) {
       seen.intentPrompts.push(e.prompt)
@@ -246,37 +195,8 @@ export function bottoms(on: any, s: State) {
       if (text instanceof Error) return { value: { isAnswered: false, reason: text.message } }
       return { value: { isAnswered: true, text, usage: {} } }
     }
-    if (e.system === REVIEW_SYSTEM) {
-      seen.reviewPrompts.push(e.prompt)
-      seen.reviewMaxTokens.push(e.maxTokens)
-      // Unscripted, the reviewer accepts every claim the prompt lists.
-      const text = s.reviewReplies?.shift() ?? JSON.stringify({ verdicts: [...e.prompt.matchAll(/"id":"((?:op|fact|drop|held)\d+)"/g)].map(m => ({ id: m[1], accept: true, reason: 'ok' })) })
-      if (text instanceof Error) throw text
-      return { value: { isAnswered: true, text, usage: {} } }
-    }
-    if (e.system === SPLIT_MERGE_SYSTEM) {
-      seen.splitPrompts.push(e.prompt)
-      if (s.splitBlock) await s.splitBlock()
-      if (s.splitDelay) await clock.sleep(s.splitDelay)
-      const text = s.splitReplies?.shift() ?? splitAnswer()
-      if (text instanceof Error) throw text
-      return { value: { isAnswered: true, text, usage: {} } }
-    }
-    if (e.system === LESSON_SYSTEM) {
-      seen.lessonPrompts.push(e.prompt)
-      return { value: { isAnswered: true, text: s.lessonReplies?.shift() ?? '{"lessons":[]}', usage: {} } }
-    }
-    if (e.system !== MERGE_SYSTEM) {
-      seen.turnPrompts.push(e.prompt)
-      return { value: { isAnswered: true, text: s.turnReplies?.shift() ?? '<changes></changes>', usage: {} } }
-    }
-    seen.prompts.push(e.prompt)
-    if (s.mergeBlock) await s.mergeBlock()
-    const delay = s.mergeDelays?.shift()
-    if (delay !== undefined) await clock.sleep(delay)
-    const text = s.replies.shift()
-    if (text instanceof Error) throw text
-    return { value: text === null ? { isAnswered: false, reason: 'aborted' } : { isAnswered: true, text: text ?? '', usage: {} } }
+    seen.turnPrompts.push(e.prompt)
+    return { value: { isAnswered: true, text: s.turnReplies?.shift() ?? '<changes></changes>', usage: {} } }
   })
   on('ui.status', () => ({ value: undefined }))
   on('ui.log', (_$: any, e: any) => {
@@ -312,10 +232,6 @@ export async function turnEnds($: any, s: State, seen: { results: SessionCompact
   await $.turn.complete({ ...TURN, answer })
   seen.results.push(await $.session.compact({ trigger: 'manual', messages: handled(s.rows) }))
 }
-export async function waitForPending(seen: { store: Record<string, unknown>; logs: string[]; splitPrompts: string[]; compressionPrompts: string[]; reviewPrompts: string[] }) {
-  for (let i = 0; i < 2000 && !seen.store['pending:s1']; i++) await new Promise(resolve => setTimeout(resolve, 1))
-  if (!seen.store['pending:s1']) throw new Error(`background fold did not write Pending; calls split=${seen.splitPrompts.length}, compress=${seen.compressionPrompts.length}, review=${seen.reviewPrompts.length}; recent logs: ${seen.logs.slice(-5).join(' | ')}`)
-}
 export const BG_OPTS = { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }
 export const logEvents = (seen: { files: Record<string, string> }) => (seen.files[LOG_FILE] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
 
@@ -341,10 +257,6 @@ export async function sixDone($: Engine, on: On, seen: Seen) {
   for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskCreate', subject: `done ${i}`, description: `d${i}` })
   for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: `panel-${i}`, status: 'completed' })
 }
-export const storedOverhead = (v: unknown): Meta['overhead'] =>
-  typeof v === 'object' && v !== null && 'overhead' in v && typeof v.overhead === 'number' ? v.overhead : undefined
-
-
 export const NOTE_REPLY = '## 목표\n- g\n\n'
 
 // Escape-path rows: the oldest turn's tool result is the only thing that can be withheld.

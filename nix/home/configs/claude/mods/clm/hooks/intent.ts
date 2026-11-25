@@ -3,9 +3,6 @@ import { askedItems, checkEvidence, CONFIRM_PREFIX, confirmAnswer, confirmQuesti
 import { isHarnessText, stripReminders } from './fold'
 import type { ClmWorkflow } from '../types'
 import { describe, focusOf, issueId, snapshot, type Origin, type TrackerEvent } from './tracker'
-import { instructionKey, normalizeLedger } from './ledger'
-import { issueAddressKey, objectiveKey } from './resident'
-import type { AddressRow } from './address'
 import type { LogEvent, LogFields } from './events'
 
 export type FocusState = TrackerFocusState
@@ -113,6 +110,8 @@ type IntentContext = {
   requests: readonly { id: string; text: string }[]
 }
 
+export const instructionKey = (text: string) => text.replace(/\s+/g, ' ').trim()
+export const normalizeLedger = (text: string) => text.trim().replace(/^```[a-z]*\n([\s\S]*?)\n```$/, '$1').trim()
 export const xmlText = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
 const list = (rows: readonly string[]) => rows.length ? rows.join('\n') : '(none)'
 
@@ -317,18 +316,12 @@ export type PromptIntentIo = {
   complete: (request: { model: string; system: string; prompt: string; maxTokens: number; timeoutMs: number }) => Promise<{ isAnswered: boolean; text: string; reason: string }>
   get: (key: string) => Promise<unknown>
   set: (key: string, value: unknown) => Promise<void>
-  addressRows?: (key: string) => Promise<AddressRow[]>
   writeEvents: (payloads: readonly Payload[], origin: Origin) => Promise<TrackerEvent[]>
   serialize: <T>(session: string, run: () => Promise<T>) => Promise<T>
   syncPanel: (origin: Origin, events: readonly TrackerEvent[]) => Promise<void>
   log: (text: string, options?: { to?: 'transcript' | 'debug' }) => void
   logEvent?: (event: LogEvent, fields: LogFields) => Promise<void>
 }
-
-export type Objective = { issue: string; address: string; text: string; at: string; promptSeq: number }
-export const isObjective = (value: unknown): value is Objective => isRecord(value)
-  && typeof value.issue === 'string' && typeof value.address === 'string' && typeof value.text === 'string'
-  && typeof value.at === 'string' && typeof value.promptSeq === 'number'
 
 const requestKey = (key: string) => `requests:${key}`
 const requestPromptSeqKey = (key: string) => `request-prompt-seq:${key}`
@@ -380,7 +373,7 @@ export async function applyRequestClassification(
  * confirmed items become done citing the reply, denied items leave the
  * question and stay open, and the question is retitled or closed to match.
  */
-export async function resolveConfirmAnswer(io: PromptIntentIo, origin: Origin, reply: string, lastAssistantReply: string, address?: string): Promise<void> {
+export async function resolveConfirmAnswer(io: PromptIntentIo, origin: Origin, reply: string, lastAssistantReply: string): Promise<void> {
   await io.serialize(origin.session, async () => {
     const issues = snapshot(await io.readAll()).filter(issue => issue.origin.session === origin.session)
     const question = issues.find(issue => issue.status === 'question' && issue.title.startsWith(CONFIRM_PREFIX))
@@ -389,7 +382,7 @@ export async function resolveConfirmAnswer(io: PromptIntentIo, origin: Origin, r
     const askedInReply = lastAssistantReply.includes(question.id) || items.some(item => !item.opaque && lastAssistantReply.includes(item.title))
     const answer = confirmAnswer(reply, items, askedInReply)
     if (!answer) return
-    const note = `cited ${address ?? 'user'}: ${reply.replace(/\s+/g, ' ').trim().slice(0, 200)}`
+    const note = `cited user: ${reply.replace(/\s+/g, ' ').trim().slice(0, 200)}`
     const ops: Payload[] = answer.confirmed.flatMap((item): Payload[] => {
       // An id names one issue; once it is closed elsewhere the answer has nothing left to land.
       const issue = item.id ? issues.find(i => i.id === item.id) : issues.find(i => isOpen(i) && i.title.trim() === item.title) ?? issues.find(i => i.title.trim() === item.title)
@@ -445,19 +438,18 @@ export function sameInstruction(a: string, b: string): boolean {
   return (2 * shared) / (left.length + right.length) >= 0.6
 }
 
-/** `address` is the one clm coined for this prompt at prompt.submit, absent when recording it failed. */
-export async function recordPromptIntent(io: PromptIntentIo, text: string, promptSeq: number, address?: string): Promise<void> {
+export async function recordPromptIntent(io: PromptIntentIo, text: string, promptSeq: number): Promise<void> {
   const userPrompt = stripReminders(text)
   if (!userPrompt || isHarnessText(userPrompt)) return
   try {
     const origin = await io.captureOrigin()
-    await chained(origin.session, () => classifyPrompt(io, origin, userPrompt, promptSeq, address))
+    await chained(origin.session, () => classifyPrompt(io, origin, userPrompt, promptSeq))
   } catch (err) {
     io.log(`clm intent: classification failed (${String(err).slice(0, 160)})`)
   }
 }
 
-async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: string, promptSeq: number, address?: string): Promise<void> {
+async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: string, promptSeq: number): Promise<void> {
   const key = intentSessionKey(origin.session)
   const events = await io.readAll()
   const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
@@ -466,7 +458,7 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
   const requests = (Array.isArray(requestValue) ? requestValue.filter(isRequestRecord) : []).filter(request => request.status === 'open').map(({ id, text }) => ({ id, text }))
   const rows = await io.sessionMessages()
   const lastAssistantReply = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
-  try { await resolveConfirmAnswer(io, origin, userPrompt, lastAssistantReply, address) }
+  try { await resolveConfirmAnswer(io, origin, userPrompt, lastAssistantReply) }
   catch (err) { io.log(`clm confirm: answer not applied (${String(err).slice(0, 160)})`, { to: 'debug' }) }
   const response = await io.complete({
     model: 'haiku', system: INTENT_SYSTEM,
@@ -534,27 +526,10 @@ async function classifyPrompt(io: PromptIntentIo, origin: Origin, userPrompt: st
         ...payloads,
         { op: 'focus', stack: next.stack, pending: next.pending, intent: classification.intent, ...(classification.rule === null ? {} : { rule: classification.rule }) },
       ], origin)
-      const promoted = classification.intent === 'continue' && classification.target !== null
-        && currentState.pending.includes(classification.target) && next.stack.at(-1) === classification.target
-      const objectiveIssue = createdId ?? ((classification.intent === 'handoff' || classification.intent === 'interleave' || promoted) ? classification.target : undefined)
-      if (objectiveIssue && address && io.addressRows) {
-        const previous = await io.get(objectiveKey(key))
-        if (!isObjective(previous) || previous.issue !== objectiveIssue) {
-          const row = (await io.addressRows(key)).find(candidate => candidate.address === address)
-          if (row) await io.set(objectiveKey(key), { issue: objectiveIssue, address: row.address, text: row.text, at: row.at, promptSeq: row.promptSeq ?? promptSeq })
-        }
-      }
       filedDeferrals.set(origin.session, filed)
       for (const item of deferredIssues) io.log(`clm: deferred issue ${item.id}: ${item.title}`)
       try { for (const line of describe(written, allIssues)) io.log(line) }
       catch { /* display notices never block tracker writes */ }
-      if (address) {
-        const addressesKey = issueAddressKey(key)
-        const rawAddresses = await io.get(addressesKey)
-        const addresses = typeof rawAddresses === 'object' && rawAddresses !== null && !Array.isArray(rawAddresses) ? { ...rawAddresses } as Record<string, unknown> : {}
-        for (const id of new Set([classification.target, next.stack.at(-1), createdId])) if (id && typeof addresses[id] !== 'string') addresses[id] = address
-        await io.set(addressesKey, addresses)
-      }
       if (payloads.length) await io.syncPanel(origin, written)
       await io.changeWorkflow(current => ({
         next: promptSeq > current.focusAppliedSeq ? { ...current, focusAppliedSeq: promptSeq } : current,

@@ -1,47 +1,19 @@
-import { update, type EngineInterface, type Register, type SessionMessage } from 'claude-code'
+import { update, type EngineInterface, type Register } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields, type Payloads } from './events'
 import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, STEPPED_WORKTREE_CONTEXT, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, planPromptContext, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
-import { droppedIds, gateMerge as gateHeldMerge, heldClaims, isHeld, readHeld as readHeldStore, reviewFold as reviewHeldFold, updateHeld as updateHeldStore, type Held, type HeldIo } from './held'
-
-import {
-  buildCleared, fingerprint, isLedgerRow, isPrompt, isStableAttachmentType, isSystemRow, isUserTyped, keepSpawnReminders, kst, STABLE_ATTACHMENT_TYPES, stableAttachmentOf, stableAttachmentRow, ledgerRowSeq, ledgerRowText, liveRows, planClear, protectedIndex, sum, visibleTokens, TOKEN_ESTIMATOR_VERSION,
-  type Boundary, type ClearPlan, type QueuedMessage, type StableAttachmentType,
-} from './fold'
-import {
-  checkEvidence, clippedSource, describeOp, gateOps, isDoneClaim, isDropClaim, isReopenClaim, renderRange,
-  type Evidence, type Source,
-} from './evidence'
-import {
-  composeLedger, EMPTY_LEDGER, factLines, constraintFactLines, learnedFactLines, fallbackLedger, instructionKey, instructionValues, withdrawnInstructionKeys, issueList, legacyItems, MERGE_SYSTEM, mergeableNotes, normalizeLedger, notesOf, oversizeLines,
-  parseChanges, parseMerge, parseReview, preservedLines, rememberOversize, rememberPreserved, renderTurns, REVIEW_SYSTEM, withheldLines, withheldPointer,
-  WITHDRAWN_PREFIX, SPLIT_MERGE_SYSTEM, SECTIONS, ageDecayPlan, isDirective,
-} from './ledger'
-import {
-  archivedDone, injected, normalizeRemote, parseLog, parseOps, snapshot, toEvents,
-  focusOf, isOpen, isRecord, type Issue, type Origin, type Payload, type TrackerEvent,
-} from './tracker'
+import { keepSpawnReminders, kst } from './fold'
+import { type Evidence, renderRange } from './evidence'
+import { snapshot, focusOf, isOpen, isRecord, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
 import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
 import { recordPromptIntent as classifyPrompt, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
-import type { ClmQueuedMessageState as QueuedMessageStore, ClmStableAttachmentSession as StableAttachmentSession, ClmStableAttachmentState as StableAttachmentStore, ClmStableAttachmentValue as StableAttachmentValue, ClmStatus, ClmTaskInput, ClmWorkflow } from '../types'
-import { addressRows, recordPrompt, sentAtOf, stampMessages, type AddressIo, type SentAt } from './address'
-import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
-import { observeTranscript, type RewindIo } from './rewind'
-import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
-import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
+import type { ClmWorkflow } from '../types'
 import { registerResources } from './resources'
 
-export { residentLedgerText } from './resident'
 export { chooseContinuation, resetUserWorkflow, restoreFailedContinuation } from './workflow'
-export { messageTokens, type Meta, type Opts }
-
-// Each transcript has one background compaction job; engine compactions join
-// it and apply its ready plan. The tracker renders task state, so merge ops
-// update persistent issues; withholding is used inside the job if summary fails.
 
 const WORKFLOW = { plugin: 'clm', key: 'workflow' } as const
-const FOLD_TOOL_ID = 'mcp__clm__clm_fold'
 export { TASK_TOOL }
 
 type WorkflowReader = { state: { get: (ref: typeof WORKFLOW) => Promise<{ value: unknown }> } }
@@ -78,93 +50,17 @@ const readWorkflow = ($: WorkflowReader): Promise<ClmWorkflow> => readWorkflowDo
 const changeWorkflow = <T>($: EngineInterface, change: (current: ClmWorkflow) => { next: ClmWorkflow; result: T }): Promise<T> =>
   changeWorkflowDomain(workflowStateIo($), change)
 
-// --- options -------------------------------------------------------------
-
-/** Reads userConfig, naming every value it could not use and the value used instead. */
-// An unset or 0 budget follows the live window: the fold escape point
-// (budget - reserve) sits at `threshold` of it, so the background fold starts
-// there and the targets below scale with it. The gates compare conversation
-// rows alone (reading minus the fixed prefix), so the window point becomes a
-// rows budget here; left whole, a 67k prefix put it past the engine's own
-// autocompact point and the ready plan never applied.
-export function readOpts(o: Record<string, unknown>, window?: number, prefix = 0): { opts: Opts; problems: string[] } {
-  const problems: string[] = []
-  const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v)
-  let threshold = 0.6
-  if (o.threshold !== undefined && o.threshold !== 0) {
-    if (typeof o.threshold === 'number' && o.threshold > 0 && o.threshold < 1) threshold = o.threshold
-    else problems.push(`threshold=${JSON.stringify(o.threshold)} must be a fraction between 0 and 1; using 0.6`)
-  }
-  const point = typeof window === 'number' && Number.isFinite(window) && window > 0 ? Math.floor(window * threshold) : 0
-  const target = Math.max(Math.floor(point / 4), point - Math.max(0, prefix))
-  const followsWindow = point >= 2000 && (o.budget === undefined || o.budget === 0)
-  let budget = followsWindow ? target + Math.min(2048, Math.floor(target / 4)) : 32000
-  if (!followsWindow && o.budget !== undefined && o.budget !== 0) {
-    if (isInt(o.budget) && o.budget >= 2000) budget = o.budget
-    else {
-      budget = typeof o.budget === 'number' && Number.isFinite(o.budget) && o.budget > 0 ? Math.max(2000, Math.round(o.budget)) : 32000
-      problems.push(`budget=${JSON.stringify(o.budget)} must be an integer of at least 2000; using ${budget}`)
-    }
-  }
-  const half = Math.floor(budget / 2)
-  let tailTarget = half
-  if (o.tailTarget !== undefined && o.tailTarget !== 0) {
-    if (isInt(o.tailTarget) && o.tailTarget > 0 && o.tailTarget < budget) tailTarget = o.tailTarget
-    else problems.push(`tailTarget=${JSON.stringify(o.tailTarget)} must be a positive integer under the budget (${budget}); using ${half}`)
-  }
-  let queueTarget = 8000
-  if (o.queueTarget !== undefined) {
-    if (isInt(o.queueTarget) && o.queueTarget > 0) queueTarget = o.queueTarget
-    else problems.push(`queueTarget=${JSON.stringify(o.queueTarget)} must be a positive integer; using 8000`)
-  }
-  const defLedgerTarget = Math.floor(tailTarget / 4)
-  let ledgerTarget = defLedgerTarget
-  if (o.ledgerTarget !== undefined) {
-    if (isInt(o.ledgerTarget) && o.ledgerTarget >= 0 && o.ledgerTarget < tailTarget) ledgerTarget = o.ledgerTarget
-    else problems.push(`ledgerTarget=${JSON.stringify(o.ledgerTarget)} must be a non-negative integer under tailTarget (${tailTarget}); using ${defLedgerTarget}`)
-  }
-  const defReserve = followsWindow ? budget - target : Math.min(2048, Math.floor(budget / 4))
-  let reserve = defReserve
-  if (o.reserve !== undefined && o.reserve !== 0) {
-    if (isInt(o.reserve) && o.reserve > 0 && o.reserve < budget) reserve = o.reserve
-    else problems.push(`reserve=${JSON.stringify(o.reserve)} must be a positive integer under the budget (${budget}); using ${defReserve}`)
-  }
-  const name = (key: 'model' | 'reviewModel', fallback: string) => {
-    const v = o[key]
-    if (v === undefined || v === '') return fallback
-    if (typeof v === 'string' && v.trim()) return v.trim()
-    problems.push(`${key}=${JSON.stringify(v)} must be a model name; using ${fallback}`)
-    return fallback
-  }
-  const model = name('model', 'haiku')
-  return { opts: { budget, tailTarget, queueTarget, ledgerTarget, reserve, model, reviewModel: name('reviewModel', model) }, problems }
-}
-
 // --- session state -------------------------------------------------------
 
-// Pending fold ops land only when session.compact applies the plan, so abandoned
-// plans cannot leave duplicate issues. `foldTokens` tracks the pre-fold usage
-// reading until the next API response, so equal readings are ignored.
 const sid = ($: SessionReader) => $.session.id()
-const metaKey = async ($: SessionReader) => `ledger:${await sid($)}`
-const pendingKey = async ($: SessionReader, key?: string) => {
-  const session = await sid($)
-  return `pending:${key && key !== `${session}:main` ? key : session}`
-}
-const topicsKey = async ($: EngineInterface, key?: string) => {
-  const session = await sid($)
-  return `topics:${key && key !== `${session}:main` ? key : session}`
-}
 
 const SESSION_STORE_PREFIXES = new Set([
-  'address-index', 'agent-task-roots', 'agent-task-step-claims', 'headAttachments', 'held', 'issue-addresses',
-  'ledger', 'ledger-snapshots', 'pending', 'request-prompt-seq', 'requests', 'stepped', 'topics', 'transcript-path', 'transcript-rows',
+  'agent-task-roots', 'agent-task-step-claims', 'request-prompt-seq', 'requests', 'stepped', 'transcript-path',
 ])
 const SESSION_STATE_MAX_BYTES = 4_194_304
 const SESSION_STATE_MIGRATION_KEY = 'migrated:session-files:v1'
 const sessionStateCache = new Map<string, { size: number; mtimeMs: number; bytes: number; state: Record<string, unknown> }>()
 const sessionStateWrites = new Map<string, Promise<void>>()
-const foldChecks = new Map<string, Promise<void>>()
 let sessionStateMigration: Promise<void> | undefined
 let sessionStateMigrationFailed = false
 
@@ -271,22 +167,6 @@ async function sessionStoreSet($: StoreWriter, key: string, value: unknown): Pro
   })
 }
 
-async function sessionStoreDelete($: StoreWriter, key: string): Promise<void> {
-  const session = sessionStoreOwner(key)
-  if (!session) return $.store.delete(key)
-  await ensureSessionStateMigration($)
-  await serializeSessionState(session, async () => {
-    const path = await sessionStatePath($, session)
-    if (await $.fs.exists(path)) {
-      const state = await readSessionState($, session)
-      if (Object.prototype.hasOwnProperty.call(state, key)) {
-        delete state[key]
-        await writeSessionState($, session, state)
-      }
-    }
-  })
-}
-
 async function migrateSessionStore($: StoreWriter, report: (reason: string) => Promise<void>): Promise<void> {
   if (await $.store.get(SESSION_STATE_MIGRATION_KEY) === true) return
   const sessions = new Map<string, string[]>()
@@ -353,319 +233,13 @@ async function ensureSessionStateMigration($: StoreWriter): Promise<void> {
   await sessionStateMigration
 }
 
-const isNumberRecord = (v: unknown): v is Record<string, number> => isRecord(v) && Object.values(v).every(n => typeof n === 'number')
-const optional = (v: unknown, type: 'number' | 'string') => v === undefined || typeof v === type
-const isMeta = (v: unknown): v is Partial<Meta> =>
-  isRecord(v) && optional(v.seq, 'number') && optional(v.fails, 'number') && optional(v.ratio, 'number') && optional(v.overhead, 'number')
-  && optional(v.foldTokens, 'number') && optional(v.firstObserved, 'number') && optional(v.estimatorVersion, 'number') && optional(v.lastFoldAt, 'number') && (v.foldDurationsMs === undefined || isNumberRecord(v.foldDurationsMs)) && optional(v.lastClear, 'string') && (v.boundary === undefined || isRecord(v.boundary))
-  && (v.compactionDisabled === undefined || typeof v.compactionDisabled === 'boolean')
-async function readMeta($: StoreReader): Promise<Meta> {
-  const stored = await sessionStoreGet($, await metaKey($))
-  const meta = { seq: 0, fails: 0, ...(isMeta(stored) ? stored : {}) }
-  if (meta.estimatorVersion !== TOKEN_ESTIMATOR_VERSION) {
-    meta.ratio = undefined
-    meta.overhead = undefined
-    meta.estimatorVersion = TOKEN_ESTIMATOR_VERSION
-  }
-  return meta
-}
-const writeMeta = async ($: EngineInterface, m: Meta) => sessionStoreSet($, await metaKey($), m)
-export type StableAttachmentInput = { type: StableAttachmentType; text: string; origin: unknown; agentId?: string; detail?: unknown }
-export type StableAttachmentIo = Pick<EngineInterface, 'state'> & StoreWriter
-const STABLE_ATTACHMENTS = { plugin: 'clm', key: 'stableAttachments' } as const
-const QUEUED_MESSAGES: { plugin: 'clm'; key: 'queuedMessages' } = { plugin: 'clm', key: 'queuedMessages' }
-const MAX_STABLE_ATTACHMENT_DELTAS = 32
-const INSTRUCTIONS_PREAMBLE = 'Codebase and user instructions are shown below.'
-const isInstructionDelta = (text: string) => !text.startsWith(INSTRUCTIONS_PREAMBLE)
-const textDigest = (text: string) => {
-  let hash = 0xcbf29ce484222325n
-  for (let i = 0; i < text.length; i++) hash = ((hash ^ BigInt(text.charCodeAt(i))) * 0x100000001b3n) & 0xffffffffffffffffn
-  return `${text.length}:${hash.toString(16)}`
-}
-// The descriptions Claude Code 2.1.288 emits; a quoted header with any other
-// description stays file content instead of starting a fake section.
-const INSTRUCTION_KINDS = ["project instructions, checked into the codebase", "user's private project instructions, not checked in", "user's auto-memory, persists across conversations", 'organization-managed policy instructions', "user's private global instructions for all projects"]
-const INSTRUCTION_FILE = new RegExp(`(?:^|\\n\\n)Contents of (.+) \\((?:${INSTRUCTION_KINDS.join('|')})\\):\\n\\n`, 'g')
-const instructionSections = (text: string) => {
-  const heads = [...text.matchAll(INSTRUCTION_FILE)].map(m => ({ path: m[1] ?? '', at: m.index + m[0].indexOf('Contents of ') }))
-  return { lead: text.slice(0, heads[0]?.at ?? text.length), sections: heads.map((head, i) => ({ path: head.path, text: text.slice(head.at, heads[i + 1]?.at ?? text.length) })) }
-}
-const uniquePaths = (sections: readonly { path: string }[]) => new Set(sections.map(section => section.path)).size === sections.length
-// The harness re-announces a changed file after every compact boundary, each
-// section replacing "its earlier copy"; folding it into the full text keeps one
-// latest instructions row. undefined when either side has no file sections.
-export const mergeInstructions = (full: string, delta: string): string | undefined => {
-  const changed = instructionSections(delta).sections
-  const { lead, sections } = instructionSections(full)
-  // A path seen twice, or one the full text lacks, means file content quoted the
-  // header shape; keeping the delta as its own row loses nothing.
-  if (!changed.length || !uniquePaths(changed) || !uniquePaths(sections) || changed.some(c => !sections.some(section => section.path === c.path))) return undefined
-  const replace = new Map(changed.map(section => [section.path, section.text.trimEnd()]))
-  let differs = false
-  const merged = sections.map(section => {
-    const next = replace.get(section.path)
-    const body = section.text.trimEnd()
-    if (next === undefined || next === body) return section.text
-    differs = true
-    return next + section.text.slice(body.length)
-  })
-  return differs ? lead + merged.join('') : full
-}
-const stableDeltaSections = (text: string) => {
-  const matches = [...text.matchAll(/^(?:Contents of (.+?)(?: \(([^()\n]*)\))?:|Instructions no longer present: (.+))$/gm)]
-  const sections = matches.flatMap((match, i) => {
-    const path = match[1] ?? match[3]
-    const start = match.index
-    if (path === undefined || start === undefined) return []
-    const end = matches[i + 1]?.index ?? text.length
-    return [{ path, start, text: text.slice(start, end) }]
-  })
-  if (!sections.length) return undefined
-  return {
-    prefix: text.slice(0, sections[0]?.start ?? text.length),
-    sections,
-  }
-}
-const appendStableDelta = (deltas: string[], text: string, type: StableAttachmentType) => {
-  const incoming = type === 'instructions' ? stableDeltaSections(text) : undefined
-  const paths = new Set(incoming?.sections.map(section => section.path))
-  const retained = incoming ? deltas.flatMap(delta => {
-    const previous = stableDeltaSections(delta)
-    if (!previous) return [delta]
-    const sections = previous.sections.filter(section => !paths.has(section.path))
-    if (!sections.length) {
-      const remaining = previous.prefix.replace(/^Instruction files were re-read[^\n]*(?:\n|$)/, '').trim()
-      return remaining ? [remaining] : []
-    }
-    return [previous.prefix + sections.map(section => section.text).join('')]
-  }) : deltas
-  return [...retained.filter(delta => delta !== text), text].slice(-MAX_STABLE_ATTACHMENT_DELTAS)
-}
-type StableAttachmentProgress = StableAttachmentValue & { droppedAtSeq?: number }
-
-const absorbStable = (value: StableAttachmentValue, type: StableAttachmentType, text: string): boolean => {
-  if (type === 'instructions' && isInstructionDelta(text)) {
-    const merged = value.full === undefined ? undefined : mergeInstructions(value.full, text)
-    if (merged !== undefined) {
-      if (merged === value.full) return false
-      value.full = merged
-      return true
-    }
-    if (value.deltas.includes(text)) return false
-    const deltas = appendStableDelta(value.deltas, text, type)
-    const changed = deltas.length !== value.deltas.length || deltas.some((delta, index) => delta !== value.deltas[index])
-    value.deltas = deltas
-    return changed
-  }
-  if (value.full === text) return false
-  Object.assign(value, { full: text, deltas: [] })
-  return true
-}
-const isStableAttachmentValue = (value: unknown): value is StableAttachmentValue =>
-  isRecord(value) && (value.full === undefined || typeof value.full === 'string') && (value.inHead === undefined || typeof value.inHead === 'boolean') && (value.headDigest === undefined || typeof value.headDigest === 'string') && Array.isArray(value.deltas)
-  && value.deltas.every(item => typeof item === 'string') && typeof value.carriedAtSeq === 'number'
-  && (value.droppedAtSeq === undefined || typeof value.droppedAtSeq === 'number')
-const isStableAttachmentSession = (value: unknown): value is StableAttachmentSession =>
-  isRecord(value) && Object.entries(value).every(([type, item]) => isStableAttachmentType(type) && isStableAttachmentValue(item))
-const stableAttachmentStore = (value: unknown): StableAttachmentStore => {
-  const store: StableAttachmentStore = {}
-  if (!isRecord(value)) return store
-  for (const [session, item] of Object.entries(value)) if (isStableAttachmentSession(item)) store[session] = item
-  return store
-}
-const updateStableAttachmentStore = async <T>($: StableAttachmentIo, change: (current: StableAttachmentStore) => { next: StableAttachmentStore; result: T }): Promise<T> => {
-  const outcomes: { result: T }[] = []
-  await update($, STABLE_ATTACHMENTS, current => {
-    const changed = change(stableAttachmentStore(current))
-    outcomes.push({ result: changed.result })
-    return changed.next
-  })
-  const outcome = outcomes[0]
-  if (outcome === undefined) throw new Error('clm: stable attachment state update did not run')
-  return outcome.result
-}
-
-function attachmentSessionFromMessages(rows: readonly SessionMessage[]): StableAttachmentSession {
-  const ledgerIndex = rows.findLastIndex(isLedgerRow)
-  const ledgerRow = ledgerIndex < 0 ? undefined : rows[ledgerIndex]
-  const seq = ledgerRow === undefined ? 0 : Number(ledgerRowSeq(ledgerRow.text) ?? 0)
-  const state: StableAttachmentSession = {}
-  const carried: { type: StableAttachmentType; text: string }[] = []
-  for (let i = ledgerIndex - 1; i >= 0; i--) {
-    const message = rows[i]
-    if (message === undefined) continue
-    const row = stableAttachmentOf(message)
-    if (!row) break
-    carried.unshift(row)
-  }
-  for (const row of carried) {
-    let value = state[row.type]
-    if (!value) value = state[row.type] = { deltas: [], carriedAtSeq: seq }
-    if (row.type === 'instructions' && isInstructionDelta(row.text)) {
-      const merged = value.full === undefined ? undefined : mergeInstructions(value.full, row.text)
-      if (merged !== undefined) value.full = merged
-      else value.deltas = appendStableDelta(value.deltas, row.text, row.type)
-    }
-    else if (value.full === undefined) value.full = row.text
-    else value.deltas = appendStableDelta(value.deltas, row.text, row.type)
-  }
-  return state
-}
-
-// $.state does not survive a resume, and attachments the kept head row holds
-// leave no carried row to restore from. Their digests (never the text) persist
-// so the resumed harness's re-announcement is still recognised and dropped.
-type HeadAttachments = { seq: number; digests: Partial<Record<StableAttachmentType, string>> }
-const headAttachmentsKey = async ($: StableAttachmentIo) => `headAttachments:${await $.session.id()}`
-const isHeadAttachments = (value: unknown): value is HeadAttachments =>
-  isRecord(value) && typeof value.seq === 'number' && isRecord(value.digests)
-  && Object.entries(value.digests).every(([type, digest]) => isStableAttachmentType(type) && typeof digest === 'string')
-async function stableAttachmentSession($: StableAttachmentIo): Promise<{ session: string; state: StableAttachmentSession }> {
-  const session = await $.session.id()
-  const current = stableAttachmentStore((await $.state.get(STABLE_ATTACHMENTS)).value)[session]
-  if (current) return { session, state: current }
-  const restored = attachmentSessionFromMessages(await $.session.messages())
-  const head = await sessionStoreGet($, await headAttachmentsKey($))
-  if (isHeadAttachments(head)) for (const [type, digest] of Object.entries(head.digests)) {
-    if (!isStableAttachmentType(type) || digest === undefined) continue
-    const value = restored[type] ?? (restored[type] = { deltas: [], carriedAtSeq: head.seq })
-    if (value.full === undefined) Object.assign(value, { inHead: true, headDigest: digest })
-  }
-  return updateStableAttachmentStore($, sessions => {
-    const state = sessions[session] ?? restored
-    return { next: { ...sessions, [session]: state }, result: { session, state } }
-  })
-}
-
-export async function handleStableAttachment($: StableAttachmentIo, input: StableAttachmentInput): Promise<{ text: null } | undefined> {
-  if (input.agentId !== undefined) return
-  const { session } = await stableAttachmentSession($)
-  // Announced before any reply, it sits in the first request's transcript group.
-  const inHead = !(await $.session.messages()).some(m => m.role === 'assistant')
-  return updateStableAttachmentStore($, sessions => {
-    const state = sessions[session] ?? {}
-    const value = state[input.type] ?? (state[input.type] = { deltas: [], carriedAtSeq: 0 })
-    const delta = input.type === 'instructions' && isInstructionDelta(input.text)
-    if (!delta && value.full === undefined && value.headDigest === textDigest(input.text)) value.full = input.text
-    const changed = absorbStable(value, input.type, input.text)
-    if (inHead && !delta) Object.assign(value, { inHead, headDigest: textDigest(input.text) })
-    if (changed) {
-      value.carriedAtSeq = 0
-      ;(value as StableAttachmentProgress).droppedAtSeq = 0
-    }
-    // Re-announced carried attachments must not create duplicate rows.
-    const progress = value as StableAttachmentProgress
-    const result = input.type !== 'instructions' && !changed && value.carriedAtSeq > 0 && (delta || value.carriedAtSeq > (progress.droppedAtSeq ?? 0)) ? { text: null } : undefined
-    if (result) progress.droppedAtSeq = value.carriedAtSeq
-    return { next: { ...sessions, [session]: state }, result }
-  })
-}
-
-const isQueuedMessage = (value: unknown): value is QueuedMessage =>
-  isRecord(value) && typeof value.uuid === 'string' && typeof value.text === 'string' && typeof value.at === 'number' && (value.after === undefined || typeof value.after === 'string')
-const queuedMessageStore = (value: unknown): QueuedMessageStore => {
-  const store: QueuedMessageStore = {}
-  if (!isRecord(value)) return store
-  for (const [session, messages] of Object.entries(value)) if (Array.isArray(messages) && messages.every(isQueuedMessage)) store[session] = messages
-  return store
-}
-export const storeQueuedMessage = (store: QueuedMessageStore, session: string, message: QueuedMessage): QueuedMessageStore =>
-  store[session]?.some(item => item.uuid === message.uuid) ? store : { ...store, [session]: [...store[session] ?? [], message] }
-const lastMainRow = new Map<string, string>()
-const appendedFingerprint = (role: 'user' | 'assistant', content: readonly { type: string; [field: string]: unknown }[]): string => fingerprint({
-  role,
-  text: content.flatMap(block => block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join(''),
-  toolUses: content.flatMap(block => block.type === 'tool_use' && typeof block.id === 'string' ? [{ tool_use_id: block.id, tool: typeof block.name === 'string' ? block.name : '', input: {}, text: '' }] : []),
-  ...(role === 'user' ? { toolResults: content.flatMap(block => block.type === 'tool_result' && typeof block.tool_use_id === 'string' ? [{ tool_use_id: block.tool_use_id, text: '', isError: false }] : []) } : {}),
-})
-export const captureAppendedRow = async ($: StableAttachmentIo & Pick<EngineInterface, 'clock'>, uuid: string, type: string, name: string | undefined, content: readonly { type: string; [field: string]: unknown }[], metadata: { origin?: unknown; commandMode?: unknown; isMeta?: unknown } = {}): Promise<void> => {
-  const session = await $.session.id()
-  if (type === 'user' || type === 'assistant') {
-    lastMainRow.set(session, appendedFingerprint(type, content))
-    return
-  }
-  if (type !== 'attachment' || name !== 'queued_command') return
-  const text = content.flatMap(block => block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('')
-  if (text === '') return
-  if (metadata.origin !== undefined) {
-    if (!isRecord(metadata.origin) || !['composer', 'bridge', 'sdk'].includes(String(metadata.origin.kind))) return
-  } else if ((metadata.commandMode !== undefined && metadata.commandMode !== 'prompt') || metadata.isMeta === true || text.startsWith('<task-notification>') || text.startsWith('<agent-message')) return
-  const message: QueuedMessage = { uuid, text, at: await $.clock.now(), ...(lastMainRow.get(session) === undefined ? {} : { after: lastMainRow.get(session) }) }
-  await update($, QUEUED_MESSAGES, current => storeQueuedMessage(queuedMessageStore(current), session, message))
-}
-const queuedMessages = async ($: StableAttachmentIo): Promise<QueuedMessage[]> => {
-  const session = await $.session.id()
-  return [...queuedMessageStore((await $.state.get(QUEUED_MESSAGES)).value)[session] ?? []]
-}
-const markQueuedMessagesFolded = async ($: StableAttachmentIo, folded: readonly QueuedMessage[]): Promise<void> => {
-  if (!folded.length) return
-  const session = await $.session.id()
-  const uuids = new Set(folded.map(message => message.uuid))
-  await update($, QUEUED_MESSAGES, current => {
-    const store = queuedMessageStore(current)
-    return { ...store, [session]: (store[session] ?? []).filter(message => !uuids.has(message.uuid)) }
-  })
-}
-
-// The kept head group brings back the session-start copy; once a newer text
-// replaced it, that copy is stale, so the head is rebuilt without its handle
-// and the latest text is carried instead. A head copy known only by digest
-// (after a resume) cannot be carried, so it keeps the head.
-const stableAttachmentRows = async ($: StableAttachmentIo, headKept: boolean): Promise<{ rows: SessionMessage[]; headKept: boolean }> => {
-  const { session } = await stableAttachmentSession($)
-  return updateStableAttachmentStore($, sessions => {
-    const state = sessions[session] ?? {}
-    const stale = (value: StableAttachmentValue) => value.inHead === true && value.full !== undefined && textDigest(value.full) !== value.headDigest
-    const held = Object.values(state).filter(value => value.inHead)
-    const keep = headKept && !(held.every(value => value.full !== undefined) && held.some(stale))
-    const rows = STABLE_ATTACHMENT_TYPES.filter(type => type !== 'instructions').flatMap(type => {
-      const value = state[type]
-      return value ? [...(value.full === undefined || (keep && value.inHead && !stale(value)) ? [] : [stableAttachmentRow(type, value.full)]), ...value.deltas.map(text => stableAttachmentRow(type, text))] : []
-    })
-    return { next: sessions, result: { rows, headKept: keep } }
-  })
-}
-
-const markStableAttachmentsCarried = async ($: StableAttachmentIo, seq: number, rows: readonly SessionMessage[], headKept: boolean) => {
-  const { session } = await stableAttachmentSession($)
-  const marked = await updateStableAttachmentStore($, sessions => {
-    const state = sessions[session] ?? {}
-    for (const row of rows) {
-      const attachment = stableAttachmentOf(row)
-      const value = attachment?.type === 'instructions' ? undefined : attachment && state[attachment.type]
-      if (value) value.carriedAtSeq = seq
-    }
-    for (const [type, value] of Object.entries(state)) {
-      if (type !== 'instructions' && headKept && value.inHead) value.carriedAtSeq = seq
-      if (!headKept) { delete value.inHead; delete value.headDigest }
-    }
-    return { next: { ...sessions, [session]: state }, result: state }
-  })
-  const digests: HeadAttachments['digests'] = {}
-  if (headKept) for (const type of STABLE_ATTACHMENT_TYPES) {
-    const value = marked[type]
-    const digest = value?.inHead ? (value.full === undefined ? value.headDigest : textDigest(value.full)) : undefined
-    if (digest !== undefined) digests[type] = digest
-  }
-  await sessionStoreSet($, await headAttachmentsKey($), { seq, digests } satisfies HeadAttachments)
-}
-
-const clearStableAttachmentSession = ($: StableAttachmentIo, session: string) => updateStableAttachmentStore($, sessions => {
-  const next = { ...sessions }
-  delete next[session]
-  return { next, result: undefined }
-})
 
 async function sessionBasePath($: HomeReader, session: string): Promise<string> {
   const home = await $.env.get('HOME')
   return `${home ?? '.'}/.claude-work/plans/clm-${session}`
 }
 async function basePath($: HomeReader): Promise<string> { return sessionBasePath($, await sid($)) }
-const ledgerPath = async ($: HomeReader) => `${await basePath($)}.md`
 const logPath = async ($: HomeReader) => `${await basePath($)}.log.jsonl`
-async function readText($: EngineInterface, p: string): Promise<string | undefined> {
-  return (await $.fs.exists(p)) ? await $.fs.read(p) : undefined
-}
 
 const eventsIo = ($: EngineInterface): EventsIo => ({
   sessionId: () => $.session.id(),
@@ -693,35 +267,6 @@ const logEvent = ($: StoreWriter, event: LogEvent, fields: LogFields) => writeLo
   write: (path, text) => $.fs.write(path, text),
 }, event, fields)
 
-async function logModLocationFailure($: EngineInterface, loadedFrom: string | undefined, error: unknown): Promise<void> {
-  const reason = `could not resolve installed clm path: ${String(error).slice(0, 500)}`
-  try { await logEvent($, 'mod-stale', { loadedFrom, reason }) }
-  catch { try { $.ui.log(`clm: ${reason}`, { to: 'debug' }) } catch { /* detection remains fail-open */ } }
-}
-
-async function resolveInstalledMod($: EngineInterface): Promise<string> {
-  const home = (await $.env.get('HOME')) ?? '.'
-  const pluginDirs = await $.env.get('CLAUDE_CODE_PLUGIN_DIRS')
-  const configured = pluginDirs?.split(':')
-    .map(path => path.startsWith('~/') ? `${home}/${path.slice(2)}` : path)
-    .find(path => /\/mods\/clm\/?$/.test(path))
-  const installedDir = (configured ?? `${home}/.claude/mods/clm`).replace(/\/$/, '')
-  const result = await $.process.run(['realpath', installedDir], { timeoutMs: 5000 })
-  if (result.exitCode !== 0 || !result.stdout.trim()) throw new Error(`realpath exited ${result.exitCode}: ${result.stderr}`)
-  return result.stdout.trim()
-}
-
-async function detectStaleMod($: EngineInterface, loadedFrom: string, installed: string, warnedSessions: Set<string>): Promise<void> {
-  if (installed === loadedFrom) return
-  const session = await sid($)
-  if (warnedSessions.has(session)) return
-  warnedSessions.add(session)
-  try { await logEvent($, 'mod-stale', { loadedFrom, installedPath: installed }) }
-  catch (error) { try { $.ui.log(`clm: stale mod event logging failed (${String(error).slice(0, 160)})`, { to: 'debug' }) } catch { /* detection remains fail-open */ } }
-  try {
-    $.ui.log(`clm: this session is running a stale clm copy and must be restarted (loaded ${loadedFrom}; installed ${installed})`)
-  } catch (error) { try { $.ui.log(`clm: stale mod warning failed (${String(error).slice(0, 160)})`, { to: 'debug' }) } catch { /* detection remains fail-open */ } }
-}
 
 const panelIo = ($: EngineInterface): PanelIo => ({
   captureOrigin: () => captureOrigin($),
@@ -733,8 +278,6 @@ const panelIo = ($: EngineInterface): PanelIo => ({
   sessionId: () => $.session.id(),
   sessionMessages: agentId => agentId === undefined ? $.session.messages() : $.session.messages({ agentId }),
   readWorkflow: () => readWorkflow($),
-  readMeta: () => readMeta($),
-  ledgerPath: () => ledgerPath($),
   storeGet: key => sessionStoreGet($, key),
   storeSet: (key, value) => sessionStoreSet($, key, value),
   toolCall: input => $.tool.call(input),
@@ -902,78 +445,15 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
     return failOpen('internal tracker or git operation', error)
   }
 }
+
 const clmStatusIo = ($: StatusReader) => ({
-  readWorkflow: () => readWorkflow($), readMeta: () => readMeta($), readAll: () => readAll($),
-  sessionId: () => $.session.id(), ledgerPath: () => ledgerPath($), storeGet: (key: string) => sessionStoreGet($, key),
+  readWorkflow: () => readWorkflow($), readAll: () => readAll($),
+  sessionId: () => $.session.id(), storeGet: (key: string) => sessionStoreGet($, key),
 })
 const syncPanelSafely = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => syncPanelDomain(panelIo($), origin, events)
-const projectPanel = ($: EngineInterface, origin: Origin, events: readonly TrackerEvent[]) => panelIo($).serialize(origin.session, () => syncPanelSafely($, origin, events))
 export const sessionIssues = ($: EngineInterface, query: { issue?: string; status?: Issue['status'] } = {}) => panelIssues(panelIo($), query)
 export const clmStatus = ($: StatusReader) => panelStatus(clmStatusIo($))
 export const trackIssue = ($: EngineInterface, input: { title: string; status: Issue['status']; issue?: string }) => trackPanelIssue(panelIo($), input)
-export { isHeld, type Held }
-
-const heldIo = ($: EngineInterface): HeldIo => ({
-  now: () => $.clock.now(),
-  get: key => sessionStoreGet($, key),
-  set: (key, value) => sessionStoreSet($, key, value),
-  delete: key => sessionStoreDelete($, key),
-  logEvent: (event, fields) => logEvent($, event, fields),
-  complete: request => $.model.complete(request),
-})
-const readHeld = async ($: EngineInterface) => readHeldStore(heldIo($), await sid($))
-const updateHeld = async ($: EngineInterface, settled: readonly string[], added: readonly Held[]) => updateHeldStore(heldIo($), await sid($), settled, added)
-const gateMerge = ($: EngineInterface, ops: readonly Payload[], evidence: readonly Evidence[][], sources: ReadonlyMap<string, Source>, ratio: number, dropped: ReadonlySet<string>, issues: readonly Issue[]) =>
-  gateHeldMerge(heldIo($), ops, evidence, sources, ratio, dropped, issues)
-const reviewFold = ($: EngineInterface, opts: Opts, input: import('./held').ReviewInput) => reviewHeldFold(heldIo($), opts, input)
-
-const foldRuntimeIo = ($: EngineInterface): FoldRuntimeIo => ({
-  readLedger: async () => readText($, await ledgerPath($)),
-  captureOrigin: () => captureOrigin($),
-  readAll: () => readAll($),
-  trackerView: (origin, ops) => trackerViewDomain({ readAll: () => readAll($) }, origin, ops),
-  readHeld: () => readHeld($),
-  heldClaims: (held, issues, session) => heldClaims(held, issues, session),
-  gateMerge: (ops, evidence, sources, ratio, dropped, issues) => gateMerge($, ops, evidence, sources, ratio, dropped, issues),
-  reviewFold: (opts, input) => reviewFold($, opts, input),
-  residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
-  addressRows: key => addressRows(addressIo($), key),
-  nowIso: () => nowIso($),
-  readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
-  ledgerPath: () => ledgerPath($),
-  topics: async key => sessionStoreGet($, await topicsKey($, key)),
-  usageReading: () => usageReading($),
-  sentAt: () => sentAt($),
-  complete: request => $.model.complete(request),
-  logEvent: (event, fields) => logEvent($, event, fields),
-  log: (text, options) => $.ui.log(text, options),
-})
-const fold = ($: EngineInterface, opts: Opts, rows: readonly SessionMessage[], meta: Meta, mustFold: boolean, reading?: number, calibrate = true, prepared?: PreparedFold, transcript?: string) =>
-  runFold(foldRuntimeIo($), opts, rows, meta, mustFold, reading, calibrate, prepared, transcript)
-const trackerView = ($: EngineInterface, origin: Origin, ops: readonly Payload[] = []) =>
-  trackerViewDomain({ readAll: () => readAll($) }, origin, ops)
-
-const addressIo = ($: EngineInterface): AddressIo => ({
-  get: key => sessionStoreGet($, key), set: (key, value) => sessionStoreSet($, key, value),
-})
-const sentAt = async ($: EngineInterface): Promise<SentAt> => sentAtOf(addressIo($), transcriptKey(await sid($)))
-const nowIso = async ($: EngineInterface) => new Date(await $.clock.now()).toISOString()
-
-async function readLegacyTopics($: EngineInterface, notes: string, seq: number, key?: string): Promise<Topic[]> {
-  const resolvedKey = key ?? transcriptKey(await sid($))
-  return readLegacyTopicsDomain({ topics: async target => sessionStoreGet($, await topicsKey($, target)) }, notes, seq, resolvedKey)
-}
-
-const residentIo = ($: EngineInterface): ResidentIo => ({
-  get: key => sessionStoreGet($, key),
-  set: (key, value) => sessionStoreSet($, key, value),
-  log: (text, options) => $.ui.log(text, options),
-  readLedger: async () => readText($, await ledgerPath($)),
-  readMeta: () => readMeta($),
-  readLegacyTopics: (notes, seq, key) => readLegacyTopics($, notes, seq, key),
-})
-const residentLedger = ($: EngineInterface, key: string, issues: readonly Issue[], state: { stack: string[]; pending: string[] }, events: readonly TrackerEvent[], preview: { notes?: string; topics?: TopicState[]; issues?: Issue[]; state?: { stack: string[]; pending: string[] } } = {}) =>
-  renderResidentLedger(residentIo($), key, issues, state, events, preview)
 
 const intentIo = ($: EngineInterface): PromptIntentIo => ({
   captureOrigin: () => captureOrigin($),
@@ -984,113 +464,13 @@ const intentIo = ($: EngineInterface): PromptIntentIo => ({
   complete: request => $.model.complete(request),
   get: key => sessionStoreGet($, key),
   set: (key, value) => sessionStoreSet($, key, value),
-  addressRows: key => addressRows(addressIo($), key),
   writeEvents: (payloads, origin) => writeEvents($, payloads, origin),
   serialize: (session, run) => serialized(session, run),
   syncPanel: (origin, events) => syncPanelSafely($, origin, events),
   log: (text, options) => $.ui.log(text, options),
   logEvent: (event, fields) => logEvent($, event, fields),
 })
-const recordPromptIntent = async ($: EngineInterface, text: string, promptSeq: number, address?: string) => {
-  return classifyPrompt(intentIo($), text, promptSeq, address)
-}
-
-/** Options resolved against the live context window, so the threshold point follows the model in use. */
-async function liveOpts($: EngineInterface, options: Record<string, unknown>): Promise<Opts> {
-  const window = await Promise.resolve().then(() => $.session.usage()).then(usage => usage.context.window, () => undefined)
-  const prefix = await readMeta($).then(meta => meta.overhead, () => undefined)
-  return readOpts(options, window, prefix).opts
-}
-/** The engine's live context tokens, when it has a reading. */
-async function usageReading($: EngineInterface): Promise<number | undefined> {
-  try {
-    const { tokens } = (await $.session.usage()).context
-    return typeof tokens === 'number' && Number.isFinite(tokens) ? tokens : undefined
-  } catch {
-    return undefined
-  }
-}
-const rewindIo = ($: EngineInterface): RewindIo => ({
-  storeGet: key => sessionStoreGet($, key),
-  storeSet: (key, value) => sessionStoreSet($, key, value),
-  storeDelete: key => sessionStoreDelete($, key),
-  serialize: (session, run) => serialized(session, run),
-  writeFile: (path, text) => $.fs.write(path, text),
-  ledgerPath: () => ledgerPath($),
-  topicsKey: key => topicsKey($, key),
-  pendingKey: key => pendingKey($, key),
-  readMeta: () => readMeta($),
-  writeMeta: value => writeMeta($, value),
-  readyFoldDropFps: key => foldJobDropFps(key),
-  clearReadyFold: async key => {
-    clearFoldJob(key)
-    await sessionStoreDelete($, await pendingKey($, key))
-  },
-  setRewindReady: (key, plan, fingerprints) => setRewindFoldJob(key, plan, fingerprints),
-  logEvent: fields => logEvent($, 'rewind', fields),
-  log: text => $.ui.log(text, { to: 'debug' }),
-})
-
-const foldJobIo = ($: EngineInterface, loadedFromPath?: string): FoldJobIo => ({
-  loadedFrom: loadedFromPath,
-  sessionId: () => $.session.id(),
-  sessionMessages: () => $.session.messages(),
-  stableAttachments: headKept => stableAttachmentRows($, headKept),
-  markStableAttachmentsCarried: (seq, rows, headKept) => markStableAttachmentsCarried($, seq, rows, headKept),
-  queuedMessages: () => queuedMessages($),
-  markQueuedMessagesFolded: messages => markQueuedMessagesFolded($, messages),
-  sessionCompact: () => $.session.compact({}),
-  now: () => $.clock.now(),
-  after: (ms, fn) => $.clock.after(ms, fn),
-  usageReading: () => usageReading($),
-  sentAt: () => sentAt($),
-  readMeta: () => readMeta($),
-  writeMeta: meta => writeMeta($, meta),
-  readLedger: async () => readText($, await ledgerPath($)),
-  ledgerPath: () => ledgerPath($),
-  basePath: () => basePath($),
-  readFile: async path => readText($, path),
-  writeFile: (path, text) => $.fs.write(path, text),
-  appendFile: async (path, text) => {
-    await $.process.run(['mkdir', '-p', '--', path.slice(0, path.lastIndexOf('/'))], { timeoutMs: 5000 })
-    await $.fs.write(path, ((await readText($, path)) ?? '') + text)
-  },
-  lessonsPath: async () => `${(await $.env.get('HOME')) ?? '.'}/.dotfiles/.lessons/lessons.jsonl`,
-  fileExists: path => $.fs.exists(path),
-  fileList: path => $.fs.list(path),
-  run: (args, options) => $.process.run(args, options),
-  storeGet: key => sessionStoreGet($, key),
-  storeSet: (key, value) => sessionStoreSet($, key, value),
-  storeDelete: key => sessionStoreDelete($, key),
-  serialize: (session, run) => serialized(session, run),
-  pendingKey: key => pendingKey($, key),
-  topicsKey: key => topicsKey($, key),
-  captureOrigin: () => captureOrigin($),
-  readAll: () => readAll($),
-  trackerView: (origin, ops) => trackerView($, origin, ops),
-  updateHeld: (settled, hold) => updateHeld($, settled, hold),
-  residentLedger: (key, issues, state, events, preview) => residentLedger($, key, issues, state, events, preview),
-  append: (payloads, origin, project, knownTitles) => append($, payloads, origin, project, knownTitles),
-  projectPanel: (origin, events) => projectPanel($, origin, events),
-  readRewindIo: () => rewindIo($),
-  observeTranscript: (key, rows) => observeTranscript(rewindIo($), key, rows),
-  fold: (opts, rows, meta, mustFold, reading, calibrate, prepared, transcript) => fold($, opts, rows, meta, mustFold, reading, calibrate, prepared, transcript),
-  complete: request => $.model.complete(request),
-  logEvent: (event, fields) => logEvent($, event, fields),
-  log: (text, options) => $.ui.log(text, options),
-})
-
-export const report = foldJobReport
-
-/** clm_fold: asks for a fold now; the swap itself waits for a turn end, where the host allows session.compact. */
-export async function foldOnRequest($: EngineInterface, opts: Opts) {
-  let request: FoldRequest
-  try { request = await requestFold(foldJobIo($), opts) }
-  catch (err) { request = { outcome: 'refused', detail: `the fold could not start (${String(err).slice(0, 160)})` } }
-  await logEvent($, 'model-fold', { outcome: request.outcome, reason: request.detail })
-  if (request.outcome === 'refused') return { result: `Fold not requested: ${request.detail}.`, isError: true }
-  return { result: `Fold requested: ${request.detail}. It applies at a turn end once the summary is ready; keep working meanwhile.` }
-}
+const recordPromptIntent = async ($: EngineInterface, text: string, promptSeq: number) => classifyPrompt(intentIo($), text, promptSeq)
 
 const workflowIo = ($: EngineInterface): WorkflowIo => ({
   read: () => readWorkflow($),
@@ -1101,9 +481,7 @@ const workflowIo = ($: EngineInterface): WorkflowIo => ({
 const stampHumanPrompt = ($: EngineInterface) => stampWorkflowPrompt(workflowIo($))
 export const submitWithRecovery = recoverWorkflowSubmit
 
-const mainTurnCompletionIo = ($: EngineInterface, opts: Opts): MainTurnCompletionIo => ({
-  showChanges: answer => { void showFoldTurnChanges(foldJobIo($), answer).catch(err => $.ui.log(`clm: turn context refresh failed (${String(err).slice(0, 160)})`, { to: 'debug' })) },
-  maybeClear: async () => {},
+const mainTurnCompletionIo = ($: EngineInterface): MainTurnCompletionIo => ({
   arbitrate: turnId => arbitrateWorkflow(workflowIo($), turnId),
   clearActiveTurn: turnId => changeWorkflow($, current => ({
     next: current.activeTurnId === turnId ? { ...current, activeTurnId: null } : current,
@@ -1113,25 +491,12 @@ const mainTurnCompletionIo = ($: EngineInterface, opts: Opts): MainTurnCompletio
 })
 
 // clm-prompt
-const GUIDE = [
-  'Memory ledger (clm): when this conversation outgrows its budget, the harness folds the older turns into one row that starts with "[clm ledger".',
-  'That row carries the goal, what was done, what is left, open tracker questions. The turns they replaced are gone.',
-  'Use it as your memory of that work, and re-query any PR, branch, deploy or ticket state before acting on it or reporting it.',
-  'Describe task changes in the conversation; clm records them in the tracker and task panel.',
-  'A result shown as `[clm step … done: …]` was folded.',
-].join('\n')
+const GUIDE = 'Describe task changes in the conversation; clm records them in the tracker and task panel.'
 
 export const register: Register = (on, options) => {
-  const forceCompacts = new Set<string>()
-  const { problems } = readOpts(options as Record<string, unknown>)
-  const userOptions = options as Record<string, unknown>
-  let loadedFromPath: string | undefined
-  const warnedStaleSessions = new Set<string>()
 
   on('engine.create', async ($, e, next) => {
     const built = await next(e)
-    try { loadedFromPath ??= await resolveInstalledMod($) }
-    catch (error) { await logModLocationFailure($, loadedFromPath, error) }
     return {
       ...built,
       clm: {
@@ -1158,10 +523,7 @@ export const register: Register = (on, options) => {
         sessionStateMigrationFailed = false
       }
       await ensureSessionStateMigration($)
-      const session = await $.session.id()
-      await clearStableAttachmentSession($, session)
     }
-    for (const p of problems) $.ui.log(`clm: option ${p}`)
     try {
       await $.tool.register({
         name: 'clm_task',
@@ -1183,28 +545,10 @@ export const register: Register = (on, options) => {
     }
     await $.command.register({
       name: 'clm',
-      description: 'Show the clm ledger, budget use and recent decisions; `board` opens the issue board.',
+      description: 'List the open clm issues; `board` opens the issue board.',
       immediate: true,
     })
-    await $.command.register({ name: 'force-compact', description: 'Compact once with Claude Code\'s own summarizer instead of the clm fold; text after it becomes the summary instructions.', immediate: true })
     return next(e)
-  })
-
-  // The host refuses a compaction from inside command.run, so it runs once the command has returned.
-  on('command.run', { command: 'force-compact' }, async ($, e) => {
-    const key = transcriptKey(await sid($))
-    const instructions = e.args.trim()
-    $.clock.after(0, async () => {
-      forceCompacts.add(key)
-      try {
-        const result = await $.session.compact(instructions ? { instructions } : {})
-        if (result.skip !== undefined) $.ui.log(`clm: force-compact skipped (${result.skip})`)
-        await adoptEngineSummary(foldJobIo($), key, result.messages)
-      } catch (err) {
-        $.ui.log(`clm: force-compact failed (${String(err).slice(0, 160)})`)
-      } finally { forceCompacts.delete(key) }
-    })
-    return {}
   })
 
   // Printed through ui.log, which the engine draws as a notice and never sends
@@ -1218,10 +562,8 @@ export const register: Register = (on, options) => {
       log: text => $.ui.log(text),
     }, e.args)
     if (outcome === 'handled') return {}
-    const meta = await readMeta($)
-    const rows = liveRows(await $.session.messages(), meta.boundary)
-    const log = ((await readText($, await logPath($))) ?? '').split('\n').filter(Boolean).slice(-5)
-    $.ui.log(foldJobReport(rows.findLast(isLedgerRow)?.text ?? await readText($, await ledgerPath($)), rows, await liveOpts($, userOptions), meta, log))
+    const open = (await sessionIssues($)).filter(isOpen)
+    $.ui.log(open.length ? open.map(issue => `clm: ${issue.id} [${issue.status}] ${issue.title}`).join('\n') : 'clm: no open issues; /clm board opens the board')
     return {}
   })
 
@@ -1240,9 +582,7 @@ export const register: Register = (on, options) => {
       }
     }
     const res = await next(e)
-    try { await stampMessages(addressIo($), transcriptKey(await sid($)), await $.session.messages(), await nowIso($)) }
-    catch (err) { $.ui.log(`clm: could not stamp turn rows (${String(err).slice(0, 160)})`, { to: 'debug' }) }
-    await completeMainTurn(mainTurnCompletionIo($, await liveOpts($, userOptions)), e.turnId, e.isAborted, e.answer)
+    await completeMainTurn(mainTurnCompletionIo($), e.turnId, e.isAborted)
     return res
   })
 
@@ -1297,27 +637,7 @@ export const register: Register = (on, options) => {
   })
   on('tool.describe', { tool: 'TaskCreate' }, ($, e) => ({ ...e, isDeferred: true }))
   on('tool.describe', { tool: 'TaskUpdate' }, ($, e) => ({ ...e, isDeferred: true }))
-  on('session.append', async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId === undefined && result.deny === undefined)
-      await captureAppendedRow($, result.uuid, result.message.type, result.message.name, result.message.content, { origin: e.origin, isMeta: result.message.isMeta })
-    return result
-  })
   on('prompt.attachment', { type: 'todo_reminder' }, () => ({ text: null }))
-  on('prompt.attachment', async ($, e) => {
-    if (e.agentId !== undefined) return
-    if (isStableAttachmentType(e.type) && typeof e.text === 'string')
-      return handleStableAttachment($, { type: e.type, text: e.text, origin: e.origin, detail: e.detail })
-  })
-
-  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    const seq = ledgerRowSeq(e.props.text)
-    if (e.props.isExpanded || e.props.from !== undefined || e.props.task !== undefined || seq === undefined) return next(e)
-    const durationMs = (await readMeta($)).foldDurationsMs?.[seq]
-    const text = durationMs === undefined ? '* clm compacted' : `* clm compacted in ${(durationMs / 1000).toFixed(1)} s`
-    const { Text } = $.ui.resolve(e)
-    return Text({ children: [text] })
-  })
 
   on('prompt.compose', async ($, e, next) => {
     const r = await next(e)
@@ -1341,28 +661,19 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', async ($, e, next) => {
     let promptSeq: number | undefined
-    let address: string | undefined
     if (isHumanOrigin(e.origin)) {
       try {
-        const key = transcriptKey(await sid($))
-        await observeTranscript(rewindIo($), key, await $.session.messages())
         await changeWorkflow($, current => ({ next: resetUserWorkflow(current, e.origin), result: undefined }))
         promptSeq = await stampHumanPrompt($)
-        address = await recordPrompt(addressIo($), key, e.text, await nowIso($), promptSeq)
       } catch (err) {
         $.ui.log(`clm: prompt state update failed (${String(err).slice(0, 160)})`)
       }
     }
     if (promptSeq !== undefined) {
-      void recordPromptIntent($, e.text, promptSeq, address).catch(err => {
+      void recordPromptIntent($, e.text, promptSeq).catch(err => {
         $.ui.log(`clm intent: classifier failed issue=unknown argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`, { to: 'debug' })
       })
     }
-    return next(e)
-  })
-
-  on('session.end', { sessionId: /.*/ }, async ($, e, next) => {
-    if (e.agentId === undefined) await clearStableAttachmentSession($, e.sessionId)
     return next(e)
   })
 

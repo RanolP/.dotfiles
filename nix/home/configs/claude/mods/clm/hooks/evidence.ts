@@ -1,7 +1,6 @@
 import type { SessionMessage } from 'claude-code'
 
-import type { SentAt } from './address'
-import { isUserTyped, kst, stripReminders } from './fold'
+import { isUserTyped, stripReminders } from './fold'
 import type { Issue, Payload } from './tracker'
 
 // A summary claim (a done step, a key fact, a user instruction) stands only on
@@ -38,10 +37,6 @@ const RELAY_TOOLS = new Set(['Agent', 'Task', 'SendMessage'])
 
 
 /** ` 2026-10-15 14:03 KST` when the row's send time is known, '' otherwise. */
-export const sentStamp = (m: SessionMessage, sentAt?: SentAt) => {
-  const at = sentAt?.(m)
-  return at ? ` ${kst(at)}` : ''
-}
 
 /** The ref of a user row: its 1-based position in the rendered range. */
 export const rowRef = (i: number) => `m${i + 1}`
@@ -51,14 +46,14 @@ export const rowRef = (i: number) => `m${i + 1}`
  * ref's text exactly as rendered (clipped), which is what a quote is checked
  * against. Over `cap`, whole oldest rows go, so every kept ref is shown whole.
  */
-export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refOffset = 0, sentAt?: SentAt): { text: string; sources: Map<string, Source> } {
+export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refOffset = 0): { text: string; sources: Map<string, Source> } {
   const toolUseOf = new Map(rows.flatMap(m => m.toolUses.map(u => [u.tool_use_id, {
     tool: u.tool,
     input: clip(JSON.stringify(u.input ?? {}) ?? '{}', INPUT_CLIP),
   }] as const)))
   const rendered = rows.map((m, i) => {
     const sources: [string, Source][] = []
-    const at = sentStamp(m, sentAt)
+    const at = ''
     let head = `[${m.role}${at}]`
     const shown = m.role === 'user' ? stripReminders(m.text) : m.text
     if (shown) {
@@ -183,16 +178,12 @@ export function checkEvidence(list: readonly Evidence[], sources: Sources, admis
 
 export const isDoneClaim = (o: Payload) => (o.op === 'create' || o.op === 'status') && o.status === 'done'
 
-/** A done claim that lost its evidence leaves its issue where it was: a status move is withheld and a create lands as todo, while `confirmQuestion` asks the user. */
-export const withhold = (o: Payload): Payload[] => (o.op === 'status' ? [] : o.op === 'create' ? [{ ...o, status: 'todo' }] : [o])
-
 export const CONFIRM_PREFIX = '이 항목들이 끝났는지 확인: '
 const CONFIRM_SEP = ' · '
 const CONFIRM_TITLE_MAX = 200
 /** Prefix of the note holding a confirm question's items as JSON; the ledger line hides it. */
 export const CONFIRM_ITEMS = '확인 대기 항목 '
 
-/** `denied` marks an item the user said, at `at`, is not finished: kept in the stored list so a later fold asks it again only once its issue moves. */
 export type ConfirmItem = { id?: string; title: string; opaque?: true; denied?: true; at?: string }
 const confirmText = (item: ConfirmItem) => item.opaque ? item.title : `${item.id ? `${item.id} ` : ''}"${item.title}"`
 
@@ -320,60 +311,6 @@ export function confirmAnswer(reply: string, items: readonly ConfirmItem[], aske
   const all = items.filter(item => !item.opaque)
   if (!askedInReply || !all.length) return undefined
   return said === 'yes' ? { confirmed: all, denied: [] } : said === 'no' ? { confirmed: [], denied: all } : undefined
-}
-
-/** Appends the first held quote to a done create's note, so 한 일 shows what proved it. */
-export function citeNote(o: Payload, held: readonly Evidence[]): Payload {
-  const first = held[0]
-  if (o.op !== 'create' || !first) return o
-  const cite = `quote: ${JSON.stringify(clip(squash(first.quote), 120))}`
-  return { ...o, note: o.note ? `${o.note} (${cite})` : cite }
-}
-
-export const isDropClaim = (o: Payload) => o.op === 'status' && o.status === 'dropped'
-
-/**
- * Applies the mechanical check to tracker ops: a done claim with no held
- * evidence is withheld for the user's confirmation, and a drop with no held quote from the user is
- * discarded, since only the user can abandon a direction. Returns the ops (aligned with `evidence` by index,
- * now holding only the held items) and one line per rejection.
- */
-/** A move of an issue in `dropped` (the ids now dropped) to any other status: only the user resuming that direction re-opens it. */
-export const isReopenClaim = (o: Payload, dropped: ReadonlySet<string>) => o.op === 'status' && o.status !== 'dropped' && dropped.has(o.issue)
-
-// A drop or a re-open turns on the user's direction, so each needs a quote of
-// a user row and is discarded without one; a stale tool row from before the
-// pivot proves neither.
-export function gateOps(ops: readonly Payload[], evidence: readonly Evidence[][], sources: Sources, dropped: ReadonlySet<string> = new Set()): { ops: Payload[]; evidence: Evidence[][]; rejections: string[] } {
-  const out: Payload[] = [], kept: Evidence[][] = [], rejections: string[] = []
-  ops.forEach((o, i) => {
-    const reopen = isReopenClaim(o, dropped)
-    if (reopen || isDropClaim(o)) {
-      const { held, problems } = checkEvidence(evidence[i] ?? [], sources, ['user'])
-      if (held.length) {
-        out.push(o)
-        kept.push(held)
-      } else rejections.push(`${describeOp(o)}: ${reopen ? 're-open' : 'drop'} discarded (${problems.join('; ') || 'no evidence'})`)
-      return
-    }
-    if (!isDoneClaim(o)) {
-      out.push(o)
-      kept.push([])
-      return
-    }
-    const { held, problems } = checkEvidence(evidence[i] ?? [], sources, undefined, true)
-    if (held.length) {
-      out.push(citeNote(o, held))
-      kept.push(held)
-      return
-    }
-    rejections.push(`${describeOp(o)}: done held for the user's confirmation (${problems.join('; ') || 'no evidence'})`)
-    for (const op of withhold(o)) {
-      out.push(op)
-      kept.push([])
-    }
-  })
-  return { ops: out, evidence: kept, rejections }
 }
 
 export const describeOp = (o: Payload, title?: string): string => {

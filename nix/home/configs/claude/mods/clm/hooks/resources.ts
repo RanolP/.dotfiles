@@ -1,6 +1,11 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ClmResourceInput } from '../types'
-import { fnv1a } from './address'
+
+function fnv1a(seed: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 0x01000193) >>> 0
+  return h
+}
 
 export const RESOURCE_TOOL = 'mcp__clm__clm_resource'
 export const RESOURCE_DESCRIPTION = 'Track resources this session owns and shared exclusive resources. Call `register` with kind `mutex` when a device or service may be used by only one session at a time; call `who` before using one; call `release` the moment you finish with it. Bash commands that start an emulator, simulator, Metro, a web dev server, or a PR are recorded automatically; `register` with kind `owned` covers anything they miss.'

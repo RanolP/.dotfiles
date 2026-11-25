@@ -1,5 +1,3 @@
-import type { QueuedMessage, StableAttachmentType } from '../hooks/fold'
-
 export type ClmBoardIssue = {
   id: string
   title: string
@@ -46,8 +44,6 @@ export type ClmStatus = {
   pending: Array<{ id: string; title: string }>
   agents: Array<{ agentId: string; taskId: string; title: string; status: 'todo' | 'doing' | 'ready-to-land' | 'done' | 'question' | 'uncertain' | 'dropped' }>
   resumeRequest: { text: string } | null
-  lastFoldAt: number | null
-  ledgerPath: string
   openIssues: number
 }
 
@@ -72,12 +68,6 @@ export type ClmResourceInput = {
   description?: string
 }
 
-export type ClmStableAttachmentType = StableAttachmentType
-export type ClmStableAttachmentValue = { full?: string; inHead?: boolean; headDigest?: string; deltas: string[]; carriedAtSeq: number }
-export type ClmStableAttachmentSession = Partial<Record<ClmStableAttachmentType, ClmStableAttachmentValue>>
-export type ClmStableAttachmentState = Record<string, ClmStableAttachmentSession>
-export type ClmQueuedMessageState = Record<string, QueuedMessage[]>
-
 export type Clm = {
   /** Create an issue in this session, or set an existing issue's status. */
   track(input: ClmTrackInput): Promise<ClmIssue>
@@ -85,7 +75,7 @@ export type Clm = {
   issues(query?: ClmIssueQuery): Promise<ClmIssue[]>
   /** Queue a continuation prompt for clm's turn-end arbiter. */
   resume(input: { text: string }): Promise<'submitted' | 'queued'>
-  /** Read the pending resume request, last fold, ledger path, and open issue count. */
+  /** Read the pending resume request and open issue count. */
   status(): Promise<ClmStatus>
 }
 
@@ -96,7 +86,7 @@ declare module 'claude-code' {
   }
 
   interface PluginState {
-    clm: { workflow: ClmWorkflow; stableAttachments: ClmStableAttachmentState; queuedMessages: ClmQueuedMessageState }
+    clm: { workflow: ClmWorkflow }
   }
 
   interface EngineInterface {

@@ -28,8 +28,6 @@ export type PanelIo = {
   sessionId: () => Promise<string>
   sessionMessages: (agentId?: string) => Promise<SessionMessage[] | { deny: string }>
   readWorkflow: () => Promise<ClmWorkflow>
-  readMeta: () => Promise<{ lastFoldAt?: number }>
-  ledgerPath: () => Promise<string>
   storeGet: (key: string) => Promise<unknown>
   storeSet: (key: string, value: unknown) => Promise<void>
   toolCall: (input: TaskToolCall) => Promise<
@@ -152,10 +150,8 @@ export async function sessionIssues(io: Pick<PanelIo, 'captureOrigin' | 'readAll
     && (query.status === undefined || issue.status === query.status))
 }
 
-export async function clmStatus(io: Pick<PanelIo, 'readWorkflow' | 'readMeta' | 'readAll' | 'sessionId' | 'ledgerPath' | 'storeGet'>): Promise<ClmStatus> {
-  const [workflow, meta, events, session, path] = await Promise.all([
-    io.readWorkflow(), io.readMeta(), io.readAll(), io.sessionId(), io.ledgerPath(),
-  ])
+export async function clmStatus(io: Pick<PanelIo, 'readWorkflow' | 'readAll' | 'sessionId' | 'storeGet'>): Promise<ClmStatus> {
+  const [workflow, events, session] = await Promise.all([io.readWorkflow(), io.readAll(), io.sessionId()])
   const issues = snapshot(events).filter(issue => issue.origin.session === session)
   const byId = new Map(issues.map(issue => [issue.id, issue]))
   const focusState = focusOf(events, session)
@@ -174,8 +170,6 @@ export async function clmStatus(io: Pick<PanelIo, 'readWorkflow' | 'readMeta' | 
       return issue ? [{ agentId, taskId, title: issue.title, status: issue.status }] : []
     }),
     resumeRequest: workflow.resumeRequest ? { ...workflow.resumeRequest } : null,
-    lastFoldAt: meta.lastFoldAt ?? null,
-    ledgerPath: path,
     openIssues: issues.filter(isOpen).length,
   }
 }
@@ -764,7 +758,7 @@ export async function runPanelCommand(io: PanelCommandIo, rawArgs: string | unde
       return 'handled'
     }
     await io.append([{ op: 'link', issue: issue.id }])
-    io.log(`clm: ${issue.id} "${issue.title}" (${issue.origin.repo}) is linked to this session and shows in its ledger from the next fold`)
+    io.log(`clm: ${issue.id} "${issue.title}" (${issue.origin.repo}) is linked to this session`)
     return 'handled'
   }
   if (sub === 'drop') {

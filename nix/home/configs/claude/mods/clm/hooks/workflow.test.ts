@@ -3,19 +3,14 @@ import type { Engine, TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, residentLedgerText, TASK_TOOL } from './register'
-import type { Held, Meta } from './register'
+import { chooseContinuation, clmStatus, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
 import { planPromptContext } from './panel'
 import { INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
-import { observeTranscript, transcriptRowsKey, type RewindIo } from './rewind'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, carryLegacyInstructions, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { CONFIRM_ITEMS, CONFIRM_PREFIX } from './evidence'
-import { gateMerge } from './held'
 import { focusOf, parseLog, parseOps, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint } from './fold'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
+import { M, intentReply, use, res, BIG, MID, ROWS, CITE, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, bottoms, turnEnds, BG_OPTS, logEvents, panelHandlers, sixDone, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 const seedWorkflow = (on: On, seed: ClmWorkflow) => {
   const isWorkflow = (e: { plugin: string; key: string }) => e.plugin === 'clm' && e.key === 'workflow'
@@ -344,48 +339,6 @@ test('/clm drop drops one named issue, then every open issue of the session', OP
   await runClm($, 'drop all')
   expect(tracker()).toEqual(['dropped', 'dropped', 'dropped'])
   expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate' && c.status === 'deleted').length).toBe(3)
-})
-
-// Regression caught: `!` shell echoes, slash-command wrappers and bare go-aheads ("ㄱㄱ", "지금?") filled 30-40% of 사용자 지시.
-test('wrapper rows and short acknowledgements stay out of 사용자 지시', async () => {
-  const prev = '## 목표\n- g\n\n## 사용자 지시\n- "ㄱ"\n\n## 핵심 사실·경로\n- f'
-  const dropped = ['<bash-input>adb uninstall com.x</bash-input>', '<bash-stdout>Success</bash-stdout>', '<local-command-stdout>ok</local-command-stdout>', 'ㄱㄱ', '지금?', '빨리 하쇼', 'OK', 'keep the API stable'].map(t => M('user', t))
-  const out = carryLegacyInstructions(prev, instructionValues(prev), dropped, '/ledger.md')
-  expect(section(out.fullNotes, '사용자 지시')).toBe('- "keep the API stable"')
-})
-
-// Regression caught: the ledger header went back to a UTC ISO time the user cannot read at a glance, or a KST header stopped being recognized as a ledger row.
-test('the ledger header carries a KST time and is still read as a ledger row', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger(), ledger()] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  const row = seen.results[0].messages[1].text
-  expect(row).toMatch(/^\[clm ledger #1 · \d{4}-\d\d-\d\d \d\d:\d\d KST\]\n\n## where we are/)
-  s.rows = [...seen.results[0].messages, ...ROWS.slice(4)]
-  await turnEnds($, s, seen)
-  expect(seen.results[1].messages.filter((m: any) => m.text.startsWith('[clm ledger')).length).toBe(1)
-})
-// Regression caught: a length cutoff filed short directives (하지마, push, 멈춰) as noise, and since stored lines pass the same filter the next fold deleted them for good.
-test('short directives stay in 사용자 지시 and survive the next fold reading them back', async () => {
-  const prev = '## 목표\n- g\n\n## 사용자 지시\n- "ㄱ"\n\n## 핵심 사실·경로\n- f'
-  const rows = ['하지마', 'push', '멈춰', 'ㅇㅋ', '넵', 'y'].map(t => M('user', t))
-  const want = '- "하지마"\n- "push"\n- "멈춰"'
-  const first = carryLegacyInstructions(prev, instructionValues(prev), rows, '/ledger.md')
-  expect(section(first.fullNotes, '사용자 지시')).toBe(want)
-  const again = carryLegacyInstructions(first.fullNotes, instructionValues(first.fullNotes), [], '/ledger.md')
-  expect(section(again.fullNotes, '사용자 지시')).toBe(want)
-})
-
-// Regression caught: a dropped issue is hidden from <issues>, so the next fold re-created its title as a fresh open issue and the abandoned work came back.
-test('a fold cannot re-create the title of an issue dropped in this session', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"build work","status":"todo"}]')] }
-  const seen = bottoms(on, s)
-  panelHandlers(on, seen)
-  await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
-  const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
-  await runClm($, `drop ${issueAt(tracker(), 0)}`)
-  await turnEnds($, s, seen)
-  expect(tracker().map(i => [i.title, i.status])).toEqual([['build work', 'dropped']])
 })
 
 // Regression caught: a fold re-opened a dropped issue on a tool-row quote, or a failed review landed a user-quoted re-open no reviewer had matched to that issue.
@@ -805,30 +758,6 @@ test('an uncited clm_task done stays done', OPTS, async ($, on) => {
   expect(result.result).toBe('clm_task: s1-task done.')
 })
 
-// Regression caught: a task update made before compaction caused the fold's own tracker ops to be discarded.
-test('a fold after an earlier clm_task update still applies its own ops', { options: { ...BG_OPTS.options, tailTarget: 2500 } }, async ($, on) => {
-  const rows = [...ROWS]
-  rows[2] = res('tu_a', 'log: make fails at a.ts:12 ' + 'x'.repeat(24_000))
-  // Hold the background split until turn.complete has returned: a ready plan would otherwise be swapped inside turn.complete, which this engine mock cannot compact without rows.
-  let release!: () => void
-  const gate = new Promise<void>(resolve => { release = resolve })
-  const s: State = {
-    rows, replies: [], splitReplies: [JSON.stringify({ split: 2, ops: [{ op: 'create', title: 'fold-created issue', status: 'todo' }] })],
-    splitBlock: () => gate,
-  }
-  const seen = bottoms(on, s)
-  panelHandlers(on, seen)
-  seedTracker(seen, [
-    { op: 'create', issue: 's1-focus', title: 'focused task', status: 'doing' },
-    { op: 'focus', stack: ['s1-focus'], pending: [], intent: 'handoff' },
-  ])
-  await $.tool.call({ tool: TASK_TOOL, id: 's1-focus', status: 'doing', note: 'started in this turn' } satisfies ToolCallInput)
-  await $.turn.complete(TURN)
-  release()
-  seen.results.push(await $.session.compact({ trigger: 'manual', messages: handled(s.rows) }))
-  expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).map(issue => issue.title)).toContain('fold-created issue')
-})
-
 const until = async (check: () => boolean) => {
   for (let i = 0; i < 300 && !check(); i++) await new Promise(resolve => setTimeout(resolve, 2))
 }
@@ -863,43 +792,3 @@ test('planner classification upgrades inline plans and inline never downgrades p
   expect(parseLog(seen.files[TRACKER] ?? '').filter(event => event.op === 'planned')).toHaveLength(1)
 })
 
-// Regression caught: compaction paraphrased the user's objective and renamed its explicitly planned steps.
-test('a planned objective keeps the address row text while merge drops a child retitle', OPTS, async ($, on) => {
-  const prompt = 'inspect the current behavior\nthen implement only U1'
-  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [intentReply({
-    intent: 'handoff', title: 'U1 구현', plan: 'inline',
-  })] })
-  await $.prompt.submit(promptInput(prompt))
-  await until(() => seen.store['objective:s1:main'] !== undefined)
-  const objective = seen.store['objective:s1:main'] as { issue: string; text: string; address: string }
-  expect(objective.text).toBe(prompt)
-  await $.tool.call({ tool: TASK_TOOL, status: 'todo', plan: ['inspect', 'implement'] } satisfies ToolCallInput)
-  const issues = snapshot(parseLog(seen.files[TRACKER] ?? ''))
-  const child = issues.find(issue => issue.parent === objective.issue)
-  expect(child).toBeDefined()
-  if (!child) throw new Error('expected a child issue')
-  const gated = await gateMerge({ logEvent: async () => undefined }, [{ op: 'retitle', issue: child.id, title: 'paraphrased' }], [[]], new Map(), 1, new Set(), issues)
-  expect(gated.ops).toEqual([])
-  expect((seen.store['objective:s1:main'] as { text: string }).text).toBe(prompt)
-})
-
-// Regression caught: routine follow-up prompts churned the objective while a real root handoff did not replace it.
-test('continue keeps the objective and handoff replaces it', OPTS, async ($, on) => {
-  const first = 'build the first root'
-  const followUp = 'continue with the next detail'
-  const second = 'switch to the second root'
-  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [
-    intentReply({ intent: 'handoff', title: 'first root', plan: 'inline' }),
-    intentReply({ intent: 'continue', target: 's1-1' }),
-    intentReply({ intent: 'handoff', title: 'second root', plan: 'inline' }),
-  ] })
-  await $.prompt.submit(promptInput(first))
-  await until(() => (seen.store['objective:s1:main'] as { text?: string } | undefined)?.text === first)
-  const original = seen.store['objective:s1:main']
-  await $.prompt.submit(promptInput(followUp))
-  await until(() => seen.intentPrompts.length === 2 && (seen.files[TRACKER] ?? '').split('\n').filter(line => line.includes('"focus"')).length >= 2)
-  expect(seen.store['objective:s1:main']).toEqual(original)
-  await $.prompt.submit(promptInput(second))
-  await until(() => (seen.store['objective:s1:main'] as { text?: string } | undefined)?.text === second)
-  expect((seen.store['objective:s1:main'] as { text: string }).text).toBe(second)
-})

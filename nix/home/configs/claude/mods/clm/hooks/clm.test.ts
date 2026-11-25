@@ -4,15 +4,12 @@ import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCo
 
 import { boardHtml } from './board'
 import { clmStatus as readClmStatus } from './panel'
-import { chooseContinuation, clmStatus, isHeld, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, residentLedgerText, TASK_TOOL } from './register'
-import type { Held, Meta } from './register'
+import { chooseContinuation, clmStatus, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
 import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
-import { ageDecayPlan, fallbackLedger, instructionValues, MERGE_SYSTEM, parseMerge, REVIEW_SYSTEM, SPLIT_MERGE_SYSTEM } from './ledger'
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { fingerprint } from './fold'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, ledger, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, est, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, heldIn, isMetaValue, metaIn, bottoms, turnEnds, waitForPending, BG_OPTS, logEvents, panelHandlers, sixDone, storedOverhead, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
+import { M, intentReply, use, res, BIG, MID, ROWS, CITE, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, bottoms, turnEnds, BG_OPTS, logEvents, panelHandlers, sixDone, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 
 // Regression caught: the time-budget noun could not create, update, filter, or reject cross-session tracker issues.
@@ -51,72 +48,6 @@ test('the clm noun tracks only this session\'s issues', OPTS, async ($, on) => {
   }
   expect(created.id).toBe('noun-tes-1')
   expect(error instanceof Error ? error.message : String(error)).toContain('does not belong')
-})
-
-// Regression: repeated session reads reparsed the multi-megabyte state file, and a cache without metadata validation hid external writes.
-test('the clm status noun caches unchanged session state and sees an external file change', async () => {
-  const workflow: ClmWorkflow = {
-    resumeRequest: { text: 'continue the audit' }, lastSubmittedTurn: null, activeTurnId: 'turn-1', promptSeq: 0, focusAppliedSeq: 0,
-  }
-  const eventFile = '/home/t/.claude-work/tracker/events/status-session.jsonl'
-  const events = [
-    { ts: '2026-10-06T00:00:00.000Z', seq: 1, issue: 'status-s-1', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'todo item', status: 'todo' },
-    { ts: '2026-10-06T00:00:01.000Z', seq: 2, issue: 'status-s-2', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'doing item', status: 'doing' },
-    { ts: '2026-10-06T00:00:02.000Z', seq: 3, issue: 'status-s-3', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'question item', status: 'question' },
-    { ts: '2026-10-06T00:00:03.000Z', seq: 4, issue: 'status-s-4', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'dropped item', status: 'dropped' },
-    { ts: '2026-10-06T00:00:04.000Z', seq: 5, issue: 'status-s-5', origin: { session: 'status-session', repo: 'github.com/o/repo', cwd: '/work/repo' }, op: 'create', title: 'finished item', status: 'done' },
-  ].map(event => JSON.stringify(event)).join('\n') + '\n'
-  const store: Record<string, unknown> = {}
-  const statePath = '/home/t/.claude-work/plans/clm-status-session.state.json'
-  const stateFile = { text: JSON.stringify({ 'ledger:status-session': { seq: 2, fails: 0, lastFoldAt: 1_791_926_400_000 } }), mtimeMs: 1 }
-  let stateReads = 0
-  const engine = {
-    state: {
-      get: async (ref: { plugin: string; key: string }) => ({ value: ref.plugin === 'clm' && ref.key === 'workflow' ? workflow : undefined }),
-    },
-    store: {
-      get: async (key: string) => store[key],
-      set: async (key: string, value: unknown) => { store[key] = value },
-      delete: async (key: string) => { delete store[key] },
-      keys: async () => Object.keys(store),
-    },
-    session: { id: async () => 'status-session' },
-    env: { get: async () => '/home/t' },
-    fs: {
-      exists: async (path: string) => path === '/home/t/.claude-work/tracker/events' || path === eventFile || path === statePath,
-      list: async (path: string) => path === '/home/t/.claude-work/tracker/events'
-        ? [{ name: 'status-session.jsonl', kind: 'file' as const, size: events.length, mtimeMs: 1, isLink: false }]
-        : path === '/home/t/.claude-work/plans'
-          ? [{ name: 'clm-status-session.state.json', kind: 'file' as const, size: stateFile.text.length, mtimeMs: stateFile.mtimeMs, isLink: false }]
-          : [],
-      read: async (path: string) => {
-        if (path === eventFile) return events
-        if (path === statePath) { stateReads++; return stateFile.text }
-        return ''
-      },
-      write: async () => undefined,
-    },
-    ui: { log: () => undefined },
-  } satisfies Parameters<typeof clmStatus>[0]
-
-  const expected = {
-    focus: null,
-    stackDepth: 0,
-    pending: [],
-    agents: [],
-    resumeRequest: { text: 'continue the audit' },
-    lastFoldAt: 1_791_926_400_000,
-    ledgerPath: '/home/t/.claude-work/plans/clm-status-session.md',
-    openIssues: 3,
-  }
-  expect(await clmStatus(engine)).toEqual(expected)
-  expect(await clmStatus(engine)).toEqual(expected)
-  expect(stateReads).toBe(1)
-
-  stateFile.text = JSON.stringify({ 'ledger:status-session': { seq: 2, fails: 0, lastFoldAt: 1_791_926_400_001 } })
-  stateFile.mtimeMs++
-  expect(await clmStatus(engine)).toEqual({ ...expected, lastFoldAt: 1_791_926_400_001 })
-  expect(stateReads).toBe(2)
 })
 
 // Regression caught: the host rejects state files by UTF-8 bytes, while Korean text uses three bytes per character.
@@ -179,10 +110,8 @@ test('clm status names the focus top, stack depth, pending and live subagent tas
 
   const status = await readClmStatus({
     readWorkflow: async () => workflow(),
-    readMeta: async () => ({}),
     readAll: async () => parseLog(seen.files[TRACKER] ?? ''),
     sessionId: async () => 's1',
-    ledgerPath: async () => LEDGER_FILE,
     storeGet: async key => seen.store[key],
   })
   const focusId = focusOf(parseLog(seen.files[TRACKER] ?? ''), 's1').stack.at(-1)
@@ -192,71 +121,6 @@ test('clm status names the focus top, stack depth, pending and live subagent tas
   expect(status.agents).toEqual([{
     agentId, taskId: root.id, title: 'Agent checks', status: 'doing',
   }])
-})
-
-// Regression caught: a stale projected task id used to hide completion instead of relinking to a fresh task.
-test('fold issues project to the task panel', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"clm 조사하기","status":"todo","note":"조사 메모"}]'), ledger('[{"op":"status","issue":"s1-1","status":"done"}]', [{ ref: 'tu_c', quote: 'all 12 tests passed' }])] }
-  const seen = bottoms(on, s)
-  let created = 0
-  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { task: { id: `panel-${++created}`, subject: e.subject } } }
-  })
-  let stale = true
-  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    if (stale && e.taskId === 'panel-1') {
-      stale = false
-      return { result: { success: false, message: 'stale task id' }, isError: true }
-    }
-    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
-  })
-  await turnEnds($, s, seen)
-  s.rows = [...ROWS, ...seen.results[0].messages, M('user', 'complete the investigation'), use('tu_d', 'Write'), res('tu_d', 'w ' + BIG), M('assistant', 'completed'), M('user', 'push'), M('assistant', 'pushed')]
-  await turnEnds($, s, seen)
-  const create = seen.taskCalls.find(c => c.tool === 'TaskCreate')
-  const updates = seen.taskCalls.filter(c => c.tool === 'TaskUpdate')
-  expect(create.subject).toBe('clm 조사하기')
-  expect(create.description).toBe('조사 메모')
-  expect(updates.some(u => u.taskId === 'panel-2' && u.status === 'completed')).toBe(true)
-  expect(logEvents(seen).some(e => e.event === 'panel-relink')).toBe(true)
-})
-
-// Regression caught: every done issue of the session stayed in the ledger's 한 일 and on the task panel forever, so a long session's context filled with old completions.
-test('a session with 8 done issues shows only the latest 5 in the ledger and panel', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger()] }
-  const seen = bottoms(on, s)
-  let n = 0
-  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { task: { id: `panel-${++n}`, subject: e.subject } } }
-  })
-  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
-  })
-  for (let i = 1; i <= 8; i++) await $.tool.call({ tool: 'TaskCreate', subject: `done ${i}`, description: `d${i}` })
-  for (let i = 1; i <= 8; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: `panel-${i}`, status: 'completed' })
-  const last = new Map<string, string>()
-  for (const c of seen.taskCalls) if (c.tool === 'TaskUpdate' && c.status) last.set(c.taskId, c.status)
-  expect([1, 2, 3].map(i => last.get(`panel-${i}`))).toEqual(['deleted', 'deleted', 'deleted'])
-  expect([4, 5, 6, 7, 8].map(i => last.get(`panel-${i}`))).toEqual(Array(5).fill('completed'))
-  await turnEnds($, s, seen)
-  const done = /## 한 일\n([\s\S]*?)\n\n/.exec(seen.files[LEDGER_FILE] ?? '')?.[1] ?? ''
-  expect(done.split('\n').map(l => /^- (done \d)/.exec(l)?.[1])).toEqual(['done 4', 'done 5', 'done 6', 'done 7', 'done 8'])
-})
-
-// Regression caught: the merge model never saw archived done issues, re-created them from the folded turns, and each duplicate pushed a real recent completion off the ledger and panel.
-test('a fold over turns that finished an archived issue creates no duplicate done issue', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"done 1","status":"done","note":"again"}]')] }
-  const seen = bottoms(on, s)
-  await sixDone($, on, seen)
-  await turnEnds($, s, seen)
-  expect(seen.prompts[0]).toContain('<finished_earlier>\n- done 1\n</finished_earlier>')
-  const done = /## 한 일\n([\s\S]*?)\n\n/.exec(seen.files[LEDGER_FILE] ?? '')?.[1] ?? ''
-  expect(done.split('\n').map(l => /^- (done \d)/.exec(l)?.[1])).toEqual(['done 2', 'done 3', 'done 4', 'done 5', 'done 6'])
-  expect(seen.files[LEDGER_FILE]).not.toContain('<finished_earlier>')
 })
 
 // Regression caught: a TaskUpdate answered with success: false and no isError counted as success, so a missing panel task was never relinked.
@@ -298,62 +162,3 @@ test('model task calls are denied outside clm projection', OPTS, async ($, on) =
   expect(seen.logs).toContain("작업 'model task' 추가")
 })
 
-// Regression caught: a fold creating several issues re-entered the projection and created duplicate panel tasks.
-test('several fold issues create one panel task each', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"A","status":"todo"},{"op":"create","title":"B","status":"done"},{"op":"create","title":"C","status":"todo"}]')] }
-  const seen = bottoms(on, s)
-  let n = 0
-  on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { task: { id: `panel-${++n}`, subject: e.subject } } }
-  })
-  on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => {
-    seen.taskCalls.push(e)
-    return { result: { success: true, taskId: e.taskId, updatedFields: [] } }
-  })
-  await turnEnds($, s, seen)
-  expect(seen.taskCalls.filter(c => c.tool === 'TaskCreate').map(c => c.subject)).toEqual(['A', 'B', 'C'])
-  expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate').map(c => [c.taskId, c.status])).toEqual([['panel-2', 'completed']])
-})
-
-// Regression caught: a refused panel write blocked the fold or the tracker append.
-test('a refused TaskCreate still lets the fold complete', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger('[{"op":"create","title":"clm 조사하기","status":"todo"}]')] }
-  const seen = bottoms(on, s)
-  on('tool.call', { tool: 'TaskCreate' }, () => ({ deny: 'refused in test' }))
-  await turnEnds($, s, seen)
-  expect(seen.results[0].messages[1].text).toMatch(/^\[clm ledger #1 · /)
-  expect(storedLedger(seen)).toContain('clm 조사하기')
-  expect(seen.logs).toContain("작업 'clm 조사하기' 추가")
-})
-
-// Regression caught: a `<changes>` block in the merge reply leaked into the ledger notes or was announced as a 맥락 갱신 line at fold time.
-test('a merge reply carrying a changes block folds without announcing it', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger()] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  expect(storedLedger(seen)).toContain('## 목표')
-  expect(seen.results[0].messages[1].text).not.toContain('<changes>')
-  expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
-})
-
-// Regression caught: the turn-time 맥락 갱신 lines were lost, capped above three, or leaked into the session transcript.
-test('turn-time context changes show at most three display-only notices', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger()], turnReplies: ['<changes>핵심 사실: 브리지 재시작 시 키 유실 확인\n미결 질문 추가: ui.log가 --resume 후 남는지\n셋째\n넷째</changes>'] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen, 'finished')
-  expect(seen.turnPrompts.length).toBe(1)
-  expect(seen.logs).toContain('맥락 갱신: 핵심 사실: 브리지 재시작 시 키 유실 확인')
-  expect(seen.logs).toContain('맥락 갱신: 미결 질문 추가: ui.log가 --resume 후 남는지')
-  expect(seen.logs.filter(l => l.startsWith('맥락 갱신: ')).length).toBe(3)
-  expect(seen.results[0].messages.some((m: { text?: string }) => m.text?.includes('맥락 갱신:'))).toBe(false)
-})
-
-// Regression caught: a merge reply without the optional changes block must still apply its ledger fold.
-test('a merge without non-task changes still applies the fold', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [ledger()] }
-  const seen = bottoms(on, s)
-  await turnEnds($, s, seen)
-  expect(storedLedger(seen)).toContain('## 목표')
-  expect(seen.logs.some(l => l.startsWith('맥락 갱신: '))).toBe(false)
-})

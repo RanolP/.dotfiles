@@ -6,7 +6,7 @@
 // verdicts, attempts and failed methodologies live elsewhere and call in.
 
 import { checkEvidence, type Evidence, type Sources } from './evidence'
-import { normalizeLedger } from './ledger'
+import { normalizeLedger } from './intent'
 import { isRecord, type Issue, type RubricItem } from './tracker'
 
 /** Tries with one methodology before rolling back to the previous checkpoint. */

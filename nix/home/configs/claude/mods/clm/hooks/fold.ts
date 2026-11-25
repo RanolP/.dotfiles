@@ -1,27 +1,6 @@
 import type { SessionMessage } from 'claude-code'
-import type { SentAt } from './address'
 
-// Matches the header of rows written before the Haiku-summary wording too, and
-// both header times: the KST stamp below and the UTC ISO time older rows carry.
-const LEDGER_ROW = /^\[clm ledger #(\d+) · [^\]]+\]/
-const RESULT_FLOOR = 1024 // tokens each older kept tool result may shrink to, at least
-export const TOKEN_ESTIMATOR_VERSION = 1
-const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
-
-// --- rows ----------------------------------------------------------------
-
-export const estTokens = (m: SessionMessage): number => {
-  let chars = 0, cjk = 0
-  const count = (text: string) => { for (const char of text) { chars++; if (CJK.test(char)) cjk++ } }
-  count(m.text)
-  for (const u of m.toolUses) { count(JSON.stringify(u.input ?? {})); count(u.tool) }
-  for (const r of m.toolResults ?? []) count(r.text)
-  return Math.ceil(cjk * 1.5 + (chars - cjk) / 2.4)
-}
-export const sum = (rows: readonly SessionMessage[]) => rows.reduce((n, m) => n + estTokens(m), 0)
-
-export const fingerprint = (m: SessionMessage): string =>
-  [m.role, m.toolUses.map(u => u.tool_use_id).join(','), (m.toolResults ?? []).map(r => r.tool_use_id).join(','), m.text.slice(0, 160)].join('|')
+const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
 
 // Rows the engine injects rather than the conversation. SessionMessage has no
 // origin flag, so match text. "(no content)" is how the engine rebuilds an
@@ -29,131 +8,37 @@ export const fingerprint = (m: SessionMessage): string =>
 const SYSTEM_ROW = {
   taskNotification: /^\s*<task-notification>/,
   remindersOnly: /^\s*(?:<system-reminder>[\s\S]*?<\/system-reminder>\s*)+$/,
-  // A session opened by /clear starts with that command's row; kept as the
-  // first request, every fold re-drew it above the ledger.
   localCommand: /^\s*(?:<command-name>\/(?:clear|compact)<\/command-name>|<local-command-(?:stdout|stderr|caveat)>)/,
 }
-export const STABLE_ATTACHMENT_TYPES = ['instructions', 'session_context', 'coordinator_context', 'context_sections', 'output_style_instructions'] as const
-export type StableAttachmentType = typeof STABLE_ATTACHMENT_TYPES[number]
-export const isStableAttachmentType = (value: unknown): value is StableAttachmentType => STABLE_ATTACHMENT_TYPES.some(type => type === value)
-const CARRIED_ATTACHMENT = new RegExp(`^<clm-stable-attachment type="(${STABLE_ATTACHMENT_TYPES.join('|')})">\\n([\\s\\S]*)\\n<\\/clm-stable-attachment>$`)
-const FOLDED_QUEUED_MESSAGE = /^<clm-queued-message at="[^"]+" folded>\nThe user sent this while you were working\. Act on it unless the tail shows it is already handled\.\n[\s\S]*\n<\/clm-queued-message>$/
-export type QueuedMessage = { uuid: string; text: string; at: number; after?: string }
-const queuedMessageSources = new WeakMap<SessionMessage, QueuedMessage>()
-export const stableAttachmentRow = (type: StableAttachmentType, text: string): SessionMessage => ({
-  role: 'user', text: `<clm-stable-attachment type="${type}">\n${text}\n</clm-stable-attachment>`, toolUses: [],
-})
-export const stableAttachmentOf = (m: SessionMessage): { type: StableAttachmentType; text: string } | undefined => {
-  if (m.role !== 'user' || m.toolUses.length || (m.toolResults?.length ?? 0)) return undefined
-  const match = CARRIED_ATTACHMENT.exec(m.text)
-  const type = match?.[1]
-  const text = match?.[2]
-  return isStableAttachmentType(type) && text !== undefined ? { type, text } : undefined
-}
-const isCarriedAttachment = (m: SessionMessage) => stableAttachmentOf(m) !== undefined
-const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
-const isQueuedMessage = (m: SessionMessage) => isBare(m) && m.role === 'user' && FOLDED_QUEUED_MESSAGE.test(m.text)
-const queuedMessageText = (message: QueuedMessage, folded = false) => `<clm-queued-message at="${kst(message.at)}"${folded ? ' folded' : ''}>\nThe user sent this while you were working. Act on it unless the tail shows it is already handled.\n${message.text}\n</clm-queued-message>`
 const isLocalCommand = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.localCommand.test(m.text)
 const isReminderRow = (m: SessionMessage) => isBare(m) && m.role === 'user' && SYSTEM_ROW.remindersOnly.test(m.text)
 const isEmptyRow = (m: SessionMessage) => isBare(m) && (m.text.trim() === '' || (m.role === 'assistant' && m.text.trim() === '(no content)'))
-export const isSystemRow = (m: SessionMessage): boolean => {
+const isSystemRow = (m: SessionMessage): boolean => {
   if (!isBare(m)) return false
   if (m.role === 'assistant') return isEmptyRow(m)
-  return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text) || isLocalCommand(m) || isCarriedAttachment(m) || isQueuedMessage(m)
+  return SYSTEM_ROW.taskNotification.test(m.text) || SYSTEM_ROW.remindersOnly.test(m.text) || isLocalCommand(m)
 }
+
 /** A user-facing time on the Asia/Seoul clock, `2026-10-13 18:04 KST`; Korea keeps no DST, so +9h is exact. */
 export const kst = (t: number | string | Date = new Date()): string => {
   const ms = new Date(t).getTime()
   return Number.isNaN(ms) ? String(t) : `${new Date(ms + 9 * 3_600_000).toISOString().slice(0, 16).replace('T', ' ')} KST`
 }
-export const ledgerRowSeq = (text: string): string | undefined => LEDGER_ROW.exec(text)?.[1]
-export const isLedgerRow = (m: SessionMessage) => m.role === 'user' && ledgerRowSeq(m.text) !== undefined
-export const isPrompt = (m: SessionMessage) =>
-  m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m) && !isLedgerRow(m)
+const isPrompt = (m: SessionMessage) => m.role === 'user' && m.text.trim() !== '' && (m.toolResults ?? []).length === 0 && !isSystemRow(m)
 
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 export const stripReminders = (text: string) => text.replace(REMINDER, '').trim()
 const isCompactSummary = (m: SessionMessage): boolean => (m as SessionMessage & { isCompactSummary?: boolean }).isCompactSummary === true
 // User-role rows the harness writes into the conversation: a subagent's
-// hand-back and a loaded skill's body. They still open a turn (isPrompt), so
-// a session driven by hand-backs keeps its fold boundaries, but they are not
-// the user speaking, so they are neither citable as the user nor instructions.
+// hand-back and a loaded skill's body. They are not the user speaking, so
+// they are neither citable as the user nor instructions.
 const HARNESS_TEXT = /^(?:Another Claude session sent a message:|Base directory for this skill: )/
 export const isHarnessText = (text: string) => HARNESS_TEXT.test(text)
-/** A prompt the user wrote: what may be quoted as the user and kept under 사용자 지시. */
+/** A prompt the user wrote: what may be quoted as the user. */
 export const isUserTyped = (m: SessionMessage) => !isCompactSummary(m) && isPrompt(m) && !isHarnessText(stripReminders(m.text))
-export const queuedMessageSourceRow = (message: QueuedMessage): SessionMessage => ({
-  role: 'user', text: message.text, toolUses: [],
-})
-export const queuedMessageSourceOf = (message: SessionMessage): QueuedMessage | undefined => queuedMessageSources.get(message)
-export const withQueuedMessages = (rows: readonly SessionMessage[], queued: readonly QueuedMessage[], sentAt: SentAt): SessionMessage[] => {
-  const pending = queued.filter(message => {
-    // A carried message stays queued until a reply follows it, so its folded row is the copy already in the rows.
-    const existing = rows.find(row => queuedMessageSourceOf(row)?.uuid === message.uuid || row.text === queuedMessageText(message) || row.text === queuedMessageText(message, true))
-    if (existing !== undefined) queuedMessageSources.set(existing, message)
-    return existing === undefined
-  }).map(message => {
-    const row = queuedMessageSourceRow(message)
-    queuedMessageSources.set(row, message)
-    return row
-  })
-  const combined = [...rows]
-  // Messages sharing an anchor go after the ones this call already placed there, so they keep typing order.
-  const placed = new Set<SessionMessage>()
-  for (const message of pending) {
-    const source = queuedMessageSourceOf(message)
-    const anchor = source?.after === undefined ? -1 : combined.findLastIndex(row => fingerprint(row) === source.after)
-    if (anchor >= 0) {
-      let index = Math.max(protectedIndex(combined) + 1, anchor + 1)
-      while (index < combined.length && placed.has(combined[index]!)) index++
-      combined.splice(index, 0, message)
-      placed.add(message)
-      continue
-    }
-    const queuedAt = source?.at ?? Number.POSITIVE_INFINITY
-    const after = combined.findLastIndex(row => {
-      const at = queuedMessageSourceOf(row)?.at ?? new Date(sentAt(row) ?? '').getTime()
-      return !Number.isNaN(at) && at <= queuedAt
-    })
-    const hasStamped = combined.some(row => !Number.isNaN(new Date(sentAt(row) ?? '').getTime()))
-    const index = after < 0 ? (hasStamped ? protectedIndex(combined) + 1 : combined.length) : Math.max(protectedIndex(combined) + 1, after + 1)
-    combined.splice(index, 0, message)
-    placed.add(message)
-  }
-  return combined
-}
-
-// A ledger row ahead of every prompt means the first request was already
-// folded away; the ledger then marks the head, and buildCleared replaces it.
-export const protectedIndex = (msgs: readonly SessionMessage[]): number => {
-  const i = msgs.findIndex(m => !isCompactSummary(m) && (isPrompt(m) || isLedgerRow(m)))
-  return i < 0 ? 0 : i
-}
-// Conversation rows ahead of the first request open a session whose first
-// turn began on a row the transcript does not hand back (an isMeta peer
-// message). A head that kept them re-emitted that turn after every fold, so
-// they are folded with the range after the request; system rows stay put.
-export const headRows = (msgs: readonly SessionMessage[], first: number): SessionMessage[] =>
-  msgs.slice(0, first + 1).filter((m, i) => i === first || isSystemRow(m) || isLedgerRow(m))
-// A carried folded row is a system row that still has its queued source; it folds like the message it carries.
-export const foldedRows = (msgs: readonly SessionMessage[], first: number, keepFrom: number): SessionMessage[] =>
-  [...msgs.slice(0, first), ...msgs.slice(first + 1, keepFrom)].filter(m => !isLedgerRow(m) && (!isSystemRow(m) || queuedMessageSourceOf(m) !== undefined))
-export const visibleTokens = (msgs: readonly SessionMessage[]) => msgs.reduce((n, m) => n + (isSystemRow(m) ? 0 : estTokens(m)), 0)
-
-// `$.session.messages()` returns the stored transcript, older chains before a
-// compact boundary included, and no API option scopes it. So each fold records
-// the ledger row it wrote (unique: it carries a sequence number and a time) and
-// its offset; the live rows start that far before its last occurrence.
-export type Boundary = { fp: string; offset: number }
-export function liveRows(msgs: readonly SessionMessage[], b: Boundary | undefined): readonly SessionMessage[] {
-  if (!b) return msgs
-  for (let j = msgs.length - 1; j >= 0; j--) if (fingerprint(msgs[j]!) === b.fp) return msgs.slice(Math.max(0, j - b.offset))
-  return msgs
-}
 
 // Rebuilt WITHOUT the handle: a handled row keeps its old parent and message id,
-// and on --resume the loader pulls the pre-fold chain back in.
+// and on --resume the loader pulls the pre-compaction chain back in.
 const strip = (m: SessionMessage): SessionMessage =>
   ({ role: m.role, text: m.text, toolUses: m.toolUses, ...(m.toolResults ? { toolResults: m.toolResults } : {}) })
 
@@ -166,181 +51,4 @@ export function keepSpawnReminders(before: readonly SessionMessage[], after: rea
   const missing = before.slice(0, firstReply < 0 ? before.length : firstReply)
     .filter(m => isReminderRow(m) && !after.some(kept => kept.text === m.text)).map(strip)
   return after.length && missing.length ? [after[0]!, ...missing, ...after.slice(1)] : [...after]
-}
-
-// --- planning a fold -----------------------------------------------------
-
-export type ClearPlan = {
-  head: readonly SessionMessage[]
-  dropped: readonly SessionMessage[]
-  tail: readonly SessionMessage[]
-  keptTurns: number
-  /** tool_use_id -> token share its result is cut to */
-  cuts: Record<string, number>
-  /** tool_use_id -> complete replacement text for a folded step result */
-  replace?: Record<string, string>
-}
-
-const sumAfterCuts = (rows: readonly SessionMessage[], cuts: Record<string, number>): number => rows.reduce((n, m) =>
-  n + estTokens({ ...m, toolResults: m.toolResults?.map(r => {
-    const share = cuts[r.tool_use_id]
-    return share === undefined ? r : { ...r, text: cutText(r.text, share) }
-  }) }), 0)
-
-// Turns open on a real user prompt, so whole turns never split a tool_use
-// from its tool_result. The tail is the newest turns that fit `target`
-// alongside the head and the ledger after older result trimming, and always
-// holds the newest one.
-export function planClear(msgs: readonly SessionMessage[], target: number, ledgerTokens: number): ClearPlan | undefined {
-  const first = protectedIndex(msgs)
-  const starts = msgs.flatMap((m, i) => (i > first && isPrompt(m) ? [i] : []))
-  const head = headRows(msgs, first)
-  const fixed = sum(head) + ledgerTokens
-  let keepFrom = starts.length ? starts[starts.length - 1]! : first + 1
-  let keptTurns = starts.length ? 1 : 0
-  for (let t = starts.length - 2; t >= 0; t--) {
-    const candidate = msgs.slice(starts[t]!)
-    if (fixed + sum(candidate) > target) {
-      const candidateCuts = shareResults(candidate, target - fixed, starts[starts.length - 1]! - starts[t]!)
-      if (Object.keys(candidateCuts).length === 0 || fixed + sumAfterCuts(candidate, candidateCuts) > target) break
-    }
-    keepFrom = starts[t]!
-    keptTurns++
-  }
-  const tail = msgs.slice(keepFrom)
-  const dropped = foldedRows(msgs, first, keepFrom)
-  // The newest turn may still be in progress when compaction is requested;
-  // preserve its tool results whole so a live command's output is not lost.
-  const newestStart = starts.at(-1)
-  const cuttable = newestStart === undefined ? tail.length : Math.max(0, newestStart - keepFrom)
-  const cuts = fixed + sum(tail) > target ? shareResults(tail, target - fixed, cuttable) : {}
-  if (dropped.length === 0 && Object.keys(cuts).length === 0) return undefined
-  return { head, dropped, tail, keptTurns, cuts }
-}
-
-// Each tool result in the tail gets an equal slice of the room left after the
-// tail's other text; only results bigger than their slice are cut.
-function shareResults(tail: readonly SessionMessage[], room: number, cuttableLength = tail.length): Record<string, number> {
-  const results = tail.slice(0, cuttableLength).flatMap(m => m.toolResults ?? [])
-  if (results.length === 0) return {}
-  const other = sum(tail.map(m => ({ ...m, toolResults: [] })))
-  const share = Math.max(RESULT_FLOOR, Math.floor((room - other) / results.length))
-  const cuts: Record<string, number> = {}
-  for (const r of results) if (estTokens({ role: 'user', text: '', toolUses: [], toolResults: [r] }) > share) cuts[r.tool_use_id] = share
-  return cuts
-}
-
-export function cutText(text: string, share: number): string {
-  const chars = [...text]
-  const render = (keep: number) => {
-    const headChars = Math.floor(keep * 0.6)
-    const tailChars = keep - headChars
-    return `${chars.slice(0, headChars).join('')}\n…[clm: ${chars.length - keep} of ${text.length} chars cut at fold time]…\n${chars.slice(chars.length - tailChars).join('')}`
-  }
-  let low = 0, high = chars.length
-  while (low < high) {
-    const keep = Math.ceil((low + high) / 2)
-    if (estTokens({ role: 'user', text: render(keep), toolUses: [] }) <= share) low = keep
-    else high = keep - 1
-  }
-  return render(low)
-}
-const applyCuts = (m: SessionMessage, cuts: Record<string, number>, replace: Record<string, string>): SessionMessage => {
-  if (!m.toolResults?.some(result => replace[result.tool_use_id] !== undefined || cuts[result.tool_use_id] !== undefined)) return m
-  return { ...m, toolResults: m.toolResults.map(result => {
-    const text = replace[result.tool_use_id]
-    if (text !== undefined) return { ...result, text }
-    const share = cuts[result.tool_use_id]
-    return share === undefined ? result : { ...result, text: cutText(result.text, share) }
-  }) }
-}
-
-// A request row kept with its handle and unchanged text brings back its
-// transcript group, the session-start attachments that follow it, so they stay
-// attachments instead of carried user rows. Only row 0 qualifies: the restored
-// entry keeps its old parentUuid, and --resume walks back through every row
-// ahead of it.
-export const keepsHeadGroup = (msgs: readonly SessionMessage[], first: number): boolean =>
-  first === 0 && msgs[0] !== undefined && isPrompt(msgs[0]) && msgs[0].handle !== undefined
-
-// The queued messages a fold carries: those in the folded rows with no assistant row after them.
-export const carriedQueuedMessages = (head: readonly SessionMessage[], dropped: readonly SessionMessage[]): QueuedMessage[] => {
-  const folded = [...head, ...dropped]
-  const newestAssistant = folded.findLastIndex(message => message.role === 'assistant')
-  return folded.slice(newestAssistant + 1).flatMap(message => {
-    const source = queuedMessageSourceOf(message)
-    return source ? [source] : []
-  })
-}
-
-export function buildCleared(plan: Pick<ClearPlan, 'head' | 'dropped' | 'tail' | 'cuts' | 'replace'>, ledgerRow: SessionMessage, attachments: readonly SessionMessage[] = [], keepHead = false): SessionMessage[] {
-  const kept = keepHead ? plan.head.find(isPrompt) : undefined
-  const queued = carriedQueuedMessages(plan.head, plan.dropped).map((message): SessionMessage => ({
-    role: 'user',
-    text: queuedMessageText(message, true),
-    toolUses: [],
-  }))
-  const head = plan.head.filter(m => !isCompactSummary(m) && !isLedgerRow(m) && !isCarriedAttachment(m) && !isQueuedMessage(m) && queuedMessageSourceOf(m) === undefined)
-  // A folded row with no queued source is a retired message's; one with a source is still unanswered and stays.
-  const tail = plan.tail.filter(m => !isCarriedAttachment(m) && (!isQueuedMessage(m) || queuedMessageSourceOf(m) !== undefined)).map((message): SessionMessage => {
-    const source = queuedMessageSourceOf(message)
-    return source === undefined ? message : { role: 'user', text: queuedMessageText(source, isQueuedMessage(message)), toolUses: [] }
-  })
-  return [...head, ...attachments, ledgerRow, ...queued, ...tail].filter(m => !isEmptyRow(m) && !isLocalCommand(m)).map(m => (m === kept ? m : strip(applyCuts(m, plan.cuts, plan.replace ?? {}))))
-}
-
-// clm-prompt
-export const LEDGER_LINE_LIMIT = 240
-const LEDGER_NONE = '- (none yet)'
-const LEDGER_MORE = '- …+'
-const clipLedgerLine = (line: string) => {
-  const chars = [...line.replace(/\s+/g, ' ').trim()]
-  return chars.length > LEDGER_LINE_LIMIT ? `${chars.slice(0, LEDGER_LINE_LIMIT - 1).join('')}…` : chars.join('')
-}
-type LedgerSection = { name: string; lines: string[]; dropped: number }
-const ledgerSections = (ledger: string): LedgerSection[] => ledger.split(/\n\n(?=## )/).map(part => {
-  const [heading, ...lines] = part.split('\n')
-  return { name: heading?.startsWith('## ') ? heading.slice(3) : '', lines: lines.map(clipLedgerLine), dropped: 0 }
-})
-const renderLedgerSections = (sections: readonly LedgerSection[]) => sections.map(section => {
-  const lines = section.lines.filter(line => line !== '' && line !== LEDGER_NONE)
-  if (section.name === 'where we are' && section.dropped) {
-    const metadata = lines.findIndex(line => line.startsWith('- stack '))
-    const before = metadata < 0 ? lines : lines.slice(0, metadata)
-    const after = metadata < 0 ? [] : lines.slice(metadata)
-    before.push(`${LEDGER_MORE}${section.dropped} older`)
-    return `## ${section.name}\n${[...before, ...after].join('\n')}`
-  }
-  if (section.dropped) lines.push(`${LEDGER_MORE}${section.dropped} older`)
-  return `## ${section.name}\n${lines.length ? lines.join('\n') : LEDGER_NONE}`
-}).join('\n\n')
-const dropOldestLedgerItem = (section: LedgerSection | undefined) => {
-  if (!section) return false
-  let index = -1
-  if (section.name === 'where we are') {
-    const metadata = section.lines.findIndex(line => line.startsWith('- stack '))
-    const end = metadata < 0 ? section.lines.length : metadata
-    for (let i = 1; i < end; i++) if (section.lines[i] !== LEDGER_NONE) { index = i; break }
-  } else index = section.lines.findIndex(line => line !== LEDGER_NONE)
-  if (index < 0) return false
-  section.lines.splice(index, 1)
-  section.dropped++
-  return true
-}
-
-export const ledgerRowText = (seq: number, at: string, _path: string, ledger: string, maxTokens: number) => {
-  const header = `[clm ledger #${seq} · ${at}]\n\n`
-  const footer = '\n\nPR, branch, deploy and ticket states may have moved since: re-query one before acting on it.'
-  const sections = ledgerSections(ledger)
-  const render = () => `${header}${renderLedgerSections(sections)}${footer}`
-  const fits = () => estTokens({ role: 'user', text: render(), toolUses: [] }) <= maxTokens
-  if (fits()) return render()
-  const byName = (name: string) => sections.find(section => section.name === name)
-  // The plan stays whole; every other resident section yields oldest entries first.
-  const trimOrder = ['legacy', 'where we are', 'owned resources', 'uncertain', 'notes', 'open questions', 'what to do']
-  while (!fits()) {
-    const trimmed = trimOrder.some(name => dropOldestLedgerItem(byName(name)))
-    if (!trimmed) break
-  }
-  return render()
 }

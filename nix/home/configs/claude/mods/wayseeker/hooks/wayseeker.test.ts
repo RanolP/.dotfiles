@@ -321,9 +321,9 @@ test('want(review(replace(wayseeker, clm_ledger))) parses and prints back unchan
 
 // Regression: a nested fact rendered as its printed form instead of its own gloss, losing the atoms' Korean glosses.
 test('a nested fact renders through its own decl gloss', () => {
-  const ledger = appendAll([...NESTED, '@1 user: say(review(replace(wayseeker, clm_ledger)))'])
+  const ledger = appendAll([...NESTED, '@1 user: want(review(replace(wayseeker, clm_ledger)))'])
   const out = renderInstructions(ledger, evaluate(ledger))
-  expect(out).toContain('wayseeker이 clm 작업 원장을 대체할 수 있다을 검토한다. (@1)')
+  expect(out).toContain('wayseeker이(가) clm 작업 원장을 대체할 수 있다를 검토한다. (@1)')
 })
 
 // Regression: key slots comparing nested facts by name only (two different clauses collide) or not at all (one clause's two answers never conflict).

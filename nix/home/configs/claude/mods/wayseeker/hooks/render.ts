@@ -1,7 +1,8 @@
 import { isRecord, stripReminders } from './text'
-import { parseLiteral, printArgument, printFact, type Fact } from './syntax'
-import { append, emptyLedger, nextId, type Ledger } from './store'
+import { parseLine, parseLiteral, printArgument, printFact, printLiteral, type Fact, type Literal, type Utterance } from './syntax'
+import { append, emptyLedger, liveIds, nextId, type Ledger } from './store'
 import type { EvalResult } from './eval'
+import { openItems } from './say'
 
 /** Session state key of the wayseeker Ledger for one transcript (`<session>:<agent or main>`). */
 export const wayseekerKey = (key: string) => `wayseeker:${key}`
@@ -85,6 +86,18 @@ export function readWayseekerLedger(value: unknown): Ledger {
 
 const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim()
 
+// Korean particle pairs as [after a final consonant, after a vowel]; 으로/로 also takes 로 after ㄹ.
+const PARTICLES: Record<string, [string, string]> = { 이: ['이', '가'], 가: ['이', '가'], 을: ['을', '를'], 를: ['을', '를'], 은: ['은', '는'], 는: ['은', '는'], 과: ['과', '와'], 와: ['과', '와'], 으로: ['으로', '로'], 로: ['으로', '로'] }
+
+/** The particle a gloss wrote after {column}, re-picked for the substituted text's last syllable; after a non-Hangul end both forms show, as 이(가). */
+const particleFor = (text: string, written: string): string => {
+  const [consonant, vowel] = PARTICLES[written]!
+  const code = text.charCodeAt(text.length - 1) - 0xac00
+  if (!(code >= 0 && code < 11172)) return consonant === '으로' ? '(으)로' : `${consonant}(${vowel})`
+  const final = code % 28
+  return final === 0 || (consonant === '으로' && final === 8) ? vowel : consonant
+}
+
 /**
  * One Korean sentence for a fact: the declaration gloss with each {column} replaced by
  * the argument's gloss (or the atom itself); a gloss without placeholders gets the
@@ -105,18 +118,20 @@ function clause(ledger: Ledger, fact: Fact): string {
   let text: string
   if (decl?.gloss) {
     let used = false
-    text = decl.gloss.replace(/\{(\w+)\}/g, (whole, column: string) => {
+    // A particle counts only as a whole word after the placeholder, so 이다/으로써 stay as written.
+    text = decl.gloss.replace(/\{(\w+)\}(?:(으로|로|이|가|을|를|은|는|과|와)(?=[\s.,!?)]|$))?/g, (whole, column: string, particle: string | undefined) => {
       const index = decl.columns.indexOf(column)
       if (index < 0 || values[index] === undefined) return whole
       used = true
-      return values[index]!
+      const value = values[index]!
+      // A trailing parenthetical is read past, as in 방식(과제 76)으로.
+      return particle ? value + particleFor(oneLine(value).replace(/\s*\([^()]*\)$/, ''), particle) : value
     })
     if (!used && values.length) text = `${text}: ${values.join(', ')}`
   } else text = values.length ? `${fact.name}: ${values.join(', ')}` : fact.name
   return oneLine(text)
 }
 
-const userIds = (ledger: Ledger) => new Set(ledger.utterances.filter(u => u.speaker === 'user').map(u => u.id))
 const address = (ids: readonly number[]) => `(${ids.map(id => `@${id}`).join(' ')})`
 
 /** A printed literal key ("use(lang, python)" / "not(use(lang, python))") as one sentence; an unparsable key stays as written. */
@@ -129,17 +144,31 @@ const literalSentence = (ledger: Ledger, key: string) => {
 
 /**
  * The resident ledger's "## user instructions" section from a wayseeker Ledger:
- * every live fact a user utterance supports, then a "## raises" block for conflicts
+ * every user want still open by say.openItems (the user's directives, goals and standing
+ * preferences; their observations and reports stay facts in the ledger) and every proposal the
+ * user accepted that still holds and is not done, then a "## raises" block for conflicts
  * still waiting on a decision and contested facts. Paid on every prompt, so empty
  * blocks are left out.
  */
 export function renderInstructions(ledger: Ledger, result: EvalResult): string {
-  const users = userIds(ledger)
   const instructions: string[] = []
-  for (const [key, state] of result.facts) {
-    if (state.value !== 'true') continue
-    const spoken = state.support.filter(id => users.has(id))
-    if (spoken.length) instructions.push(`- ${literalSentence(ledger, key)} ${address(spoken)}`)
+  for (const line of openItems(ledger).want) {
+    const parsed = parseLine(line)
+    if (!parsed.ok) continue
+    const u = parsed.entry as Utterance
+    if (u.speaker === 'user' && u.act.kind === 'want' && u.act.content.kind === 'literal') instructions.push(`- ${sentence(ledger, u.act.content.fact, u.act.content.negated)} ${address([u.id])}`)
+  }
+  // An accepted try is the user's decision; it leaves once done(p) holds, as a want does in openItems.
+  const live = liveIds(ledger.utterances)
+  const holds = (literal: Literal) => result.facts.get(printLiteral(literal))?.value === 'true'
+  for (const u of ledger.utterances) {
+    if (u.speaker !== 'user' || u.act.kind !== 'accept' || !live.has(u.id)) continue
+    const target = u.act.target
+    for (const t of ledger.utterances) {
+      if (t.id !== target || t.act.kind !== 'try' || t.act.content.kind !== 'literal') continue
+      const p = t.act.content
+      if (holds(p) && !holds({ ...p, fact: { kind: 'fact', name: 'done', args: [p.fact] } })) instructions.push(`- ${sentence(ledger, p.fact, p.negated)} ${address([u.id])}`)
+    }
   }
   // Facts settled before fuel ran out still render above; this line says the rest are undecided.
   const raises: string[] = result.fuelExhausted ? ['- 평가 한도 초과: 일부 사실을 정하지 못했다. 사용자에게 묻는다.'] : []

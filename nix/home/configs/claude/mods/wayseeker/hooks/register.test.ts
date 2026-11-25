@@ -6,9 +6,9 @@ import { readWayseekerLedger, renderInstructions, wayseekerKey } from './render'
 const DECLS = ['decl use(role, tool) key(role) "{role}에 {tool}을 쓴다"', 'serving := "서빙"']
 // The extractor's reply per prompt, as the model would fence it.
 const REPLIES: Record<string, string[]> = {
-  'sglang 써': [...DECLS, '@1 user: say(use(serving, sglang))'],
-  'vllm으로 바꿔': ['@2 user: say(use(serving, vllm))'],
-  '아니 vllm으로': ['@2 user: say(use(serving, vllm))'],
+  'sglang 써': [...DECLS, '@1 user: want(use(serving, sglang))'],
+  'vllm으로 바꿔': ['@2 user: reject(@1)', '@2 user: want(use(serving, vllm))'],
+  '아니 vllm으로': ['@2 user: reject(@1)', '@2 user: want(use(serving, vllm))'],
   '다른 얘기': [],
 }
 
@@ -53,7 +53,7 @@ test('with no clm loaded, a prompt is extracted and rendered from the wayseeker 
   const { instructions } = world(on)
   await submit($, 'sglang 써')
   await settle()
-  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)')
+  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)')
 })
 
 // Regression caught: a rewound prompt's instruction outliving the rewind once clm's rewind no longer trims the ledger.
@@ -67,7 +67,7 @@ test('a prompt rewound before the next submit loses its extracted lines', async 
   rows.splice(2) // the rewind takes the transcript back to before "vllm으로 바꿔"
   await submit($, '다른 얘기')
   await settle()
-  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)')
+  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)')
 })
 
 // Regression caught: the instructions reaching the model only through clm's ledger, so they vanish once clm is removed.
@@ -78,7 +78,7 @@ test('a human turn gets the wayseeker instructions attachment even with clm abse
   expect(contexts[0]).toBeUndefined() // the ledger rendered empty: no attachment
   await submit($, '다른 얘기')
   await settle()
-  expect(contexts[1]).toEqual(['<system-reminder>\n## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)\n</system-reminder>'])
+  expect(contexts[1]).toEqual(['<system-reminder>\n## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)\n</system-reminder>'])
 })
 
 test('an unchanged section present in the transcript is not attached on the next human turn', async ($, on) => {
@@ -98,7 +98,7 @@ test('a changed section lands on the next tool call in the same human turn', asy
   await submit($, 'sglang 써')
   await settle()
   const first = await $.tool.call({ tool: 'Read', file_path: '/test' })
-  expect(first.context).toEqual(['existing context', '<system-reminder>\n## user instructions\n\n- 서빙에 sglang을 쓴다. (@1)\n</system-reminder>'])
+  expect(first.context).toEqual(['existing context', '<system-reminder>\n## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)\n</system-reminder>'])
   rows.push({ role: 'assistant', text: (first.context ?? []).join('\n'), toolUses: [] })
   expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context).toEqual(['existing context'])
   await submit($, 'vllm으로 바꿔')
@@ -158,7 +158,7 @@ test('the user is shown an added instruction, and nothing when the section is un
   const { logs } = world(on)
   await submit($, 'sglang 써')
   await settle()
-  expect(logs).toEqual(['say(use(serving, sglang))', '지시 추가: 서빙에 sglang을 쓴다. (@1)'])
+  expect(logs).toEqual(['want(use(serving, sglang))', '지시 추가: 서빙에 sglang을(를) 쓴다. (@1)'])
   await submit($, '다른 얘기')
   await settle()
   expect(logs).toHaveLength(2)
@@ -185,10 +185,10 @@ test('a prompt folded into the running turn as an attachment lands and is not re
     message: { type: 'attachment', name: 'queued_command', role: 'user', content: [{ type: 'text', text: 'The user sent a new message while you were working:\n아니 vllm으로\n\nAddress the message above.' }] },
   })
   await settle()
-  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 vllm을 쓴다. (@2)')
+  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 vllm을(를) 쓴다. (@2)')
   await submit($, '다른 얘기')
   await settle()
-  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 vllm을 쓴다. (@2)')
+  expect(await instructions()).toBe('## user instructions\n\n- 서빙에 vllm을(를) 쓴다. (@2)')
   const prompts = JSON.parse(files['/home/t/.claude-work/plans/wayseeker-s1.json']!)['prompts:s1:main'] as { address?: string; midTurn?: true }[]
   expect(prompts.map(row => [row.address, row.midTurn ?? false])).toEqual([['@w1', false], ['@w2', true], ['@w3', false]])
 })

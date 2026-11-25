@@ -17,8 +17,8 @@ const render = (lines: string[]) => {
 
 // Regression caught: a stale instruction stays resident after the user corrects it.
 test('a superseded instruction (sglang replaced by vllm) is not rendered', () => {
-  const out = render(['@1 user: say(use(serving, sglang))', '@2 user: say(use(serving, vllm))'])
-  expect(out).toContain('- 서빙에 vllm을 쓴다. (@2)')
+  const out = render(['@1 user: want(use(serving, sglang))', '@2 user: reject(@1)', '@2 user: want(use(serving, vllm))'])
+  expect(out).toContain('- 서빙에 vllm을(를) 쓴다. (@2)')
   expect(out).not.toContain('sglang')
 })
 
@@ -29,6 +29,28 @@ test('a raise-mode conflict appears under raises', () => {
   expect(raises).toContain('sglang')
   expect(raises).toContain('vllm')
   expect(raises).toContain('사용자에게 묻는다')
+})
+
+// Regression caught: the user's observations and reports ("there's no panel", "rebuilt.") injected every turn as
+// instructions, and a want the agent already did (say(done(p))) staying there.
+test('only open user wants render as instructions', () => {
+  const OBSERVED = ['decl exist(thing) key(thing) "{thing}이 존재한다"', 'decl done(task) key(task) "{task}이 완료되었다"', 'panel := "패널"']
+  const said = ['@1 user: say(not(exist(panel)))', '@1 user: say(done(rebuild))', '@2 user: want(use(serving, vllm))']
+  expect(render([...OBSERVED, ...said])).toBe('## user instructions\n\n- 서빙에 vllm을(를) 쓴다. (@2)')
+  expect(render([...OBSERVED, ...said, '@3 agent: say(done(use(serving, vllm)))'])).toBe('## user instructions\n\n- (none yet)')
+})
+
+// Regression caught: glosses written with one particle form rendered "작업 재개이", "문제을", "방식(과제 76)로".
+test('a particle after a filled column follows the filled text\'s last syllable', () => {
+  const out = render([
+    'decl done(task) key(task) "{task}이 완료되었다"', 'decl fix(issue, method) key(issue) "{issue}을 {method}로 고친다"',
+    'resume := "작업 재개"', 'noise := "문제"', 'split := "분리하는 방식(과제 76)"', 'learned := "모델"',
+    '@1 user: want(done(resume))', '@2 user: want(fix(noise, split))', '@3 user: want(done(rebuild))', '@4 user: want(fix(rebuild, learned))',
+  ])
+  expect(out).toContain('- 작업 재개가 완료되었다. (@1)')
+  expect(out).toContain('- 문제를 분리하는 방식(과제 76)으로 고친다. (@2)')
+  expect(out).toContain('- rebuild이(가) 완료되었다. (@3)')
+  expect(out).toContain('- rebuild을(를) 모델로 고친다. (@4)')
 })
 
 // Regression caught: a rewound turn's extracted lines staying in the wayseeker ledger.
@@ -74,9 +96,9 @@ test('a late extraction lands onto the rewound ledger and never brings the cut l
 
 // Regression caught: an evaluation that ran out of fuel rendered like an empty session.
 test('fuel exhaustion is raised while the settled facts still render', () => {
-  const ledger = appendAll([...DECLS, '@1 user: say(use(serving, vllm))'])
+  const ledger = appendAll([...DECLS, '@1 user: want(use(serving, vllm))'])
   const out = renderInstructions(ledger, { ...evaluate(ledger), fuelExhausted: true })
-  expect(out).toContain('- 서빙에 vllm을 쓴다. (@1)')
+  expect(out).toContain('- 서빙에 vllm을(를) 쓴다. (@1)')
   expect(out.split('## raises')[1] ?? '').toContain('평가 한도 초과')
 })
 

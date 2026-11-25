@@ -39,8 +39,8 @@ export const EXTRACT_CASES: ExtractCase[] = [
   },
   {
     user: '아 sglang 말고 vllm',
-    lines: ['@1 user: say(use(server, vllm))'],
-    why: 'A correction is a new say; the key of use replaces the old value.',
+    lines: ['@1 user: reject(@12)', '@1 user: want(use(server, vllm))'],
+    why: 'A changed preference is a new want, with reject(@n) of the live want it replaces (here @12, want(use(server, sglang))).',
   },
   {
     user: '우리에겐 Suspense가 있다… isLoading을 굳이 상태로?',
@@ -145,10 +145,10 @@ export const l1Forms = (speakers: string): string[] => [
 
 export const L1_KINDS: string[] = [
   'The seven kinds, used only as the outermost wrapper:',
-  '- say(p): assertion. Also evaluations, preferences, corrections (a new say), and denials as say(not(p)).',
+  '- say(p): assertion of what is or was the case: observations, reports of what someone did, evaluations, verdicts, and denials as say(not(p)).',
   '- ask(p): question. A blank is a named variable like ?x; with no variable it is a yes/no question.',
   '- try(p): proposal. "~해볼까?" from the user stays a try.',
-  '- want(p): directive or goal.',
+  '- want(p): directive or goal, including a standing preference or rule the listener should keep following ("vllm 써", "테스트는 항상 먼저").',
   '- guess(p): estimate or suspicion.',
   '- accept(@n): adopts the proposal in utterance n. Short replies such as "ㅇㅇ", "ok", "A." become accept of the proposal they pick.',
   '- reject(@n): withdraws utterance n.',
@@ -180,6 +180,7 @@ export const EXTRACT_SYSTEM = [
   '- Feedback about which conflicts to ask about becomes say(raise_on(key)) or say(not(raise_on(key))).',
   WITHDRAWAL_RULE,
   '- A message reporting what the user already did (past tense, e.g. "rebuilt and resumed.", "pushed", "머지했어") states a fact: extract it as say, never want.',
+  '- Write every instruction the user gives the agent as want (a directive, a goal, a standing preference or rule), and what the user observes, reports, judges or suspects as say or guess: only open wants reach the agent as its instructions.',
   '- When the message carries no claim, question, proposal or directive, output an empty block.',
   '',
   'Output: one fenced code block holding only L1 lines, one per line, with no commentary inside or outside the block.',

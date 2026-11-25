@@ -121,6 +121,17 @@ export const EXTRACT_CASES: ExtractCase[] = [
     ],
     why: 'Pasted material is a speaker: an atom glossed with the text, its claims as its own lines; the user adopts it separately.',
   },
+  {
+    user: 'clm 작업 원장을 wayseeker가 대체할 수 있는지 검토해',
+    lines: [
+      'decl review(topic) key(topic) "{topic}을 검토한다"',
+      'decl replace(new, old) key(new, old) "{new}이 {old}을 대체할 수 있다"',
+      'wayseeker := "wayseeker"',
+      'clm_ledger := "clm 작업 원장"',
+      '@1 user: want(review(replace(wayseeker, clm_ledger)))',
+    ],
+    why: 'A request to review whether P is a directive whose object is the fact P with its own arguments; an atom names one thing, never a clause.',
+  },
 ]
 
 export const EXTRACT_SYSTEM = [
@@ -142,8 +153,9 @@ export const EXTRACT_SYSTEM = [
   '- reject(@n): withdraws utterance n.',
   '',
   'Rules:',
-  '- Write a fact as name(atom, atom). Arguments are bare atoms (lowercase snake_case, e.g. sglang, python) or named variables (?x, ?y). Give every variable a name.',
-  '- Keep content to at most two levels: kind(not(fact)) or kind(fact). Put a kind only at the outermost position; when a guess belongs to a condition, write guess(p -> q).',
+  '- Write a fact as name(arg, arg). An argument is a bare atom (lowercase snake_case, e.g. sglang, python), a named variable (?x, ?y), or another fact, which nests to any depth, e.g. want(review(replace(wayseeker, clm_ledger))). Give every variable a name.',
+  '- Put a kind (say/ask/try/want/guess) only at the outermost position, and not(...) only directly inside it: kind(fact) or kind(not(fact)); when a guess belongs to a condition, write guess(p -> q).',
+  '- An atom names one thing (a tool, a file, a feature). When a gloss would be a clause ("whether X replaces Y", "that X is slow"), write that clause as a nested fact with its own arguments, e.g. review(replace(x, y)), and declare its predicate like any other.',
   '- Reuse a declared predicate or a glossed atom whenever its meaning fits, even when the user words it differently. Add a new decl line only when no declared predicate fits, with its gloss written as a {column} sentence, and a gloss line for each new atom.',
   '- Put decl and gloss lines before the utterances that use them.',
   '- Number the user message as @FIRST (given below); every line of that one message shares that number. When the message accepts, rejects or answers a proposal or question in the assistant reply that is not yet in the ledger, first record that assistant line as agent with @FIRST and give the user message @FIRST+1.',

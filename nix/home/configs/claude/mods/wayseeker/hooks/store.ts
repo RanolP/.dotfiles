@@ -32,11 +32,14 @@ export const liveIds = (utterances: readonly Utterance[]): Set<number> => {
 
 const conditionFacts = (condition: Condition): Fact[] => [...condition.premises.map(p => p.fact), ...(condition.conclusion.kind === 'literal' ? [condition.conclusion.fact] : [])]
 
+// Every fact of a line, nested argument facts included, so each one is checked against its own decl.
+const withNested = (fact: Fact): Fact[] => [fact, ...fact.args.flatMap(a => a.kind === 'fact' ? withNested(a) : [])]
+
 const factsOf = (u: Utterance): Fact[] => {
   const act = u.act
   if (act.kind === 'accept' || act.kind === 'reject') return []
-  if (act.kind === 'condition') return conditionFacts(act)
-  return act.content.kind === 'condition' ? conditionFacts(act.content) : [act.content.fact]
+  const top = act.kind === 'condition' ? conditionFacts(act) : act.content.kind === 'condition' ? conditionFacts(act.content) : [act.content.fact]
+  return top.flatMap(withNested)
 }
 
 const validateUtterance = (ledger: Ledger, u: Utterance): string[] => {

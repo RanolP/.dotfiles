@@ -3,6 +3,7 @@ import { test, expect } from 'claude-code/testing'
 import { parseLine, printUtterance, type Utterance } from './syntax'
 import { append, appendAll, emptyLedger, nextId } from './store'
 import { evaluate } from './eval'
+import { renderInstructions } from './render'
 
 const USE = 'decl use(slot, tool) key(slot) "자리마다 쓰는 도구"'
 const value = (lines: string[], fact: string, opts?: { atTime?: number; fuel?: number }) => evaluate(appendAll(lines), opts).facts.get(fact)?.value
@@ -300,4 +301,47 @@ test('parses and prints the remaining line forms', () => {
   const cond = parseLine('@3 user: done(build) -> ready(release)')
   expect(cond.ok && (cond.entry as Utterance).kind).toBe('cond')
   expect(parseLine('sglang := "빠른 서버 프레임워크"')).toEqual({ ok: true, entry: { kind: 'gloss', atom: 'sglang', gloss: '빠른 서버 프레임워크' } })
+})
+
+// Nested facts: a clause the user names is a fact argument, never an atom whose gloss hides the proposition.
+const NESTED = [
+  'decl review(topic) key(topic) "{topic}을 검토한다"',
+  'decl replace(new, old) key(new, old) "{new}이 {old}을 대체할 수 있다"',
+  'wayseeker := "wayseeker"',
+  'clm_ledger := "clm 작업 원장"',
+]
+
+// Regression: the parser rejecting or flattening a fact nested three deep, so the clause falls back into an atom gloss.
+test('want(review(replace(wayseeker, clm_ledger))) parses and prints back unchanged', () => {
+  const line = '@1 user: want(review(replace(wayseeker, clm_ledger)))'
+  const r = parseLine(line)
+  if (!r.ok) throw new Error(r.error)
+  expect(printUtterance(r.entry as Utterance)).toBe(line)
+  expect(appendAll([...NESTED, line]).utterances.length).toBe(1)
+})
+
+// Regression: a nested fact rendered as its printed form instead of its own gloss, losing the atoms' Korean glosses.
+test('a nested fact renders through its own decl gloss', () => {
+  const ledger = appendAll([...NESTED, '@1 user: say(review(replace(wayseeker, clm_ledger)))'])
+  const out = renderInstructions(ledger, evaluate(ledger))
+  expect(out).toContain('wayseeker이 clm 작업 원장을 대체할 수 있다을 검토한다. (@1)')
+})
+
+// Regression: key slots comparing nested facts by name only (two different clauses collide) or not at all (one clause's two answers never conflict).
+test('key slots compare nested facts structurally', () => {
+  const VERDICT = [...NESTED, 'gemini := "gemini"', 'decl verdict(topic, answer) key(topic) "{topic}: {answer}"']
+  const different = run([...VERDICT, '@1 user: say(verdict(replace(wayseeker, clm_ledger), yes))', '@2 agent: say(verdict(replace(gemini, clm_ledger), no))'])
+  expect(different.raises).toEqual([])
+  expect(different.facts.get('verdict(replace(gemini, clm_ledger), no)')?.value).toBe('true')
+  const same = run([...VERDICT, '@1 user: say(verdict(replace(wayseeker, clm_ledger), yes))', '@2 agent: say(verdict(replace(wayseeker, clm_ledger), no))'])
+  expect(same.raises.map(r => r.kind)).toEqual(['conflict'])
+  expect(same.facts.get('verdict(replace(wayseeker, clm_ledger), yes)')?.value).toBe('true')
+  expect(same.facts.get('verdict(replace(wayseeker, clm_ledger), no)')?.value).toBe('unknown')
+})
+
+// Regression: a variable inside a nested premise fact failing to bind, so rules over nested facts never fire.
+test('variables inside a nested fact bind like top-level ones', () => {
+  const r = run([...NESTED, 'decl done(topic) key(topic) "{topic} 끝"', '@1 user: review(replace(?x, clm_ledger)) -> done(?x)', '@2 user: say(review(replace(wayseeker, clm_ledger)))'])
+  expect(r.facts.get('done(wayseeker)')?.value).toBe('true')
+  expect(parseError('@1 user: a(?x) -> b(f(?x))')).toContain('function symbol')
 })

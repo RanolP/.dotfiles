@@ -1,6 +1,6 @@
 // wayseeker evaluator: event-calculus initiations, JTMS support sets, rank/recency conflict
 // resolution, and well-founded semantics (alternating fixpoint) for self-defeating loops.
-import { factKey, parseLiteral, printLiteral, type Argument, type Fact, type Literal, type Premise, type Utterance } from './syntax'
+import { factKey, isGroundFact, parseLiteral, printArgument, printLiteral, type Argument, type Fact, type Literal, type Premise, type Utterance } from './syntax'
 import { declarations, liveIds, type Ledger } from './store'
 
 export type FactValue = 'true' | 'false' | 'unknown' | 'contested'
@@ -18,7 +18,7 @@ export type EvalResult = {
 
 type Cand = { literal: Literal; key: string; support: number[]; rank: number; latest: number; derived: boolean; proof: ProofNode }
 type Rule = { id: number; premises: Premise[]; conclusion: Literal }
-type Env = Map<string, string>
+type Env = Map<string, Argument> // variable name -> the ground atom or nested fact it binds
 type Store = Map<string, Cand>
 type World = { best: Store; all: Cand[] }
 
@@ -207,7 +207,7 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
 
   // Fact table over every ground literal mentioned or derivable.
   const mentioned = new Map<string, Literal>()
-  const mention = (l: Literal) => { if (l.fact.args.every(a => a.kind === 'atom')) mentioned.set(printLiteral(l), l) }
+  const mention = (l: Literal) => { if (isGroundFact(l.fact)) mentioned.set(printLiteral(l), l) }
   for (const u of utterances) for (const l of literalsOf(u)) mention(l)
   for (const c of universe.values()) mention(c.literal)
   const beating = (c: Cand): Cand[] => truthWorld.all.filter(w => conflicts(w, c) && compare(w, c) > 0)
@@ -265,7 +265,7 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
     const act = u.act
     if (act.kind === 'ask' && act.content.kind === 'literal') {
       const q = act.content
-      const answered = holds(q) || (q.fact.args.every(a => a.kind === 'atom') && holds({ ...q, negated: !q.negated }))
+      const answered = holds(q) || (isGroundFact(q.fact) && holds({ ...q, negated: !q.negated }))
       if (!answered && !openQuestions.includes(u.id)) openQuestions.push(u.id)
     }
     if (act.kind === 'try' && act.content.kind === 'literal') {
@@ -301,21 +301,25 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
   }
 }
 
-const printArg = (a: Argument | undefined): string => a === undefined ? '' : a.kind === 'atom' ? a.name : '?' + a.name
+// A nested fact prints canonically, so slots and conflicts compare it structurally through its printed form.
+const printArg = (a: Argument | undefined): string => a === undefined ? '' : printArgument(a)
+
+const unifyArg = (p: Argument, g: Argument, env: Env): Env | undefined => {
+  if (g.kind === 'variable') return undefined
+  if (p.kind === 'atom') return g.kind === 'atom' && p.name === g.name ? env : undefined
+  if (p.kind === 'fact') return g.kind === 'fact' ? unify(p, g, env) : undefined
+  if (g.kind === 'fact' && !isGroundFact(g)) return undefined
+  const bound = env.get(p.name)
+  if (bound !== undefined) return printArgument(bound) === printArgument(g) ? env : undefined
+  const out = new Map(env)
+  out.set(p.name, g)
+  return out
+}
 
 const unify = (pattern: Fact, ground: Fact, env: Env): Env | undefined => {
   if (pattern.name !== ground.name || pattern.args.length !== ground.args.length) return undefined
-  let out = env
-  for (let i = 0; i < pattern.args.length; i++) {
-    const p = pattern.args[i]!
-    const g = ground.args[i]!
-    if (g.kind !== 'atom') return undefined
-    if (p.kind === 'atom') { if (p.name !== g.name) return undefined; continue }
-    const bound = out.get(p.name)
-    if (bound !== undefined) { if (bound !== g.name) return undefined; continue }
-    out = new Map(out)
-    out.set(p.name, g.name)
-  }
+  let out: Env | undefined = env
+  for (let i = 0; i < pattern.args.length && out; i++) out = unifyArg(pattern.args[i]!, ground.args[i]!, out)
   return out
 }
 
@@ -323,9 +327,10 @@ const instantiate = (fact: Fact, env: Env): Fact | undefined => {
   const args: Argument[] = []
   for (const a of fact.args) {
     if (a.kind === 'atom') { args.push(a); continue }
+    if (a.kind === 'fact') { const inner = instantiate(a, env); if (!inner) return undefined; args.push(inner); continue }
     const value = env.get(a.name)
     if (value === undefined) return undefined
-    args.push({ kind: 'atom', name: value })
+    args.push(value)
   }
   return { kind: 'fact', name: fact.name, args }
 }

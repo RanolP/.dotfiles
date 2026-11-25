@@ -1,5 +1,5 @@
 import { isRecord, stripReminders } from './text'
-import { parseLiteral, printArgument, type Fact } from './syntax'
+import { parseLiteral, printArgument, printFact, type Fact } from './syntax'
 import { append, emptyLedger, nextId, type Ledger } from './store'
 import type { EvalResult } from './eval'
 
@@ -91,9 +91,17 @@ const oneLine = (value: string) => value.replace(/\s+/g, ' ').trim()
  * arguments appended so no value is lost.
  */
 function sentence(ledger: Ledger, fact: Fact, negated: boolean): string {
+  const text = clause(ledger, fact)
+  return negated ? `${text} — 아니다.` : /[.!?]$/.test(text) ? text : `${text}.`
+}
+
+/** The filled gloss of one fact without closing punctuation; a nested fact argument fills its column with its own clause. */
+function clause(ledger: Ledger, fact: Fact): string {
   const decl = ledger.decls.findLast(item => item.name === fact.name)
   const glossOf = (atom: string) => ledger.glosses.findLast(item => item.atom === atom)?.gloss ?? atom
-  const values = fact.args.map(arg => arg.kind === 'atom' ? glossOf(arg.name) : printArgument(arg))
+  const values = fact.args.map(arg => arg.kind === 'atom' ? glossOf(arg.name)
+    : arg.kind === 'fact' ? (ledger.decls.some(item => item.name === arg.name) ? clause(ledger, arg) : printFact(arg))
+    : printArgument(arg))
   let text: string
   if (decl?.gloss) {
     let used = false
@@ -105,8 +113,7 @@ function sentence(ledger: Ledger, fact: Fact, negated: boolean): string {
     })
     if (!used && values.length) text = `${text}: ${values.join(', ')}`
   } else text = values.length ? `${fact.name}: ${values.join(', ')}` : fact.name
-  text = oneLine(text)
-  return negated ? `${text} — 아니다.` : /[.!?]$/.test(text) ? text : `${text}.`
+  return oneLine(text)
 }
 
 const userIds = (ledger: Ledger) => new Set(ledger.utterances.filter(u => u.speaker === 'user').map(u => u.id))

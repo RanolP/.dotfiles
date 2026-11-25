@@ -1,7 +1,8 @@
 // wayseeker L1/L2 syntax: one ledger line in, one AST entry out. See the design page, sections L1, L2, L6.
 export type Atom = { kind: 'atom'; name: string }
 export type Variable = { kind: 'variable'; name: string }
-export type Argument = Atom | Variable
+// A fact argument is a proposition with its own arguments, e.g. want(review(replace(wayseeker, clm_ledger))).
+export type Argument = Atom | Variable | Fact
 
 export type Fact = { kind: 'fact'; name: string; args: Argument[] }
 export type Literal = { kind: 'literal'; negated: boolean; fact: Fact }
@@ -114,7 +115,7 @@ class Parser {
     const token = this.take()
     if (token.kind === 'variable') return { kind: 'variable', name: token.text }
     if (token.kind === 'identifier') {
-      if (this.is('(')) throw new Error('function symbol ' + token.text + '(...) is not allowed as an argument (Datalog)')
+      if (this.is('(')) { this.offset--; return this.fact() }
       return { kind: 'atom', name: token.text }
     }
     throw new Error('fact arguments must be atoms or named variables, not strings or sentences')
@@ -207,7 +208,7 @@ class Parser {
   }
 }
 
-const variablesOf = (fact: Fact): string[] => fact.args.flatMap(a => a.kind === 'variable' ? [a.name] : [])
+const variablesOf = (fact: Fact): string[] => fact.args.flatMap(a => a.kind === 'variable' ? [a.name] : a.kind === 'fact' ? variablesOf(a) : [])
 
 const checkAct = (act: ContentAct): void => {
   if (act.kind === 'accept' || act.kind === 'reject') return
@@ -224,6 +225,9 @@ const checkAct = (act: ContentAct): void => {
     const bound = new Set(condition.premises.flatMap(p => variablesOf(p.fact)))
     const free = variablesOf(condition.conclusion.fact).filter(v => !bound.has(v))
     if (free.length > 0) throw new Error('head variable ?' + free[0] + ' does not appear in any premise')
+    // A head that builds a new term from a variable (n(?x) -> n(s(?x))) could derive forever; heads only copy bound terms.
+    const built = condition.conclusion.fact.args.find(a => a.kind === 'fact' && variablesOf(a).length > 0)
+    if (built) throw new Error('function symbol ' + (built as Fact).name + '(...) with a variable is not allowed in a rule conclusion (Datalog)')
   }
 }
 
@@ -288,7 +292,7 @@ export const parseLiteral = (source: string): Literal => {
   return literal
 }
 
-export const printArgument = (argument: Argument): string => argument.kind === 'atom' ? argument.name : '?' + argument.name
+export const printArgument = (argument: Argument): string => argument.kind === 'atom' ? argument.name : argument.kind === 'variable' ? '?' + argument.name : printFact(argument)
 export const printFact = (fact: Fact): string => fact.args.length === 0 ? fact.name : fact.name + '(' + fact.args.map(printArgument).join(', ') + ')'
 export const printLiteral = (literal: Literal): string => literal.negated ? 'not(' + printFact(literal.fact) + ')' : printFact(literal.fact)
 const printPremise = (premise: Premise): string => premise.kind === 'try' ? 'try(' + printFact(premise.fact) + ')' : printLiteral(premise)
@@ -310,5 +314,5 @@ export const printLine = (line: Line): string => {
   return printUtterance(line)
 }
 
-export const isGroundFact = (fact: Fact): boolean => fact.args.every(argument => argument.kind === 'atom')
+export const isGroundFact = (fact: Fact): boolean => fact.args.every(argument => argument.kind === 'atom' || (argument.kind === 'fact' && isGroundFact(argument)))
 export const factKey = (fact: Fact): string => printFact(fact)

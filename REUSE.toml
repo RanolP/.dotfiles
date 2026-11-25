@@ -412,6 +412,7 @@ path = [
     "docs/src/fast-apply.md",
     "docs/src/agent-incidents.md",
     "docs/src/xpkg.md",
+    "docs/src/model-routing.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

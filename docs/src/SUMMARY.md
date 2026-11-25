@@ -14,6 +14,7 @@
 - [Mise](./mise.md)
 - [Claude Code](./claude-code.md)
 - [Codex](./codex.md)
+- [Choosing a subagent by kind of work](./model-routing.md)
 - [Karabiner](./karabiner.md)
 - [LinearMouse](./linearmouse.md)
 - [Raycast](./raycast.md)

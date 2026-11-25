@@ -52,9 +52,14 @@ A one-word `codex exec` reply used 24.7k-31.7k tokens (measured 2026-11-25). Cod
 
 ## Writing
 
-Blind comparison pending (started 2026-11-25).
+On 2026-11-25, Opus 5.5, `gpt-5.6-sol`, `gpt-6.1-sol`, `gemini-4-argon` and `gemini-4-hydrogen` each wrote a Korean PR body, a doc section and a Slack draft from the same facts, and the user judged them blind.
 
-The comparison has Opus 5.5, `gpt-5.6-sol`, `gpt-6.1-sol`, `gemini-4-argon` and `gemini-4-hydrogen` each write a Korean PR body, a doc section and a Slack draft.
+- PR body: `gpt-5.6-sol` came closest to the wanted shape (short problem, two-line solution, no self-adopted proposal).
+- Structured doc: Opus 5.5 won by opening with a summary table.
+- Short Slack announcement: `gemini-4-argon` had the best structure (one claim per top-level bullet, numbers nested under it); its tone needs fixing.
+- `gpt-6.1-sol` earned no plus in any of the three tasks.
+
+Every draft gets a fact check against the repo: Opus 5.5 and `gemini-4-argon` each stated one false fact.
 
 ## Where the guidance lives
 

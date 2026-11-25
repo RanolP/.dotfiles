@@ -1,6 +1,6 @@
 {
   "name": "hetero-subagents",
   "version": "0.1.0",
-  "description": "Agent types backed by Codex and Google Antigravity: the Agent tool spawns names such as hetero-subagents:codex:gpt-6-luna and hetero-subagents:agy:gemini-3.8-flash-medium like any subagent, and every model step is answered by its backend instead of a Claude request.",
+  "description": "Agent types backed by Codex and Google Antigravity: the Agent tool spawns names such as hetero-subagents:codex:gpt-6.1-sol and hetero-subagents:agy:gemini-4-neon-high like any subagent, and every model step is answered by its backend instead of a Claude request.",
   "author": { "name": "RanolP" }
 }

@@ -2,12 +2,13 @@ import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
 import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, routingContext, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 import { codexConfig } from '../daemon/codex-config.mjs'
-import { beginAcpPrompt, decidePermission, finalAgentMessage, finalTurnText, handleAcpLine, installChildPending, interruptAcp, runAcpStep } from '../daemon/acp-bridge.mjs'
+import { beginAcpPrompt, decidePermission, finalAgentMessage, finalTurnText, handleAcpLine, installChildPending, interruptAcp, readOnlyMode, runAcpStep } from '../daemon/acp-bridge.mjs'
 
 const LUNA = 'codex:gpt-6-luna' as const
 const SOL = 'codex:gpt-6.1-sol' as const
 const ASTRA = 'codex:gpt-6.2-astra' as const
 const NEON = 'agy:gemini-4-neon-high' as const
+const isTypeName = (value: string): value is keyof typeof TYPES => Object.hasOwn(TYPES, value)
 
 const row = (role: 'user' | 'assistant', text: string, extra: Partial<SessionMessage> = {}): SessionMessage =>
   ({ ...extra, role, text, toolUses: extra.toolUses ?? [] })
@@ -106,10 +107,48 @@ test('ACP registrations describe Antigravity tools and session continuity', () =
   expect(agentDescription(TYPES[ASTRA])).not.toContain('edit tools')
 })
 
+// The test runtime has no file access ($.fs is unmocked, node:fs and text imports are refused), so the on-disk agents/*.md files are checked outside it.
+test('every registered type has a name, model, description and prompt for its agents/ file', () => {
+  for (const [name, type] of Object.entries(TYPES)) {
+    expect(`${name.replace(':', '-')}.md`).toMatch(/^[a-z]+-[a-z0-9.-]+\.md$/)
+    expect({ model: type.model !== '', description: agentDescription(type) !== '', body: agentPrompt(type) !== '' }).toEqual({ model: true, description: true, body: true })
+  }
+})
+
 test('session.start routing context lists exactly the registered types', () => {
   const lines = [...routingContext().matchAll(/^- `hetero-subagents:([^`]+)`: (.+)$/gm)].map(match => ({ name: match[1], blurb: match[2] }))
   expect(lines.map(line => line.name)).toEqual(['codex:gpt-6.1-sol', 'codex:gpt-6-luna', 'codex:gpt-6.2-astra', 'agy:gemini-4-neon-high'])
   expect(lines).toEqual(Object.entries(TYPES).map(([name, type]) => ({ name, blurb: type.blurb })))
+  expect(routingContext()).toContain("a workspace-write codex type gets its own shell, apply_patch and this session's read-only MCP tools; a read-only codex type gets a read-only shell")
+})
+
+// Regression: a subagent start overwrote the module-wide main-session flag, removing routing context from the still-running main session.
+test('a subagent session start does not remove routing context from the main session', async ($, on) => {
+  let sessionId = 'main-session'
+  const seenSessionIds: string[] = []
+  on('session.id', () => { seenSessionIds.push(sessionId); return { value: sessionId } })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('env.get', () => ({ value: '1' }))
+  on('prompt.compose', (_$, e) => ({ sections: e.sections }))
+
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  sessionId = 'subagent-session'
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true, agentId: 'agent-1' })
+  sessionId = 'main-session'
+  const result = await $.prompt.compose({ model: 'claude-sonnet-4-5', promptModel: 'claude-sonnet-4-5', traits: [], sections: [], outputStyle: null, tools: [], surfaces: [] })
+
+  expect({ text: result.sections.find(section => section.id === 'hetero-subagents:routing')?.text, seenSessionIds }).toEqual({
+    text: routingContext(),
+    seenSessionIds: ['main-session', 'main-session'],
+  })
+})
+
+test('read-only ACP mode is selected from the modes advertised by agy', () => {
+  expect(readOnlyMode({ availableModes: [{ id: 'accept-edits' }, { id: 'default' }, { id: 'plan' }] })).toEqual({
+    modeIds: ['accept-edits', 'default', 'plan'],
+    modeId: 'default',
+  })
+  expect(readOnlyMode({ availableModes: [{ id: 'accept-edits' }] })).toEqual({ modeIds: ['accept-edits'], modeId: undefined })
 })
 
 test('ACP developer instructions omit Codex-only relayed tools and apply_patch', () => {
@@ -345,6 +384,29 @@ test('a codex spawn without a writable line is denied with the brief fix', async
   expect(result.deny).toContain('missing the required writable: line')
   expect(result.deny).toContain('add a line `writable: /abs/repo, /abs/other-worktree` to the brief naming every directory the worker must write')
   expect(spawnCalls).toBe(0)
+})
+
+// Regression: a read-only reviewer was forced to claim write access and a code-writing finish line before it could inspect the workspace.
+test('a read-only codex spawn needs neither writable nor Done when and defaults its root to the workspace', async ($, on) => {
+  const remembered: Record<string, unknown>[] = []
+  mock.env(on, { HOME: '/home/test' })
+  on('session.id', async () => ({ value: 'test-session' }))
+  on('ui.log', async () => ({ value: undefined }))
+  on('process.run', async (_$, e) => ({ value: { exitCode: 0, stdout: e.argv[0] === 'git' ? '/repo\n' : '', stderr: '' } }))
+  on('agent.spawn', async () => ({ agentId: 'read-only-reviewer', model: 'gpt-6.2-astra' }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: '{"ready":true}\n' }
+    return { value: { code: 0, signal: null } }
+  })
+  on('http.fetch', async (_$, e) => {
+    if (new URL(e.url).pathname === '/remember') remembered.push(JSON.parse(e.init?.body ?? '{}'))
+    return { value: { status: 200, ok: true, headers: {}, text: '{}' } }
+  })
+
+  const result = await $.agent.spawn({ prompt: 'Review the implementation.', subagentType: 'hetero-subagents:codex:gpt-6.2-astra', cwd: '/repo/pkg' } satisfies AgentSpawnArgs)
+
+  expect(result.agentId).toBe('read-only-reviewer')
+  expect(remembered).toEqual([{ key: 'read-only-reviewer', type: ASTRA, cwd: '/repo', writableRoots: ['/repo'] }])
 })
 
 // Regression: relative and missing directory paths silently pass the writable-root gate.

@@ -1,6 +1,6 @@
 ---
 name: codex:gpt-6-luna
-description: Runs the task on OpenAI gpt-6-luna at xhigh effort in the workspace-write sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; slow but cheap implementer, only for a task that may run slow but must run cheap). SendMessage continues the same codex thread.
+description: Runs the task on OpenAI gpt-6-luna at xhigh effort in the workspace-write sandbox through Codex (codex's own shell and edit tools, plus this session's read-only MCP tools and skills relayed; cheapest implementer, for mechanical bulk edits whose Done-when command the caller reruns; no web or MCP lookups). SendMessage continues the same codex thread.
 model: gpt-6-luna
 ---
 

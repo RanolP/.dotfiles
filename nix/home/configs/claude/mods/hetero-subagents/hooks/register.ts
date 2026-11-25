@@ -601,7 +601,7 @@ export const agentDescription = (type: (typeof TYPES)[TypeName]): string => type
 
 export const routingContext = () => [
   '## Non-Claude agent types (hetero-subagents)',
-  "- Pick by tool reach first: a codex type gets its own shell, apply_patch and this session's read-only MCP tools; a read-only type gets no edits; an agy type gets no Claude-side tools; device UI, Artifact and write-capable MCP work stays with a Claude worker.",
+  "- Pick by tool reach first: a workspace-write codex type gets its own shell, apply_patch and this session's read-only MCP tools; a read-only codex type gets a read-only shell; an agy type gets no Claude-side tools; device UI, Artifact and write-capable MCP work stays with a Claude worker.",
   '- Send codex a unit worth its fixed ~25-30k-token thread cost (several files or 10+ tool calls); a smaller edit goes to a haiku or sonnet worker.',
   ...Object.entries(TYPES).map(([name, type]) => `- \`hetero-subagents:${name}\`: ${type.blurb}`),
   "- Verify each non-Claude report before adopting it: rerun its Done-when command, or open each quoted file:line; these models' cards record omitted obstacles in their reports.",
@@ -665,7 +665,7 @@ export const register: Register = (on) => {
   const stepKey = (e: { agentId?: string; turnId: string; index: number }) => `${e.agentId ?? ''}|${e.turnId}|${e.index}`
   // Agents a step has claimed for codex: the .catch handler reads it without awaiting.
   const claimed = new Set<string>()
-  let mainSession = false
+  const mainSessions = new Set<string>()
 
   on('session.receive', async ($, e, next) => {
     const r = await next(e)
@@ -687,7 +687,7 @@ export const register: Register = (on) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    mainSession = e.agentId === undefined
+    if (e.agentId === undefined) mainSessions.add(await $.session.id())
     // The bridge's schema-harvest child is a `claude -p` that never reaches the
     // API; were this plugin installed there, it would start a bridge of its own.
     if ((await $.env.get('CODEX_SUBAGENT_HARVEST')) === '1') return started
@@ -698,7 +698,7 @@ export const register: Register = (on) => {
 
   on('prompt.compose', { model: /.*/ }, async ($, e, next) => {
     const result = await next(e)
-    if (!mainSession || e.traits.includes('bare')) return result
+    if (!mainSessions.has(await $.session.id()) || e.traits.includes('bare')) return result
     return { ...result, sections: [...result.sections, { id: 'hetero-subagents:routing', text: routingContext(), scope: 'session' as const }] }
   })
 
@@ -714,11 +714,15 @@ export const register: Register = (on) => {
     let writableRoots: string[] = []
     try {
       const spawnCwd = e.cwd ?? await $.session.cwd()
-      const parsed = await writableRootsFromPrompt($, e.prompt, spawnCwd, true)
-      if (parsed.error) return { deny: parsed.error }
-      const doneWhen = doneWhenError(e.prompt, parsed.writableRoots ?? [])
-      if (doneWhen) return { deny: doneWhen }
-      writableRoots = parsed.writableRoots!
+      if (TYPES[type].sandbox === 'read-only') {
+        writableRoots = [await workspaceRoot((argv, init) => $.process.run(argv, init), spawnCwd)]
+      } else {
+        const parsed = await writableRootsFromPrompt($, e.prompt, spawnCwd, true)
+        if (parsed.error) return { deny: parsed.error }
+        const doneWhen = doneWhenError(e.prompt, parsed.writableRoots ?? [])
+        if (doneWhen) return { deny: doneWhen }
+        writableRoots = parsed.writableRoots ?? []
+      }
       cwd = writableRoots[0]
       r = await next(e)
       if (r.agentId) { agents.set(r.agentId, { type, cwd, writableRoots }); st.subagentTypes.set(r.agentId, e.subagentType) }

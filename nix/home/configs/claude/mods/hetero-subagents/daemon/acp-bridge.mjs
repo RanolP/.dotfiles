@@ -28,6 +28,11 @@ export const decidePermission = (toolCall, { sandbox, writableRoots, tmpDir }) =
   }) ? 'allow' : 'deny'
 }
 
+export const readOnlyMode = modes => {
+  const modeIds = modes?.availableModes?.map(mode => mode.id).filter(id => typeof id === 'string') ?? []
+  return { modeIds, modeId: modeIds.includes('default') ? 'default' : undefined }
+}
+
 const childPendingHandlers = pending => {
   const reject = error => {
     for (const request of pending.values()) request.reject(error)
@@ -257,17 +262,23 @@ async function main() {
     ])
     // Claude-side MCP and built-in tool relay is the next ACP integration step.
     const mcpServers = []
+    let opened
     if (session.sessionId) {
       bySessionId.set(session.sessionId, session)
-      await rpc('session/load', { sessionId: session.sessionId, cwd: session.cwd, mcpServers })
+      opened = await rpc('session/load', { sessionId: session.sessionId, cwd: session.cwd, mcpServers })
     }
     else {
-      const opened = await rpc('session/new', { cwd: session.cwd, mcpServers })
+      opened = await rpc('session/new', { cwd: session.cwd, mcpServers })
       session.sessionId = opened.sessionId
     }
     bySessionId.set(session.sessionId, session)
     await rpc('session/set_model', { sessionId: session.sessionId, modelId: session.model })
-    if (session.sandbox !== 'read-only') {
+    const { modeIds, modeId } = readOnlyMode(opened.modes)
+    console.error(`[acp-bridge] session modes: ${modeIds.join(', ') || '<none>'}`)
+    if (session.sandbox === 'read-only') {
+      if (!modeId) throw new Error(`agy reported no non-accept-edits mode; available modes: ${modeIds.join(', ') || '<none>'}`)
+      await rpc('session/set_mode', { sessionId: session.sessionId, modeId })
+    } else {
       try { await rpc('session/set_mode', { sessionId: session.sessionId, modeId: 'accept-edits' }) }
       catch (error) { console.error('[acp-bridge] session/set_mode failed; continuing in default mode', String(error?.message ?? error)) }
     }

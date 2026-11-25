@@ -1,6 +1,6 @@
 import { isRecord } from '../tracker'
 import { parseLiteral, printArgument, type Fact } from './syntax'
-import { emptyLedger, type Ledger } from './store'
+import { append, emptyLedger, nextId, type Ledger } from './store'
 import type { EvalResult } from './eval'
 
 /** Session store key of the wayseeker Ledger, kept beside clauseStoreKey's `clauses:<key>`. */
@@ -28,6 +28,34 @@ export function dropWayseekerTurns(value: unknown, addresses: ReadonlySet<string
 }
 
 export const readWayseekerTurns = (value: unknown): WayseekerTurn[] => isRecord(value) && Array.isArray(value.turns) ? value.turns.filter(isTurn) : []
+
+/**
+ * Lands one turn's extracted lines after the model call. The store is read again here, not before
+ * the call, so a rewind that trimmed the ledger meanwhile stands: the lines replay onto the fresh
+ * ledger (a line citing a cut utterance fails validation and is dropped), and a turn the rewind
+ * removed writes nothing. Run inside the session's serialize, as landClauses does.
+ */
+export async function landWayseekerTurn(
+  io: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void>; isLive(): Promise<boolean> },
+  key: string, appended: readonly string[], address?: string,
+): Promise<{ landed: string[]; dropped: { line: string; errors: string[] }[]; rewound: boolean }> {
+  if (!appended.length) return { landed: [], dropped: [], rewound: false }
+  if (!(await io.isLive())) return { landed: [], dropped: [], rewound: true }
+  const stored = await io.get(wayseekerKey(key))
+  let ledger = readWayseekerLedger(stored)
+  const turns = readWayseekerTurns(stored)
+  const firstId = nextId(ledger)
+  const landed: string[] = []
+  const dropped: { line: string; errors: string[] }[] = []
+  for (const line of appended) {
+    const result = append(ledger, line)
+    if (result.ok) { ledger = result.ledger; landed.push(line) } else dropped.push({ line, errors: result.errors })
+  }
+  if (!landed.length) return { landed, dropped, rewound: false }
+  const added = ledger.utterances.some(u => u.id >= firstId)
+  await io.set(wayseekerKey(key), { ...ledger, turns: added && address ? [...turns, { address, firstId }] : turns })
+  return { landed, dropped, rewound: false }
+}
 
 /** A stored value read back as a Ledger; anything malformed reads as the empty ledger. */
 export function readWayseekerLedger(value: unknown): Ledger {
@@ -86,7 +114,8 @@ export function renderInstructions(ledger: Ledger, result: EvalResult): string {
     const spoken = state.support.filter(id => users.has(id))
     if (spoken.length) instructions.push(`- ${literalSentence(ledger, key)} ${address(spoken)}`)
   }
-  const raises: string[] = []
+  // Facts settled before fuel ran out still render above; this line says the rest are undecided.
+  const raises: string[] = result.fuelExhausted ? ['- 평가 한도 초과: 일부 사실을 정하지 못했다. 사용자에게 묻는다.'] : []
   const contested = new Set<string>()
   for (const raise of result.raises) {
     if (raise.kind === 'contested') { raise.facts.forEach(fact => contested.add(fact)); continue }

@@ -29,7 +29,7 @@ import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampM
 import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes, WRAP_UP_NOTICE, wrapUpDue, wrapUpStoreKey } from './memory'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { extractTurn } from './wayseeker/extract'
-import { readWayseekerLedger, readWayseekerTurns, wayseekerKey } from './wayseeker/render'
+import { landWayseekerTurn, readWayseekerLedger, wayseekerKey } from './wayseeker/render'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
@@ -1027,15 +1027,16 @@ async function recordWayseekerTurn($: EngineInterface, text: string, address?: s
   const rows = await $.session.messages()
   const prevAssistant = [...rows].reverse().find(row => row.role === 'assistant' && row.text.trim())?.text ?? ''
   const run = async () => {
-    const stored = await sessionStoreGet($, wayseekerKey(key))
-    const ledger = readWayseekerLedger(stored)
-    const turns = readWayseekerTurns(stored)
-    const firstId = ledger.utterances.reduce((max, u) => Math.max(max, u.id), 0) + 1
+    const ledger = readWayseekerLedger(await sessionStoreGet($, wayseekerKey(key)))
     const result = await extractTurn({ complete: request => $.model.complete(request) }, ledger, userMessage, prevAssistant)
     for (const { line, errors } of result.rejected) $.ui.log(`clm wayseeker: rejected ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })
-    if (!result.appended.length) return
-    const added = result.ledger.utterances.some(u => u.id >= firstId)
-    await sessionStoreSet($, wayseekerKey(key), { ...result.ledger, turns: added && address ? [...turns, { address, firstId }] : turns })
+    // The model call takes seconds; landing re-reads the store so a rewind in that window is not overwritten.
+    const landed = await serialized(session, () => landWayseekerTurn({
+      get: k => sessionStoreGet($, k), set: (k, v) => sessionStoreSet($, k, v),
+      isLive: async () => (await $.session.messages()).some(row => row.role === 'user' && stripReminders(row.text) === userMessage),
+    }, key, result.appended, address))
+    if (landed.rewound) $.ui.log(`clm wayseeker: prompt rewound during extraction; ${result.appended.length} line(s) not written`, { to: 'debug' })
+    for (const { line, errors } of landed.dropped) $.ui.log(`clm wayseeker: dropped on replay ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })
   }
   const job = (wayseekerChains.get(session) ?? Promise.resolve()).then(run)
   const tail = job.catch(() => undefined)

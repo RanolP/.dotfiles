@@ -2,7 +2,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { appendAll } from './store'
 import { evaluate } from './eval'
-import { renderInstructions, wayseekerKey } from './render'
+import { landWayseekerTurn, renderInstructions, wayseekerKey } from './render'
 import { residentLedger, type ResidentIo } from '../resident'
 import { observeTranscript, transcriptRowsKey, type RewindIo } from '../rewind'
 import { fingerprint } from '../fold'
@@ -77,4 +77,30 @@ test('rewinding a prompt cuts the utterances it appended from the wayseeker ledg
   const stored = values.get(wayseekerKey(key)) as { utterances: { id: number }[]; turns: unknown[] }
   expect(stored.utterances.map(u => u.id)).toEqual([1])
   expect(stored.turns).toEqual([{ address: '@00000001', firstId: 1 }])
+})
+
+// Regression caught: a late extraction overwriting a rewind and resurrecting the rewound instruction.
+test('a late extraction lands onto the rewound ledger and never brings the cut line back', async () => {
+  const key = 's1:main'
+  const before = appendAll([...DECLS, '@1 user: say(use(serving, sglang))'])
+  // The rewind ran during the model call and cut @1; the extractor still answers from the ledger it read.
+  const values = new Map<string, unknown>([[wayseekerKey(key), { ...before, utterances: [], turns: [] }]])
+  const io = { get: async (k: string) => values.get(k), set: async (k: string, v: unknown) => { values.set(k, v) }, isLive: async () => true }
+  await landWayseekerTurn(io, key, ['@2 user: say(use(serving, vllm))'], '@00000002')
+  const stored = values.get(wayseekerKey(key)) as { utterances: { id: number }[]; turns: unknown[] }
+  expect(stored.utterances.map(u => u.id)).toEqual([2])
+  expect(stored.turns).toEqual([{ address: '@00000002', firstId: 1 }])
+
+  const gone = { ...io, isLive: async () => false }
+  const result = await landWayseekerTurn(gone, key, ['@3 user: say(use(serving, sglang))'], '@00000003')
+  expect(result.rewound).toBe(true)
+  expect((values.get(wayseekerKey(key)) as { utterances: unknown[] }).utterances).toHaveLength(1)
+})
+
+// Regression caught: an evaluation that ran out of fuel rendered like an empty session.
+test('fuel exhaustion is raised while the settled facts still render', () => {
+  const ledger = appendAll([...DECLS, '@1 user: say(use(serving, vllm))'])
+  const out = renderInstructions(ledger, { ...evaluate(ledger), fuelExhausted: true })
+  expect(out).toContain('- 서빙에 vllm을 쓴다. (@1)')
+  expect(out.split('## raises')[1] ?? '').toContain('평가 한도 초과')
 })

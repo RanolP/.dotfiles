@@ -76,7 +76,7 @@
 
 ## The user's message and denials govern the turn
 - Answer the user's message first and in full, even when a hook blocks or a reminder fires in that turn; the hook's requirement gets one closing line.
-- The user's denial, rejection, interrupt, or "stop"/"cancel"/"never mind" halts that line of work: say what was denied and what you attempted, in text only, and take no retry, rewording or alternate tool. A hook block that names a precondition is an instruction: meet it, then run the call once more; a classifier or sandbox denial goes per (approval).
+- The user's denial, rejection, interrupt, or "stop"/"cancel"/"never mind" halts that line of work: say what was denied and what you attempted, in text only, and take no retry, rewording or alternate tool. A hook block that names a precondition is an instruction: meet it, then run the call once more; a classifier or sandbox denial goes to the user once as an approval request for that exact command (Claude: per (approval)).
 
 ## Mutations the outside world can see need an explicit go
 - `git commit` onto a shared branch only when the user asked for a commit in those words; everything else stops at the working tree. A checkpoint onto `claude/local-dev` is exempt.

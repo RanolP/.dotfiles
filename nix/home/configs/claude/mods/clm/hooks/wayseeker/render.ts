@@ -1,3 +1,4 @@
+import { stripReminders } from '../fold'
 import { isRecord } from '../tracker'
 import { parseLiteral, printArgument, type Fact } from './syntax'
 import { append, emptyLedger, nextId, type Ledger } from './store'
@@ -55,6 +56,22 @@ export async function landWayseekerTurn(
   const added = ledger.utterances.some(u => u.id >= firstId)
   await io.set(wayseekerKey(key), { ...ledger, turns: added && address ? [...turns, { address, firstId }] : turns })
   return { landed, dropped, rewound: false }
+}
+
+/**
+ * Whether the prompt at `address` is still in the live transcript. Positional, not by text: a short
+ * prompt ("ok") said twice is live only while the transcript still holds as many user rows with that
+ * text as the address index has up to and including this address. False when the address is unknown.
+ */
+export function turnIsLive(
+  addressRows: readonly { address: string; text: string }[], messages: readonly { role: string; text: string }[],
+  address: string | undefined, userMessage: string,
+): boolean {
+  const upto = address === undefined ? -1 : addressRows.findIndex(row => row.address === address)
+  if (upto < 0) return false
+  const need = addressRows.slice(0, upto + 1).filter(row => stripReminders(row.text) === userMessage).length
+  const have = messages.filter(row => row.role === 'user' && stripReminders(row.text) === userMessage).length
+  return have >= need
 }
 
 /** A stored value read back as a Ledger; anything malformed reads as the empty ledger. */

@@ -2,7 +2,7 @@ import { test, expect } from 'claude-code/testing'
 
 import { appendAll } from './store'
 import { evaluate } from './eval'
-import { landWayseekerTurn, renderInstructions, wayseekerKey } from './render'
+import { landWayseekerTurn, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { residentLedger, type ResidentIo } from '../resident'
 import { observeTranscript, transcriptRowsKey, type RewindIo } from '../rewind'
 import { fingerprint } from '../fold'
@@ -103,4 +103,14 @@ test('fuel exhaustion is raised while the settled facts still render', () => {
   const out = renderInstructions(ledger, { ...evaluate(ledger), fuelExhausted: true })
   expect(out).toContain('- 서빙에 vllm을 쓴다. (@1)')
   expect(out.split('## raises')[1] ?? '').toContain('평가 한도 초과')
+})
+
+// Regression caught: a rewound repeated prompt ("ok") counted as live because an earlier prompt had the same text.
+test('of two equal-text prompts, the rewound later one is not live', () => {
+  const rows = [{ address: '@00000001', text: 'ok' }, { address: '@00000002', text: '다음' }, { address: '@00000003', text: 'ok' }]
+  const afterRewind = [{ role: 'user', text: 'ok' }, { role: 'assistant', text: 'done' }, { role: 'user', text: '다음' }]
+  expect(turnIsLive(rows, afterRewind, '@00000003', 'ok')).toBe(false)
+  expect(turnIsLive(rows, afterRewind, '@00000001', 'ok')).toBe(true)
+  expect(turnIsLive(rows, [...afterRewind, { role: 'user', text: 'ok' }], '@00000003', 'ok')).toBe(true)
+  expect(turnIsLive(rows, afterRewind, undefined, 'ok')).toBe(false)
 })

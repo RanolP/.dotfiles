@@ -29,7 +29,7 @@ import { addressRows, recallAddress, recallQuery, recordPrompt, sentAtOf, stampM
 import { addNote, NOTE_DESCRIPTION, NOTE_TOOL, noteStoreKey, readNotes, WRAP_UP_NOTICE, wrapUpDue, wrapUpStoreKey } from './memory'
 import { residentLedger as renderResidentLedger, type ResidentIo } from './resident'
 import { extractTurn } from './wayseeker/extract'
-import { landWayseekerTurn, readWayseekerLedger, wayseekerKey } from './wayseeker/render'
+import { landWayseekerTurn, readWayseekerLedger, turnIsLive, wayseekerKey } from './wayseeker/render'
 import { observeTranscript, type RewindIo } from './rewind'
 import { fold as runFold, parseSplitAnswer, readLegacyTopics as readLegacyTopicsDomain, trackerView as trackerViewDomain, type FoldRuntimeIo, type Meta, type Opts, type PreparedFold, type TopicState, type TrackerView } from './fold-runtime'
 import { adoptEngineSummary, clearFoldJob, foldJobDropFps, foldJobIdle, handOff as handOffFoldJob, handleSessionCompact as compactFoldJob, maybeClear as maybeClearFoldJob, report as foldJobReport, requestFold, setRewindFoldJob, showTurnChanges as showFoldTurnChanges, transcriptKey, type FoldJobIo, type FoldRequest } from './fold-job'
@@ -1033,7 +1033,7 @@ async function recordWayseekerTurn($: EngineInterface, text: string, address?: s
     // The model call takes seconds; landing re-reads the store so a rewind in that window is not overwritten.
     const landed = await serialized(session, () => landWayseekerTurn({
       get: k => sessionStoreGet($, k), set: (k, v) => sessionStoreSet($, k, v),
-      isLive: async () => (await $.session.messages()).some(row => row.role === 'user' && stripReminders(row.text) === userMessage),
+      isLive: async () => turnIsLive(await addressRows(addressIo($), key), await $.session.messages(), address, userMessage),
     }, key, result.appended, address))
     if (landed.rewound) $.ui.log(`clm wayseeker: prompt rewound during extraction; ${result.appended.length} line(s) not written`, { to: 'debug' })
     for (const { line, errors } of landed.dropped) $.ui.log(`clm wayseeker: dropped on replay ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })

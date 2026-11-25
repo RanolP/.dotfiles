@@ -95,10 +95,20 @@ function recordTurn($: EngineInterface, session: string, userMessage: string, ro
     }, ledger, userMessage, prevAssistant)
     for (const { line, errors } of result.rejected) $.ui.log(`wayseeker: rejected ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })
     // The model call takes seconds; landing re-reads the store so a rewind in that window is not overwritten.
-    const landed = await serialized(session, () => landWayseekerTurn({
+    let before = ''
+    let after = ''
+    const landed = await serialized(session, async () => {
+      const sectionOf = (stored: unknown) => { const l = readWayseekerLedger(stored); return renderInstructions(l, evaluate(l)) }
+      before = sectionOf(await store.get(wayseekerKey(key)))
+      const landing = await landWayseekerTurn({
       get: store.get, set: store.set,
       isLive: async () => turnIsLive(await $.session.messages(), userMessage, seen),
-    }, key, result.appended, address))
+    }, key, result.appended, address)
+      after = sectionOf(await store.get(wayseekerKey(key)))
+      return landing
+    })
+    // The attachment is a system-reminder the user cannot see, so a changed instruction list is also shown in the UI.
+    for (const line of instructionChanges(before, after)) $.ui.log(line)
     if (landed.rewound) $.ui.log(`wayseeker: prompt rewound during extraction; ${result.appended.length} line(s) not written`, { to: 'debug' })
     for (const { line, errors } of landed.dropped) $.ui.log(`wayseeker: dropped on replay ${JSON.stringify(line)} (${errors.join('; ').slice(0, 160)})`, { to: 'debug' })
   }
@@ -107,6 +117,18 @@ function recordTurn($: EngineInterface, session: string, userMessage: string, ro
   chains.set(session, tail)
   void tail.then(() => { if (chains.get(session) === tail) chains.delete(session) })
   return job
+}
+
+const instructionLines = (section: string) => (section.split('\n\n## raises')[0] ?? '').split('\n').filter(line => line.startsWith('- ') && line !== '- (none yet)').map(line => line.slice(2))
+const MAX_NOTICES = 3
+/** One user-visible line per instruction that entered or left the section, at most three, then a count. */
+export function instructionChanges(before: string, after: string): string[] {
+  const [was, now] = [instructionLines(before), instructionLines(after)]
+  const notices = [
+    ...now.filter(line => !was.includes(line)).map(line => `wayseeker: 지시 추가: ${line}`),
+    ...was.filter(line => !now.includes(line)).map(line => `wayseeker: 지시 제외: ${line}`),
+  ]
+  return notices.length > MAX_NOTICES ? [...notices.slice(0, MAX_NOTICES), `… 외 ${notices.length - MAX_NOTICES}건`] : notices
 }
 
 const EMPTY_LEDGER = readWayseekerLedger(undefined)
@@ -120,7 +142,7 @@ async function instructions($: EngineInterface, input: WayseekerInstructionsInpu
   return renderInstructions(ledger, evaluate(ledger))
 }
 
-const instructionAttachment = async ($: EngineInterface): Promise<string | undefined> => {
+const instructionAttachment = async ($: EngineInterface, atSubmit: boolean): Promise<string | undefined> => {
   const session = await $.session.id()
   const key = transcriptKey(session)
   const store = sessionStore($, session)
@@ -130,8 +152,9 @@ const instructionAttachment = async ($: EngineInterface): Promise<string | undef
     if (section === EMPTY_SECTION) return undefined
     const fingerprint = promptFingerprint(section)
     const delivered = readDeliveredSection(await store.get(deliveredSectionKey(key)))
-    if (delivered?.fingerprint === fingerprint && (await $.session.messages()).some(row => row.text.includes(delivered.section))) return undefined
-    await store.set(deliveredSectionKey(key), { fingerprint, section })
+    // A tool.call in the turn that submit delivered to trusts the record: the prompt's row may not hold the attachment yet.
+    if (delivered?.fingerprint === fingerprint && ((!atSubmit && delivered.atSubmit) || (await $.session.messages()).some(row => row.text.includes(delivered.section)))) return undefined
+    await store.set(deliveredSectionKey(key), { fingerprint, section, atSubmit })
     return `<system-reminder>\n${section}\n</system-reminder>`
   })
 }
@@ -161,7 +184,7 @@ export const register: Register = on => {
       // Rendered after observePrompt so a rewind's cuts are already gone, and before the extraction starts so it
       // cannot land ahead of this prompt's own row; this prompt's lines reach the next tool call's attachment.
       try {
-        attachment = await instructionAttachment($)
+        attachment = await instructionAttachment($, true)
       } catch (err) {
         $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       }
@@ -195,7 +218,7 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.agentId !== undefined || result.deny !== undefined) return result
     try {
-      const attachment = await instructionAttachment($)
+      const attachment = await instructionAttachment($, false)
       return attachment === undefined ? result : { ...result, context: [...(result.context ?? []), attachment] }
     } catch (err) {
       $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })

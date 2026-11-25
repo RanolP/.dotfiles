@@ -108,6 +108,11 @@ export const EXTRACT_CASES: ExtractCase[] = [
     why: 'Adding a blocker to the live rule @12 puts its number in the conclusion slot.',
   },
   {
+    user: 'rebuilt and resumed.',
+    lines: ['@1 user: say(done(rebuild))'],
+    why: 'A report of something the user already did (past tense: "rebuilt and resumed.", "pushed", "머지했어") states a fact; extract it as say, not want.',
+  },
+  {
     user: '이 에러 로그대로 해 (retry 최대 3번이라고 적힌 로그)',
     lines: [
       'paste_1 := "retry 최대 3번"',
@@ -146,6 +151,7 @@ export const EXTRACT_SYSTEM = [
   '- "Try it" phrasing: try(p) -> report when the user wants results reported first; try(p) -> proceed only for an explicit "go ahead if it works". Choose report when the nuance is unclear.',
   '- Feedback about which conflicts to ask about becomes say(raise_on(key)) or say(not(raise_on(key))).',
   '- Withdrawal is reject(@n) of the earlier utterance.',
+  '- A message reporting what the user already did (past tense, e.g. "rebuilt and resumed.", "pushed", "머지했어") states a fact: extract it as say, never want.',
   '- When the message carries no claim, question, proposal or directive, output an empty block.',
   '',
   'Output: one fenced code block holding only L1 lines, one per line, with no commentary inside or outside the block.',

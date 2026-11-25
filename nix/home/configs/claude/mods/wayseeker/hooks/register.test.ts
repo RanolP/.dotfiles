@@ -11,17 +11,18 @@ const REPLIES: Record<string, string[]> = {
   '다른 얘기': [],
 }
 
-function world(on: any) {
+function world(on: any, rowsKeepContext = true) {
   const files: Record<string, string> = {}
   const rows: { role: 'user' | 'assistant'; text: string; toolUses: [] }[] = []
   const contexts: (readonly string[] | undefined)[] = []
+  const logs: string[] = []
   mock.env(on, { HOME: '/home/t' })
   on('session.id', () => ({ value: 's1' }))
   on('session.messages', () => ({ value: rows.map(row => ({ ...row })) }))
   on('fs.exists', (_$: any, e: any) => ({ value: e.path in files }))
   on('fs.read', (_$: any, e: any) => ({ value: files[e.path] }))
   on('fs.write', (_$: any, e: any) => { files[e.path] = e.text; return { value: undefined } })
-  on('ui.log', () => ({ value: undefined }))
+  on('ui.log', (_$: any, e: any) => { if (e.to !== 'debug') logs.push(e.message ?? e.text ?? JSON.stringify(e)); return { value: undefined } })
   on('model.complete', (_$: any, e: any) => {
     const prompt = /<user_message>\n([\s\S]*?)\n<\/user_message>/.exec(e.prompt)?.[1]
     return { value: { isAnswered: true, text: `\`\`\`\n${(REPLIES[prompt ?? ''] ?? []).join('\n')}\n\`\`\`` } }
@@ -29,7 +30,7 @@ function world(on: any) {
   // Core: the prompt's row lands once the submit chain settles, followed by a reply.
   on('prompt.submit', (_$: any, e: any) => {
     contexts.push(e.context)
-    rows.push({ role: 'user', text: [e.text, ...(e.context ?? [])].join('\n'), toolUses: [] }, { role: 'assistant', text: 'ok', toolUses: [] })
+    rows.push({ role: 'user', text: [e.text, ...(rowsKeepContext ? e.context ?? [] : [])].join('\n'), toolUses: [] }, { role: 'assistant', text: 'ok', toolUses: [] })
     return { text: e.text, context: e.context }
   })
   on('tool.call', (_$: unknown, e: { tool: string }) => e.tool === 'Denied' ? { deny: 'blocked' } : { result: 'ok', context: ['existing context'] })
@@ -38,7 +39,7 @@ function world(on: any) {
     const ledger = readWayseekerLedger(JSON.parse(files['/home/t/.claude-work/plans/wayseeker-s1.json'] ?? '{}')[wayseekerKey('s1:main')])
     return renderInstructions(ledger, evaluate(ledger))
   }
-  return { files, rows, contexts, instructions }
+  return { files, rows, contexts, logs, instructions }
 }
 const submit = ($: Engine, text: string) => $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
 // The extraction runs after the submit resolves; a few timer turns let it land. setTimeout is reached through globalThis: the mod's types carry no DOM or Node globals.
@@ -138,4 +139,25 @@ test('worker and denied tool calls leave changed instructions for the main agent
   expect((await $.tool.call({ tool: 'Read', file_path: '/test', agentId: 'worker' })).context).toEqual(['existing context'])
   expect((await $.tool.call({ tool: 'Denied' })).context).toBeUndefined()
   expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context?.[1]).toContain('sglang')
+})
+
+// Regression caught: a section delivered at prompt.submit was attached again on the same turn's first tool.call because the prompt's row did not yet hold it.
+test('a section delivered at prompt.submit is not re-sent by the same turn\'s tool.call', async ($, on) => {
+  const { contexts } = world(on, false)
+  await submit($, 'sglang 써')
+  await settle()
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts[1]?.[0]).toContain('sglang')
+  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context).toEqual(['existing context'])
+})
+
+test('the user is shown an added instruction, and nothing when the section is unchanged', async ($, on) => {
+  const { logs } = world(on)
+  await submit($, 'sglang 써')
+  await settle()
+  expect(logs).toEqual(['wayseeker: 지시 추가: 서빙에 sglang을 쓴다. (@1)'])
+  await submit($, '다른 얘기')
+  await settle()
+  expect(logs).toHaveLength(1)
 })

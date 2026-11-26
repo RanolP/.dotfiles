@@ -10,7 +10,7 @@ const fraction = (v: unknown, fallback: number) =>
   typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 1 ? v : fallback
 
 export function preSettings(options: Record<string, unknown>): PreSettings {
-  return { ratio: fraction(options.preCompactRatio, 0.6), extendRatio: fraction(options.extendRatio, 0.3) }
+  return { ratio: fraction(options.preCompactRatio, 0.7), extendRatio: fraction(options.extendRatio, 0.3) }
 }
 
 // The boundary: the newest rows the fork read, newest last. SessionMessage carries a uuid only on a ranged read and

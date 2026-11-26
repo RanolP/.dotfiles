@@ -29,7 +29,7 @@ const minutes = { type: 'number', exclusiveMinimum: 0 }
 const TOOLS = [
   {
     name: 'estimate',
-    description: 'Open a time-budget unit and estimate its duration, or pass task with an existing unit id to resume or refine that estimate; the result names the unit id. Pass done: true with task to close that unit and log its calibration pair. The result shows the calibrated budget, checkpoint reminders, and recent extension history.',
+    description: 'Open a time-budget unit and estimate its duration, or pass task with an existing unit id to resume or refine that estimate; the result names the unit id. Pass done: true with task (minutes, scope and steps then optional and ignored) to close that unit and log its calibration pair. Otherwise minutes, scope and steps are required. The result shows the calibrated budget, checkpoint reminders, and recent extension history.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -39,7 +39,7 @@ const TOOLS = [
         task: { type: 'string', description: 'An existing time-budget unit id to resume or refine' },
         done: { type: 'boolean', description: 'With task: close that unit and log its calibration pair' },
       },
-      required: ['minutes', 'scope', 'steps'],
+      required: [],
     },
   },
   {
@@ -578,25 +578,35 @@ export const register: Register = (on) => {
     const args = e as unknown as Record<string, unknown>
 
     if (e.tool === TOOL.estimate) {
+      if (args.done !== undefined && typeof args.done !== 'boolean') return toolError(`Call ${TOOL.estimate} with done as true or false.`)
+      if (main && args.done === true) {
+        const target = args.task
+        if (typeof target !== 'string' || !target.trim()) return toolError(`Call ${TOOL.estimate} with task as the unit id to close when done is true.`)
+        const open = s.units[target]?.kind === 'main'
+        if (!open && !s.parked[target]) return toolError(`${TOOL.estimate}: no time-budget unit ${target}.`)
+        // A parked unit was closed, and its pair logged, when it parked.
+        if (open) {
+          await closeMain($, s, now, target)
+          await save($, s)
+          await showStatus($, s)
+        }
+        return { result: `Unit ${target} closed.` }
+      }
       const m = args.minutes
       if (typeof m !== 'number' || !Number.isFinite(m) || !(m > 0)) return toolError(`Call ${TOOL.estimate} with minutes as a positive number, scope as one line and steps as a list.`)
       const factor = calibrationFactor(await loadPairs($, s))
       const baseBudget = budgetFor(m, factor)
       const scope = typeof args.scope === 'string' ? args.scope : ''
-      let closing = false
       if (main) {
         const requested = args.task
         if (requested !== undefined && (typeof requested !== 'string' || !requested.trim()))
           return toolError(`Call ${TOOL.estimate} with task as an existing time-budget unit id when resuming one.`)
         const targetKey = typeof requested === 'string' ? requested : undefined
-        if (args.done !== undefined && typeof args.done !== 'boolean') return toolError(`Call ${TOOL.estimate} with done as true or false.`)
-        if (args.done === true && !targetKey) return toolError(`Call ${TOOL.estimate} with task as the unit id to close when done is true.`)
         if (targetKey && s.units[targetKey]?.kind !== 'main' && !s.parked[targetKey])
           return toolError(`${TOOL.estimate}: no time-budget unit ${targetKey}; omit task to open a new one.`)
         const id = targetKey ?? newUnitId(s, now)
         if (unitKey && unitKey !== id) await closeMain($, s, now, unitKey)
         unitKey = id
-        closing = args.done === true
         u = s.units[unitKey]
         const parked = s.parked[unitKey]
         delete s.parked[unitKey]
@@ -632,10 +642,6 @@ export const register: Register = (on) => {
       }
       await save($, s)
       await arm($, s, unitKey)
-      if (closing) {
-        await closeMain($, s, now, unitKey)
-        await save($, s)
-      }
       if (main) await showStatus($, s)
       const at = CHECKPOINTS.slice(0, LAST - 1).map((c, i) => `${c.label} at ${mins(dueAt(i, unit.budgetMin!))}m`).join(', ')
       const history = extensionSummary(await loadPairs($, s), await loadExtensions($, s))

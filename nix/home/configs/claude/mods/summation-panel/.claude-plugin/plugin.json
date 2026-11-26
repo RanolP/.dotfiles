@@ -1,7 +1,7 @@
 {
   "name": "summation-panel",
   "version": "0.1.0",
-  "description": "A pane beside the chat: usage limits, subagents, the dotfiles version, and the state other mods wrote to disk (clm focus and open issues, wayseeker open wants and asks).",
+  "description": "A pane beside the chat: usage limits, subagents, the dotfiles version, and the state other mods wrote to disk (wayseeker open wants and asks).",
   "author": {
     "name": "RanolP"
   },

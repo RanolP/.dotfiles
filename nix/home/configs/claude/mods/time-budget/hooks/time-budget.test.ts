@@ -107,6 +107,19 @@ const unitId = (r: { result?: string }) => /^Unit (\S+):/.exec(r.result ?? '')?.
 const close = ($: Engine, task: string, minutes = 10) =>
   call($, TOOL.estimate, { minutes, scope: 'the task', steps: ['a', 'b'], task, done: true })
 
+// Regression: done ran the re-estimate path first, so closing with a new minutes value changed the logged budget and wrote a reestimate extension.
+test('closing with done ignores a new estimate and logs the unit as it was', async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await prompt($, 'go')
+  const task = unitId(await estimate($, 30))
+  const closed = await close($, task, 45)
+  expect(closed.result).toBe(`Unit ${task} closed.`)
+  expect(pairs(seen)).toHaveLength(1)
+  expect(pairs(seen)[0]).toMatchObject({ estimate_min: 30, budget_min: 30 })
+  expect(extensions(seen)).toEqual([])
+})
+
 const CAL = '/home/t/.local/share/claude-time-budget/calibration.jsonl'
 const EXT = '/home/t/.local/share/claude-time-budget/extensions.jsonl'
 const pairs = (seen: { files: Record<string, string> }) => (seen.files[CAL] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))

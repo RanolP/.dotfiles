@@ -1,8 +1,6 @@
 {
   "name": "time-budget",
   "version": "0.1.0",
-  "description": "Provides estimate, checkpoint, and overrun feedback for clm tracker tasks, with explicit extra-time records in its own history.",
+  "description": "Provides estimate, checkpoint, and overrun feedback for time-budget units, with explicit extra-time records in its own history.",
   "author": { "name": "RanolP" },
-  "types": "./types/index.d.ts",
-  "dependencies": ["clm"]
-}
+  "types": "./types/index.d.ts"}

@@ -261,6 +261,11 @@ let
     why = localSkill "why";
     apology = localSkill "apology";
     socratic-tutor = localSkill "socratic-tutor";
+    build-the-lever = localSkill "build-the-lever";
+    refactor = localSkill "refactor";
+    blind-eval = localSkill "blind-eval";
+    decision-log = localSkill "decision-log";
+    overnight = localSkill "overnight";
     ketchup = localSkill "ketchup";
     pause-resume = localSkill "pause-resume";
     benchmark-checklist = localSkill "benchmark-checklist";

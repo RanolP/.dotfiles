@@ -1,17 +1,14 @@
-import { test, expect, mock } from 'claude-code/testing'
-import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
+import { test, expect } from 'claude-code/testing'
+import type { ToolCallInput } from 'claude-code'
 
-import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
+import { chooseContinuation, resetUserWorkflow, restoreFailedContinuation, submitWithRecovery, TASK_TOOL } from './register'
 import { planPromptContext } from './panel'
-import { INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { CONFIRM_ITEMS, CONFIRM_PREFIX } from './evidence'
-import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { M, intentReply, use, res, BIG, MID, ROWS, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, promptInput, turnInput, commandInput, workflow, bottoms, logEvents, panelHandlers, sixDone, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
-import type { State, On, Seen, PanelReply } from './clm-test-support'
+import { focusOf, parseLog, snapshot } from './tracker'
+import { M, intentReply, use, res, ROWS, OPTS, promptInput, turnInput, workflow, bottoms, panelHandlers, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
+import type { State, On } from './clm-test-support'
 const seedWorkflow = (on: On, seed: ClmWorkflow) => {
   const isWorkflow = (e: { plugin: string; key: string }) => e.plugin === 'clm' && e.key === 'workflow'
   let written: ClmWorkflow = seed

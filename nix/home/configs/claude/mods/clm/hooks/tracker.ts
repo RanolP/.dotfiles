@@ -1,5 +1,4 @@
-// The tracker behind the ledger's 한 일 / 할 일 / 미결 질문 sections. State is
-// global (every session, every repository) but written as one append-only log
+// Task state is global (every session, every repository) but written as one append-only log
 // per session, so each file has a single writer session; that session's own
 // concurrent writes (parallel tool calls) are serialized per session in
 // register.ts `serialized`, since `$.fs` offers only a read-then-rewrite
@@ -11,13 +10,8 @@ import type { Worktree } from './worktree'
 
 export const STATUSES = ['todo', 'doing', 'ready-to-land', 'done', 'question', 'uncertain', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
-export type AssumptionStatus = 'live' | 'merged' | 'rejected'
 export type AssumptionLabel = string[][]
-export type LabelVisibility = 'main' | 'branch' | 'invalid'
-export const isStatus = (v: unknown): v is IssueStatus => typeof v === 'string' && (STATUSES as readonly string[]).includes(v)
 export const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
-export const isAssumptionLabel = (value: unknown): value is AssumptionLabel => Array.isArray(value)
-  && value.every(environment => Array.isArray(environment) && environment.every(id => typeof id === 'string'))
 
 /** A step's done state: a command that exits 0, or a criterion a cited transcript quote must prove. */
 export type RubricItem =
@@ -124,25 +118,6 @@ export type Issue = {
   label?: AssumptionLabel
   hypothesis?: true
   resolution?: 'closed'
-}
-
-export const assumptionStatusOfIssue = (issue: Pick<Issue, 'status'>): AssumptionStatus =>
-  issue.status === 'dropped' ? 'rejected' : issue.status === 'done' ? 'merged' : 'live'
-export function labelVisibility(label: AssumptionLabel | undefined, status: (id: string) => AssumptionStatus | undefined): LabelVisibility {
-  if (label === undefined) return 'main'
-  const known = label.map(environment => environment.filter(id => status(id) !== undefined))
-  if (known.some(environment => environment.length === 0)) return 'main'
-  const surviving = known.filter(environment => !environment.some(id => status(id) === 'rejected'))
-  if (!surviving.length) return 'invalid'
-  return surviving.some(environment => environment.every(id => status(id) === 'merged')) ? 'main' : 'branch'
-}
-export function effectiveIssueLabel(issue: Issue, byId: ReadonlyMap<string, Issue>): AssumptionLabel | undefined {
-  const ancestors: string[] = []
-  const seen = new Set<string>()
-  let parent = issue.parent ? byId.get(issue.parent) : undefined
-  while (parent && !seen.has(parent.id)) { if (parent.hypothesis) ancestors.push(parent.id); seen.add(parent.id); parent = parent.parent ? byId.get(parent.parent) : undefined }
-  if (!ancestors.length) return issue.label
-  return (issue.label ?? [[]]).map(environment => [...new Set([...environment, ...ancestors])])
 }
 
 export const issueId = (session: string, seq: number) => `${session.slice(0, 8)}-${seq}`
@@ -356,30 +331,11 @@ export function normalizeRemote(url: string): string {
     .replace(/\/+$/, '')
 }
 
-// --- ledger sections ------------------------------------------
-
-/** Ledger section -> the statuses it lists; these sections are rendered, never merged. */
-export const TRACKER_SECTIONS: Record<string, readonly IssueStatus[]> = { '한 일': ['done'], '할 일': ['doing', 'ready-to-land', 'todo'], '미결 질문': ['question'], 'uncertain': ['uncertain'] }
-export const isTrackerSection = (s: string) => s in TRACKER_SECTIONS
-
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s)
 const flat = (s: string) => s.replace(/\s*\n\s*/g, ' ').trim()
 
 /** The issue's last note meant for people: a confirm question's stored item list is data, not a note to show. */
 export const shownNote = (i: Pick<Issue, 'notes'>) => i.notes.findLast(n => !n.startsWith(CONFIRM_ITEMS))
-
-export const issueLine = (i: Issue) => {
-  const note = shownNote(i)
-  return `- ${i.status === 'doing' ? '(doing) ' : ''}${i.title}${i.progress ? ` (${i.progress.done}/${i.progress.total})` : ''}${note ? ` — ${note}` : ''} [${i.id}]`
-}
-
-export function sectionLines(issues: readonly Issue[], section: string): string[] {
-  const want = TRACKER_SECTIONS[section] ?? []
-  const lines = issues.filter(i => want.includes(i.status))
-    .sort((a, b) => want.indexOf(a.status) - want.indexOf(b.status) || (a.updated < b.updated ? -1 : a.updated > b.updated ? 1 : 0))
-    .map(issueLine)
-  return lines.length ? lines : ['- (none yet)']
-}
 
 const statusText: Record<IssueStatus, string> = {
   doing: '착수', 'ready-to-land': '반영 대기', done: '완수', todo: '대기', question: '질문 대기', uncertain: '불확실', dropped: '중단',

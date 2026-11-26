@@ -1,16 +1,7 @@
-import { test, expect, mock } from 'claude-code/testing'
-import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import { test, expect } from 'claude-code/testing'
 
-import { boardHtml } from './board'
-import { chooseContinuation, clmStatus, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
-import { INTENT_SYSTEM } from './intent'
-import type { ClmWorkflow } from '../types'
 
-import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { checkEvidence } from './evidence'
-import { M, intentReply, use, res, BIG, MID, ROWS, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, promptInput, turnInput, commandInput, workflow, bottoms, logEvents, panelHandlers, sixDone, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
-import type { State, On, Seen, PanelReply } from './clm-test-support'
 // --- evidence gate and review ------------------------------------------------
 
 // Regression caught: refs copied as rendered (`<- [toolu_…]`, `[user m4 … KST]`) or with the `m` dropped or case changed missed their source row, so every done they backed was downgraded.

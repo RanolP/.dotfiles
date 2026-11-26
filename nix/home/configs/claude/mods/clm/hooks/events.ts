@@ -5,14 +5,8 @@ import {
 import { snapshot } from './tracker'
 import { describeOp } from './evidence'
 
-export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
-  | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost' | 'ledger-over-budget' | 'rewind'
-  | 'session-state-migration' | 'mod-stale'
-export type LogFields = {
-  tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; durationMs?: number; summaryMs?: number; reason?: string
-  trigger?: string; state?: 'none' | 'idle' | 'summarizing' | 'ready' | 'swapping'; outcome?: string; waitMs?: number; totalMs?: number
-  loadedFrom?: string; installedPath?: string
-}
+export type LogEvent = 'panel-relink' | 'session-state-migration'
+export type LogFields = { reason?: string }
 
 type FsEntry = { name: string; kind: string; size: number; mtimeMs: number; isLink: boolean }
 export type EventsIo = {

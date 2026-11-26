@@ -1,7 +1,6 @@
-import { test, expect, mock } from 'claude-code/testing'
-import type { SessionMessage } from 'claude-code'
+import { test, expect } from 'claude-code/testing'
 
-import { describe, focusOf, injected, isStatus, parseLog, snapshot, toEvents, type Issue, type TrackerEvent } from './tracker'
+import { describe, focusOf, injected, parseLog, snapshot, toEvents, type Issue, type TrackerEvent } from './tracker'
 import { compose } from './intent'
 import { describeOp } from './evidence'
 import { openBoard } from './panel'
@@ -143,7 +142,7 @@ test('stray doing issues are demoted to preserve one doing focus', async () => {
   expect(result.payloads).toContainEqual({ op: 'status', issue: 's1-c', status: 'todo' })
 })
 
-// Regression caught: stack targets produced duplicate focus a self-parent, or a second pending copy.
+// Regression caught: stack targets produced duplicate focus ids, a self-parent, or a second pending copy.
 test('stack targets normalize to continue or leave the stack before pending', async () => {
   const issues = [
     localIssue('s1-a', 'first task', 'todo'),

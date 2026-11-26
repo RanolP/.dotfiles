@@ -1,16 +1,12 @@
-import { test, expect, mock } from 'claude-code/testing'
-import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import { test, expect } from 'claude-code/testing'
+import type { ToolCallInput } from 'claude-code'
 
-import { boardHtml } from './board'
 import { clmStatus as readClmStatus } from './panel'
-import { chooseContinuation, clmStatus, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
-import { INTENT_SYSTEM } from './intent'
-import type { ClmWorkflow } from '../types'
+import { sessionIssues, trackIssue, TASK_TOOL } from './register'
 
-import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { M, intentReply, use, res, BIG, MID, ROWS, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, promptInput, turnInput, commandInput, workflow, bottoms, logEvents, panelHandlers, sixDone, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
-import type { State, On, Seen, PanelReply } from './clm-test-support'
+import { focusOf, parseLog, snapshot } from './tracker'
+import { intentReply, ROWS, TURN, OPTS, promptInput, workflow, bottoms, logEvents, panelHandlers, TRACKER, waitForLog } from './clm-test-support'
+import type { State } from './clm-test-support'
 
 // Regression caught: the time-budget noun could not create, update, filter, or reject cross-session tracker issues.
 test('the clm noun tracks only this session\'s issues', OPTS, async ($, on) => {

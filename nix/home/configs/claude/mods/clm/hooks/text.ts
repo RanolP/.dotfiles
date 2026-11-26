@@ -3,6 +3,7 @@ import type { SessionMessage } from 'claude-code'
 const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
 
 // SessionMessage has no origin flag, so identify injected rows by their text.
+// "(no content)" is how the engine rebuilds an empty assistant row after a compaction.
 const SYSTEM_ROW = {
   taskNotification: /^\s*<task-notification>/,
   remindersOnly: /^\s*(?:<system-reminder>[\s\S]*?<\/system-reminder>\s*)+$/,

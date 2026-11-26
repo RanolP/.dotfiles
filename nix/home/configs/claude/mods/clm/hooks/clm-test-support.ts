@@ -1,5 +1,5 @@
 import { mock } from 'claude-code/testing'
-import type { Engine, TestBody } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 import type { CommandRunInput, PromptSubmitInput, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
@@ -16,8 +16,8 @@ export const intentReply = (fields: Record<string, unknown> = {}) => JSON.string
 })
 export const use = (id: string, tool: string) => M('assistant', '', { toolUses: [{ tool_use_id: id, tool, input: { id }, text: 'ok' }] })
 export const res = (id: string, text: string) => M('user', '', { toolResults: [{ tool_use_id: id, text, isError: false }] })
-export const BIG = 'x'.repeat(4000) // ~1667 tokens
-export const MID = 'y'.repeat(800) // ~334 tokens
+const BIG = 'x'.repeat(4000) // ~1667 tokens
+const MID = 'y'.repeat(800) // ~334 tokens
 
 export const ROWS = [
   M('user', 'please investigate the build'), use('tu_a', 'Bash'), res('tu_a', 'log: make fails at a.ts:12 ' + BIG), M('assistant', 'make fails at a.ts:12'),
@@ -27,9 +27,7 @@ export const ROWS = [
 ]
 export const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } satisfies TurnCompleteInput
 export const OPTS = { options: {} }
-export const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
 export const LOG_FILE = '/home/t/.claude-work/plans/clm-s1.log.jsonl'
-export const storedLedger = (seen: { files: Record<string, string> }) => seen.files[LEDGER_FILE] ?? ''
 export const promptInput = (text: string) => ({ text, origin: { kind: 'composer' }, wait: false } satisfies PromptSubmitInput)
 export const turnInput = (turnId: string, extra: Partial<TurnCompleteInput> = {}) => ({ ...TURN, ...extra, turnId } satisfies TurnCompleteInput)
 export const commandInput = (command: string, args = '') => ({ command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } satisfies CommandRunInput)
@@ -219,12 +217,6 @@ export function panelHandlers(on: On, seen: Seen, reply: (taskId: string) => Pan
     seen.taskCalls.push(e)
     return { result: { taskId: e.taskId, updatedFields: [], ...reply(e.taskId) } }
   })
-}
-// Six model tasks, all completed, so 'done 1' is archived.
-export async function sixDone($: Engine, on: On, seen: Seen) {
-  panelHandlers(on, seen)
-  for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskCreate', subject: `done ${i}`, description: `d${i}` })
-  for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: `panel-${i}`, status: 'completed' })
 }
 export const TRACKER = '/home/t/.claude-work/tracker/events/s1.jsonl'
 export function seedTracker(seen: { files: Record<string, string> }, payloads: Payload[]) {

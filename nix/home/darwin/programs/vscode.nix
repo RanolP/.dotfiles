@@ -77,6 +77,8 @@
         # read-only nix store symlink.
         "extensions.autoUpdate" = "off";
         "extensions.autoCheckUpdates" = false;
+        "telemetry.telemetryLevel" = "off";
+        "gitlens.telemetry.enabled" = false;
         "editor.fontFamily" = "Iosevka Nerd Font Mono, Pretendard";
         "editor.fontSize" = 14;
         "editor.fontLigatures" = true;

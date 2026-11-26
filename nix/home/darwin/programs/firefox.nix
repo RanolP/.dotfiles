@@ -23,6 +23,16 @@
         "signon.autofillForms" = false;
         "extensions.formautofill.addresses.enabled" = false;
         "extensions.formautofill.creditCards.enabled" = false;
+        # Telemetry, health report, studies and Normandy off
+        "datareporting.healthreport.uploadEnabled" = false;
+        "datareporting.policy.dataSubmissionEnabled" = false;
+        "datareporting.usage.uploadEnabled" = false;
+        "toolkit.telemetry.enabled" = false;
+        "toolkit.telemetry.unified" = false;
+        "toolkit.telemetry.archive.enabled" = false;
+        "app.shield.optoutstudies.enabled" = false;
+        "app.normandy.enabled" = false;
+        "browser.discovery.enabled" = false;
       };
       # `policies` is dropped when package = null, so search goes through
       # Home Manager's search.json. Kagi is declared as a plain engine because

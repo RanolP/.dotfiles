@@ -35,7 +35,7 @@ Read the node the URL names with `get_metadata` (a call with only the fileKey ma
 - The frames directly inside a concern are its **states**, a sequence ordered by position: left to right, then top to bottom.
 - Text and sticky nodes inside or beside a concern but outside its states are its **notes**.
 
-Ask the user back only where the structure leaves you unsure (a frame that might be a state or a component sheet, a note that might belong to either neighbour).
+Ask the user back only where the structure leaves you unsure (a frame that might be a state or a component sheet, a note that might belong to either neighbour). In that same question, name every loading, empty, error and pressed or feedback state the code renders for a concern that no frame covers, so the user decides whether each joins the state list; one that joins is judged against its nearest frame as step 4 describes.
 
 ## 2. Answers
 

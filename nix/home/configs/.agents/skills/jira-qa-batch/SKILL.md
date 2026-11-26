@@ -10,7 +10,7 @@ The scenario is the unit of reuse. It is written once, committed in the app repo
 
 ## The six steps
 
-1. **Pick the cards.** `jira search '<JQL>'`, then `jira show -i KEY --json` for each. Read and write every card body as raw ADF, which keeps the images attached to it intact.
+1. **Pick the cards.** `jira search '<JQL>'`, then `jira show -i KEY --json` for each. Read and write every card body as raw ADF, which keeps the images attached to it intact. Download each attachment and read it as evidence: screenshots at full resolution, and a video at the frames around the state change that separates the correct behaviour from the broken one. Record an attachment you cannot open as `unreadable: <file>` in the card's notes, and leave its content undescribed. Read the comments, assignee and linked PRs too: a linked PR or commit is the to-be build to QA, and a person who has claimed the fix without one yet leaves nothing to QA, so report that card as waiting on them and move on.
 2. **Write the scenario.** One file per card under `qa/scenarios/<JIRA-KEY>/` in the app repo -- an `.ad` script for Android, a `batch` command list for web. Author it by recording your first exploratory pass rather than by hand; see the `record-replay` skill.
 3. **Bring the two variants up.** Android: the two builds below. Web: two sessions pointed at the two URLs.
 4. **Capture both sides.** One recording per side, into its own directory.

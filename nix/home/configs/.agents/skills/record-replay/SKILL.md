@@ -67,6 +67,16 @@ agent-browser --session "$AGENT_BROWSER_SESSION" --restore open <url>
 
 Starter scripts for auth, capture, and form flows ship with the CLI: `agent-browser skills path core`, then `templates/*.sh`.
 
+## Selectors that survive a rebuild
+
+A committed scenario outlives the build it was recorded on, so every target in it names what the user sees or what the code named on purpose, in this order: role plus accessible name, then an ARIA relationship or a purpose-named test id (`id=`, `data-testid`), then visible text. Generated class names (CSS modules, StyleX, Tailwind JIT hashes), child indexes such as `nth-child`, and raw coordinates change on the next build; when a recording captured one, replace it with a selector from that list before committing, and add a test id to the code when the element has nothing stable.
+
+## Evidence that a recording proves something
+
+A recording or screenshot backs a repro or a fix only when it shows two things: enough app chrome (URL bar, build label, app header) to prove which app and build is under test, and the discriminating state itself -- the broken frame for a repro, the corrected frame for a fix -- rather than the setup or a loading screen before it. End each capture on that state.
+
+Before claiming a repro or a fix from media, hand only the files plus a one-line description of the broken and the correct state to a read-only worker that has not seen the session, and ask it one question: does this evidence visibly show that state? A "no" or an uncertain answer leaves the claim unconfirmed; capture better evidence and ask again, or report it as not reproduced.
+
 ## Everything else
 
 The same shape applies with no special tooling: put the curl calls, the payload, or the input sequence in a file, and run the file. A shell script committed beside the code beats a command you will retype from memory.

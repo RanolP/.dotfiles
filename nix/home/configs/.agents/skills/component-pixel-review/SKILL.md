@@ -11,7 +11,7 @@ The evidence is the component itself, rendered twice in one screen: the shipped 
 ## The seven steps
 
 1. **Pin the base.** `git fetch --prune`, then take the component as it ships from the default branch (`git show origin/<default>:<path> > <path>-asis.tsx`, rename the export). A fix already on the branch counts as to-be, so read `git log -3 -- <path>` first: a commit that names the card and says it was never checked on a device is exactly what this review is for.
-2. **Derive the cases from the component's own gates.** Every `condition && <...>` branch in the JSX and every prop that changes the rendered text is one row. A rank badge gated on `rank >= 6` yields one badge row, and the real cutoff rank is the value to put in the props; a gate is the product's own list of states.
+2. **Derive the cases from the component's own gates.** Every `condition && <...>` branch in the JSX and every prop that changes the rendered text is one row. A rank badge gated on `rank >= 6` yields one badge row, and the real cutoff rank is the value to put in the props; a gate is the product's own list of states. Add the interaction states the component supports -- pressed, focus-visible, disabled, loading, empty, error, selected, open or expanded -- as rows too, each staged through props, since a fix that holds at rest can still shift in any of them.
 3. **Mount the playground.** Copy `playground.template.tsx` into the app, fill `CASES` and `Variants`, and return it from the app root in place of the navigator. The template draws a 1px red guide across the centre of each fixed-height container and logs `ROW <label> <theme> y=` from `onLayout`.
 4. **Capture per theme.** Wait on the last row's log line, then `screencap`. Flip `THEME` and repeat; Fast Refresh re-renders without a relaunch.
 5. **Measure and crop.** `measure-rows.py` locates the guides, crops every row at 4x, and writes the ink-centre offset of each row and each horizontal cluster into one JSON.
@@ -57,6 +57,17 @@ open qa/<KEY>/compare.html
 ```
 
 Case titles carry the product's own names for the states (the rank's display name, the notice text's trigger), because the reader compares the gallery against the card and Figma, where those names are what appears.
+
+## Migration parity
+
+When the change is a refactor or migration meant to leave the component looking the same, the as-is column is a baseline, captured before the first edit of the migration -- a parity claim made without one has nothing to be equal to. Mount the playground with the `-asis` copy in both variants, capture every case and theme into `qa/<KEY>/baseline/`, then migrate and capture again into `qa/<KEY>/after/` with the same cases, device and theme. Compare each pair at pixel resolution with `design-review`'s diff script, passing `--width` equal to the image's pixel width:
+
+```bash
+node ~/.claude/skills/design-review/scripts/diff-regions.mjs --asis baseline/dark.png --tobe after/dark.png \
+  --width <png width> --threshold 0 --min-area 0 --merge 0
+```
+
+`[]` is the pass; any region it prints is a fail to investigate at that rectangle, with the baseline image left as it was taken. Report each pair's result alongside where the baseline lives.
 
 ## Reporting
 

@@ -45,6 +45,17 @@ Two hops are normal: a Jira card in `To Do` usually cannot jump to `Dev Done`, s
 
 Run `flow` and read the chain before you run `move`. A status transition is visible to every watcher of the card, so run `move` only when the user has asked for that move and named the target status, even on a card you own; never offer a transition as your own next step.
 
+## Before filing a new card
+
+A new card goes out only after a search for the one that already exists. Run `jira search` with each of: the exact error or crash signature, the product area plus trigger plus symptom, the version or date window, and the source link (Slack permalink, Sentry URL) the report came from. Then sort the best hit into one of four tiers:
+
+- **Confident duplicate** -- the same signature, or the same area, trigger and symptom, or a confirmed shared cause. File nothing; bring the existing key to the user with a one-line recurrence comment they can approve.
+- **Possibly related** -- a shared cause is plausible but unproven. File nothing yet; report both keys and let the user decide.
+- **Weak resemblance** or **no match** -- file the card.
+- **A match closed long ago** -- a regression lead, not a live duplicate. File the card and name the closed key in it as the possible regression.
+
+A card that goes out carries its own evidence: a title naming the area and the observed symptom, expected versus observed behavior, version and environment (or `unknown`), trigger and frequency, and the source link. A suspected cause goes in the body, labelled as a hypothesis, because the title is what every search and board shows, and a guessed cause there sends the next reader down the wrong path. When the report lacks the evidence for that body, ask the user for it -- no card is better than a guessed or duplicate one.
+
 ## Answering "which card?"
 
 Offer one Jira card per question, after `jira show -i KEY` confirmed its status, leaving out keys merely mentioned in a card body. When a branch or PR instruction carries a key other than the one you reported, ask in one line before running it.

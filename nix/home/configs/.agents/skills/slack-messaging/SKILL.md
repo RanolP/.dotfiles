@@ -33,6 +33,8 @@ When two candidates match and the wrong one is embarrassing, ask. The user knows
 
 A reply is `thread_ts` set to the **parent message's** timestamp (`"1234567890.123456"`, always a string with the decimal point). Omitting it posts a fresh top-level message to the channel, which reads as an interruption to everyone watching the thread.
 
+Fix the thread's coordinates once, at the start, and carry them unchanged to the send. When the task starts from a message (a link, a search hit, a message the user pointed at), `thread_ts` is that message's own `thread_ts` when it is already a reply, else its `ts`; together with its `channel_id` that pair names the thread for the whole task. Every later call returns more timestamps -- a reply's `message_ts`, a draft's, a read-back's -- and each of them names a single message, so passing one as `thread_ts` starts a new thread under it or fails, never reaching the thread the user meant.
+
 Read before you write: `slack_read_thread(channel_id, message_ts=<parent ts>)` returns the parent plus every reply, so the answer fits what was actually asked instead of restating something three messages up. To find the parent in the first place, `slack_read_channel(channel_id)` returns newest-first, and `slack_search_public` with `is:thread` finds threads by content.
 
 Reading the thread is also how you learn the shape to write in. Reuse the layout of the messages already in that channel or thread instead of inventing one -- "예전 거랑 비교해서 잘 포매팅해봐라", "이전 스레드와 비슷한 포맷으로 내줘".
@@ -70,6 +72,8 @@ Landed as one iOS link whose text ended in `_:android`, followed by `: <android 
 
 `slack_send_message` returns `message_ts`; the next call is `slack_read_thread` (or `slack_read_channel`) on it, in `detailed` format, and the reply to the user quotes what Slack actually rendered. A send is permanent, so the only fix for a mangled one is a correction reply, and that is worth posting within the minute rather than after a teammate notices. The incident above went unread for over an hour because the send result alone was reported as success.
 
+The same two reads bracket every threaded send. Right before it, `slack_read_thread` on the fixed `channel_id` and `thread_ts` confirms the parent still exists in that channel; right after it, the read-back confirms the new message sits in that thread as a reply. When either check fails, the send stops there and the user gets a report of what failed and what, if anything, landed -- a repost at channel root or into another channel is a second permanent message in a room nobody asked for.
+
 ## Short lines, never paragraphs
 
 The recurring correction on this user's drafts is length and shape, not accuracy. "문장이 너무 길고 리스트가 아니야. 슬랙 메시지 다시 정리해" came first; "여전히 기니까 더 구조화하고 문장 다듬어" came after the revision. Treat your first draft's length as a ceiling to beat.
@@ -94,6 +98,10 @@ Derived on 2026-10-26 from about 300 of the user's own Slack messages (2026-07-2
 
 - **The designer is off limits.** "디자이너와 소통은 니가 슬랙 맨날 사고 치니까 절대 안맡김" -- do not draft or send anything to the designer; hand that conversation back to the user.
 - **Weigh the blast radius before any write.** A send either delivers information or interrupts the team, and the second one is a cost the recipients pay. When it is closer to an interruption, say so and do not send.
+- **Mention a person only on evidence that they own the thing.** A mention is a notification the recipient cannot unsee. Tag one named person when the code path, an owners file, or the thread itself shows them as owner; when ownership is unclear, write that it is unclear and leave the mention to the user. Group handles (`@here`, `@channel`, a team or on-call group) go in only when the user wrote them.
+- **Post in the channel the user named, once.** When the content belongs in another channel, say which one in the reply and let the user carry it there.
+- **Slack writes run in the main session.** A worker returns the message text, `channel_id` and `thread_ts` in its report, and main shows the draft to the user. The `slack-subagent-guard.py` PreToolUse hook denies every non-read Slack tool call that carries a subagent's `agent_id`.
+- **Name the undo of the first write before making the second.** When one action writes to two systems (a Jira card, then a Slack post about it), know how to reverse or annotate the first write before the second runs; if the second fails, run that undo or add the note, and report the state of both.
 - **Do not reconfigure the Slack MCP.** Use it to read, to draft, and to send what was approved; leave its setup alone.
 - **Synthesize, then ask for verification.** When the answer lives across a Slack thread and a Jira card, combine them yourself and bring the finished result for the user to check, rather than asking them to supply the pieces.
 - **A Slack post never triggers a ticket transition.** Ticket transitions belong to the user; report card states as facts and leave the move to them.

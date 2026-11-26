@@ -498,6 +498,11 @@ in
         source = ./configs/claude/hooks/done-claim-guard.py;
         executable = true;
       };
+      # Deny Slack write tools when the call comes from a subagent.
+      ".claude/hooks/slack-subagent-guard.py" = {
+        source = ./configs/claude/hooks/slack-subagent-guard.py;
+        executable = true;
+      };
       # Block a mostly-English reply when the output style requires Korean.
       ".claude/hooks/korean-reply-guard.py" = {
         source = ./configs/claude/hooks/korean-reply-guard.py;

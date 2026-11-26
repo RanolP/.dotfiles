@@ -72,7 +72,7 @@
   "model": "opus",
   "outputStyle": "concise-adhd-korean",
   "env": {
-    "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/wayseeker:~/.claude/mods/resources:~/.claude/mods/clm:~/.claude/mods/hetero-subagents:~/.claude/mods/time-budget:~/.claude/mods/ask-later:~/.claude/mods/request:~/.claude/mods/summation-panel:~/.claude/mods/bg-compact",
+    "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/wayseeker:~/.claude/mods/resources:~/.claude/mods/hetero-subagents:~/.claude/mods/time-budget:~/.claude/mods/ask-later:~/.claude/mods/request:~/.claude/mods/summation-panel:~/.claude/mods/bg-compact",
     "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
     "DISABLE_AUTOUPDATER": "1",
     "DISABLE_ERROR_REPORTING": "1",

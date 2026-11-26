@@ -1,7 +1,0 @@
-{
-  "name": "clm",
-  "version": "0.3.0",
-  "description": "Tracks tasks across a session: the issue tracker, the task panel, the board and stepped goals.",
-  "author": { "name": "RanolP" },
-  "types": "./types/index.d.ts"
-}

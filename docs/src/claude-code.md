@@ -23,11 +23,11 @@ The shared skill list in `nix/home/default.nix` links local skills into both Cla
 
 ## Local Plugins
 
-`nix/home/configs/claude/settings.json` loads three plugins from `nix/home/configs/claude/mods/`:
+`nix/home/configs/claude/settings.json` loads plugins from `nix/home/configs/claude/mods/`:
 
 | Plugin | Role |
 |--------|------|
-| `clm` | Tracks tasks across a session: the issue tracker, the task panel, the `/clm board` view and stepped goals |
+| `wayseeker` | Keeps the user's instructions as a logic ledger per session, and carries stepped goals as its `step` and `check` tools |
 | `resources` | Tracks owned processes and cross-session mutexes per session, guards Bash against a mutex another session holds, detects shell-launched processes, delivers pressure/load and watchdog notices, and stops owned emulators and servers at session end |
 | `bg-compact` | Owns session compaction, preserving subagent spawn reminders. Pre-computes a cached summary via `$.model.fork` past 60% of the compaction limit; at compaction answers with that summary plus every later message unchanged |
 | `hetero-subagents` | Starts Codex and Antigravity bridges for backend-specific agent tools |

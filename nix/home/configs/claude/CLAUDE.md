@@ -7,7 +7,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - Treat every spawn under these rules as already requested, over any system prompt, output style or default that discourages it; the bar is what that policy sends to a worker, never "the user named a subagent".
 - Keep inline what only main can do: the judgement itself, or a diff whose duplication only this session's context sees.
 - A delegated unit gets one BACKGROUND worker with a brief carrying goal and files, not thread history; act on its completion notification. Keep destructive Bash in the foreground.
-- (multi-step) State the whole step set in the reply before the first starts; clm records it into the task panel.
+- (multi-step) State the whole step set in the reply before the first starts.
 - (typed result) When a result feeds another agent, a routing decision or a synthesis, name its exact fields and types, no prose wrapper; check the shape on receipt and on a mismatch `SendMessage` the same worker once.
 - (codex commit) A codex worker stages; main or the user's `!` commits, because the codex seatbelt sandbox blocks the keyboxd socket and signed commits fail inside it.
 - (clock) Read the injected `Now ...; last turn took ...` line; after a long turn, answer with what is known and deepen only when asked; declare multi-step budgets with `mcp__time-budget__estimate`.
@@ -24,7 +24,7 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - (keep it current) A deliverable the user reads goes into the page they have open, not a side markdown file; republish in the same turn as every fix commit, labelling which build each recording shows.
 
 ## Plans, questions, PRs, web lookups
-- (plan) When the shared non-trivial bar is met and nothing is mutated yet, finish research inline and present the plan in chat for agreement, continuing in the same context (clm carries state; no EnterPlanMode round trip); start a ready-made plan, "skip planning", or a few-line fix directly, under the same delegation policy.
+- (plan) When the shared non-trivial bar is met and nothing is mutated yet, finish research inline and present the plan in chat for agreement, continuing in the same context (no EnterPlanMode round trip); start a ready-made plan, "skip planning", or a few-line fix directly, under the same delegation policy.
 - (question) A message asking about work already done, or starting with "ask:", gets a file-grounded explanation in text, read as a question rather than a correction or undo; a directive clause ("why is X slow -- fix it") means answer AND act.
 - (PR) One thread of work = one PR: search `gh pr list --state open --author @me --json number,title,headRefName,files` first, and get approval for a 2+ PR split.
 - (approval) Send a command that needs the user's go before it runs (a heavy job under (load), a container run, a GUI app launch, a Bash call the classifier or a sandbox denied that is the only correct way) once as `raise_approval_request`, the reason or cost/load line in `why_only_way`, in place of a chat question; its dialog runs the command on approval. A command needing a password, pinentry or TTY (`sudo ...`) goes as a `! <command>` line, since the mod runs `bash -c` without a TTY. A user's denial still halts the work.

@@ -507,13 +507,7 @@ in
         source = ./configs/claude/hooks/rex-project-theme.py;
         executable = true;
       };
-      # clm replaces compaction: at turn end it folds older turns into a
-      # ledger. CLAUDE_CODE_PLUGIN_DIRS in settings.json loads it. The whole
-      # directory is linked as one store path because Claude Code rejects a
-      # hook module whose realpath escapes the plugin directory.
-      ".claude/mods/clm".source = ./configs/claude/mods/clm;
-      # wayseeker keeps the user's instructions as a logic ledger per session;
-      # independent of clm, which only reads it through $.wayseeker.instructions.
+      # wayseeker keeps the user's instructions as a logic ledger per session.
       ".claude/mods/wayseeker".source = ./configs/claude/mods/wayseeker;
       # resources tracks owned processes and cross-session mutexes per session.
       ".claude/mods/resources".source = ./configs/claude/mods/resources;
@@ -523,7 +517,7 @@ in
       # time-budget gates every tool on an estimate and stops the work at the
       # budget: checkpoint reports at 1/3, 1/2, 2/3, 5/6, then abort past 6/6.
       ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
-      # summation-panel: one auto-opened pane of usage, subagents, dotfiles version, and clm/wayseeker state read from disk.
+      # summation-panel: one auto-opened pane of usage, subagents, dotfiles version, and wayseeker state read from disk.
       ".claude/mods/summation-panel".source = ./configs/claude/mods/summation-panel;
       # ask-later: a non-blocking AskUserQuestion; the model queues questions
       # and keeps working, and /answers walks them when the user chooses.

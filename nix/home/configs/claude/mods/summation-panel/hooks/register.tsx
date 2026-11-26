@@ -3,7 +3,7 @@ import type {
   SummationDashboardState, EngineInterface, Register, SessionUsage, Timer,
 } from 'claude-code'
 import type { Section, TrackedAgent, UsageSnapshot } from '../types'
-import { parseClmLog, parseWayseekerState } from './sources'
+import { parseWayseekerState } from './sources'
 import { reconcileAgents, recordCompletion, recordMessage, recordSpawn, taskDescription, withoutStaleDone } from './fleet'
 import { behindFromCount, versionLabel } from './version'
 
@@ -14,7 +14,7 @@ const TITLE = 'Summation'
 const REFRESH_MS = 15_000
 const REFRESH_LABEL = 'refresh'
 const dashboard = atom({ plugin: 'summation-panel', key: 'dashboard' } as const, {
-  now: 0, usage: null, agents: [], clm: null, wayseeker: null,
+  now: 0, usage: null, agents: [], wayseeker: null,
 } satisfies SummationDashboardState)
 
 function errorText(error: unknown): string {
@@ -94,7 +94,7 @@ async function load<T>($: EngineInterface, label: string, path: string, parse: (
   return section
 }
 
-// Read-only: clm's per-session event log and wayseeker's per-session ledger file, as each mod writes them.
+// Read-only: wayseeker's per-session ledger file, as that mod writes it.
 async function refreshFiles($: EngineInterface): Promise<void> {
   let session: string, home: string
   try {
@@ -105,11 +105,8 @@ async function refreshFiles($: EngineInterface): Promise<void> {
     return
   }
   const before = await read($, dashboard).catch(() => undefined)
-  const [clm, wayseeker] = await Promise.all([
-    load($, 'clm', `${home}/.claude-work/tracker/events/${session}.jsonl`, text => parseClmLog(text, session), before?.clm ?? null),
-    load($, 'wayseeker', `${home}/.claude-work/plans/wayseeker-${session}.json`, text => parseWayseekerState(text, session), before?.wayseeker ?? null),
-  ])
-  await change($, 'state file update', state => ({ ...state, clm, wayseeker }))
+  const wayseeker = await load($, 'wayseeker', `${home}/.claude-work/plans/wayseeker-${session}.json`, text => parseWayseekerState(text, session), before?.wayseeker ?? null)
+  await change($, 'state file update', state => ({ ...state, wayseeker }))
 }
 
 async function refreshUsage($: EngineInterface): Promise<void> {
@@ -296,25 +293,15 @@ function usageRows(elements: Elements, state: SummationDashboardState, width: nu
   )
 }
 
-function clmHead(state: SummationDashboardState): { text: string, dim: boolean } {
-  if (state.clm === null) return { text: '▸ Loading clm…', dim: true }
-  if ('error' in state.clm) return { text: `▸ clm: ${state.clm.error}`, dim: false }
-  const { focus, stackDepth, open } = state.clm.rows
-  const title = focus ? `${focus.title}${focus.status === 'doing' ? '' : ` (${focus.status})`}` : 'no focus'
-  const depth = focus && stackDepth > 1 ? ` · depth ${stackDepth}` : ''
-  return { text: `▸ ${title}${depth} · issues ${open.length}`, dim: false }
-}
-
 function headRow({ Box, Text, Button }: Elements, state: SummationDashboardState, width: number, onRefresh: (baseline: string) => void) {
-  const head = clmHead(state)
   const { baseline } = state
-  if (baseline === undefined) return <Text dimColor={head.dim}>{clip(head.text, width)}</Text>
-  // The version is the reason to look at this row, so the clm head gives way first; the terminal draws a Button as `[ label ]` after one space.
-  const version = versionLabel(baseline, state.behind)
+  if (baseline === undefined) return null
+  // The terminal draws a Button as `[ label ]` after one space.
+  const version = `▸${versionLabel(baseline, state.behind).slice(2)}`
   const buttonWidth = REFRESH_LABEL.length + 5
   return (
     <Box flexDirection="row">
-      <Text dimColor={head.dim}>{`${clip(head.text, width - buttonWidth - version.length)}${version}`}</Text>
+      <Text>{clip(version, width - buttonWidth)}</Text>
       <Text> </Text>
       <Button key="refresh" label={REFRESH_LABEL} dimColor onPress={() => onRefresh(baseline)} />
     </Box>
@@ -323,7 +310,6 @@ function headRow({ Box, Text, Button }: Elements, state: SummationDashboardState
 
 function workRows(elements: Elements, state: SummationDashboardState, width: number, onRefresh: (baseline: string) => void) {
   const { Box, Text } = elements
-  const clm = state.clm && 'rows' in state.clm ? state.clm.rows : undefined
   // Running first, finished last; spawn order within each group.
   const rank = (status: string) => status === 'running' ? 0 : status === 'done' || status === 'completed' ? 2 : 1
   const agents = withoutStaleDone(state.agents, 2).sort((a, b) => rank(a.status) - rank(b.status) || a.startedAt - b.startedAt)
@@ -331,14 +317,12 @@ function workRows(elements: Elements, state: SummationDashboardState, width: num
   return (
     <Box flexDirection="column">
       {headRow(elements, state, width, onRefresh)}
-      {clm?.pending.length ? <Text>{clip(`  Pending  ${clm.pending.map(item => item.title).join(', ')}`, width)}</Text> : null}
       {agents.map(agent => (
         <Box key={agent.id} flexDirection="column">
           <Text>{clip(`  ${statusGlyph(agent.status)} ${elapsedLabel(agent, state.now).padEnd(elapsedWidth)}  ${agent.description ?? agent.status}`, width)}</Text>
           {agent.lastMessage ? <Text dimColor>{clip(`    └ ${agent.lastMessage}`, width)}</Text> : null}
         </Box>
       ))}
-      {(clm?.open ?? []).map(issue => <Text key={issue.id} dimColor>{clip(`  · ${issue.status} ${issue.title}`, width)}</Text>)}
     </Box>
   )
 }
@@ -358,7 +342,7 @@ function wayseekerRows({ Box, Text }: Elements, state: SummationDashboardState, 
 }
 
 // Resource tracking: no mod writes its state yet. When one does, read its per-session file here the way
-// refreshFiles reads clm's and wayseeker's (its path, e.g. ~/.claude-work/resources/<session>.json, is undecided).
+// refreshFiles reads wayseeker's (its path, e.g. ~/.claude-work/resources/<session>.json, is undecided).
 function resourceRows({ Text }: Elements, width: number) {
   return <Text dimColor>{clip('▸ resources: not tracked yet', width)}</Text>
 }

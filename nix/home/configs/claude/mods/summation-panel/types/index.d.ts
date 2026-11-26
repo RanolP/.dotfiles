@@ -15,10 +15,8 @@ export type TrackedAgent = {
 
 export type Behind = number | 'unknown'
 
-export type ClmIssueRow = { id: string; title: string; status: string }
 /** One file-backed section's parsed rows, or the one-line reason it could not be read. */
 export type Section<T> = { rows: T } | { error: string }
-export type ClmRows = { focus: ClmIssueRow | null; stackDepth: number; pending: ClmIssueRow[]; open: ClmIssueRow[] }
 export type WayseekerRows = { want: string[]; ask: string[] }
 
 declare module 'claude-code' {
@@ -26,7 +24,6 @@ declare module 'claude-code' {
     now: number
     usage: UsageSnapshot | null
     agents: TrackedAgent[]
-    clm: Section<ClmRows> | null
     wayseeker: Section<WayseekerRows> | null
     baseline?: string
     behind?: Behind

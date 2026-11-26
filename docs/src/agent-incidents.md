@@ -162,3 +162,4 @@ Asked why a development loop was slow, an agent listed three plausible causes. T
 
 | Rule | Lives in | Enforced by | Incidents |
 |---|---|---|---|
+| shared-GPU jobs queue on measured free VRAM, util and RAM, never one exclusive lock | the GPU project's own run wrapper (the one path); memory `heavy-runs-memory-capped` | PreToolUse hook in that project (Bash/Agent/SendMessage, denies `flock … .gpu.lock`, names the wrapper) | 2026-11-27 (x2 in one session: owner "잠금을 스마트하게 하자 제발", then GPU at 16% with workers still on flock) |

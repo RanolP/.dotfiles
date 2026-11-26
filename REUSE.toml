@@ -52,6 +52,8 @@ path = [
     "nix/home/configs/.agents/skills/create-verification-skill/references/verify-existing-fix.md",
     "nix/home/configs/.agents/skills/github-master/guides/babysit.md",
     "nix/home/configs/.agents/skills/quint-verify/references/persistent.md",
+    "nix/home/configs/.agents/skills/ketchup/SKILL.md",
+    "nix/home/configs/.agents/skills/pause-resume/SKILL.md",
     "nix/home/configs/.agents/skills/arena/SKILL.md",
     "nix/home/configs/.agents/skills/benchmark-checklist/SKILL.md",
     "nix/home/configs/.agents/skills/interrogate/SKILL.md",
@@ -206,6 +208,8 @@ SPDX-License-Identifier = "MIT"
 
 [[annotations]]
 path = [
+    "nix/home/configs/claude/hooks/bash-guards.py",
+    "nix/home/configs/claude/hooks/test_bash_guards.py",
     "nix/home/configs/claude/hooks/git-push-guard.py",
     "nix/home/configs/claude/hooks/declarative-package-guard.py",
     "nix/home/configs/claude/hooks/commit-check-guard.py",

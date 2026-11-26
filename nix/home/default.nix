@@ -261,6 +261,8 @@ let
     why = localSkill "why";
     apology = localSkill "apology";
     socratic-tutor = localSkill "socratic-tutor";
+    ketchup = localSkill "ketchup";
+    pause-resume = localSkill "pause-resume";
     benchmark-checklist = localSkill "benchmark-checklist";
     arena = localSkill "arena";
     interrogate = localSkill "interrogate";
@@ -336,6 +338,10 @@ in
       ".claude/CLAUDE.md".source = claudeUserRules;
       ".claude/statusline.sh" = {
         source = ./configs/claude/statusline.sh;
+        executable = true;
+      };
+      ".claude/hooks/bash-guards.py" = {
+        source = ./configs/claude/hooks/bash-guards.py;
         executable = true;
       };
       ".claude/hooks/git-push-guard.py" = {

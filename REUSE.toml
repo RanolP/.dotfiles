@@ -52,6 +52,9 @@ path = [
     "nix/home/configs/.agents/skills/create-verification-skill/references/verify-existing-fix.md",
     "nix/home/configs/.agents/skills/github-master/guides/babysit.md",
     "nix/home/configs/.agents/skills/quint-verify/references/persistent.md",
+    "nix/home/configs/.agents/skills/arena/SKILL.md",
+    "nix/home/configs/.agents/skills/benchmark-checklist/SKILL.md",
+    "nix/home/configs/.agents/skills/interrogate/SKILL.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = ["2026 Lauren Tan", "2026 RanolP"]

@@ -6,7 +6,6 @@ import { compose, deferralsFiled, sameInstruction } from './intent'
 import { archivedDone, focusOf, injected, isOpen, isRecord, issueId, shownNote, snapshot, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import type { FocusState } from './tracker'
 import { debateRubric, outermostSteppedRootOf, rubricText, type ModelIo } from './stepped'
-import { WorktreeError, startWorktree, type Worktree } from './worktree'
 
 export const TASK_TOOL = 'mcp__clm__clm_task'
 
@@ -259,7 +258,6 @@ export const STEPPED_PLANNER_CONTEXT = [
   'Record each returned step in order with `clm_task` using `status: "todo"` and its title. Then start the first step with `status: "doing"`, its issue id, and a short `method` describing the approach.',
   'Do the goal work only after the ordered steps have been recorded.',
 ].join('\n')
-export const STEPPED_WORKTREE_CONTEXT = (worktree: Worktree) => `Use ${worktree.dir} as the working directory for every edit and verification command for this stepped goal.`
 export const SPAWN_PLAN_REQUEST = [
   'clm: report your plan as clm tasks first, then spawn the agent.',
   '1. Load the tool: ToolSearch with query "select:mcp__clm__clm_task".',
@@ -275,10 +273,6 @@ export async function plannedAgentStep(io: Pick<PanelIo, 'readAll'>, session: st
   return snapshot(await io.readAll()).find(issue => issue.origin.session === session && issue.parent === parent && isOpen(issue) && issue.title === title)?.id
 }
 
-const failureDetails = (err: unknown) => err instanceof WorktreeError
-  ? `argv=${JSON.stringify(err.argv)} exitCode=${err.exitCode ?? 'unavailable'} stderr=${JSON.stringify(err.stderr)}`
-  : `argv=[] exitCode=unavailable stderr=${JSON.stringify(String(err))}`
-
 export async function steppedPromptContext(io: Pick<PanelIo, 'captureOrigin' | 'readAll'>): Promise<string | undefined> {
   const origin = await io.captureOrigin()
   const events = await io.readAll()
@@ -287,11 +281,10 @@ export async function steppedPromptContext(io: Pick<PanelIo, 'captureOrigin' | '
   const focusId = focusOf(events, origin.session).stack.at(-1)
   if (!focusId) return undefined
   const root = outermostSteppedRootOf(focusId, byId)
-  if (!root || !isOpen(root) || root.landCommandsShown) return undefined
+  if (!root || !isOpen(root)) return undefined
   const children = issues.filter(issue => issue.parent === root.id)
   if (children.length === 0)
     return `${STEPPED_PLANNER_CONTEXT}\nGoal title: ${root.title}\nRepository: ${origin.cwd}`
-  if (root.worktree) return `Stepped goal ${root.id} is using a worktree. ${STEPPED_WORKTREE_CONTEXT(root.worktree)}`
   return undefined
 }
 
@@ -315,38 +308,6 @@ function stepForTask(taskId: string, root: Issue, byId: ReadonlyMap<string, Issu
     current = current.parent ? byId.get(current.parent) : undefined
   }
   return undefined
-}
-
-async function ensureGoalWorktree(io: PanelIo, origin: Origin, root: Issue): Promise<Worktree | undefined> {
-  if (root.worktree) return root.worktree
-  const argv = ['git', 'rev-parse', '--show-toplevel']
-  let repoRoot: string
-  try {
-    const result = await io.run(argv, { cwd: origin.cwd, timeoutMs: 5000 })
-    if (result.exitCode !== 0 || !result.stdout.trim().startsWith('/')) {
-      const reason = `issue=${root.id} argv=${JSON.stringify(argv)} exitCode=${result.exitCode} stderr=${JSON.stringify(result.stderr || 'git toplevel was not an absolute path')}`
-      io.log(`clm stepped: worktree skipped (${reason})`, { to: 'debug' })
-      return undefined
-    }
-    repoRoot = result.stdout.trim()
-  } catch (err) {
-    io.log(`clm stepped: worktree skipped issue=${root.id} ${failureDetails(err)}`, { to: 'debug' })
-    return undefined
-  }
-  let worktree: Worktree
-  try {
-    worktree = await startWorktree(io, { repoRoot, sessionId: origin.session, goalId: root.id })
-  } catch (err) {
-    io.log(`clm stepped: worktree start failed issue=${root.id} ${failureDetails(err)}`, { to: 'debug' })
-    return undefined
-  }
-  try {
-    await io.append([{ op: 'worktree', issue: root.id, ...worktree }], origin)
-  } catch (err) {
-    io.log(`clm stepped: worktree tracker write failed issue=${root.id} ${failureDetails(err)}`, { to: 'debug' })
-    return undefined
-  }
-  return worktree
 }
 
 // The intent classifier writes main's focus only from a user prompt it can
@@ -398,7 +359,7 @@ async function closeUnownedIssue(
   const target = input.id === undefined ? undefined : byId.get(input.id)
   if (!target || !isOpen(target) || taskOwner(target.id, focus.stack, roots, byId) !== undefined) return undefined
   if (status === 'done' && outermostSteppedRootOf(target.id, byId))
-    return { result: `clm_task: stepped issue ${target.id} stays open until the Stop hook passes its rubric and checkpoints it.` }
+    return { result: `clm_task: stepped issue ${target.id} stays open until the Stop hook passes its rubric.` }
   if (status === 'dropped') {
     const problem = await taskEvidenceProblem(io, undefined, input.evidence, ['user'], false, `drop or re-open requires a quote from a user message. ${EVIDENCE_FORMAT}`)
     if (problem) return { deny: `clm_task: ${problem}` }
@@ -510,7 +471,7 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
     const closesGoal = goal !== undefined && (goal.id === target?.id || (!target && goal.id === ownRoot))
     if (closesGoal || (target && step?.id === target.id)) {
       if (resultPayload) await io.append([resultPayload], origin)
-      return { result: `clm_task: stepped issue ${target?.id ?? ownRoot} stays open until the Stop hook passes its rubric and checkpoints it.` }
+      return { result: `clm_task: stepped issue ${target?.id ?? ownRoot} stays open until the Stop hook passes its rubric.` }
     }
   }
   const audit = status === 'done' && input.evidence ? `cited ${input.evidence.ref}: ${input.evidence.quote}` : undefined
@@ -545,11 +506,6 @@ export async function runClmTask(io: PanelIo, input: ClmTaskInput, agentId?: str
       const goal = outermostSteppedRootOf(taskId, currentById)
       const step = goal && stepForTask(taskId, goal, currentById)
       if (goal && step) {
-        if (step.stepped && step.id !== goal.id)
-          io.log(`clm stepped: nested goal issue=${step.id} is a step of outer goal issue=${goal.id}; no nested worktree will start`, { to: 'debug' })
-        let worktree = goal.worktree
-        if (!worktree) worktree = await ensureGoalWorktree(io, origin, goal)
-        if (worktree) context.push(STEPPED_WORKTREE_CONTEXT(worktree))
         if (input.method !== undefined) {
           const method = input.method.trim()
           const alreadyFailed = currentById.get(step.id)?.methods?.some(item => item.text === method && item.failed) ?? false
@@ -587,7 +543,7 @@ async function settleStepRubric(io: PanelIo, origin: Origin, taskId: string): Pr
       : ''
     if (step.rubric) return `Rubric for this step:\n${rubricText(step.rubric)}${citationHint}`
     const items = await debateRubric(io, {
-      goal: root.title, step: step.title, notes: step.notes, cwd: root.worktree?.dir ?? origin.cwd,
+      goal: root.title, step: step.title, notes: step.notes, cwd: origin.cwd,
       siblings: issues.filter(issue => issue.parent === step.parent && issue.id !== step.id).map(issue => issue.title),
     })
     if (typeof items === 'string') {

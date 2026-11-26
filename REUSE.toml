@@ -272,8 +272,6 @@ path = [
     "nix/home/configs/claude/mods/clm/hooks/workflow.ts",
     "nix/home/configs/claude/mods/clm/hooks/events.ts",
     "nix/home/configs/claude/mods/clm/hooks/panel.ts",
-    "nix/home/configs/claude/mods/clm/hooks/worktree.ts",
-    "nix/home/configs/claude/mods/clm/hooks/worktree.test.ts",
     "nix/home/configs/claude/mods/clm/hooks/clauses.ts",
     "nix/home/configs/claude/mods/clm/hooks/clauses.test.ts",
     "nix/home/configs/claude/mods/clm/types/index.d.ts",

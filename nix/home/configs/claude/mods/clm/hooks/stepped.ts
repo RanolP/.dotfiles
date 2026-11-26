@@ -2,14 +2,14 @@
 // and whose child issues are its planned steps. Each step gets a rubric, the
 // done state it must reach, settled here by a two-round debate between a
 // drafter and an adversarial reviewer. `judgeRubric` scores a step against
-// that rubric; the Stop-hook loop, checkpoints and rollback that act on the
+// that rubric; the Stop-hook loop and method switching that act on the
 // verdicts, attempts and failed methodologies live elsewhere and call in.
 
 import { checkEvidence, type Evidence, type Sources } from './evidence'
 import { normalizeLedger } from './intent'
 import { isRecord, type Issue, type RubricItem } from './tracker'
 
-/** Tries with one methodology before rolling back to the previous checkpoint. */
+/** Tries with one methodology before requiring a different method. */
 export const TRIES_PER_METHOD = 2
 /** Failed methodologies on one step before the goal stops. */
 export const METHODS_PER_STEP = 5

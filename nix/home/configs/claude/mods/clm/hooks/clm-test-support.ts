@@ -139,23 +139,14 @@ export function bottoms(on: any, s: State) {
       for (const key of Object.keys(seen.files)) if (key === path || key.startsWith(`${path}/`)) delete seen.files[key]
     }
     const gitArgs = argv[0] === 'git' && argv[1] === '-C' ? argv.slice(3) : argv[0] === 'git' ? argv.slice(1) : []
-    const gitCwd = argv[0] === 'git' && argv[1] === '-C' ? argv[2]! : e.options?.cwd ?? s.cwd ?? '/work/repo'
-    if (gitArgs[0] === 'worktree' && gitArgs[1] === 'add') mkdirs(gitArgs[3]!)
-    if (gitArgs[0] === 'worktree' && gitArgs[1] === 'remove') {
-      const path = gitArgs.at(-1)!
-      for (const dir of [...seen.dirs]) if (dir === path || dir.startsWith(`${path}/`)) seen.dirs.delete(dir)
-    }
     let stdout = ''
     if (argv[0] === 'realpath') stdout = `${argv[1]}\n`
     else if (gitArgs[0] === 'remote' && gitArgs[1] === 'get-url') stdout = 'git@github.com:o/repo.git\n'
-    else if (gitArgs[0] === 'rev-parse' && gitArgs[1] === '--show-toplevel') stdout = `${gitCwd.startsWith('/home/t/.claude-work/clm/worktrees/') ? gitCwd : '/work/repo'}\n`
+    else if (gitArgs[0] === 'rev-parse' && gitArgs[1] === '--show-toplevel') stdout = '/work/repo\n'
     else if (gitArgs[0] === 'rev-parse' && gitArgs[1] === '--abbrev-ref') stdout = 'main\n'
     else if (gitArgs[0] === 'rev-parse' && gitArgs[1] === 'HEAD') stdout = `${'a'.repeat(40)}\n`
     else if (gitArgs[0] === 'merge-base') stdout = `${'b'.repeat(40)}\n`
-    else if (gitArgs[0] === 'worktree' && gitArgs[1] === 'list') {
-      const paths = [...seen.dirs].filter(path => /^\/home\/t\/\.claude-work\/clm\/worktrees\/[^/]+\/[^/]+$/.test(path))
-      stdout = [`worktree /work/repo`, ...[...new Set(paths)].map(path => `worktree ${path}`)].join('\n') + '\n'
-    } else if (argv[0] === 'sysctl' && argv.includes('vm.loadavg')) stdout = '{ 1.0 1.0 1.0 }\n'
+    else if (argv[0] === 'sysctl' && argv.includes('vm.loadavg')) stdout = '{ 1.0 1.0 1.0 }\n'
     else if (argv[0] === 'sysctl' && argv.includes('hw.ncpu')) stdout = '8\n'
     return { value: { exitCode: 0, stdout, stderr: '' } }
   })

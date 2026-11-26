@@ -1,11 +1,10 @@
 import { update, type EngineInterface, type Register } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields, type Payloads } from './events'
-import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, STEPPED_WORKTREE_CONTEXT, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, planPromptContext, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
+import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, planPromptContext, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
 import { kst } from './text'
 import { type Evidence, renderRange } from './evidence'
 import { snapshot, focusOf, isOpen, isRecord, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
-import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktree } from './worktree'
 import { recordPromptIntent as classifyPrompt, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmWorkflow } from '../types'
@@ -290,16 +289,9 @@ const panelIo = ($: EngineInterface): PanelIo => ({
   home: () => $.env.get('HOME'),
 })
 /** What `judgeRubric` needs from the engine; `agentId` picks whose transcript evidence items cite. */
-export const stepJudgeIo = ($: EngineInterface, agentId?: string, worktree?: Worktree): JudgeIo => ({
+export const stepJudgeIo = ($: EngineInterface, agentId?: string): JudgeIo => ({
   complete: request => $.model.complete(request),
-  run: (argv, options) => {
-    let cwd = options.cwd
-    if (worktree) {
-      if (!cwd || cwd === worktree.repoRoot) cwd = worktree.dir
-      else if (cwd.startsWith(`${worktree.repoRoot.replace(/\/$/, '')}/`)) cwd = `${worktree.dir}${cwd.slice(worktree.repoRoot.replace(/\/$/, '').length)}`
-    }
-    return $.process.run(argv, { ...options, ...(cwd ? { cwd } : {}) })
-  },
+  run: (argv, options) => $.process.run(argv, options),
   sources: async () => {
     const rows = agentId === undefined ? await $.session.messages() : await $.session.messages({ agentId })
     return Array.isArray(rows) ? renderRange(rows).sources : new Map()
@@ -320,9 +312,7 @@ const stepCitationMap = (message: string | undefined): Record<string, Evidence> 
   } catch { return {} }
 }
 
-const steppedFailureDetails = (error: unknown) => error instanceof WorktreeError
-  ? `argv=${JSON.stringify(error.argv)} exitCode=${error.exitCode ?? 'unavailable'} stderr=${JSON.stringify(error.stderr)}`
-  : `argv=[] exitCode=unavailable stderr=${JSON.stringify(String(error))}`
+const steppedFailureDetails = (error: unknown) => `argv=[] exitCode=unavailable stderr=${JSON.stringify(String(error))}`
 
 const failedMethodNames = (issue: Issue) => (issue.methods ?? []).flatMap(method => method.failed
   ? Array.from({ length: Math.max(1, method.failures ?? 0) }, () => method.text) : [])
@@ -350,23 +340,8 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
     const children = issues.filter(issue => issue.parent === root.id)
     const active = children.filter(issue => issue.status === 'doing').at(-1)
 
-    const land = async (goal: Issue): Promise<{ block?: string } | undefined> => {
-      issueId = goal.id
-      if (!goal.worktree) return failOpen('landing worktree lookup', new Error('stepped root has no persisted worktree'))
-      if (goal.landCommandsShown) return undefined
-      const commands = landCommands(goal.worktree)
-      await append($, [
-        { op: 'land', issue: goal.id },
-        { op: 'status', issue: goal.id, status: 'done' },
-      ], origin)
-      return {
-        block: `All steps for goal ${goal.id} passed. Run these commands in order through Bash in the main session to land the worktree:\n${commands.map(command => `- \`${command}\``).join('\n')}\nAfter the commands finish, stop again.`,
-      }
-    }
-
     if (active) {
       issueId = active.id
-      if (!root.worktree) return failOpen('worktree lookup', new Error('active stepped goal has no persisted worktree'))
       const before = attemptState(active)
       if (before.stop) {
         const failed = failedMethodNames(active)
@@ -376,7 +351,7 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
         return undefined
       }
       const method = active.activeMethod ?? before.method ?? DEFAULT_STEP_METHOD
-      const verdicts = await judgeRubric(active, stepJudgeIo($, undefined, root.worktree), stepCitationMap(lastAssistantMessage))
+      const verdicts = await judgeRubric(active, stepJudgeIo($), stepCitationMap(lastAssistantMessage))
       const internal = verdicts.filter(verdict => verdict.internal)
       if (internal.length) {
         const message = `clm stepped: judge internal error issue=${active.id}; stop released: ${internal.map(item => `${item.id} ${item.reason}`).join('; ')}`
@@ -387,28 +362,24 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
       const failed = verdicts.filter(verdict => !verdict.pass)
       if (failed.length === 0) {
         await append($, [{ op: 'attempt', issue: active.id, method, verdict: 'pass' }], origin)
-        const previousSha = root.worktree.headSha
-        const sha = await checkpointCommit({ run: (argv, options) => $.process.run([...argv], options) }, root.worktree, active.title)
         if (!active.result) {
-          const diff = await $.process.run(['git', '-C', root.worktree.dir, 'diff', '--name-only', previousSha, sha], { timeoutMs: 30_000 })
-          const files = diff.exitCode === 0 ? diff.stdout.split(/\r?\n/).map(file => file.trim()).filter(Boolean).slice(0, 5) : []
           await append($, [{
             op: 'result', issue: active.id, intent: active.title.slice(0, 160),
             finding: verdicts.map(verdict => `${verdict.id}: ${verdict.reason}`).join('; ').replace(/\s+/g, ' ').trim().slice(0, 160),
-            decision: `checkpoint ${sha.slice(0, 8)}`, files, source: 'judge',
+            decision: 'rubric passed', files: [], source: 'judge',
           }], origin)
         }
         await append($, [
-          { op: 'checkpoint', issue: active.id, sha },
           { op: 'status', issue: active.id, status: 'done' },
         ], origin)
         const afterEvents = await readAll($)
         const afterIssues = snapshot(afterEvents).filter(issue => issue.origin.session === origin.session)
         const nextStep = afterIssues.find(issue => issue.parent === root.id && issue.status !== 'done' && issue.status !== 'dropped')
         if (nextStep) return {
-          block: `Step done: ${active.title} [${active.id}]. Next step: ${nextStep.title} [${nextStep.id}]. Start it with clm_task status "doing" and declare its method. ${STEPPED_WORKTREE_CONTEXT(root.worktree)}`,
+          block: `Step done: ${active.title} [${active.id}]. Next step: ${nextStep.title} [${nextStep.id}]. Start it with clm_task status "doing" and declare its method.`,
         }
-        return land(afterIssues.find(issue => issue.id === root.id) ?? root)
+        await append($, [{ op: 'status', issue: root.id, status: 'done' }], origin)
+        return undefined
       }
 
       const reason = failed.map(item => `${item.id}: ${item.reason}`).join('\n')
@@ -417,11 +388,6 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
       if (!afterAttempt) throw new Error(`tracker snapshot lost issue ${active.id} after a failed attempt`)
       const state = attemptState(afterAttempt)
       if (state.rollback) {
-        const latestRoot = snapshot(await readAll($)).find(issue => issue.id === root.id) ?? root
-        const latestWorktree = latestRoot.worktree
-        if (!latestWorktree) throw new Error(`tracker snapshot lost worktree for issue ${root.id}`)
-        const rollbackSha = latestWorktree.headSha || latestWorktree.baseSha
-        await rollbackTo({ run: (argv, options) => $.process.run([...argv], options) }, latestWorktree, rollbackSha)
         await append($, [{ op: 'method', issue: active.id, text: method, failed: true }], origin)
         const failedIssue = snapshot(await readAll($)).find(issue => issue.id === active.id) ?? afterAttempt
         const failedMethods = failedMethodNames(failedIssue)
@@ -432,16 +398,17 @@ async function handleSteppedStop($: EngineInterface, lastAssistantMessage?: stri
           return undefined
         }
         return {
-          block: `The rubric failed for issue ${active.id}:\n${reason}\nThe worktree was rolled back to ${rollbackSha}. Failed methodologies: ${failedMethods.join('; ')}. Declare a different method with clm_task before continuing.`,
+          block: `The rubric failed for issue ${active.id}:\n${reason}\nFailed methodologies: ${failedMethods.join('; ')}. Declare a different method with clm_task before continuing.`,
         }
       }
       return { block: `The rubric failed for issue ${active.id}:\n${reason}\nContinue the step, then stop for another check. The current method is ${method}.` }
     }
 
-    if (children.length && children.every(issue => issue.status === 'done' || issue.status === 'dropped')) return land(root)
+    if (children.length && children.every(issue => issue.status === 'done' || issue.status === 'dropped'))
+      await append($, [{ op: 'status', issue: root.id, status: 'done' }], origin)
     return undefined
   } catch (error) {
-    return failOpen('internal tracker or git operation', error)
+    return failOpen('internal tracker operation', error)
   }
 }
 
@@ -594,14 +561,11 @@ export const register: Register = (on, options) => {
     if (!parent) return { deny: e.parentAgentId ? `clm: agent ${e.parentAgentId} needs an assigned task before spawning a child agent.` : SPAWN_PLAN_REQUEST }
     const issues = snapshot(events).filter(issue => issue.origin.session === origin.session)
     const steppedGoal = outermostSteppedRootOf(parent, new Map(issues.map(issue => [issue.id, issue])))
-    const goal = steppedGoal && isOpen(steppedGoal) && !steppedGoal.landCommandsShown ? steppedGoal : undefined
+    const goal = steppedGoal && isOpen(steppedGoal) ? steppedGoal : undefined
     const activeStep = goal?.id === parent
       ? issues.filter(issue => issue.parent === goal.id && issue.status === 'doing').at(-1)
       : undefined
-    const spawnInput = goal?.worktree
-      ? { ...e, cwd: goal.worktree.dir, prompt: `${STEPPED_WORKTREE_CONTEXT(goal.worktree)}\n\n${e.prompt}` }
-      : e
-    const spawned = await next(spawnInput)
+    const spawned = await next(e)
     if (!spawned.agentId) return spawned
     const planned = await plannedAgentStep(io, origin.session, parent, e.description)
     if (!planned || !await claimAgentTaskRoot(io, origin.session, spawned.agentId, planned))

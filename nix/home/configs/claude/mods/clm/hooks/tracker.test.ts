@@ -286,3 +286,14 @@ test('another session\'s tracker item does not appear in this session\'s ledger'
   ]
   expect(injected(snapshot(events), { session: 's1' }).map(i => i.title)).toEqual(['own', 'linked'])
 })
+
+// Regression caught: legacy execution events on disk broke board snapshots after their integration was removed.
+test('snapshot ignores legacy execution events in a stored log', async () => {
+  const origin = at('s1', 'github.com/o/repo')
+  const base = { ts: '2026-10-06T01:00:00Z', issue: 's1-1', origin }
+  const created = { ...base, seq: 1, op: 'create', title: 'goal', status: 'doing' }
+  const legacy = ['worktree', 'checkpoint', 'land'].map((op, index) => ({ ...base, seq: index + 2, op }))
+  expect(snapshot(parseLog([created, ...legacy].map(event => JSON.stringify(event)).join('\n')))).toEqual(snapshot(parseLog(JSON.stringify(created))))
+  const events = parseLog([created, ...legacy, { ...base, seq: 5, op: 'status', status: 'done' }].map(event => JSON.stringify(event)).join('\n'))
+  expect(snapshot(events)).toEqual([{ ...snapshot(parseLog(JSON.stringify(created)))[0], status: 'done', doneOrder: 5 }])
+})

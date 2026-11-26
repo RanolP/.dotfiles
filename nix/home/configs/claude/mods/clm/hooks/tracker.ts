@@ -6,7 +6,6 @@
 // so an unchanged session file is parsed once.
 
 import { CONFIRM_ITEMS, storedItems } from './evidence'
-import type { Worktree } from './worktree'
 
 export const STATUSES = ['todo', 'doing', 'ready-to-land', 'done', 'question', 'uncertain', 'dropped'] as const
 export type IssueStatus = (typeof STATUSES)[number]
@@ -51,9 +50,7 @@ export type TrackerEvent = Base & (
   | { op: 'rubric'; items: RubricItem[] }
   | { op: 'attempt'; method: string; verdict: Verdict }
   | { op: 'method'; text: string; failed: boolean }
-  | ({ op: 'worktree' } & Worktree)
-  | { op: 'checkpoint'; sha: string }
-  | { op: 'land' }
+  | { op: 'worktree' | 'checkpoint' | 'land' } // Legacy events remain readable.
 )
 export type Payload =
   | { op: 'create'; issue?: string; title: string; status: IssueStatus; note?: string; taskId?: string; label?: AssumptionLabel; hypothesis?: true }
@@ -76,9 +73,6 @@ export type Payload =
   | { op: 'rubric'; issue: string; items: RubricItem[] }
   | { op: 'attempt'; issue: string; method: string; verdict: Verdict }
   | { op: 'method'; issue: string; text: string; failed: boolean }
-  | ({ op: 'worktree'; issue: string } & Worktree)
-  | { op: 'checkpoint'; issue: string; sha: string }
-  | { op: 'land'; issue: string }
 
 export type Issue = {
   id: string
@@ -106,12 +100,6 @@ export type Issue = {
   methods?: Method[]
   /** Most recently declared strategy, including a repeated declaration of a failed strategy. */
   activeMethod?: string
-  /** The goal's isolated checkout, stored on its stepped root. */
-  worktree?: Worktree
-  /** Successful checkpoint commits, stored on each step. */
-  checkpoints?: Array<{ sha: string; ts: string }>
-  /** The one-time landing commands were already handed back to the main agent. */
-  landCommandsShown?: boolean
   priority?: number
   ready?: boolean
   claimedBy?: string
@@ -131,7 +119,7 @@ export function parseLog(text: string): TrackerEvent[] {
     if (!line.trim()) continue
     try {
       const e = JSON.parse(line) as TrackerEvent
-      if (typeof e?.issue === 'string' && typeof e.seq === 'number' && typeof e.ts === 'string' && e.origin) out.push(e)
+      if (isRecord(e) && typeof e.issue === 'string' && typeof e.seq === 'number' && typeof e.ts === 'string' && e.origin) out.push(e)
     } catch { /* skipped */ }
   }
   return out
@@ -155,7 +143,7 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
         })
       continue
     }
-    if (e.op === 'focus') continue
+    if (e.op === 'focus' || e.op === 'worktree' || e.op === 'checkpoint' || e.op === 'land') continue
     const i = issues.get(e.issue)
     if (!i) continue
     if (e.op === 'status') {
@@ -226,17 +214,6 @@ export function snapshot(events: readonly TrackerEvent[]): Issue[] {
         }
       } else methods.push({ text: e.text, failed: e.failed, ...(e.failed ? { failures: 1 } : {}) })
     }
-    else if (e.op === 'worktree') {
-      i.worktree = { dir: e.dir, baseSha: e.baseSha, originBranch: e.originBranch, repoRoot: e.repoRoot, worktreesRoot: e.worktreesRoot, headSha: e.headSha }
-    }
-    else if (e.op === 'checkpoint') {
-      (i.checkpoints ??= []).push({ sha: e.sha, ts: e.ts })
-      const root = i.parent === undefined ? undefined : issues.get(i.parent)
-      if (root?.worktree) root.worktree = { ...root.worktree, headSha: e.sha }
-    }
-    else if (e.op === 'land') {
-      i.landCommandsShown = true
-    }
     else if (e.op === 'link' && !i.linked.includes(e.origin.session)) i.linked.push(e.origin.session)
     i.updated = e.ts
   }
@@ -276,9 +253,6 @@ export function toEvents(payloads: readonly Payload[], origin: Origin, lastSeq: 
       case 'rubric': return { ...base, issue: p.issue, op: 'rubric', items: p.items.map(item => ({ ...item })) }
       case 'attempt': return { ...base, issue: p.issue, op: 'attempt', method: p.method, verdict: p.verdict }
       case 'method': return { ...base, issue: p.issue, op: 'method', text: p.text, failed: p.failed }
-      case 'worktree': return { ...base, ...p }
-      case 'checkpoint': return { ...base, issue: p.issue, op: 'checkpoint', sha: p.sha }
-      case 'land': return { ...base, issue: p.issue, op: 'land' }
       // Focus snapshots are session metadata, so the log's issue key is the session id.
       case 'focus': return { ...base, issue: origin.session, op: 'focus', stack: [...p.stack], pending: [...p.pending], intent: p.intent, ...(p.rule === undefined ? {} : { rule: p.rule }) }
     }
@@ -382,8 +356,6 @@ export function describe(events: readonly TrackerEvent[], before: readonly Issue
       out.push(`작업 '${title}' 시도 ${e.verdict === 'pass' ? '통과' : '실패'}: ${clip(flat(e.method), 60)}`)
     } else if (e.op === 'method') {
       out.push(`작업 '${title}' 방법론 ${e.failed ? '실패 기록' : '기록'}: ${clip(flat(e.text), 60)}`)
-    } else if (e.op === 'worktree' || e.op === 'checkpoint' || e.op === 'land') {
-      // Execution metadata is persisted for the Stop hook, not shown as task progress.
     } else if (e.op === 'note' && e.text.startsWith(CONFIRM_ITEMS)) {
       out.push(`작업 '${title}' 확인 대기 ${storedItems(e.text)?.length ?? 0}건`)
     } else if (e.op === 'note') {

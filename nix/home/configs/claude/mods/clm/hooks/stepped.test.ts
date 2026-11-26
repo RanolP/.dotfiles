@@ -6,18 +6,10 @@ import { describe, parseLog, snapshot, toEvents, type Issue, type Payload } from
 import { M, seedTracker, TRACKER, turnInput } from './clm-test-support'
 import { renderRange } from './evidence'
 import { claimAgentTaskRoot, closeAgentTaskRoot, type PanelIo } from './panel'
-import type { Worktree } from './worktree'
 
 const origin = { session: 'step-session', repo: 'github.com/o/repo', cwd: '/w' }
 const answer = (text: string) => ({ isAnswered: true, text, reason: '' })
 const RUBRIC = JSON.stringify({ items: [{ id: 'tests', kind: 'command', argv: ['bun', 'test'] }] })
-const BASE_SHA = 'a'.repeat(40)
-const CHECKPOINT_SHA = 'b'.repeat(40)
-const STEP_WORKTREE: Worktree = {
-  dir: '/home/t/.claude-work/clm/worktrees/s1/s1-root', baseSha: BASE_SHA, headSha: BASE_SHA,
-  originBranch: 'main', repoRoot: '/work/repo', worktreesRoot: '/home/t/.claude-work/clm/worktrees',
-}
-
 let steppedFixtureMtime = 10
 function steppedStopFixture(
   on: any,
@@ -74,16 +66,13 @@ function defaultProcessResult(argv: string[], options: any) {
   const cIndex = argv.indexOf('-C')
   const gitCwd = cIndex < 0 ? options.cwd : argv[cIndex + 1]
   if (argv.includes('remote')) return { exitCode: 0, stdout: 'https://github.com/o/repo.git', stderr: '' }
-  if (argv.includes('list')) return { exitCode: 0, stdout: `worktree /work/repo\nworktree ${STEP_WORKTREE.dir}\n`, stderr: '' }
   if (argv.includes('--show-toplevel')) return { exitCode: 0, stdout: `${gitCwd || '/work/repo'}\n`, stderr: '' }
-  if (argv.at(-1) === 'HEAD') return { exitCode: 0, stdout: `${CHECKPOINT_SHA}\n`, stderr: '' }
   return { exitCode: 0, stdout: argv.includes('--abbrev-ref') ? 'main\n' : '', stderr: '' }
 }
 
 const stepPayloads = (extra: Payload[] = []): Payload[] => [
   { op: 'create', issue: 's1-root', title: 'Ship the feature', status: 'doing' },
   { op: 'stepped', issue: 's1-root' },
-  { op: 'worktree', issue: 's1-root', ...STEP_WORKTREE },
   { op: 'create', issue: 's1-step-1', title: 'Implement the parser', status: 'doing' },
   { op: 'parent', issue: 's1-step-1', parent: 's1-root' },
   { op: 'rubric', issue: 's1-step-1', items: [{ id: 'tests', kind: 'command', argv: ['true'] }] },
@@ -193,17 +182,16 @@ test('attemptState counts trailing failures of the current method and failed met
     .toMatchObject({ triesWithMethod: 2, failedMethods: 1, rollback: true })
 })
 
-// Regression caught: the second failed check for one method left partial edits in place without recording that method as failed.
-test('the same methodology failing twice rolls back and records a failed method', async ($, on) => {
+// Regression caught: the second failed check for one method did not require a new methodology.
+test('the same methodology failing twice requires a different method and records failure', async ($, on) => {
   const fixture = steppedStopFixture(on, stepPayloads([
     { op: 'rubric', issue: 's1-step-1', items: [{ id: 'tests', kind: 'command', argv: ['false'] }] },
   ]))
   const first = await $.classic.Stop({ stop_hook_active: false })
   expect(first.block).toContain('rubric failed')
   const second = await $.classic.Stop({ stop_hook_active: false })
-  expect(second.block).toContain('rolled back')
   expect(second.block).toContain('different method')
-  expect(fixture.commands.some(argv => argv.includes('reset') && argv.includes('--hard') && argv.includes(BASE_SHA))).toBe(true)
+  expect(fixture.commands.some(argv => argv.includes('reset') || argv.includes('clean'))).toBe(false)
   const events = parseLog(fixture.files[TRACKER] ?? '')
   expect(events.some(event => event.op === 'method' && event.issue === 's1-step-1' && event.text === 'replace parser state' && event.failed)).toBe(true)
 })
@@ -218,8 +206,8 @@ test('five failed methodologies allow stop and surface the stopped goal', async 
   for (const method of methods) expect(fixture.logs.join('\n')).toContain(method)
 })
 
-// Regression caught: a passing rubric completed a step without a checkpoint or a handoff to the next recorded step.
-test('an all-pass rubric checkpoints the step and advances to the next step', async ($, on) => {
+// Regression caught: a passing rubric completed a step without a handoff to the next recorded step.
+test('an all-pass rubric completes the step and advances to the next step', async ($, on) => {
   const fixture = steppedStopFixture(on, stepPayloads([
     { op: 'create', issue: 's1-step-2', title: 'Update parser tests', status: 'todo' },
     { op: 'parent', issue: 's1-step-2', parent: 's1-root' },
@@ -227,27 +215,23 @@ test('an all-pass rubric checkpoints the step and advances to the next step', as
   const result = await $.classic.Stop({ stop_hook_active: false })
   expect(result.block).toContain('Step done: Implement the parser')
   expect(result.block).toContain('Next step: Update parser tests')
-  expect(fixture.commands.some(argv => argv.includes('commit') && argv.includes('--allow-empty'))).toBe(true)
+  expect(fixture.commands.some(argv => argv.includes('commit'))).toBe(false)
   const issues = snapshot(parseLog(fixture.files[TRACKER] ?? ''))
   expect(issues.find(issue => issue.id === 's1-step-1')?.status).toBe('done')
-  expect(issues.find(issue => issue.id === 's1-step-1')?.checkpoints).toEqual([{ sha: CHECKPOINT_SHA, ts: expect.any(String) }])
 })
 
-// Regression caught: a Stop-pass checkpoint closed a stepped step without a fallback result record.
-test('an all-pass Stop appends a judge result with checkpoint sha and changed files', async ($, on) => {
-  const fixture = steppedStopFixture(on, stepPayloads(), (argv, options) => {
-    if (argv.includes('diff') && argv.includes('--name-only')) return { exitCode: 0, stdout: 'hooks/panel.ts\nhooks/tracker.ts\n', stderr: '' }
-    return defaultProcessResult(argv, options)
-  })
+// Regression caught: a Stop pass closed a stepped step without a fallback result record.
+test('an all-pass Stop appends a judge result', async ($, on) => {
+  const fixture = steppedStopFixture(on, stepPayloads())
   await $.classic.Stop({ stop_hook_active: false })
   const result = snapshot(parseLog(fixture.files[TRACKER] ?? '')).find(issue => issue.id === 's1-step-1')?.result
   expect(result).toMatchObject({
-    intent: 'Implement the parser', finding: 'tests: exit 0', decision: `checkpoint ${CHECKPOINT_SHA.slice(0, 8)}`,
-    files: ['hooks/panel.ts', 'hooks/tracker.ts'], source: 'judge',
+    intent: 'Implement the parser', finding: 'tests: exit 0', decision: 'rubric passed',
+    files: [], source: 'judge',
   })
 })
 
-// Regression caught: background workers writing the worktree were reset while Stop judged their shared step.
+// Regression caught: Stop judged a shared step while background workers were still running.
 test('a Stop event with background tasks passes through without judging or changing the step', async ($, on) => {
   let judgeCalls = 0
   const fixture = steppedStopFixture(on, stepPayloads([
@@ -277,7 +261,11 @@ test('a background shell task does not defer the Stop judge', async ($, on) => {
 // Regression caught: an ad-hoc agent root under a stepped goal stayed open and became the next planned step.
 test('an ad-hoc agent under a focused stepped goal closes before Stop chooses the next step', async ($, on) => {
   const fixture = steppedStopFixture(on, stepPayloads())
-  on('agent.spawn', () => ({ model: 'haiku', agentId: 'ad-hoc-worker' }))
+  on('agent.spawn', (_$, input) => {
+    expect(input.prompt).toBe('Check an unrelated issue.')
+    expect(input.cwd).toBeUndefined()
+    return { model: 'haiku', agentId: 'ad-hoc-worker' }
+  })
   on('turn.complete', async () => ({ text: '' }))
   const spawned = await $.agent.spawn({ prompt: 'Check an unrelated issue.', description: 'Ad-hoc check' })
   expect(spawned.agentId).toBe('ad-hoc-worker')
@@ -287,23 +275,21 @@ test('an ad-hoc agent under a focused stepped goal closes before Stop chooses th
   await $.turn.complete(turnInput('ad-hoc-worker-end', { agentId: 'ad-hoc-worker', reason: 'answer' }))
   expect(snapshot(parseLog(fixture.files[TRACKER] ?? '')).find(issue => issue.id === adHoc?.id)?.status).toBe('done')
   const result = await $.classic.Stop({ stop_hook_active: false })
-  expect(result.block).toContain('All steps for goal s1-root passed')
-  expect(result.block).not.toContain('Next step: Ad-hoc check')
+  expect(result.block).toBeUndefined()
+  expect(snapshot(parseLog(fixture.files[TRACKER] ?? '')).find(issue => issue.id === 's1-root')?.status).toBe('done')
 })
 
-// Regression caught: a rubric debate error left an active step permanently unclosable without a Stop checkpoint.
-test('an active step without a settled rubric passes fail-soft and is checkpointed', async ($, on) => {
+// Regression caught: a rubric debate error left an active step permanently unclosable without a Stop verdict.
+test('an active step without a settled rubric passes fail-soft and completes', async ($, on) => {
   const fixture = steppedStopFixture(on, stepPayloads().filter(payload => payload.op !== 'rubric'))
   const result = await $.classic.Stop({ stop_hook_active: false })
-  expect(result.block).toContain('All steps for goal s1-root passed')
+  expect(result.block).toBeUndefined()
   const issues = snapshot(parseLog(fixture.files[TRACKER] ?? ''))
   expect(issues.find(issue => issue.id === 's1-step-1')?.status).toBe('done')
-  expect(issues.find(issue => issue.id === 's1-step-1')?.checkpoints).toEqual([{ sha: CHECKPOINT_SHA, ts: expect.any(String) }])
   expect(issues.find(issue => issue.id === 's1-root')?.status).toBe('done')
-  expect(issues.find(issue => issue.id === 's1-root')?.landCommandsShown).toBe(true)
 })
 
-// Regression caught: an agent turn closed its claimed stepped task before Stop could judge and checkpoint it.
+// Regression caught: an agent turn closed its claimed stepped task before Stop could judge it.
 test('a delegated stepped step stays open until the Stop judge closes it', async () => {
   let events = toEvents(stepPayloads(), origin, 0, '2026-10-19T00:00:00Z')
   const store: Record<string, unknown> = {}

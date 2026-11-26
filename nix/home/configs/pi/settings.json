@@ -1,4 +1,5 @@
 {
+  "enableInstallTelemetry": false,
   "packages": [
     "./vendor/choco-pi/packages/choco-pi-agents-md",
     "./vendor/choco-pi/packages/choco-pi-goal",

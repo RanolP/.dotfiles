@@ -340,11 +340,11 @@ const sharedRules = async ($: EngineInterface, rel: string, what: string, log: L
 // The first step's developer instructions: tool mapping, the implementer's
 // share of the inherited context, the role, the owner's agent rules, the style
 // rules the reviewer grades against, and the rules of every repo the agent writes.
-const developerInstructions = async ($: EngineInterface, api: readonly ApiMessage[], roots: readonly string[], type: { backend: Backend; sandbox: string }, log: Log): Promise<string> => {
+export const developerInstructions = async ($: EngineInterface, api: readonly ApiMessage[], roots: readonly string[], type: { backend: Backend; sandbox: string }, log: Log): Promise<string> => {
   const parts = [
     preambleFor(type),
     implementerContext(api),
-    IMPLEMENTER_ROLE,
+    type.backend !== 'acp' && type.sandbox === 'workspace-write' ? IMPLEMENTER_ROLE : '',
     await sharedRules($, AGENT_RULES_PATH, "the owner's agent rules", log),
     await sharedRules($, STYLE_RULES_PATH, 'the style rules', log),
     await projectRules($, roots, log),

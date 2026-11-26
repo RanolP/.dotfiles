@@ -1,6 +1,6 @@
 import { test, expect, mock, type MockClock } from 'claude-code/testing'
 import type { AgentSpawnArgs, ApiMessage, HttpResponse, SessionCompactInput, SessionCompactResult, SessionMessage, TimerCall } from 'claude-code'
-import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, routingContext, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
+import { agentDescription, agentPrompt, bridgeFingerprint, bridgeReady, codexName, developerInstructions, doneWhenError, inheritedContext, keepalive, pendingPrompt, preambleFor, relaySet, resetBridgeStates, routingContext, settlePending, toolResultFor, typeForModel, typeOf, TYPES, unreachable, workspaceRoot } from './register'
 import { codexConfig, writeConfigIfChanged } from '../daemon/codex-config.mjs'
 import { beginAcpPrompt, decidePermission, finalAgentMessage, finalTurnText, handleAcpLine, installChildPending, interruptAcp, readOnlyMode, runAcpStep } from '../daemon/acp-bridge.mjs'
 
@@ -154,6 +154,14 @@ test('ACP developer instructions omit Codex-only relayed tools and apply_patch',
 test('a read-only codex preamble omits apply_patch and a workspace-write one keeps it', () => {
   expect(preambleFor(TYPES[ASTRA])).not.toContain('apply_patch')
   expect(preambleFor(TYPES[SOL])).toContain('apply_patch')
+})
+
+test('read-only worker told to implement: only a workspace-write codex type gets the implementer role', async () => {
+  const $ = { env: { get: async () => '/nohome' }, fs: { read: async () => { throw new Error('absent') } } } as any
+  const build = (type: Parameters<typeof developerInstructions>[3]) => developerInstructions($, [], [], type, () => {})
+  expect(await build(TYPES[NEON])).not.toContain('## Your role: implement')
+  expect(await build(TYPES[ASTRA])).not.toContain('## Your role: implement')
+  expect(await build(TYPES[SOL])).toContain('## Your role: implement')
 })
 
 test('session start discards both backend bridge states for the new session socket', () => {

@@ -1,5 +1,6 @@
 import { test, expect } from 'claude-code/testing'
-import { acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, touchResources, turnStartResources, unregisterResource } from './resources'
+import { acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, scanShellProcesses, touchResources, turnStartResources, unregisterResource } from './resources'
+import { deliveredPath, loadLine, loadNotices, ownerNotices, pressureNotes, shellJobs } from './load'
 import { register } from './register'
 import type { MutexOwner, OwnedResource, ProcessResult, ResourceIo, ResourceSession } from './resources'
 import type { ResourceInput } from '../types'
@@ -466,4 +467,126 @@ test('regression: resource changes become one prompt notice on the next turn onl
     owned: [{ kind: 'metro', id: '8081', label: ':8081', profile: 'default', cwd: '/work/repo', startedAt: '2026-10-16T00:00:00.000Z' }],
     mutexes: ['ipad'], changes: [],
   })).toEqual(['- metro :8081', '- mutex ipad held'])
+})
+
+const stoppedJob = { id: '7@t', pid: 7, command: 'ipsw dyld xref', rss_mb: 900, pressure: 2, pressure_name: 'warn', stopped_at: 't', resume_policy: 'P', resumed_at: null, session_id: 'A' }
+
+test('regression: another session must not see a watchdog stop', () => {
+  expect(ownerNotices([stoppedJob], 'B', new Set())).toEqual({ notes: [], keys: [] })
+})
+test('regression: a watchdog stop is delivered once with its original explanation', () => {
+  const first = ownerNotices([stoppedJob], 'A', new Set())
+  expect(first.keys).toEqual(['7@t:stop'])
+  expect(first.notes[0]).toContain('pid 7 (900 MB, ipsw dyld xref)')
+  expect(first.notes[0]).toContain('warn (level 2). Resume: P.')
+  expect(ownerNotices([stoppedJob], 'A', new Set(first.keys))).toEqual({ notes: [], keys: [] })
+})
+test('regression: a watchdog resume is delivered after its stop', () => {
+  const resumed = ownerNotices([{ ...stoppedJob, resumed_at: 'u', resumed_by: 'watchdog' }], 'A', new Set(['7@t:stop']))
+  expect(resumed.keys).toEqual(['7@t:resume'])
+  expect(resumed.notes[0]).toContain('resumed (SIGCONT) pid 7 (ipsw dyld xref) at u.')
+})
+test('regression: an unowned watchdog stop goes to nobody', () => {
+  expect(ownerNotices([{ ...stoppedJob, session_id: null }], '', new Set())).toEqual({ notes: [], keys: [] })
+})
+test('regression: bad session ids cannot escape the watchdog delivery directory', () => {
+  expect(deliveredPath('/home/test', '../x')).toBeUndefined()
+  expect(deliveredPath('/home/test', 'A')).toBe('/home/test/.cache/claude-resource-watchdog/delivered/A.json')
+})
+const processTree = `101 1 100 S claude --test
+110 101 100 S /bin/zsh -c job
+111 110 204800 S heavy job
+120 101 100 S codex bridge
+121 120 100 S bridge-worker
+202 1 100 S claude --other
+210 202 100 S bash -c other
+211 210 500000 S other-job`
+test('regression 2026-11-23: shell jobs belong to this agent and the codex bridge stays infrastructure', () => {
+  expect(shellJobs(processTree, 101).map(p => p.pid)).toEqual([111])
+})
+test('regression: vanished and reused process pids are replaced using their start identity', async () => {
+  const shared = world()
+  writeSession(shared, 'process-scan', { profile: 'default', owned: [{ kind: 'process', id: 'pid:111@old start', pid: 111, label: 'old job', profile: 'default', cwd: '/work/repo', startedAt: 'old start' }], mutexes: [], changes: [] })
+  const io = ioFor(shared, 'process-scan')
+  const originalRun = io.run
+  io.run = async (argv, options) => argv[1] === '-axo' ? result(0, processTree) : argv.includes('lstart=') ? result(0, 'new start') : originalRun(argv, options)
+  await scanShellProcesses(io)
+  expect(readSession(shared, 'process-scan')?.owned[0]?.id).toBe('pid:111@new start')
+  expect(resourceLedgerLines(readSession(shared, 'process-scan')).join(' ')).toContain('heavy job')
+  const listed = await applyResourceAction(io, { action: 'list' })
+  expect(JSON.stringify(listed)).toContain('heavy job')
+  io.run = async (argv, options) => argv[1] === '-axo' ? result(0, '101 1 100 S claude --test') : originalRun(argv, options)
+  await scanShellProcesses(io)
+  expect(readSession(shared, 'process-scan')?.owned).toEqual([])
+})
+test('regression: endResources leaves detected processes running', async () => {
+  const shared = world()
+  writeSession(shared, 'process-end', { profile: 'default', owned: [{ kind: 'process', id: 'pid:111@t', pid: 111, rss: 204800, label: 'heavy job', profile: 'default', cwd: '/work/repo', startedAt: 't' }], mutexes: [], changes: [] })
+  await endResources(ioFor(shared, 'process-end'), 'process-end', 'logout')
+  expect(shared.calls.some(argv => argv[0] === '/bin/kill' && argv[1] === '111')).toBe(false)
+  expect(shared.calls.some(argv => argv[0] === 'lsof')).toBe(false)
+  expect(readSession(shared, 'process-end')?.owned[0]?.kind).toBe('process')
+})
+test('regression: high pressure names stop candidates in descending RSS order', () => {
+  const base = { profile: 'default', cwd: '/work/repo', startedAt: 't' }
+  const notes = pressureNotes(4, 9, 8, [
+    { ...base, kind: 'process', id: 'pid:1@t', pid: 1, rss: 1024, label: 'small' },
+    { ...base, kind: 'metro', id: '8081', label: ':8081' },
+    { ...base, kind: 'process', id: 'pid:2@t', pid: 2, rss: 2048, label: 'large' },
+  ])
+  expect(notes[2]).toBe('pid 2 2 MB large\npid 1 1 MB small\nmetro :8081\nstop the ones you no longer need and hold off on new heavy jobs until this clears; tell the user what you stopped.')
+})
+test('regression: prompt load uses the 0.8 per-core threshold and renice preserves higher niceness', async () => {
+  const shared = world()
+  const io = ioFor(shared, 'load-test')
+  const originalRun = io.run
+  io.run = async (argv, options) => {
+    if (argv.includes('vm.loadavg')) return result(0, '{ 6.4 2 1 }')
+    if (argv.includes('hw.ncpu')) return result(0, '8')
+    if (argv.includes('nice=')) return result(0, '19')
+    return originalRun(argv, options)
+  }
+  expect(await loadLine(io)).toBe('load 6.4/8 cores (high)')
+  await loadNotices(io, 101, [])
+  expect(shared.calls).toContainEqual(['renice', '-n', '19', '-p', '101'])
+})
+
+test('regression: a watchdog delivery file survives subsequent Bash calls without repeating notices', async () => {
+  const shared = world()
+  const io = ioFor(shared, 'A')
+  shared.files.set('/home/test/.cache/claude-resource-watchdog/stopped.json', JSON.stringify([stoppedJob]))
+  const originalRun = io.run
+  io.run = async (argv, options) => {
+    if (argv[0] === 'mv' && argv[1]?.endsWith('.json.tmp')) {
+      shared.files.set(must(argv[2]), must(shared.files.get(must(argv[1]))))
+      shared.files.delete(must(argv[1]))
+      return result()
+    }
+    return originalRun(argv, options)
+  }
+  expect((await loadNotices(io, undefined, [])).join(' ')).toContain('stopped (SIGSTOP) pid 7')
+  expect(await loadNotices(io, undefined, [])).toEqual([])
+  expect(shared.files.get('/home/test/.cache/claude-resource-watchdog/delivered/A.json')).toBe('["7@t:stop"]')
+})
+test('regression: a server already covered by an owned port is not duplicated as a process', async () => {
+  const shared = world()
+  writeSession(shared, 'covered-server', { profile: 'default', owned: [{ kind: 'metro', id: '8081', label: ':8081', profile: 'default', cwd: '/work/repo', startedAt: 't' }], mutexes: [], changes: [] })
+  const io = ioFor(shared, 'covered-server')
+  const originalRun = io.run
+  io.run = async (argv, options) => argv[1] === '-axo' ? result(0, processTree) : argv[0] === 'lsof' ? result(0, '111') : originalRun(argv, options)
+  await scanShellProcesses(io)
+  expect(readSession(shared, 'covered-server')?.owned.map(r => r.kind)).toEqual(['metro'])
+})
+
+test('regression: an owned shell job stays tracked after reparenting but a reused orphan pid does not', async () => {
+  const shared = world()
+  const io = ioFor(shared, 'orphan-job')
+  writeSession(shared, 'orphan-job', { profile: 'default', owned: [{ kind: 'process', id: 'pid:111@original', pid: 111, label: 'job', profile: 'default', cwd: '/work/repo', startedAt: 'original' }], mutexes: [], changes: [] })
+  const originalRun = io.run
+  io.run = async (argv, options) => argv[1] === '-axo' ? result(0, '101 1 100 S claude --test\n111 1 2048 S job') : argv.includes('lstart=') ? result(0, 'original') : originalRun(argv, options)
+  await scanShellProcesses(io)
+  expect(readSession(shared, 'orphan-job')?.owned[0]?.id).toBe('pid:111@original')
+  io.run = async (argv, options) => argv[1] === '-axo' ? result(0, '101 1 100 S claude --test\n111 1 2048 S unrelated') : argv.includes('lstart=') ? result(0, 'reused') : originalRun(argv, options)
+  await scanShellProcesses(io)
+  expect(readSession(shared, 'orphan-job')?.owned).toEqual([])
 })

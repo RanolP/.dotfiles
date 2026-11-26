@@ -409,12 +409,6 @@ in
         source = ./configs/claude/hooks/architect-rules.py;
         executable = true;
       };
-      # Nice every Bash call and tell the agent about memory pressure, high load,
-      # or a process resource-watchdog froze; never denies (2026-11-23 dyld xref panic).
-      ".claude/hooks/resource-guard.py" = {
-        source = ./configs/claude/hooks/resource-guard.py;
-        executable = true;
-      };
       # Enforce the repo's declared package manager (npm/pnpm/yarn/bun).
       ".claude/hooks/package-manager-guard.py" = {
         source = ./configs/claude/hooks/package-manager-guard.py;

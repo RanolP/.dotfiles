@@ -15,11 +15,9 @@ cost grows with the SQUARE of the turn count -- injecting the full spec would
 add hundreds of thousands of tokens to a marathon session. The full spec stays
 in AGENTS.md; this is the check, not a replacement.
 
-One more line gives the model what it cannot see on its own: the wall clock
-with the previous turn's duration, so it notices a slow turn, and the machine's
-load, so it weighs it before a heavy job. Both are read fresh on every prompt
-because a figure read at session start is stale in minutes. Memory and running
-processes are left for the model to query when the load reads high.
+One more line gives the model the wall clock with the previous turn's duration,
+so it notices a slow turn. The load reading moved to the resources mod, which
+reads it fresh on every prompt.
 
 Self-check: `python3 output-shape-reminder.py --selftest`.
 """
@@ -39,22 +37,6 @@ MAX_CHARS = 200
 
 # Tail of the transcript scanned for the previous turn's bounds, in bytes.
 TRANSCRIPT_TAIL = 262144
-
-# 1-minute load per core at or above this reads as "high": runnable work
-# already exceeds what the cores clear, so another heavy job queues behind it.
-HIGH_LOAD_PER_CORE = 0.8
-
-
-def load_line():
-    """Return the one-line load reading, or None where the OS exposes none."""
-    try:
-        one, _, _ = os.getloadavg()
-    except OSError:
-        return None
-    cores = os.cpu_count() or 1
-    level = "high" if one / cores >= HIGH_LOAD_PER_CORE else "normal"
-    return f"load {one:.1f}/{cores} cores ({level})"
-
 
 def is_prompt(entry):
     """True for a user-typed prompt, False for a tool result or a meta entry."""
@@ -127,7 +109,7 @@ def main():
     if data.get("source") == "poll_event":
         sys.exit(0)
     print(REMINDER)
-    parts = [clock_line(data.get("transcript_path")), load_line()]
+    parts = [clock_line(data.get("transcript_path"))]
     print("; ".join(p for p in parts if p) + ".")
     sys.exit(0)
 
@@ -136,8 +118,6 @@ def selftest():
     assert len(REMINDER) <= MAX_CHARS, "reminder too long -- cost grows with turns^2"
     for check in ("outcome", "closer", "stop", "choices", "next step"):
         assert check in REMINDER, f"reminder dropped the {check!r} check"
-    line = load_line()
-    assert line is None or (line.startswith("load ") and len(line) <= 40), line
 
     import tempfile
 

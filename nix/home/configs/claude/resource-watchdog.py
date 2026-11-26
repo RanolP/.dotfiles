@@ -2,7 +2,7 @@
 """Freeze the biggest agent-spawned process when macOS memory pressure leaves normal, and resume it once pressure
 has stayed normal. Incident: 2026-11-23, three parallel `ipsw dyld xref` on a 5.8GB dyld cache panicked the Mac.
 Looks only at memory, never at command names: whatever an agent runs is covered.
-Each stop is recorded with the Claude Code session that owns the process, so resource-guard.py tells that session
+Each stop is recorded with the Claude Code session that owns the process, so the resources mod tells that session
 alone what was stopped, why, and when it resumes."""
 import glob, json, os, signal, subprocess, time
 from pathlib import Path
@@ -95,7 +95,7 @@ def save(entries: list):
     closed = [e for e in entries if e.get("resumed_at")]
     entries = closed[-KEEP:] + [e for e in entries if not e.get("resumed_at")]
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE.with_suffix(".tmp")  # resource-guard.py reads this on every Bash call: never let it see half a file
+    tmp = STATE.with_suffix(".tmp")  # the resources mod reads this on every Bash call: never let it see half a file
     tmp.write_text(json.dumps(entries, ensure_ascii=False, indent=1))
     os.replace(tmp, STATE)
 
@@ -111,7 +111,7 @@ def stop_one(level: int, procs: dict) -> dict | None:
     # nothing more. Measured 2026-11-23: skipping only the stopped one made each 2 s tick freeze the next-largest
     # child, and 12 MCP servers and codex bridges of other sessions were frozen within 25 s while pressure stayed
     # at warn. The same run showed SIGSTOP alone left pressure at warn for 98 s; only SIGKILL returned it to normal.
-    # The watchdog still never kills, on the user's order (2026-11-23): resource-guard.py tells the owning agent,
+    # The watchdog still never kills, on the user's order (2026-11-23): the resources mod tells the owning agent,
     # which may kill it itself; otherwise the watchdog resumes it (RESUME_POLICY).
     if not kids or any(k[2].startswith("T") for k in kids):
         return None

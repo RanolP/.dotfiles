@@ -169,10 +169,6 @@
           },
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/resource-guard.py"
-          },
-          {
-            "type": "command",
             "command": "python3 ~/.claude/hooks/git-integrity-guard.py"
           },
           {

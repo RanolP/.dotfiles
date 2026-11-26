@@ -1,5 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ResourceInput } from '../types'
+import { loadLine, loadNotices, processRows, shellJobs } from './load'
 
 function fnv1a(seed: string): number {
   let h = 0x811c9dc5
@@ -13,7 +14,7 @@ const HEARTBEAT_TTL_MS = 60 * 60 * 1000
 // This path predates the split and stays for live registrations.
 const RESOURCE_STATE = '.local/state/clm/resources'
 
-export type OwnedKind = 'android-emulator' | 'ios-simulator' | 'metro' | 'web-dev' | 'pr' | 'custom'
+export type OwnedKind = 'android-emulator' | 'ios-simulator' | 'metro' | 'web-dev' | 'pr' | 'custom' | 'process'
 export type OwnedResource = {
   kind: OwnedKind
   id: string
@@ -21,6 +22,8 @@ export type OwnedResource = {
   profile: string
   cwd: string
   startedAt: string
+  pid?: number
+  rss?: number
   backgroundTaskId?: string
 }
 export type MutexRecord = { name: string; aliases: string[]; description: string; registeredBy: string }
@@ -62,8 +65,10 @@ const pendingNoticesShown = new Set<string>()
 let activeResourceIo: ResourceIo | undefined
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 const isOwnedResource = (value: unknown): value is OwnedResource => isRecord(value)
-  && typeof value.kind === 'string' && ['android-emulator', 'ios-simulator', 'metro', 'web-dev', 'pr', 'custom'].includes(value.kind)
+  && typeof value.kind === 'string' && ['android-emulator', 'ios-simulator', 'metro', 'web-dev', 'pr', 'custom', 'process'].includes(value.kind)
   && typeof value.id === 'string' && typeof value.label === 'string' && typeof value.profile === 'string' && typeof value.cwd === 'string' && typeof value.startedAt === 'string'
+  && (value.pid === undefined || typeof value.pid === 'number')
+  && (value.rss === undefined || typeof value.rss === 'number')
   && (value.backgroundTaskId === undefined || typeof value.backgroundTaskId === 'string')
 const isIdentity = (value: unknown): value is StoredIdentity => isRecord(value)
   && typeof value.cwd === 'string' && typeof value.repo === 'string' && typeof value.heartbeat === 'number'
@@ -1004,6 +1009,7 @@ export const endResources = async (io: ResourceIo, session: string, reason: stri
   }
   const identity = initial.identity ?? await runtimeIdentity(io)
   for (const resource of initial.owned) {
+    if (resource.kind === 'process') continue
     if (!hasEndBudget(io)) { io.log(`resources: session.end budget exhausted before stopping ${resource.kind} ${resource.id}`); break }
     if (await otherResourceReferences(io, session, resource)) {
       await mutateSession(io, session, current => ({ next: { ...current, owned: current.owned.filter(item => item.kind !== resource.kind || item.id !== resource.id) }, result: undefined }))
@@ -1014,6 +1020,40 @@ export const endResources = async (io: ResourceIo, session: string, reason: stri
   }
   const remaining = await readSession(io, session)
   if (!remaining.mutexes.length && !remaining.owned.length && !remaining.transferredFrom?.length) await removeSession(io, session)
+}
+
+export const scanShellProcesses = async (io: ResourceIo) => {
+  const session = await io.sessionId()
+  const identity = await identityFor(io, session)
+  if (identity.pid === undefined) return
+  const snapshot = await run(io, ['/bin/ps', '-axo', 'pid=,ppid=,rss=,stat=,command='])
+  if (!snapshot || snapshot.exitCode !== 0) return
+  const jobs = shellJobs(snapshot.stdout, identity.pid)
+  const shellPids = new Set(jobs.map(job => job.pid))
+  const current = await readSession(io, session)
+  const rows = processRows(snapshot.stdout)
+  for (const resource of current.owned) {
+    const row = resource.kind === 'process' && resource.pid !== undefined ? rows.get(resource.pid) : undefined
+    if (row && !row.stat.startsWith('Z') && !jobs.some(job => job.pid === row.pid)) jobs.push(row)
+  }
+  const covered = new Set(current.owned.filter(r => r.kind !== 'process').flatMap(r => r.pid === undefined ? [] : [r.pid]))
+  for (const resource of current.owned.filter(r => r.kind === 'metro' || r.kind === 'web-dev')) {
+    const listeners = await run(io, ['lsof', '-nP', `-iTCP:${resource.id}`, '-sTCP:LISTEN', '-t'])
+    for (const pid of listeners?.stdout.trim().split(/\s+/) ?? []) covered.add(Number(pid))
+  }
+  const detected: OwnedResource[] = []
+  for (const job of jobs) {
+    if (covered.has(job.pid) || current.owned.some(resource =>
+      (resource.kind === 'android-emulator' && job.command.includes(`-avd ${resource.id.replace(/^avd:/, '')}`))
+      || (resource.kind === 'ios-simulator' && job.command.includes(resource.id)))) continue
+    const start = await run(io, ['/bin/ps', '-p', String(job.pid), '-o', 'lstart='])
+    if (!start || start.exitCode !== 0 || !start.stdout.trim()) continue
+    const previous = current.owned.find(resource => resource.kind === 'process' && resource.pid === job.pid)
+    if (previous && previous.id !== `pid:${job.pid}@${start.stdout.trim()}` && !shellPids.has(job.pid)) continue
+    detected.push({ kind: 'process', id: `pid:${job.pid}@${start.stdout.trim()}`, pid: job.pid, rss: job.rss, label: job.command.slice(0, 80), startedAt: start.stdout.trim(), profile: identity.profile, cwd: identity.cwd })
+  }
+  if (!detected.length && !current.owned.some(r => r.kind === 'process')) return
+  await mutateSession(io, session, state => ({ next: { ...state, owned: [...state.owned.filter(r => r.kind !== 'process'), ...detected] }, result: undefined }))
 }
 
 const resourceActions = new Set(['list', 'who', 'register', 'unregister', 'acquire', 'release', 'forget'])
@@ -1079,12 +1119,22 @@ export const registerResources: Register = (on) => {
       return undefined
     })
     if (denied) return { deny: denied }
+    const notes = await (async () => {
+      const session = await io.sessionId()
+      return serialized(`load-notices/${session}`, async () => loadNotices(io, (await identityFor(io, session)).pid, (await readSession(io, session)).owned))
+    })().catch(err => {
+      io.log(`resources: load notices failed: ${String(err)}`)
+      return []
+    })
     const result = await next(e)
     try {
       const records = detectOwned(e.command, result, await io.cwd(), await io.now(), await profileFor(io))
       await recordDetected(io, records)
     } catch (err) { $.ui.log(`resources: Bash result tracking failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
-    return result
+    if (e.agentId === undefined) {
+      try { await scanShellProcesses(io) } catch (err) { io.log(`resources: process detection failed: ${String(err)}`) }
+    }
+    return notes.length ? { ...result, context: [...('context' in result ? result.context ?? [] : []), ...notes] } : result
   })
 
   on('tool.call', { tool: RESOURCE_TOOL }, async ($, e) => {
@@ -1095,6 +1145,17 @@ export const registerResources: Register = (on) => {
     } catch (err) {
       $.ui.log(`resources: resource action failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       return { deny: `resource failed: ${String(err).slice(0, 160)}` }
+    }
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    try {
+      const line = await loadLine(activateResourceIo($))
+      return next({ ...e, context: [...(e.context ?? []), line] })
+    } catch (err) {
+      $.ui.log(`resources: prompt load failed: ${String(err)}`, { to: 'debug' })
+      return next(e)
     }
   })
 

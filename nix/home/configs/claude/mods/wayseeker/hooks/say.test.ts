@@ -22,7 +22,6 @@ function world(on: any, seed?: string[]) {
   on('fs.write', (_$: any, e: any) => { files[e.path] = e.text; return { value: undefined } })
   on('ui.log', () => ({ value: undefined }))
   on('tool.call', () => ({ result: 'ok' }))
-  on('classic.Stop', () => ({}))
   const ledger = () => readWayseekerLedger(JSON.parse(files[STATE] ?? '{}')[wayseekerKey('s1:main')])
   return { rows, ledger }
 }
@@ -34,7 +33,14 @@ const say = async ($: Engine, lines: string[], agentId?: string): Promise<SayRes
 const human = (text: string): Row => ({ role: 'user', text, toolUses: [] })
 const acting = (...uses: [tool: string, input?: Record<string, unknown>][]): Row =>
   ({ role: 'assistant', text: '', toolUses: uses.map(([tool, input], i) => ({ tool_use_id: 't' + i, tool, input: input ?? {} })) })
-const stop = ($: Engine, active = false) => $.classic.Stop({ stop_hook_active: active })
+// The context a main-thread call adds; the turn's last row holds the call itself, so it is popped and replayed through tool.call.
+const nudged = async ($: Engine, rows: Row[]): Promise<string | undefined> => {
+  const last = rows.at(-1)!.toolUses.at(-1)!
+  rows.at(-1)!.toolUses.pop()
+  const r = await $.tool.call({ tool: last.tool, ...last.input } as unknown as Parameters<Engine['tool']['call']>[0]) as { context?: string[] }
+  rows.at(-1)!.toolUses.push(last)
+  return r.context?.find(text => text.includes(SAY_TOOL_ID))
+}
 
 // Regression caught: the speaker taken from the line instead of the call site, so a subagent could speak as the main agent.
 test('a subagent call lands as worker and a main-thread call as agent', async ($, on) => {
@@ -108,60 +114,56 @@ test('want(p) leaves the open list once done(p) holds', async ($, on) => {
   expect(result.open.want).toEqual([])
 })
 
-// Regression caught: a turn that edited files ending without a ledger record, or the nudge re-blocking its own re-prompt forever.
-test('Stop blocks once after an Edit with no say', async ($, on) => {
+// Regression caught: a turn that edited files ending without a ledger record, or the nudge repeating on every later call of that turn.
+test('the first Edit of a turn with no say gets the nudge once', async ($, on) => {
   const { rows } = world(on)
   rows.push(human('fix it'), acting(['Edit']))
-  expect((await stop($)).block).toContain(SAY_TOOL_ID)
-  expect((await stop($, true)).block).toBeUndefined()
+  expect(await nudged($, rows)).toContain(SAY_TOOL_ID)
+  rows.push(acting(['Write']))
+  expect(await nudged($, rows)).toBeUndefined()
+  rows.push(human('again'), acting(['Edit']))
+  expect(await nudged($, rows)).toContain(SAY_TOOL_ID)
 })
 
 // Regression caught: nudging a turn that already recorded its work.
-test('Stop does not block when say was called this turn', async ($, on) => {
+test('no nudge when say was called earlier this turn', async ($, on) => {
   const { rows } = world(on)
-  rows.push(human('fix it'), acting(['Edit'], [SAY_TOOL_ID, { lines: [] }]))
-  expect((await stop($)).block).toBeUndefined()
+  rows.push(human('fix it'), acting([SAY_TOOL_ID, { lines: [] }], ['Edit']))
+  expect(await nudged($, rows)).toBeUndefined()
 })
 
 // Regression caught: nudging a turn that only looked around, or one whose Edit belonged to an earlier turn.
-test('Stop does not block a turn with only read-only Bash', async ($, on) => {
+test('no nudge for read-only Bash', async ($, on) => {
   const { rows } = world(on)
   rows.push(human('before'), acting(['Edit']), human('look'), acting(['Bash', { command: 'git -C /x status && rg foo src | head -5 2>/dev/null' }], ['Bash', { command: 'claude plugin test .' }]))
-  expect((await stop($)).block).toBeUndefined()
-})
-
-// Regression caught: the nudge looping on the re-prompt it caused.
-test('Stop does not block when stop_hook_active', async ($, on) => {
-  const { rows } = world(on)
-  rows.push(human('fix it'), acting(['Write']))
-  expect((await stop($, true)).block).toBeUndefined()
+  expect(await nudged($, rows)).toBeUndefined()
 })
 
 // Regression caught: the nudge never firing in REPL-driven sessions, where files change through edit()/write() inside a script.
 test('a REPL call with edit( and no say triggers the nudge', async ($, on) => {
   const { rows } = world(on)
   rows.push(human('fix it'), acting(['REPL', { code: "await edit(H+'say.ts', 'a', 'b')" }]))
-  expect((await stop($)).block).toContain(SAY_TOOL_ID)
+  expect(await nudged($, rows)).toContain(SAY_TOOL_ID)
 })
 
 // Regression caught: a REPL script that only reads (git status, cd + ls with an interpolated dir) being nudged as work.
 test('a REPL call running only read-only shell does not trigger the nudge', async ($, on) => {
   const { rows } = world(on)
   rows.push(human('look'), acting(['REPL', { code: 'const s = await $\x60git status\x60.text(); const l = await $\x60cd ${D} && ls hooks\x60; $(\'pwd\')' }]))
-  expect((await stop($)).block).toBeUndefined()
+  expect(await nudged($, rows)).toBeUndefined()
 })
 
 // Regression caught: a REPL script hiding a mutation behind a shell template, an interpolated head, or a tools.Bash call.
 test('REPL shell outside the allowlist counts as work', async ($, on) => {
   const { rows } = world(on)
   rows.push(human('a'), acting(['REPL', { code: 'await $\x60git commit -m ${msg}\x60' }]))
-  expect((await stop($)).block).toBeDefined()
+  expect(await nudged($, rows)).toBeDefined()
   rows.push(human('b'), acting(['REPL', { code: 'await $\x60${cmd} status\x60' }]))
-  expect((await stop($)).block).toBeDefined()
+  expect(await nudged($, rows)).toBeDefined()
   rows.push(human('c'), acting(['REPL', { code: "await tools.Bash({ command: 'ls' })" }]))
-  expect((await stop($)).block).toBeDefined()
+  expect(await nudged($, rows)).toBeDefined()
   rows.push(human('d'), acting(['REPL', { code: "await edit(p, 'a', 'b'); await tools['" + SAY_TOOL_ID + "']({ lines: [] })" }]))
-  expect((await stop($)).block).toBeUndefined()
+  expect(await nudged($, rows)).toBeUndefined()
 })
 
 // Regression caught: the first say of a session rejected for numbering because nothing told the agent which id comes next.

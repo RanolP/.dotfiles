@@ -3,7 +3,7 @@ import { evaluate } from './eval'
 import { extractTurn } from './extract'
 import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, readWayseekerTurns, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { promptFingerprint, promptsKey, readPromptRows, reconcilePrompts } from './rewind'
-import { needsSayNudge, openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_NUDGE, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
+import { isHumanRow, needsSayNudge, openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_NUDGE, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
 import { deliveredSectionKey, nextId, readDeliveredSection } from './store'
 import { isHarnessText, isRecord, stripReminders } from './text'
 import type { WayseekerInstructionsInput } from '../types'
@@ -220,6 +220,26 @@ const instructionAttachment = async ($: EngineInterface, atSubmit: boolean): Pro
   })
 }
 
+// Human rows seen when the session's turn was last nudged: one nudge per turn, at its first change with no say before it.
+const NUDGED_KEY = 'say-nudged-at'
+async function sayNudge($: EngineInterface, call: { tool: string } & Record<string, unknown>): Promise<string | undefined> {
+  try {
+    const rows = await $.session.messages()
+    if (!needsSayNudge([...rows, { role: 'assistant', text: '', toolUses: [{ tool: call.tool, input: call }] }])) return undefined
+    const session = await $.session.id()
+    const store = sessionStore($, session)
+    const humans = rows.filter(isHumanRow).length
+    return serialized(session, async () => {
+      if (await store.get(NUDGED_KEY) === humans) return undefined
+      await store.set(NUDGED_KEY, humans)
+      return SAY_NUDGE
+    })
+  } catch (err) {
+    $.ui.log(`wayseeker: say nudge check failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+    return undefined
+  }
+}
+
 export const register: Register = on => {
   on('engine.create', async ($, e, next) => {
     const beneath = await next(e)
@@ -250,18 +270,6 @@ export const register: Register = on => {
     for (const line of landedActs(result.landed)) $.ui.log(line)
     for (const { line, error } of result.rejected) $.ui.log(`wayseeker: say rejected ${JSON.stringify(line)} (${error.slice(0, 160)})`, { to: 'debug' })
     return { result: JSON.stringify(result) }
-  })
-
-  // A turn that changed something and recorded nothing gets one nudge; stop_hook_active marks the turn it re-prompted.
-  on('classic.Stop', async ($, e, next) => {
-    const result = await next(e)
-    if (e.stop_hook_active || result.block !== undefined) return result
-    try {
-      if (needsSayNudge(await $.session.messages())) return { ...result, block: SAY_NUDGE }
-    } catch (err) {
-      $.ui.log(`wayseeker: say nudge check failed (${String(err).slice(0, 160)})`, { to: 'debug' })
-    }
-    return result
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -328,7 +336,9 @@ export const register: Register = on => {
     if (e.agentId !== undefined || result.deny !== undefined) return result
     try {
       const attachment = await instructionAttachment($, false)
-      return attachment === undefined ? result : { ...result, context: [...(result.context ?? []), attachment] }
+      const nudge = await sayNudge($, e as unknown as { tool: string } & Record<string, unknown>)
+      const added = [attachment, nudge].filter((text): text is string => text !== undefined)
+      return added.length ? { ...result, context: [...(result.context ?? []), ...added] } : result
     } catch (err) {
       $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       return result

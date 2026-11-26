@@ -1,5 +1,5 @@
 // The say tool: the agent (or a worker) writes its own wayseeker lines, checked line by line like an extraction,
-// plus the Stop-hook nudge for a turn that changed files without one.
+// plus the mid-turn nudge for a turn that changed files without one.
 import { evaluate } from './eval'
 import { L1_KINDS, L1_RULES, l1Forms, WITHDRAWAL_RULE } from './extract'
 import { append, liveIds, nextId, type Ledger } from './store'
@@ -166,7 +166,7 @@ export function isReadOnlyBash(command: string): boolean {
 }
 
 type Row = { role: string; text: string; toolUses: readonly { tool: string; input: Record<string, unknown> }[]; toolResults?: readonly unknown[] }
-const isHumanRow = (row: Row) => row.role === 'user' && !row.toolResults?.length && (text => text !== '' && !isHarnessText(text))(stripReminders(row.text))
+export const isHumanRow = (row: Row) => row.role === 'user' && !row.toolResults?.length && (text => text !== '' && !isHarnessText(text))(stripReminders(row.text))
 const MUTATORS = new Set(['Edit', 'Write', 'NotebookEdit'])
 // The REPL tool's file and tool globals that change something.
 const REPL_WRITES = /(?<![\w$.])(?:edit|write)\s*\(|\btools\.(?:Edit|Write|Bash|NotebookEdit)\b/
@@ -221,4 +221,5 @@ export function needsSayNudge(rows: readonly Row[]): boolean {
     || (use.tool === 'REPL' && replDoesWork(text(use.input.code))))
 }
 
-export const SAY_NUDGE = `This turn changed files or ran a mutating command and recorded nothing in wayseeker. Call ${SAY_TOOL_ID} once with what you did and decided (say(done(x)), try(p) for a choice the user should make, want(p) for what is still open). Then write your answer to the user's last message again, in full, as your final message: the user reads only that message, so it answers their question and leaves out this note and the say call.`
+// Delivered as tool.call context at the turn's first unrecorded change, so the record lands mid-turn and the final reply stays the user's answer.
+export const SAY_NUDGE = `This turn has changed something and recorded nothing in wayseeker yet. Before your final reply, call ${SAY_TOOL_ID} once with what you did and decided (say(done(x)), try(p) for a choice the user should make, want(p) for what is still open), then keep working on the user's request.`

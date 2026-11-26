@@ -13,6 +13,8 @@ let
     GH_TELEMETRY = "false";
     LIGHTPANDA_DISABLE_TELEMETRY = "true";
     PI_TELEMETRY = "0";
+    # T3 Code copies this from `$SHELL -ilc` (/bin/sh reads ~/.profile) at launch.
+    T3CODE_TELEMETRY_ENABLED = "false";
     NEXT_TELEMETRY_DISABLED = "1";
     TURBO_TELEMETRY_DISABLED = "1";
     ASTRO_TELEMETRY_DISABLED = "1";

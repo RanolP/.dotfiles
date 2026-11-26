@@ -216,7 +216,7 @@ test('a chat question with no ask call puts the reminder into the next prompt on
 })
 
 // Regression: a reminder after an answer that already queued its question or asked nothing.
-test('a turn that called ask or ended without a question mark adds no reminder', async ($, on) => {
+test('a turn that called ask, ended without a question mark, or ended on a 질문: line adds no reminder', async ($, on) => {
   dialogs(on, {})
   const seen = contexts(on)
   await start($, on)
@@ -227,6 +227,9 @@ test('a turn that called ask or ended without a question mark adds no reminder',
   await $.turn.start({ text: 'work', turnId: 't2' })
   await finish($, 'Done.')
   await $.prompt.submit({ text: 'b' })
-  expect(seen.length).toBe(2)
+  await $.turn.start({ text: 'work', turnId: 't3' })
+  await finish($, '고칠 곳은 두 군데다.\n질문: 지금 고친다?')
+  await $.prompt.submit({ text: 'c' })
+  expect(seen.length).toBe(3)
   expect(seen.some(hasReminder)).toBe(false)
 })

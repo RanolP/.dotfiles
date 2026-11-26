@@ -46,7 +46,7 @@ RUBRIC = (
     "  - haiku  : mechanical work (fmt, lint, search, rename, file reads, "
     "pattern matching, data collection)\n"
     "  - sonnet : well-scoped edits and lookups\n"
-    "  - opus   : everything needing reasoning (DEFAULT)\n"
+    "  - opus   : everything needing reasoning (pick this when unsure)\n"
     "Fable is reachable only through the `oracle` agent."
 )
 

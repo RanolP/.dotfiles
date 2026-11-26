@@ -236,7 +236,7 @@ export const register: Register = on => {
     if (!e.agentId) await $.state.set(TURN, null)
     if (!e.agentId && !e.isAborted && !(await $.state.get(QUEUED)).value) {
       const last = e.answer.trim().split('\n').map(l => l.trim()).filter(Boolean).pop() ?? ''
-      if (last.endsWith('?')) await $.state.set(REMIND, true)
+      if (last.endsWith('?') && !last.startsWith('질문:')) await $.state.set(REMIND, true)
     }
     return r
   })

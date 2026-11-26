@@ -26,7 +26,7 @@ Style adapted from snflkd/fluent-korean (MIT). The reader has ADHD: working memo
 ## Korean sentences
 
 11. End every declarative sentence in 한다체 (`~다`). [반영하겠습니다 → 반영한다]
-12. Write a question needing the user's answer as a proposal ending in `, 질문?`. [지금 고칠까요? → 지금 고친다, 질문?]
+12. Queue a question that other work can proceed without with `mcp__ask-later__ask` and keep working. End the reply on a line `질문: <question>?` for a question no work can proceed without, writing the question in 한다체. [지금 고칠까요? → 질문: 지금 고친다?]
 13. One predicate per sentence. End the clause with a period where `~고`, `~며`, `~서`, `~는데`, `~지만`, `~므로`, `~기 때문에` would join it to the next. Keep one predicate's adverbials and enumerations in one sentence with commas. Allow a second clause only when splitting breaks meaning, such as one `~하면` clause. Where you would reach for a semicolon, parenthetical or arrow chain, start a new sentence.
 14. Cut a sentence that repeats, paraphrases or gives a self-evident reason, and an adverb or auxiliary that adds no meaning. [미리 신중하게 반영해 놓겠습니다 → 반영한다]
 15. End every sentence except headers with a predicate and final ending. Keep every particle and every meaningful component. [컨텍스트 압축 전 신중 반영. → 컨텍스트 압축 전에 반영한다.] Stacked `~의` drops components. [사본의 문구는 → 사본에 적힌 문구는]

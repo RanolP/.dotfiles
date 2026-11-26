@@ -63,6 +63,17 @@ test('recording a step withdraws earlier agent done claims and done rules for it
   expect(holds(said.ledger, 'done(other)')).toBe(true)
 })
 
+// Regression caught: withdrawing a stale claim by its @n also withdraws the unrelated lines the same say call landed.
+test('recording a step keeps the live siblings of a withdrawn claim', async () => {
+  let ledger = appendAll(['decl done(task) key(task) "{task}을 마쳤다"', 'decl note(x) key(x) "{x} note"'])
+  ledger = sayLines(ledger, ['say(done(parser))', 'say(note(design))'], 'agent').ledger
+  const recorded = writeStepRule(ledger, 'parser', ITEMS)
+  expect(recorded.errors).toEqual([])
+  expect(holds(recorded.ledger, 'done(parser)')).toBe(false)
+  expect(holds(recorded.ledger, 'note(design)')).toBe(true)
+  expect(recorded.ledger.utterances.filter(u => u.speaker === 'agent' && u.source.includes('note(design)')).at(-1)?.source).toMatch(/^@\d+ agent: say\(note\(design\)\)$/)
+})
+
 // Regression caught: the rubric rule or the goal rules fail the term-cycle guard or never derive done of the goal.
 test('check pass lines derive done(step), and through the goal rules done(goal)', async () => {
   let ledger = goalLedger()

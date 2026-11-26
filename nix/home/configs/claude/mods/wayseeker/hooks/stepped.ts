@@ -4,7 +4,7 @@
 // writes say(pass(s, i)) for each item judgeRubric passes and reject(@n) of a pass line whose item now fails.
 import { checkEvidence, type Evidence, type Sources } from './evidence'
 import { append, liveIds, nextId, type Ledger } from './store'
-import { type Fact, type Utterance } from './syntax'
+import { printLine, type Fact, type Utterance } from './syntax'
 import { isRecord } from './text'
 
 export type RubricItem =
@@ -283,8 +283,21 @@ export function writeStepRule(ledger: Ledger, step: string, items: readonly Rubr
   // The user outranks check, so a user line stands; extraction and the say tool refuse new lower-ranked claims.
   const stale = first.ledger.utterances.filter(u => u.speaker !== CHECK_SPEAKER && u.speaker !== 'user' && withRule.has(u.id)
     && rubricClaimError(first.ledger, u))
-  const swept = appendAsCheck(first.ledger, [...new Set(stale.map(u => u.id))].map(id => 'reject(@' + id + ')'))
-  return { ledger: swept.ledger, landed: [...first.landed, ...swept.landed], errors: [...first.errors, ...swept.errors] }
+  // reject withdraws a whole @n, and one say call's lines share it, so the claim's unrelated siblings land again under
+  // their own speaker on one fresh id; a rewind past this call drops the reject and the copies together.
+  let current = first.ledger
+  const landed = [...first.landed], errors = [...first.errors]
+  for (const id of new Set(stale.map(u => u.id))) {
+    const swept = appendAsCheck(current, ['reject(@' + id + ')'])
+    current = swept.ledger; landed.push(...swept.landed); errors.push(...swept.errors)
+    const fresh = nextId(current)
+    for (const sibling of first.ledger.utterances.filter(u => u.id === id && !stale.includes(u))) {
+      const line = printLine({ ...sibling, id: fresh })
+      const result = append(current, line)
+      if (result.ok) { current = result.ledger; landed.push(line) } else errors.push(line + ': ' + result.errors.join('; '))
+    }
+  }
+  return { ledger: current, landed, errors }
 }
 
 /** Lands a check run: say(pass(step, item)) for a newly passing item, reject(@n) of the live pass of a now failing one. */

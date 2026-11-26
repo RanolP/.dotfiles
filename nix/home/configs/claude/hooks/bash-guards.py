@@ -3,10 +3,10 @@
 import contextlib
 import io
 import json
-from pathlib import Path
+import logging
 import runpy
 import sys
-import traceback
+from pathlib import Path
 
 GUARDS = (
     "agent-tooling-guard.py",
@@ -53,7 +53,7 @@ def run_guard(path, payload):
                     print(exc.code, file=sys.stderr)
             except BaseException:
                 status = 1
-                traceback.print_exc()
+                logging.getLogger("bash-guards").exception("Guard failed")
     finally:
         sys.stdin, sys.argv = stdin, argv
         sys.path[:] = search_path

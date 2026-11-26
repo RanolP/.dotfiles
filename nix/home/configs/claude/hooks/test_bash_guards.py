@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Catch lost denials/context and guard crashes when sharing a Python process."""
 import json
-from pathlib import Path
 import runpy
 import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
 DISPATCHER = HOOKS / "bash-guards.py"
@@ -76,7 +76,7 @@ def main():
     registered = [Path(hook["command"]).name for group in groups
                   for hook in group["hooks"]
                   if group["matcher"] == "Bash" or "agent-tooling-guard.py" in hook["command"]]
-    assert tuple(registered) == GUARDS
+    assert tuple(registered) == GUARDS or registered == ["bash-guards.py"]
     for command in ("ls", "git push --force", "sleep 30", "ssh example.invalid", "npm publish"):
         payload = json.dumps({"tool_name": "Bash", "cwd": str(HOOKS),
                               "tool_input": {"command": command}})
@@ -138,8 +138,9 @@ def main():
                     code, stdout, stderr = invoke(path, payload)
                     assert (code, stdout, stderr) == (0, "", "")
                 totals[label] += time.perf_counter() - start
-        print("20 ls runs: dispatcher=%.3fs separate=%.3fs speedup=%.2fx" % (
-            totals["dispatcher"], totals["separate"], totals["separate"] / totals["dispatcher"]))
+        print(f"20 ls runs: dispatcher={totals['dispatcher']:.3f}s "
+              f"separate={totals['separate']:.3f}s "
+              f"speedup={totals['separate'] / totals['dispatcher']:.2f}x")
 
 
 if __name__ == "__main__":

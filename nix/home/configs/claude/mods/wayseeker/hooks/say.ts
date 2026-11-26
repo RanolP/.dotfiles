@@ -221,4 +221,4 @@ export function needsSayNudge(rows: readonly Row[]): boolean {
     || (use.tool === 'REPL' && replDoesWork(text(use.input.code))))
 }
 
-export const SAY_NUDGE = `This turn changed files or ran a mutating command and recorded nothing in wayseeker. Call ${SAY_TOOL_ID} once with what you did and decided (say(done(x)), try(p) for a choice the user should make, want(p) for what is still open), then stop.`
+export const SAY_NUDGE = `This turn changed files or ran a mutating command and recorded nothing in wayseeker. Call ${SAY_TOOL_ID} once with what you did and decided (say(done(x)), try(p) for a choice the user should make, want(p) for what is still open). Then write your answer to the user's last message again, in full, as your final message: the user reads only that message, so it answers their question and leaves out this note and the say call.`

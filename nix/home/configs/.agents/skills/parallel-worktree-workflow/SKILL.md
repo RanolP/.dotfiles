@@ -95,7 +95,7 @@ When the user says they are stepping away, collect before they go:
 
 - A done predicate every iteration can run.
 - Answers to the questions likely to stop a worker, written into the briefs.
-- A decision log at `<scratchpad>/decisions.md`, one row as each unit lands: unit, change, evidence, verdict.
+- A decision log per skill `decision-log`, one row as each unit lands (phase = the unit).
 - The stuck exit: after 3 failed hypotheses on one unit (`AGENTS.md` "A failure earns a hypothesis, never a retry"), the worker writes up why in the log and stops that unit while the others run on.
 
 WHY: an unattended run idles on the first question nobody is there to answer, and a stuck unit without an exit burns the hours the user was away.

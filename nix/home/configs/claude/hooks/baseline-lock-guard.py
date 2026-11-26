@@ -12,8 +12,9 @@ check, so the baseline is locked on disk:
     directory (or any ancestor of it);
   - this hook then denies Edit/Write/MultiEdit/NotebookEdit on any file under
     that directory, and a Bash call that passes a snapshot-update flag
-    (`--update-snapshots`, `--updateSnapshot`, `--update-baseline`, ...)
-    from a working directory at, under, or up to four levels above a lock;
+    (`--update-snapshots`, `--updateSnapshot`, `--update-baseline`, ...,
+    or `-u` beside jest/vitest/playwright) from a working directory (after a
+    leading `cd <dir> &&`) at, under, or up to four levels above a lock;
   - the user refreshes the baseline by deleting the lock file themselves.
 
 Writing the `.baseline-lock` file itself stays allowed, since that is the
@@ -26,6 +27,13 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from command_cwd import fold_leading_cd
+except Exception:  # fail-open: without the helper, a leading cd is not folded
+    def fold_leading_cd(command, cwd):
+        return cwd, command
+
 LOCK = ".baseline-lock"
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 UPDATE_FLAG = re.compile(
@@ -33,6 +41,14 @@ UPDATE_FLAG = re.compile(
     r"update-goldens?|update-golden-files|snapshot-update|record-snapshots?)\b",
     re.IGNORECASE,
 )
+# jest, vitest and playwright all take a bare -u for "update snapshots"; elsewhere
+# -u means something else (git add -u), so it counts only beside one of them.
+SNAPSHOT_RUNNER = re.compile(r"(?<![\w-])(jest|vitest|playwright)(?![\w-])")
+SHORT_UPDATE = re.compile(r"(?<![\w-])-u(?![\w-])")
+
+
+def updates_snapshots(cmd):
+    return bool(UPDATE_FLAG.search(cmd) or (SNAPSHOT_RUNNER.search(cmd) and SHORT_UPDATE.search(cmd)))
 
 
 def lock_above(path):
@@ -61,7 +77,9 @@ def lock_below(root, depth=4):
         if LOCK in files:
             return os.path.join(cur, LOCK)
         seen += 1
-        if seen >= MAX_DIRS or cur[len(root):].count(os.sep) >= depth:
+        if seen >= MAX_DIRS:
+            return None  # the budget ends the whole walk, so a wide tree cannot stall Bash
+        if cur[len(root):].count(os.sep) >= depth:
             dirs[:] = []
         else:
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS]
@@ -96,8 +114,9 @@ def reason_for(data):
         return None
     if tool == "Bash":
         cmd = ti.get("command")
-        if not isinstance(cmd, str) or not cwd or not UPDATE_FLAG.search(cmd):
+        if not isinstance(cmd, str) or not cwd or not updates_snapshots(cmd):
             return None
+        cwd, _ = fold_leading_cd(cmd, cwd)  # `cd e2e && npx playwright test -u`
         root = absolute(cwd, None)
         lock = lock_above(root) or lock_below(root)
         if lock:
@@ -151,6 +170,34 @@ def selftest():
         assert bash("npx playwright test", os.path.join(td, "e2e")) is None
         assert bash("npx playwright test --update-snapshots", td)  # project root
         assert bash("npx playwright test --update-snapshots", src) is None
+        # short -u: each runner's own update flag, missed by the long-flag regex
+        assert bash("npx jest -u", base)
+        assert bash("vitest run -u", base)
+        assert bash("npx playwright test -u", os.path.join(td, "e2e"))
+        assert bash("git add -u", base) is None  # -u without a snapshot runner
+        # a leading cd moves lock discovery to that directory
+        e2e = os.path.join(td, "e2e")
+        assert bash(f"cd '{e2e}' && npx playwright test --update-snapshots", src)
+        assert bash("cd ../e2e && npx jest -u", src)
+        # the MAX_DIRS budget stops the whole walk, not just one directory's children
+        wide = os.path.join(td, "wide")
+        for i in range(20):
+            os.makedirs(os.path.join(wide, f"d{i:02}"))
+        global MAX_DIRS
+        saved, MAX_DIRS = MAX_DIRS, 5
+        walked = []
+        real_walk = os.walk
+
+        def counting_walk(top, *a, **k):
+            for entry in real_walk(top, *a, **k):
+                walked.append(entry[0])
+                yield entry
+        os.walk = counting_walk
+        try:
+            assert lock_below(wide) is None
+        finally:
+            os.walk, MAX_DIRS = real_walk, saved
+        assert len(walked) == 5, walked
         assert reason_for({"tool_name": "Edit", "tool_input": None}) is None
         assert reason_for({"tool_name": "Read", "tool_input": {"file_path": shot}}) is None
     print("baseline-lock-guard selftest ok")

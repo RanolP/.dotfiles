@@ -45,7 +45,8 @@ def decision(data):
     if not data.get("agent_id"):
         return None  # main thread: the skill's review path governs
     op = name.rsplit("__", 1)[-1].lower()
-    if op.startswith(READ_PREFIXES):
+    # slack_get_file_upload_url reads like a get but opens an upload.
+    if op.startswith(READ_PREFIXES) and "upload" not in op:
         return None
     return DENY
 
@@ -53,18 +54,17 @@ def decision(data):
 def main():
     try:
         data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "null")
-    except ValueError:
-        sys.exit(0)  # fail-open
-    reason = decision(data)
-    if reason is None:
-        sys.exit(0)
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        }
-    }))
+        reason = decision(data)
+        if reason is not None:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            }))
+    except Exception:
+        pass  # fail-open: a bug here never blocks a call
     sys.exit(0)
 
 
@@ -76,7 +76,8 @@ def _selftest():
     for op in ("slack_send_message", "slack_schedule_message",
                "slack_send_message_draft", "slack_add_reaction",
                "slack_update_canvas", "slack_create_conversation",
-               "slack_complete_file_upload", "slack_some_new_tool"):
+               "slack_complete_file_upload", "slack_get_file_upload_url",
+               "slack_some_new_tool"):
         assert decision({"tool_name": p + op, **sub}) == DENY, op
         assert decision({"tool_name": p + op}) is None, op
     for op in ("slack_read_thread", "slack_search_users",
@@ -85,6 +86,25 @@ def _selftest():
     assert decision({"tool_name": "Bash", **sub}) is None
     assert decision({"tool_name": p + "slack_send_message", "agent_id": ""}) is None
     assert decision([1, 2]) is None
+    # fail-open: a stdin that cannot be read exits 0 with no output
+    import io
+    from contextlib import redirect_stdout
+
+    class Broken:
+        class buffer:
+            @staticmethod
+            def read():
+                raise OSError("stdin closed")
+    real_stdin, sys.stdin = sys.stdin, Broken()
+    out = io.StringIO()
+    try:
+        with redirect_stdout(out):
+            main()
+    except SystemExit as e:
+        assert e.code in (0, None), e.code
+    finally:
+        sys.stdin = real_stdin
+    assert out.getvalue() == "", out.getvalue()
     print("all guard checks passed")
 
 

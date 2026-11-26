@@ -42,14 +42,26 @@ function parseArgs(argv) {
   return o;
 }
 
-function run(argv) {
+// Every gh child gets a deadline: the time left on --timeout, capped at GH_CAP_MS, so a
+// stalled gh can never hold the watcher past --timeout or a --status-only read.
+const GH_CAP_MS = 60000;
+let watchDeadlineMs = Infinity; // set by main when --timeout is given
+function run(argv, capMs = GH_CAP_MS) {
+  const left = watchDeadlineMs - Date.now();
+  if (left <= 0) return Promise.reject(new QueryError("watch-deadline", "watch --timeout reached before " + argv.slice(0, 2).join(" ")));
+  const ms = Math.min(capMs, left);
   return new Promise((resolve, reject) => {
     const child = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "";
+    let stdout = "", stderr = "", timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, ms);
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     child.stdout.on("data", (c) => (stdout += c)); child.stderr.on("data", (c) => (stderr += c));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) reject(new QueryError("command-timeout", argv.slice(0, 2).join(" ") + " gave no answer within " + Math.round(ms / 1000) + "s; killed"));
+      else resolve({ code: code ?? -1, stdout, stderr });
+    });
   });
 }
 const firstLine = (s) => (s.trim().split(/\r?\n/, 1)[0] || "").slice(0, 240);
@@ -62,6 +74,14 @@ async function ghJson(args) {
     throw new QueryError(permanent ? "not-found" : "command-exit", detail, !permanent);
   }
   try { return JSON.parse(r.stdout); } catch (e) { throw new QueryError("json-parse", "gh " + args[0] + ": " + e.message); }
+}
+// A next page whose cursor is empty or already seen would loop forever, so it is a query error.
+function nextCursor(pageInfo, seen) {
+  if (!pageInfo.hasNextPage) return null;
+  const c = pageInfo.endCursor;
+  if (!c || seen.has(c)) throw new QueryError("pagination", "hasNextPage with " + (c ? "a repeated" : "an empty") + " endCursor");
+  seen.add(c);
+  return c;
 }
 const graphql = (query, ctx, extra = []) =>
   ghJson(["api", "graphql", "-f", "query=" + query, "-f", "owner=" + ctx.owner, "-f", "repo=" + ctx.repo, "-F", "pr=" + ctx.number, ...extra]);
@@ -138,7 +158,7 @@ async function readChecks(ctx, gates) {
       if (Array.isArray(v) && v.length > 0) return { source: "gh-pr-checks", checks: v.map((c) => fastCheck(c, gates)) };
     } catch { /* fall through to the rollup */ }
   }
-  const checks = [];
+  const checks = [], cursors = new Set();
   let after = null;
   do {
     const v = await graphql(ROLLUP_Q, ctx, after ? ["-f", "after=" + after] : []);
@@ -146,7 +166,7 @@ async function readChecks(ctx, gates) {
     const rollup = commits.length ? commits[commits.length - 1].commit.statusCheckRollup : null;
     if (!rollup) break;
     for (const n of rollup.contexts.nodes) { const c = rollupCheck(n, gates); if (c) checks.push(c); }
-    after = rollup.contexts.pageInfo.hasNextPage ? rollup.contexts.pageInfo.endCursor : null;
+    after = nextCursor(rollup.contexts.pageInfo, cursors);
   } while (after);
   if (checks.length) return { source: "graphql-rollup", checks };
   throw new QueryError("checks-unavailable", "could not read PR checks: gh pr checks exit=" + r.code +
@@ -154,7 +174,7 @@ async function readChecks(ctx, gates) {
 }
 
 async function readThreads(ctx) {
-  const out = [];
+  const out = [], cursors = new Set();
   let after = null;
   do {
     const v = await graphql(THREADS_Q, ctx, after ? ["-f", "after=" + after] : []);
@@ -162,7 +182,7 @@ async function readThreads(ctx) {
     for (const t of rt.nodes) if (!t.isResolved)
       out.push({ id: t.id, path: t.path, line: t.line, isOutdated: t.isOutdated,
         author: t.comments.nodes[0]?.author?.login ?? null });
-    after = rt.pageInfo.hasNextPage ? rt.pageInfo.endCursor : null;
+    after = nextCursor(rt.pageInfo, cursors);
   } while (after);
   return out;
 }
@@ -265,6 +285,7 @@ async function main() {
   const emit = (v) => process.stdout.write(render(v, o.pretty));
   const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
   const started = Date.now() / 1000;
+  if (o.timeout > 0) watchDeadlineMs = started * 1000 + o.timeout * 1000;
   const remaining = () => (o.timeout > 0 ? o.timeout - (Date.now() / 1000 - started) : Infinity);
   const queryFailure = (e, failures) => stamp({ kind: "BLOCKER", terminal: true, exitCode: EXIT.query,
     blocker: { kind: "status-query", failures, failure: e.kind, detail: e.message } });
@@ -289,6 +310,7 @@ async function main() {
       failures = 0;
     } catch (e) {
       if (!(e instanceof QueryError)) throw e;
+      if (e.kind === "watch-deadline") { const v = stamp({ kind: "TIMEOUT", terminal: true, exitCode: EXIT.timeout, reason: "deadline", detail: e.message }); emit(v); return v.exitCode; }
       failures += 1;
       if (!e.retryable || failures >= o.maxQueryErrors) { const v = queryFailure(e, failures); emit(v); return v.exitCode; }
       const retryInSeconds = Math.min(Math.max(o.interval, 60) * 2 ** (failures - 1), 300);
@@ -307,4 +329,24 @@ async function main() {
     await sleep(Math.min(o.interval, remaining()));
   }
 }
-main().then((code) => { process.exitCode = code; }, (e) => { process.stderr.write("watch-pr: " + (e.stack || e) + "\n"); process.exitCode = 70; });
+// Catches a stalled gh outliving its deadline and a pagination cursor that never advances.
+async function selftest() {
+  const assert = require("node:assert");
+  const t0 = Date.now();
+  await assert.rejects(run(["sleep", "30"], 300), (e) => e instanceof QueryError && e.kind === "command-timeout" && e.retryable);
+  assert.ok(Date.now() - t0 < 5000, "stalled child was not killed at its deadline");
+  watchDeadlineMs = Date.now() - 1;
+  await assert.rejects(run(["true"]), (e) => e instanceof QueryError && e.kind === "watch-deadline");
+  watchDeadlineMs = Infinity;
+  assert.equal((await run(["true"])).code, 0);
+  const seen = new Set();
+  assert.equal(nextCursor({ hasNextPage: true, endCursor: "a" }, seen), "a");
+  assert.throws(() => nextCursor({ hasNextPage: true, endCursor: "a" }, seen), (e) => e.kind === "pagination");
+  assert.throws(() => nextCursor({ hasNextPage: true, endCursor: "" }, seen), (e) => e.kind === "pagination");
+  assert.throws(() => nextCursor({ hasNextPage: true, endCursor: null }, seen), (e) => e.kind === "pagination");
+  assert.equal(nextCursor({ hasNextPage: false, endCursor: "b" }, seen), null);
+  process.stdout.write("watch-pr selftest ok\n");
+  return 0;
+}
+if (process.argv[2] === "--selftest") selftest().then((c) => { process.exitCode = c; }, (e) => { process.stderr.write(String(e.stack || e) + "\n"); process.exitCode = 1; });
+else main().then((code) => { process.exitCode = code; }, (e) => { process.stderr.write("watch-pr: " + (e.stack || e) + "\n"); process.exitCode = 70; });

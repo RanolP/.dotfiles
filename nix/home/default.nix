@@ -260,6 +260,7 @@ let
     reframe = localSkill "reframe";
     why = localSkill "why";
     apology = localSkill "apology";
+    socratic-tutor = localSkill "socratic-tutor";
     # Same skill under the name the user actually types. Slash-command
     # resolution uses the linked directory name, so the alias is a second link
     # to one source, not a copy.

@@ -401,6 +401,13 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Jakub Krehel"
 SPDX-License-Identifier = "MIT"
 
+# Vendored verbatim from https://github.com/janestreet/agent_skills (socratic-tutor/SKILL.md) at commit 469868f.
+[[annotations]]
+path = ["nix/home/configs/.agents/skills/socratic-tutor/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Jane Street Group, LLC <opensource-contacts@janestreet.com>"
+SPDX-License-Identifier = "MIT"
+
 [[annotations]]
 path = [
     "scripts/verify-claude-hook.sh",

@@ -29,7 +29,7 @@ The shared skill list in `nix/home/default.nix` links local skills into both Cla
 |--------|------|
 | `clm` | Tracks tasks across a session: the issue tracker, the task panel, the `/clm board` view and stepped goals |
 | `resources` | Tracks owned processes and cross-session mutexes per session, guards Bash against a mutex another session holds, detects shell-launched processes, delivers pressure/load and watchdog notices, and stops owned emulators and servers at session end |
-| `bg-compact` | Pre-computes a cached summary via `$.model.fork` past 60% of the compaction limit; at compaction answers with that summary plus every later message unchanged |
+| `bg-compact` | Owns session compaction, preserving subagent spawn reminders. Pre-computes a cached summary via `$.model.fork` past 60% of the compaction limit; at compaction answers with that summary plus every later message unchanged |
 | `hetero-subagents` | Starts Codex and Antigravity bridges for backend-specific agent tools |
 | `time-budget` | Gives estimate, checkpoint and overrun feedback; the `extend` tool records extra time in extensions.jsonl |
 

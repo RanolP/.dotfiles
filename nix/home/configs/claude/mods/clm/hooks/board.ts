@@ -1,6 +1,6 @@
 import type { ClmBoardIssue } from '../types'
 
-import { kst } from './fold'
+import { kst } from './text'
 
 // `/clm board` writes this page and opens it in the browser. Everything is
 // embedded, so the page works from a file:// URL with no network.

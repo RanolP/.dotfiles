@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, SessionMessage, SessionStartInput, ToolCallInput } from 'claude-code'
 
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
@@ -9,8 +9,8 @@ import { INTENT_SYSTEM, recordPromptIntent, type PromptIntentIo } from './intent
 import type { ClmWorkflow } from '../types'
 
 import { CONFIRM_ITEMS, CONFIRM_PREFIX } from './evidence'
-import { focusOf, parseLog, parseOps, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, bottoms, turnEnds, BG_OPTS, logEvents, panelHandlers, sixDone, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
+import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
+import { M, intentReply, use, res, BIG, MID, ROWS, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, promptInput, turnInput, commandInput, workflow, bottoms, logEvents, panelHandlers, sixDone, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 const seedWorkflow = (on: On, seed: ClmWorkflow) => {
   const isWorkflow = (e: { plugin: string; key: string }) => e.plugin === 'clm' && e.key === 'workflow'
@@ -29,7 +29,7 @@ const pendingResume = () => workflow({ resumeRequest: { text: 'continue the audi
 
 // Regression caught: an aborted main turn still submitted the queued resume.
 test('an aborted main turn leaves a queued resume unsubmitted', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [] })
+  const seen = bottoms(on, { rows: [] })
   seedWorkflow(on, pendingResume())
   await $.turn.complete(turnInput('t1', { isAborted: true }))
   expect(seen.submissions).toEqual([])
@@ -37,7 +37,7 @@ test('an aborted main turn leaves a queued resume unsubmitted', OPTS, async ($, 
 
 // Regression caught: a subagent's turn end submitted the main session's queued resume.
 test('a subagent turn end leaves a queued resume unsubmitted', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [] })
+  const seen = bottoms(on, { rows: [] })
   seedWorkflow(on, pendingResume())
   await $.turn.complete(turnInput('t-agent', { agentId: 'agent-1' }))
   expect(seen.submissions).toEqual([])
@@ -45,7 +45,7 @@ test('a subagent turn end leaves a queued resume unsubmitted', OPTS, async ($, o
 
 // Regression caught: a duplicate completion event for one turn submitted the queued resume twice.
 test('a duplicate completion of one turn submits a queued resume once', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [] })
+  const seen = bottoms(on, { rows: [] })
   seedWorkflow(on, pendingResume())
   await $.turn.complete(turnInput('t1'))
   await $.turn.complete(turnInput('t1'))
@@ -55,7 +55,7 @@ test('a duplicate completion of one turn submits a queued resume once', OPTS, as
 // Regression caught: a hand-back fabricated a handoff in the main session.
 test('intent classification skips harness hand-backs but records a composer prompt', OPTS, async ($, on) => {
   const s: State = {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({ intent: 'handoff', title: 'Fix the build' })],
   }
   const seen = bottoms(on, s)
@@ -77,7 +77,7 @@ test('intent classification skips harness hand-backs but records a composer prom
 // Regression caught: a hallucinated target id created a phantom stack entry.
 test('an unknown classifier target writes no tracker events', OPTS, async ($, on) => {
   const s: State = {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({ intent: 'handoff', target: 'ghost-1' })],
   }
   const seen = bottoms(on, s)
@@ -91,7 +91,7 @@ test('an unknown classifier target writes no tracker events', OPTS, async ($, on
 // Regression caught: another session closed the issue the classifier targeted while it ran, and "unknown target id" discarded the whole prompt's focus and deferrals.
 test('a classifier target that closed during classification keeps focus and still files deferrals', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({ intent: 'continue', target: 's1-1', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에', when: 'later' }] })],
   })
   seedTracker(seen, [{ op: 'create', issue: 's1-1', title: 'landed work', status: 'done' }])
@@ -104,7 +104,7 @@ test('a classifier target that closed during classification keeps focus and stil
 // Regression caught (e2e 2026-10-29): a handoff naming both a known target and a title threw "must set exactly one of target or title" and discarded the prompt's focus and deferrals.
 test('a handoff that sets both target and title switches to the known target and still files deferrals', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({ intent: 'handoff', target: 's1-1', title: 'README 줄 추가', deferred: [{ text: 'B 고쳐', quote: 'B는 나중에', when: 'later' }] })],
   })
   seedTracker(seen, [{ op: 'create', issue: 's1-1', title: 'readme line', status: 'todo' }])
@@ -119,7 +119,7 @@ test('a handoff that sets both target and title switches to the known target and
 // Regression caught: work explicitly bounded for later vanished instead of becoming a shared todo.
 test('a bounded deferral becomes one todo issue on the board', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({
       intent: 'handoff', title: 'A 고쳐',
       deferred: [{ text: 'B 고쳐', quote: 'B는 나중에', when: 'later' }],
@@ -135,7 +135,7 @@ test('a bounded deferral becomes one todo issue on the board', OPTS, async ($, o
 // Regression caught: classifier-authored deferred work entered the board without a supporting user quote.
 test('a deferred item the prompt does not support creates no issue', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({
       deferred: [{ text: 'Publish the release', quote: 'Publish the release later', when: 'later' }],
     })],
@@ -148,7 +148,7 @@ test('a deferred item the prompt does not support creates no issue', OPTS, async
 // Regression caught: a whole-message deferral created both the pending focus issue and a duplicate deferred issue.
 test('a whole-message deferral creates exactly one issue', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({
       intent: 'pending', title: 'B 고쳐',
       deferred: [{ text: 'B 수정해', quote: 'B는 나중에 해줘', when: 'later' }],
@@ -166,7 +166,7 @@ test('a whole-message deferral creates exactly one issue', OPTS, async ($, on) =
 test('a same-turn instruction beside a deferral files no board issue', OPTS, async ($, on) => {
   const prompt = "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘. 지금은 하지 마. 끝나면 clm_resource list 출력을 그대로 보여줘."
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({
       intent: 'pending', title: "README.md 끝에 'hello from agent' 한 줄 추가",
       deferred: [
@@ -187,7 +187,7 @@ test('a newer classifier waits for a slow earlier one and focus ends on B', OPTS
   const gate = new Promise<void>(resolve => { releaseA = resolve })
   const started = new Promise<void>(resolve => { startedA = resolve })
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({ intent: 'handoff', title: 'A task' }), intentReply({ intent: 'handoff', title: 'B task' })],
     intentBlocks: [async () => { startedA(); await gate }],
   })
@@ -211,7 +211,7 @@ test('a newer classifier waits for a slow earlier one and focus ends on B', OPTS
 test('a rebuild request without a question mark is stored', OPTS, async ($, on) => {
   const prompt = 'Please rebuild the configuration before release.'
   const seen = bottoms(on, {
-    rows: ROWS, replies: [],
+    rows: ROWS,
     intentReplies: [intentReply({ raised: [{ text: 'Rebuild the configuration before release.', quote: 'rebuild the configuration before release' }] })],
   })
   await $.prompt.submit(promptInput(prompt))
@@ -222,7 +222,7 @@ test('a rebuild request without a question mark is stored', OPTS, async ($, on) 
   ])
 })
 
-// Regression caught: the user's plain answer to the confirm question landed nothing until a later fold happened to read it, and a reply that did not answer it could still change it.
+// Regression caught: the user's plain answer to the confirm question was ignored, and an unrelated reply could still change it.
 for (const [name, assistant, reply, want] of [
   ['a bare yes after the agent relayed the question confirms all', 'Did you push the tag and tag the release?', '네', { a: 'done', b: 'done', q: 'done' }],
   ['naming one item confirms only it', 'Fixed the lint.', 's1-a 끝났어', { a: 'done', b: 'todo', q: 'question', left: '"tag the release"' }],
@@ -233,7 +233,7 @@ for (const [name, assistant, reply, want] of [
   ['a yes for an item dropped meanwhile neither reopens nor recreates it', 'Did you push the tag and tag the release?', '네', { a: 'dropped', b: 'done', q: 'done', drop: true }],
 ] as const) {
   test(`confirm answer: ${name}`, OPTS, async ($, on) => {
-    const seen = bottoms(on, { rows: [M('user', 'Ship it.'), M('assistant', assistant)], replies: [] })
+    const seen = bottoms(on, { rows: [M('user', 'Ship it.'), M('assistant', assistant)] })
     const title = `${CONFIRM_PREFIX}s1-a "push the tag" · "tag the release"`
     seedTracker(seen, [
       { op: 'create', issue: 's1-a', title: 'push the tag', status: 'todo' },
@@ -257,7 +257,7 @@ for (const [name, assistant, reply, want] of [
 test('one assistant answer resolves every matching open request', OPTS, async ($, on) => {
   const quote = 'The configuration was rebuilt and the docs were updated'
   const seen = bottoms(on, {
-    rows: [M('user', 'earlier prompt'), M('assistant', quote)], replies: [],
+    rows: [M('user', 'earlier prompt'), M('assistant', quote)],
     intentReplies: [
       intentReply({ raised: [
         { text: 'Rebuild the configuration.', quote: 'Please rebuild the configuration' },
@@ -281,7 +281,7 @@ test('one assistant answer resolves every matching open request', OPTS, async ($
 // Regression caught: an assistant-authored phrase became a user request without a supporting user quote.
 test('a request quoted only from assistant text is rejected', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: [M('assistant', 'I might rebuild the configuration next week.')], replies: [],
+    rows: [M('assistant', 'I might rebuild the configuration next week.')],
     intentReplies: [intentReply({ raised: [{ text: 'Rebuild the configuration.', quote: 'I might rebuild the configuration' }] })],
   })
   await $.prompt.submit(promptInput('Let us discuss priorities.'))
@@ -328,7 +328,7 @@ test('only human-origin prompts clear queued resumes', async () => {
 
 // Regression caught: tasks of an abandoned direction stayed open with no way for the user to clear them, or `/clm drop` left their panel tasks behind.
 test('/clm drop drops one named issue, then every open issue of the session', OPTS, async ($, on) => {
-  const s: State = { rows: [], replies: [] }
+  const s: State = { rows: [] }
   const seen = bottoms(on, s)
   panelHandlers(on, seen)
   for (const t of ['a', 'b', 'c']) await $.tool.call({ tool: 'TaskCreate', subject: `task ${t}`, description: t })
@@ -341,30 +341,9 @@ test('/clm drop drops one named issue, then every open issue of the session', OP
   expect(seen.taskCalls.filter(c => c.tool === 'TaskUpdate' && c.status === 'deleted').length).toBe(3)
 })
 
-// Regression caught: a fold re-opened a dropped issue on a tool-row quote, or a failed review landed a user-quoted re-open no reviewer had matched to that issue.
-for (const [name, status, cite, review] of [
-  ['citing only a tool result', 'done', [{ ref: 'tu_a', quote: 'log: make fails at' }], undefined],
-  ['on a failed review, even citing the user', 'doing', [{ ref: 'm4', quote: 'resume the build work please' }], new Error('review down')],
-] as const) {
-  test(`a fold move out of dropped ${name} leaves the issue dropped`, OPTS, async ($, on) => {
-    const rows = [...ROWS]
-    rows[4] = M('user', 'resume the build work please')
-    const s: State = { rows, replies: [], ...(review ? { reviewReplies: [review] } : {}) }
-    const seen = bottoms(on, s)
-    panelHandlers(on, seen)
-    await $.tool.call({ tool: 'TaskCreate', subject: 'build work', description: 'b' })
-    const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
-    const build = issueAt(tracker(), 0)
-    await runClm($, `drop ${build}`)
-    s.replies.push(JSON.stringify({ ops: [{ op: 'status', issue: build, status, evidence: cite }] }))
-    await turnEnds($, s, seen)
-    expect(tracker().map(i => [i.id, i.status])).toEqual([[build, 'dropped']])
-  })
-}
-
 // Regression caught: a worker changed the main agent's issue outside its assigned task subtree.
 test('a subagent cannot update a main-owned task', OPTS, async ($, on) => {
-  const s: State = { rows: [], replies: [] }
+  const s: State = { rows: [] }
   const seen = bottoms(on, s)
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'main root owned', status: 'doing' },
@@ -380,7 +359,7 @@ test('a subagent cannot update a main-owned task', OPTS, async ($, on) => {
 
 // Regression caught: with no classifier-written focus, clm_task, TaskUpdate and the spawn gate left main no way to own a task or spawn.
 test('a main agent with no focus can focus a task through clm_task and then spawn', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Implement it.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Implement it.')] })
   panelHandlers(on, seen)
   on('agent.spawn', () => ({ model: 'haiku', agentId: 'worker' }))
   const tracker = () => snapshot(parseLog(seen.files[TRACKER] ?? ''))
@@ -397,7 +376,7 @@ test('a main agent with no focus can focus a task through clm_task and then spaw
 
 // Regression caught: a spawn before the async intent classifier wrote main's focus was denied with no plan to report, or the planned step and the agent's root became two tasks.
 test('a spawn without focus asks for a clm_task plan, and after it the same spawn nests under the planned step', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Implement it.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Implement it.')] })
   on('agent.spawn', () => ({ model: 'haiku', agentId: 'worker' }))
   const denied = await $.agent.spawn({ prompt: 'Implement.', description: 'impl' })
   expect('deny' in denied && denied.deny).toContain('select:mcp__clm__clm_task')
@@ -414,7 +393,7 @@ test('a spawn without focus asks for a clm_task plan, and after it the same spaw
 
 // Regression caught: two parallel spawns with the same description both claimed the one planned step as their root.
 test('parallel spawns of one planned step give it to one agent and a new root to the other', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Delegate.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Delegate.')] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
     { op: 'create', issue: 's1-step', title: 'check', status: 'doing' },
@@ -433,7 +412,7 @@ test('parallel spawns of one planned step give it to one agent and a new root to
 // Regression caught: a finished subagent left its root task open, or one that ended on an error or refusal closed it as done.
 for (const [reason, status] of [['answer', 'done'], ['aborted', 'dropped'], ['error', 'dropped']] as const) {
   test(`a subagent ending with reason ${reason} closes its root as ${status}`, OPTS, async ($, on) => {
-    const seen = bottoms(on, { rows: [M('user', 'Delegate.')], replies: [] })
+    const seen = bottoms(on, { rows: [M('user', 'Delegate.')] })
     seedTracker(seen, [
       { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
       { op: 'focus', stack: ['s1-root'], pending: [], intent: 'handoff' },
@@ -446,7 +425,7 @@ for (const [reason, status] of [['answer', 'done'], ['aborted', 'dropped'], ['er
 }
 
 test('a main agent with no focus can create and focus a task by title', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Implement it.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Implement it.')] })
   const created = await $.tool.call({ tool: TASK_TOOL, title: 'fresh root', status: 'doing' } satisfies ToolCallInput)
   const root = snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.title === 'fresh root')
   expect(root?.status).toBe('doing')
@@ -458,7 +437,7 @@ test('a main agent with no focus can create and focus a task by title', OPTS, as
 
 // Regression caught: a batch plan attached steps to a sibling, lost their order, or counted one revision per child instead of one per plan call.
 test('clm_task plan creates ordered focused children with first doing at revision one', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Plan the work.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Plan the work.')] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'focused work', status: 'doing' },
     { op: 'planned', issue: 's1-root', mode: 'inline' },
@@ -478,7 +457,7 @@ test('clm_task plan creates ordered focused children with first doing at revisio
 
 // Regression caught: a stepped root received both planner-spawn and inline-plan instructions, then accepted the inline plan.
 test('a stepped root suppresses inline plan context and denies a clm_task plan', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Plan the work.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Plan the work.')] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'stepped work', status: 'doing' },
     { op: 'stepped', issue: 's1-root' },
@@ -497,7 +476,7 @@ test('a stepped root suppresses inline plan context and denies a clm_task plan',
 // Regression caught: a planned step silently closed without its durable intent, finding and decision line.
 test('clm_task denies planned done without result and writes result before done', OPTS, async ($, on) => {
   const rows = [M('assistant', '', { toolUses: [{ tool_use_id: 'tu_edit', tool: 'Edit', input: { file_path: 'hooks/panel.ts' }, text: '' }] })]
-  const seen = bottoms(on, { rows, replies: [] })
+  const seen = bottoms(on, { rows })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
     { op: 'planned', issue: 's1-root', mode: 'inline' },
@@ -519,7 +498,7 @@ test('clm_task denies planned done without result and writes result before done'
 
 // Regression caught: an over-length result was rejected as though result were missing.
 test('clm_task explains the received length when a planned result exceeds 360 characters', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [] })
+  const seen = bottoms(on, { rows: [] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
     { op: 'planned', issue: 's1-root', mode: 'inline' },
@@ -538,7 +517,7 @@ test('clm_task explains the received length when a planned result exceeds 360 ch
 
 // Regression caught: one oversized clause received the joined-length denial instead of naming each clause length.
 test('clm_task reports every clause length when one planned result clause exceeds 160 characters', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [] })
+  const seen = bottoms(on, { rows: [] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
     { op: 'planned', issue: 's1-root', mode: 'inline' },
@@ -557,7 +536,7 @@ test('clm_task reports every clause length when one planned result clause exceed
 // Regression caught: a model could attach an invented file path to a planned step result.
 test('clm_task drops result files absent from the step transcript', OPTS, async ($, on) => {
   const rows = [M('assistant', '', { toolUses: [{ tool_use_id: 'tu_edit', tool: 'Edit', input: { file_path: 'hooks/panel.ts' }, text: '' }] })]
-  const seen = bottoms(on, { rows, replies: [] })
+  const seen = bottoms(on, { rows })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'planned work', status: 'doing' },
     { op: 'planned', issue: 's1-root', mode: 'inline' },
@@ -575,7 +554,7 @@ test('clm_task drops result files absent from the step transcript', OPTS, async 
 
 // Regression caught: concurrent agent spawns overwrote task ownership or left an ended agent's root assigned.
 test('parallel spawns keep separate child tasks and clear each root when its agent ends', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Delegate two checks.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Delegate two checks.')] })
   panelHandlers(on, seen)
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
@@ -600,7 +579,6 @@ test('a spawned worker can finish a task with a quote from its Bash result', OPT
   const s: State = {
     rows: [M('user', 'Delegate the checks.')],
     agentRows: { worker: [M('user', 'Run the focused checks.'), use('tu_bash', 'Bash'), res('tu_bash', 'the focused checks passed successfully')] },
-    replies: [],
   }
   const seen = bottoms(on, s)
   panelHandlers(on, seen)
@@ -630,7 +608,7 @@ test('a spawned worker can finish a task with a quote from its Bash result', OPT
 // Regression caught: a task was dropped or reopened without a user quote authorizing that direction change.
 test('clm_task refuses drop and re-open without a quote from the user', OPTS, async ($, on) => {
   const rows = [M('user', 'Please drop this child task if I ask, and reopen it when I say so.')]
-  const seen = bottoms(on, { rows, replies: [] })
+  const seen = bottoms(on, { rows })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
     { op: 'create', issue: 's1-child', title: 'child work', status: 'todo' },
@@ -652,7 +630,7 @@ test('clm_task refuses drop and re-open without a quote from the user', OPTS, as
 
 // Regression caught: the main agent sees no m<N> row refs in its own transcript, so every drop it tried failed on the ref and the error never named the accepted format.
 test('clm_task finds the user row by quote when the ref is not a row ref, and names the format when it fails', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', '그 README 작업은 이제 하지 않아도 돼, 빼버려')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', '그 README 작업은 이제 하지 않아도 돼, 빼버려')] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
     { op: 'create', issue: 's1-child', title: 'child work', status: 'todo' },
@@ -668,7 +646,7 @@ test('clm_task finds the user row by quote when the ref is not a row ref, and na
 
 // Regression caught (e2e 2026-10-29): dropping a deferred issue outside main's focus was refused for lack of focus, so the model set it doing (stealing focus) and then dropped it.
 test('clm_task drops an unfocused board issue by id and leaves focus where it was', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', '그 README 작업은 이제 하지 않아도 돼, 빼버려')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', '그 README 작업은 이제 하지 않아도 돼, 빼버려')] })
   const quote = { ref: 'user', quote: '그 README 작업은 이제 하지 않아도 돼' }
   seedTracker(seen, [
     { op: 'create', issue: 's1-root', title: 'main work', status: 'doing' },
@@ -698,7 +676,7 @@ test('clm_task drops an unfocused board issue by id and leaves focus where it wa
 
 // Regression caught: with no focus, a todo clm_task was refused with a hint to use "doing", so work the user deferred became the agent's doing focus.
 test('a todo clm_task with no focus records the task for later without focusing it', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'README는 나중에 고쳐')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'README는 나중에 고쳐')] })
   const result = await $.tool.call({ tool: TASK_TOOL, title: 'README 고치기', status: 'todo' } satisfies ToolCallInput)
   if ('deny' in result) throw new Error(result.deny)
   const events = parseLog(seen.files[TRACKER] ?? '')
@@ -709,7 +687,7 @@ test('a todo clm_task with no focus records the task for later without focusing 
 // Regression caught: a deferred prompt produced two board issues, one filed by the classifier and one the model created with clm_task under a reworded title.
 test('a clm_task create of work the classifier just deferred reuses the filed issue', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: [M('user', "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘. 지금은 하지 말고")], replies: [],
+    rows: [M('user', "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘. 지금은 하지 말고")],
     intentReplies: [intentReply({
       intent: 'pending', title: "README.md 끝에 'hello from agent' 추가",
       deferred: [{ text: "README.md 끝에 'hello from agent' 추가", quote: "나중에 README.md 끝에 'hello from agent' 한 줄 추가해줘", when: 'later' }],
@@ -732,9 +710,9 @@ test('a clm_task create of work the classifier just deferred reuses the filed is
   expect(result.result).toContain('s1-1')
 })
 
-// Regression caught: clm_task or a fold op could still write the retired uncertain status.
-test('neither clm_task nor a fold op can write uncertain', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Investigate.')], replies: [] })
+// Regression caught: clm_task could still write the retired uncertain status.
+test('clm_task cannot write uncertain', OPTS, async ($, on) => {
+  const seen = bottoms(on, { rows: [M('user', 'Investigate.')] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-task', title: 'verify command', status: 'doing' },
     { op: 'focus', stack: ['s1-task'], pending: [], intent: 'handoff' },
@@ -742,13 +720,12 @@ test('neither clm_task nor a fold op can write uncertain', OPTS, async ($, on) =
   const result = await $.tool.call({ tool: TASK_TOOL, id: 's1-task', status: 'uncertain' } as unknown as ToolCallInput)
   expect('deny' in result).toBe(true)
   expect(snapshot(parseLog(seen.files[TRACKER] ?? '')).find(issue => issue.id === 's1-task')?.status).toBe('doing')
-  const parsed = parseOps(JSON.stringify([{ op: 'create', title: 'x', status: 'uncertain' }, { op: 'status', issue: 's1-task', status: 'uncertain' }]), new Set(['s1-task']))
-  expect(typeof parsed !== 'string' && parsed.ops.length === 0 && parsed.rejected).toBe(2)
+
 })
 
 // Regression caught: an agent's own done report without a citation was recorded as uncertain, so finished work stayed open.
 test('an uncited clm_task done stays done', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [M('user', 'Investigate the task.')], replies: [] })
+  const seen = bottoms(on, { rows: [M('user', 'Investigate the task.')] })
   seedTracker(seen, [
     { op: 'create', issue: 's1-task', title: 'verify command', status: 'doing' },
     { op: 'focus', stack: ['s1-task'], pending: [], intent: 'handoff' },
@@ -764,7 +741,7 @@ const until = async (check: () => boolean) => {
 
 // Regression caught: inline work was sent through the planner-only stepped path.
 test('an inline plan emits planned instead of stepped', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [intentReply({
+  const seen = bottoms(on, { rows: [], intentReplies: [intentReply({
     intent: 'handoff', title: '구현하고 검증하기', plan: 'inline',
   })] })
   await $.prompt.submit(promptInput('구현하고 검증해줘'))
@@ -776,7 +753,7 @@ test('an inline plan emits planned instead of stepped', OPTS, async ($, on) => {
 
 // Regression caught: a later planner classification could not upgrade an inline plan, or a later inline classification downgraded a planner plan.
 test('planner classification upgrades inline plans and inline never downgrades planner plans', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [], intentReplies: [
+  const seen = bottoms(on, { rows: [], intentReplies: [
     intentReply({ intent: 'handoff', title: 'planned work', plan: 'inline' }),
     intentReply({ intent: 'continue', target: 's1-1', plan: 'planner' }),
     intentReply({ intent: 'continue', target: 's1-1', plan: 'inline' }),

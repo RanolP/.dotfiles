@@ -6,7 +6,7 @@
 // "append". Log contents are cached by the metadata returned from `$.fs.list`,
 // so an unchanged session file is parsed once.
 
-import { CONFIRM_ITEMS, readEvidence, storedItems, type Evidence } from './evidence'
+import { CONFIRM_ITEMS, storedItems } from './evidence'
 import type { Worktree } from './worktree'
 
 export const STATUSES = ['todo', 'doing', 'ready-to-land', 'done', 'question', 'uncertain', 'dropped'] as const
@@ -78,7 +78,7 @@ export type Payload =
   | { op: 'focus'; stack: string[]; pending: string[]; intent: Intent; rule?: string }
   | { op: 'stepped'; issue: string }
   | { op: 'planned'; issue: string; mode: 'inline' }
-  | { op: 'result'; issue: string; intent: string; finding: string; decision: string; files: string[]; source: StepResult['source']; span?: StepSpan }
+  | { op: 'result'; issue: string; intent: string; finding: string; decision: string; files: string[]; source: Exclude<StepResult['source'], 'fold'>; span?: StepSpan }
   | { op: 'rubric'; issue: string; items: RubricItem[] }
   | { op: 'attempt'; issue: string; method: string; verdict: Verdict }
   | { op: 'method'; issue: string; text: string; failed: boolean }
@@ -165,7 +165,7 @@ export function parseLog(text: string): TrackerEvent[] {
 const order = (a: TrackerEvent, b: TrackerEvent) =>
   a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.origin.session < b.origin.session ? -1 : a.origin.session > b.origin.session ? 1 : a.seq - b.seq
 
-/** Folds every session's events, in (ts, session, seq) order, into the issues. */
+/** Reduces every session's events, in (ts, session, seq) order, into the issues. */
 export function snapshot(events: readonly TrackerEvent[]): Issue[] {
   const issues = new Map<string, Issue>()
   let n = 0
@@ -356,7 +356,7 @@ export function normalizeRemote(url: string): string {
     .replace(/\/+$/, '')
 }
 
-// --- fold ops and ledger sections ------------------------------------------
+// --- ledger sections ------------------------------------------
 
 /** Ledger section -> the statuses it lists; these sections are rendered, never merged. */
 export const TRACKER_SECTIONS: Record<string, readonly IssueStatus[]> = { '한 일': ['done'], '할 일': ['doing', 'ready-to-land', 'todo'], '미결 질문': ['question'], 'uncertain': ['uncertain'] }
@@ -379,57 +379,6 @@ export function sectionLines(issues: readonly Issue[], section: string): string[
     .sort((a, b) => want.indexOf(a.status) - want.indexOf(b.status) || (a.updated < b.updated ? -1 : a.updated > b.updated ? 1 : 0))
     .map(issueLine)
   return lines.length ? lines : ['- (none yet)']
-}
-
-/**
- * Reads the merge model's `<ops>` array. Each op is checked on its own: one
- * naming an issue the model was not shown, or a status outside the set, is
- * dropped and counted; the rest still land.
- */
-export function parseOps(raw: string, known: ReadonlySet<string>, knownAssumptions: ReadonlySet<string> = known): { ops: Payload[]; evidence: Evidence[][]; rejected: number } | string {
-  let list: unknown
-  try {
-    list = JSON.parse(raw)
-  } catch (err) {
-    return `ops are not JSON (${String(err).slice(0, 80)})`
-  }
-  if (!Array.isArray(list)) return 'ops are not a JSON array'
-  const text = (v: unknown, n: number) => (typeof v === 'string' && v.trim() ? clip(flat(v), n) : undefined)
-  const integer = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v)
-  const ops: Payload[] = []
-  // Aligned with `ops` by index; the evidence never reaches the event log.
-  const evidence: Evidence[][] = []
-  let rejected = 0
-  for (const o of list as Record<string, unknown>[]) {
-    if (o?.op === 'label' && o.label !== undefined && isAssumptionLabel(o.label) === false) return 'ops contain an invalid label'
-    if (o?.op === 'label' && isAssumptionLabel(o.label) && o.label.some(environment => environment.some(id => !knownAssumptions.has(id))))
-      { rejected++; continue }
-    const before = ops.length
-    const title = text(o?.title, 200), note = text(o?.note ?? o?.text, 300)
-    // `uncertain` and `ready-to-land` stay parseable in stored events, but no fold op may produce them.
-    if (o?.op === 'create' && title && isStatus(o.status) && o.status !== 'dropped' && o.status !== 'uncertain' && o.status !== 'ready-to-land')
-      ops.push({ op: 'create', title, status: o.status, ...(note ? { note } : {}) })
-    else if (o?.op === 'status' && typeof o.issue === 'string' && known.has(o.issue) && isStatus(o.status) && o.status !== 'uncertain' && o.status !== 'ready-to-land')
-      ops.push({ op: 'status', issue: o.issue, status: o.status })
-    else if (o?.op === 'retitle' && typeof o.issue === 'string' && known.has(o.issue) && title)
-      ops.push({ op: 'retitle', issue: o.issue, title })
-    else if (o?.op === 'progress' && typeof o.issue === 'string' && known.has(o.issue) && integer(o.done) && integer(o.total) && o.total >= 1 && o.done >= 0 && o.done <= o.total)
-      ops.push({ op: 'progress', issue: o.issue, done: o.done, total: o.total })
-    else if (o?.op === 'note' && typeof o.issue === 'string' && known.has(o.issue) && note)
-      ops.push({ op: 'note', issue: o.issue, text: note })
-    else if (o?.op === 'retract-note' && typeof o.issue === 'string' && known.has(o.issue))
-      ops.push({ op: 'retract-note', issue: o.issue })
-    else if (o?.op === 'label' && typeof o.issue === 'string' && known.has(o.issue) && (o.label === undefined || isAssumptionLabel(o.label)))
-      ops.push({ op: 'label', issue: o.issue, ...(o.label === undefined ? {} : { label: o.label }) })
-    else if (o?.op === 'assumption' && typeof o.id === 'string' && known.has(o.id) && (o.status === 'merged' || o.status === 'rejected'))
-      ops.push({ op: 'status', issue: o.id, status: o.status === 'merged' ? 'done' : 'dropped' })
-    else if (o?.op === 'resolve' && typeof o.id === 'string' && known.has(o.id) && (o.decision === 'close' || o.decision === 'keep')
-      && (o.onto === undefined || o.onto === null || (typeof o.onto === 'string' && known.has(o.onto))))
-      ops.push({ op: 'resolve', issue: o.id, decision: o.decision, ...(o.onto === undefined ? {} : { onto: o.onto }) })
-    else rejected++
-    if (ops.length > before) evidence.push(readEvidence(o?.evidence))
-  }
-  return { ops, evidence, rejected }
 }
 
 const statusText: Record<IssueStatus, string> = {

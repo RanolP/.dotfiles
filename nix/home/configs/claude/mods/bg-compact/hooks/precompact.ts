@@ -122,6 +122,26 @@ export const parsePre = (text: string | undefined): PreCompaction | undefined =>
   try { const v = JSON.parse(text); return isPre(v) ? v : undefined } catch { return undefined }
 }
 
+const isBare = (m: SessionMessage) => m.toolUses.length === 0 && (m.toolResults ?? []).length === 0
+const isReminderRow = (m: SessionMessage) => isBare(m) && m.role === 'user' && /^\s*(?:<system-reminder>[\s\S]*?<\/system-reminder>\s*)+$/.test(m.text)
+
+// Rebuilt WITHOUT the handle: a handled row keeps its old parent and message id,
+// and on --resume the loader pulls the pre-compaction chain back in.
+const strip = (m: SessionMessage): SessionMessage =>
+  ({ role: m.role, text: m.text, toolUses: m.toolUses, ...(m.toolResults ? { toolResults: m.toolResults } : {}) })
+
+// A subagent opens on harness reminders no later row repeats, the
+// SubagentHandback delivery rule among them. The engine summary of a subagent
+// dropped them, and the worker then ended on plain text its caller never got,
+// so each one the compacted rows lack goes back right after the summary.
+export const keepSpawnReminders = (before: readonly SessionMessage[], after: readonly SessionMessage[]): SessionMessage[] => {
+  const firstReply = before.findIndex(m => m.role === 'assistant')
+  const missing = before.slice(0, firstReply < 0 ? before.length : firstReply)
+    .filter(m => isReminderRow(m) && !after.some(kept => kept.text === m.text)).map(strip)
+  const [summary] = after
+  return summary && missing.length ? [summary, ...missing, ...after.slice(1)] : [...after]
+}
+
 // One pre-compaction job per session at a time; `generation` moves on at each compaction, so a fork that finishes
 // after one stores nothing for a transcript that is gone.
 export class PreCompactor {
@@ -158,9 +178,13 @@ export class PreCompactor {
     await io.log(`pre-compaction ${previous ? 'extended' : 'stored'} at ${tokens} tokens`)
   }
 
-  // The session.compact hook body for the main thread.
+  // The session.compact hook body.
   async compact(io: PreIo, e: SessionCompactInput, next: (e: SessionCompactInput) => Promise<SessionCompactResult>): Promise<SessionCompactResult> {
-    if (e.agentId !== undefined || !Array.isArray(e.messages)) return next(e)
+    if (!Array.isArray(e.messages)) return next(e)
+    if (e.agentId !== undefined) {
+      const result = await next(e)
+      return 'messages' in result && result.messages ? { ...result, messages: keepSpawnReminders(e.messages, result.messages) } : result
+    }
     const session = await io.sessionId()
     let pre = await io.read(session)
     if (!pre || findBoundary(e.messages, pre.boundary) < 0) {

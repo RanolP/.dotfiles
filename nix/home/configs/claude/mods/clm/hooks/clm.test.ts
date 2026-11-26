@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
 import { clmStatus as readClmStatus } from './panel'
@@ -9,7 +9,7 @@ import { INTENT_SYSTEM } from './intent'
 import type { ClmWorkflow } from '../types'
 
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, bottoms, turnEnds, BG_OPTS, logEvents, panelHandlers, sixDone, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
+import { M, intentReply, use, res, BIG, MID, ROWS, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, promptInput, turnInput, commandInput, workflow, bottoms, logEvents, panelHandlers, sixDone, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 
 // Regression caught: the time-budget noun could not create, update, filter, or reject cross-session tracker issues.
@@ -56,7 +56,6 @@ test('session state takes the over-cap path when UTF-8 bytes exceed the host lim
   const koreanText = '가'.repeat(Math.floor(maxStateBytes / 3) + 1)
   const seen = bottoms(on, {
     rows: [],
-    replies: [],
     fsWriteBlock: async (path, text) => {
       const bytes = new TextEncoder().encode(text).length
       if (path.endsWith('.state.json') && bytes > maxStateBytes)
@@ -74,7 +73,7 @@ test('session state takes the over-cap path when UTF-8 bytes exceed the host lim
 
 // Regression caught: haiku fenced its JSON reply in ```json, and no session ever got a focus event.
 test('a fenced intent reply still sets the main focus', OPTS, async ($, on) => {
-  const seen = bottoms(on, { rows: [], replies: [], intentReplies: ['```json\n' + intentReply({ intent: 'handoff', title: 'Main task' }) + '\n```'] })
+  const seen = bottoms(on, { rows: [], intentReplies: ['```json\n' + intentReply({ intent: 'handoff', title: 'Main task' }) + '\n```'] })
   await $.prompt.submit(promptInput('Start the main task'))
   await waitForLog(seen, '주 작업 초점 갱신 (handoff)')
   const events = parseLog(seen.files[TRACKER] ?? '')
@@ -84,7 +83,7 @@ test('a fenced intent reply still sets the main focus', OPTS, async ($, on) => {
 // Regression caught: clm status omitted the main focus stack, pending work, and live subagent roots.
 test('clm status names the focus top, stack depth, pending and live subagent tasks', OPTS, async ($, on) => {
   const seen = bottoms(on, {
-    rows: [], replies: [],
+    rows: [],
     intentReplies: [
       intentReply({ intent: 'handoff', title: 'Main task' }),
       intentReply({ intent: 'interleave', title: 'Focused subtask' }),
@@ -125,7 +124,7 @@ test('clm status names the focus top, stack depth, pending and live subagent tas
 
 // Regression caught: a TaskUpdate answered with success: false and no isError counted as success, so a missing panel task was never relinked.
 test('a TaskUpdate answered success false relinks the issue to a new panel task', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [] }
+  const s: State = { rows: ROWS }
   const seen = bottoms(on, s)
   panelHandlers(on, seen, id => (id === 'panel-1' ? { success: false, error: 'Task not found' } : { success: true }))
   await $.tool.call({ tool: 'TaskCreate', subject: 'lost task', description: 'd' })
@@ -135,22 +134,22 @@ test('a TaskUpdate answered success false relinks the issue to a new panel task'
   expect(logEvents(seen).some(e => e.event === 'panel-relink' && e.reason.includes('Task not found'))).toBe(true)
 })
 
-// Regression caught: a completed TaskUpdate notice was delayed until session.compact and then could be repeated by the pending fold.
-test('a TaskUpdate to completed logs its notice before any fold and is not repeated', OPTS, async ($, on) => {
-  const s: State = { rows: ROWS, replies: [] }
+// Regression caught: a completed TaskUpdate notice was delayed and could be repeated on turn completion.
+test('a TaskUpdate to completed logs its notice immediately and is not repeated', OPTS, async ($, on) => {
+  const s: State = { rows: ROWS }
   const seen = bottoms(on, s)
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => ({ result: { task: { id: 'panel-1', subject: e.subject } } }))
   on('tool.call', { tool: 'TaskUpdate' }, (_$: any, e: any) => ({ result: { success: true, taskId: e.taskId, updatedFields: [] } }))
   await $.tool.call({ tool: 'TaskCreate', subject: 'event task', description: 'created in the turn' })
   await $.tool.call({ tool: 'TaskUpdate', taskId: 'panel-1', status: 'completed' })
   expect(seen.logs.filter(l => l === "작업 'event task' 완수").length).toBe(1)
-  await $.session.compact({ trigger: 'plugin', messages: handled(s.rows) })
+  await $.turn.complete(TURN)
   expect(seen.logs.filter(l => l === "작업 'event task' 완수").length).toBe(1)
 })
 
 // Regression caught: the model stays denied while clm centralizes its task change into tracker and panel writes.
 test('model task calls are denied outside clm projection', OPTS, async ($, on) => {
-  const s: State = { rows: [], replies: [] }
+  const s: State = { rows: [] }
   const seen = bottoms(on, s)
   on('tool.call', { tool: 'TaskCreate' }, (_$: any, e: any) => {
     seen.taskCalls.push(e)

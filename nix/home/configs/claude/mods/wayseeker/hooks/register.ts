@@ -294,7 +294,7 @@ export const register: Register = on => {
     return next(attachment === undefined ? e : { ...e, context: [...(e.context ?? []), attachment] })
   })
 
-  // The stored transcript keeps rows from before a compaction (a clm fold arrives as this same event), so the
+  // The stored transcript keeps rows from before a compaction (bg-compact delivers through this same event), so the
   // delivered-section scan alone would still find the old section; a landed compaction forgets the record instead.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)

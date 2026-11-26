@@ -1,6 +1,6 @@
 import { isOpen, isRecord, type FocusState as TrackerFocusState, type Intent, type Issue, type Payload } from './tracker'
 import { askedItems, checkEvidence, CONFIRM_PREFIX, confirmAnswer, confirmQuestion, type Source } from './evidence'
-import { isHarnessText, stripReminders } from './fold'
+import { isHarnessText, stripReminders } from './text'
 import type { ClmWorkflow } from '../types'
 import { describe, focusOf, issueId, snapshot, type Origin, type TrackerEvent } from './tracker'
 import type { LogEvent, LogFields } from './events'

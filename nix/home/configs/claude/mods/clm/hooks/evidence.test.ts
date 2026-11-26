@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, RenderPropsOf, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
@@ -9,7 +9,7 @@ import type { ClmWorkflow } from '../types'
 
 import { focusOf, parseLog, snapshot, toEvents, type Issue, type Payload } from './tracker'
 import { checkEvidence } from './evidence'
-import { M, intentReply, use, res, BIG, MID, ROWS, CITE, splitAnswer, compressedTopics, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, ids, shape, handled, compactInput, promptInput, turnInput, commandInput, compactedMessages, workflow, bottoms, turnEnds, BG_OPTS, logEvents, panelHandlers, sixDone, NOTE_REPLY, ESCAPE_ROWS, WITHHELD_FILE, section, PR_ROWS, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
+import { M, intentReply, use, res, BIG, MID, ROWS, TURN, OPTS, LEDGER_FILE, LOG_FILE, storedLedger, promptInput, turnInput, commandInput, workflow, bottoms, logEvents, panelHandlers, sixDone, TRACKER, seedTracker, issueAt, runClm, waitForLog } from './clm-test-support'
 import type { State, On, Seen, PanelReply } from './clm-test-support'
 // --- evidence gate and review ------------------------------------------------
 
@@ -30,6 +30,6 @@ test('a ref spelled the way the range renders it resolves to its row, and an ass
   ]
   const checked = checkEvidence(evidence, sources)
   expect(checked.held.map(item => item.ref)).toEqual(['m4', 'toolu_01AbC', 'toolu_01AbC', 'm4', 'm4', 'abcd1234', '@beef5678'])
-  expect(checked.problems).toEqual(['ref [assistant 2026-10-15 14:04 KST] is not a citable row of the folded range'])
+  expect(checked.problems).toEqual(['ref [assistant 2026-10-15 14:04 KST] is not a citable row of the transcript range'])
 })
 

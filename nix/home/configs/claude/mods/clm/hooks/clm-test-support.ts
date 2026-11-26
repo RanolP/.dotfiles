@@ -1,6 +1,6 @@
 import { mock } from 'claude-code/testing'
 import type { Engine, TestBody } from 'claude-code/testing'
-import type { CommandRunInput, PromptSubmitInput, SessionCompactInput, SessionCompactResult, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
+import type { CommandRunInput, PromptSubmitInput, SessionMessage, SessionStartInput, ToolCallInput, TurnCompleteInput } from 'claude-code'
 
 import { boardHtml } from './board'
 import { chooseContinuation, clmStatus, register, resetUserWorkflow, restoreFailedContinuation, sessionIssues, submitWithRecovery, trackIssue, TASK_TOOL } from './register'
@@ -19,48 +19,25 @@ export const res = (id: string, text: string) => M('user', '', { toolResults: [{
 export const BIG = 'x'.repeat(4000) // ~1667 tokens
 export const MID = 'y'.repeat(800) // ~334 tokens
 
-// ~3750 estimated tokens over four turns. With a 1200-token tail target the
-// newest two turns fit and the first request's tool work plus "now fix it" fold.
 export const ROWS = [
   M('user', 'please investigate the build'), use('tu_a', 'Bash'), res('tu_a', 'log: make fails at a.ts:12 ' + BIG), M('assistant', 'make fails at a.ts:12'),
   M('user', 'now fix it'), use('tu_b', 'Edit'), res('tu_b', 'edited ' + MID), M('assistant', 'fixed a.ts:12'),
   M('user', 'run tests'), use('tu_c', 'Bash'), res('tu_c', 'pass: all 12 tests passed ' + BIG), M('assistant', 'tests pass'),
   M('user', 'commit it'), M('assistant', 'done'),
 ]
-// The merge model writes 목표 and an <ops> array; facts arrive as fact ops
-// and the tracker renders the other sections. Every
-// fact and done claim here cites the first tool result of ROWS ("log: ..."),
-// which tests not about evidence rely on to pass the mechanical check.
-export const CITE = [{ ref: 'tu_a', quote: 'log: make fails at' }]
-export const ledger = (ops = '[]', cite = CITE) => {
-  return JSON.stringify({ ops: [...JSON.parse(ops).map((o: any) => (o.status === 'done' && !o.evidence ? { ...o, evidence: cite } : o))] })
-}
-export const splitAnswer = (split = 2, topic = 'build', summary = 'build summary', note = 'build summary') => JSON.stringify({
-  split, ops: [{ op: 'create', title: `${topic}: ${summary || note}`, status: 'todo' }],
-})
-export const compressedTopics = (topics: { topic: string; summary: string; seq: number }[]) => JSON.stringify({ topics })
 export const TURN = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } satisfies TurnCompleteInput
-export const OPTS = { options: { budget: 2000, tailTarget: 1200, reserve: 100, queueTarget: 100000 } }
+export const OPTS = { options: {} }
 export const LEDGER_FILE = '/home/t/.claude-work/plans/clm-s1.md'
 export const LOG_FILE = '/home/t/.claude-work/plans/clm-s1.log.jsonl'
 export const storedLedger = (seen: { files: Record<string, string> }) => seen.files[LEDGER_FILE] ?? ''
-export const ids = (m: any) => [...m.toolUses.map((u: any) => u.tool_use_id), ...(m.toolResults ?? []).map((r: any) => r.tool_use_id)]
-export const shape = (out: any[]) => out.map((m: any) => m.text || ids(m).join())
-export const handled = (rows: readonly SessionMessage[]): SessionMessage[] => rows.map((m, i) => ({ ...m, handle: `h${i}` } satisfies SessionMessage))
-export const compactInput = (trigger: SessionCompactInput['trigger'], messages: readonly SessionMessage[], extra: Pick<SessionCompactInput, 'agentId' | 'instructions'> = {}) =>
-  ({ ...extra, trigger, messages } satisfies SessionCompactInput)
 export const promptInput = (text: string) => ({ text, origin: { kind: 'composer' }, wait: false } satisfies PromptSubmitInput)
 export const turnInput = (turnId: string, extra: Partial<TurnCompleteInput> = {}) => ({ ...TURN, ...extra, turnId } satisfies TurnCompleteInput)
 export const commandInput = (command: string, args = '') => ({ command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } } satisfies CommandRunInput)
-export const compactedMessages = (result: SessionCompactResult): readonly SessionMessage[] => {
-  if (!('messages' in result)) throw new Error('compaction returned no messages')
-  return result.messages
-}
 export const workflow = (fields: Partial<ClmWorkflow> = {}): ClmWorkflow => ({
   resumeRequest: null, lastSubmittedTurn: null, activeTurnId: null,
   promptSeq: 0, focusAppliedSeq: 0, ...fields,
 })
-export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; replies: (string | null | Error)[]; splitReplies?: (string | Error)[]; compressionReplies?: (string | Error)[]; splitBlock?: () => Promise<void>; mergeBlock?: () => Promise<void>; sessionMessagesBlock?: () => Promise<void>; splitDelay?: number; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; usage?: any; mergeDelays?: number[]; reviewReplies?: (string | Error)[]; lessonReplies?: string[]; sessionId?: string; nextSessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined; fsWriteBlock?: (path: string, text: string) => Promise<void>; promptDrops?: string[]; sendResult?: (to: unknown) => { isDelivered: true } | { isDelivered: false; reason: string } }
+export type State = { rows: SessionMessage[]; agentRows?: Record<string, SessionMessage[]>; sessionMessagesBlock?: () => Promise<void>; turnReplies?: string[]; intentReplies?: (string | Error)[]; intentBlocks?: (() => Promise<void>)[]; usage?: any; sessionId?: string; nextSessionId?: string; storeKeysBlock?: () => Promise<void>; env?: Record<string, string | undefined>; cwd?: string; processRun?: (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => { exitCode: number; stdout: string; stderr: string } | undefined; fsWriteBlock?: (path: string, text: string) => Promise<void>; promptDrops?: string[]; sendResult?: (to: unknown) => { isDelivered: true } | { isDelivered: false; reason: string } }
 const readFixtureState = (files: Record<string, string>, path: string): Record<string, unknown> => {
   try {
     const value: unknown = JSON.parse(files[path] ?? '{}')
@@ -109,7 +86,7 @@ export function bottoms(on: any, s: State) {
       return true
     },
   })
-  const seen = { clock, store, engineStore, files, dirs: new Set<string>(), fileReads: {} as Record<string, number>, sessionMessageReads: 0, usageReads: 0, prompts: [] as string[], splitPrompts: [] as string[], compressionPrompts: [] as string[], rewindPrompts: [] as string[], intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], reviewPrompts: [] as string[], reviewMaxTokens: [] as number[], turnPrompts: [] as string[], logs: [] as string[], results: [] as SessionCompactResult[], taskCalls: [] as ToolCallInput[], engineCompactions: 0, engineInputs: [] as (readonly SessionMessage[])[], lessonPrompts: [] as string[], runs: [] as string[][], sends: [] as { to: unknown; text: string }[] }
+  const seen = { clock, store, engineStore, files, dirs: new Set<string>(), fileReads: {} as Record<string, number>, sessionMessageReads: 0, usageReads: 0, intentPrompts: [] as string[], submissions: [] as { text: string; asUser?: true }[], turnPrompts: [] as string[], logs: [] as string[], taskCalls: [] as ToolCallInput[], runs: [] as string[][], sends: [] as { to: unknown; text: string }[] }
   on('store.get', (_$: any, e: any) => ({ value: seen.engineStore[e.key] }))
   on('store.set', (_$: any, e: any) => { seen.engineStore[e.key] = e.value; return { value: undefined } })
   on('store.delete', (_$: any, e: any) => { delete seen.engineStore[e.key]; return { value: undefined } })
@@ -223,16 +200,8 @@ export function bottoms(on: any, s: State) {
   on('turn.complete', async ($: any) => {
     return { text: '' }
   })
-  // Stands for the engine summarizer: any call reaching it is a compaction clm failed to replace.
-  on('session.compact', (_$: any, e: any) => { seen.engineCompactions++; seen.engineInputs.push(e.messages); return { messages: [M('user', 'ENGINE SUMMARY')] } })
   return seen
 }
-// The test asks the engine for a manual compaction after the turn hook runs.
-export async function turnEnds($: any, s: State, seen: { results: SessionCompactResult[] }, answer = '') {
-  await $.turn.complete({ ...TURN, answer })
-  seen.results.push(await $.session.compact({ trigger: 'manual', messages: handled(s.rows) }))
-}
-export const BG_OPTS = { options: { budget: 5000, tailTarget: 1200, queueTarget: 1, ledgerTarget: 300, reserve: 100 } }
 export const logEvents = (seen: { files: Record<string, string> }) => (seen.files[LOG_FILE] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
 
 
@@ -257,24 +226,6 @@ export async function sixDone($: Engine, on: On, seen: Seen) {
   for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskCreate', subject: `done ${i}`, description: `d${i}` })
   for (let i = 1; i <= 6; i++) await $.tool.call({ tool: 'TaskUpdate', taskId: `panel-${i}`, status: 'completed' })
 }
-export const NOTE_REPLY = '## 목표\n- g\n\n'
-
-// Escape-path rows: the oldest turn's tool result is the only thing that can be withheld.
-export const ESCAPE_ROWS = [
-  M('user', 'start'), M('user', 'a'), use('tu_a', 'Bash'), res('tu_a', 'r'.repeat(4000)), M('assistant', 'A'.repeat(2000)),
-  M('user', 'b'), M('assistant', 'B'.repeat(2200)), M('user', 'go'), M('assistant', 'w'.repeat(2200)),
-]
-export const WITHHELD_FILE = '/home/t/.claude-work/plans/clm-s1.withheld-0-tu_a.txt'
-
-
-export const section = (ledgerText: string, name: string) => new RegExp(`## ${name}\n([\\s\\S]*?)(\n\n|$)`).exec(ledgerText)?.[1] ?? ''
-// The PR #<pr> incident: the assistant recommended closing the PR, the only tool result showed it OPEN, and the ledger recorded it closed.
-export const PR_ROWS = [
-  M('user', 'check PR #<pr> and close it if it is stale'), use('tu_pr', 'Bash'), res('tu_pr', 'PR <pr> state: OPEN ' + BIG), M('assistant', 'I recommend closing PR #<pr>; closed it.'),
-  ...ROWS.slice(4),
-]
-
-
 export const TRACKER = '/home/t/.claude-work/tracker/events/s1.jsonl'
 export function seedTracker(seen: { files: Record<string, string> }, payloads: Payload[]) {
   const events = toEvents(payloads, { session: 's1', repo: 'github.com/o/repo', cwd: '/work/repo' }, 0, '2026-10-06T00:00:00.000Z')

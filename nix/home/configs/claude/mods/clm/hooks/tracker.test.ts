@@ -1,7 +1,7 @@
 import { test, expect, mock } from 'claude-code/testing'
-import type { SessionCompactInput, SessionMessage } from 'claude-code'
+import type { SessionMessage } from 'claude-code'
 
-import { describe, focusOf, injected, isStatus, parseLog, parseOps, snapshot, toEvents, type Issue, type TrackerEvent } from './tracker'
+import { describe, focusOf, injected, isStatus, parseLog, snapshot, toEvents, type Issue, type TrackerEvent } from './tracker'
 import { compose } from './intent'
 import { describeOp } from './evidence'
 import { openBoard } from './panel'
@@ -77,19 +77,6 @@ test('tracker snapshot resolve closes to dropped and keep removes parent and lab
   expect(issues.find(item => item.id === 'I-K')?.label).toBeUndefined()
 })
 
-// Regression caught: folded assumption decisions were parsed as unknown operations instead of issue status transitions.
-test('parseOps maps assumption merged and rejected to done and dropped', () => {
-  const parsed = parseOps(JSON.stringify([
-    { op: 'assumption', id: 'I-M', status: 'merged' },
-    { op: 'assumption', id: 'I-R', status: 'rejected' },
-  ]), new Set(['I-M', 'I-R']))
-  if (typeof parsed === 'string') throw new Error(parsed)
-  expect(parsed.ops).toEqual([
-    { op: 'status', issue: 'I-M', status: 'done' },
-    { op: 'status', issue: 'I-R', status: 'dropped' },
-  ])
-})
-
 // Regression caught: returning to a lower task left the interleaved task doing alongside it.
 test('interleave then continue back pops the side task and restores one doing issue', async () => {
   const issues = [localIssue('s1-a', 'main task', 'doing'), localIssue('s1-b', 'side task', 'todo')]
@@ -156,7 +143,7 @@ test('stray doing issues are demoted to preserve one doing focus', async () => {
   expect(result.payloads).toContainEqual({ op: 'status', issue: 's1-c', status: 'todo' })
 })
 
-// Regression caught: stack targets produced duplicate focus ids, a self-parent, or a second pending copy.
+// Regression caught: stack targets produced duplicate focus a self-parent, or a second pending copy.
 test('stack targets normalize to continue or leave the stack before pending', async () => {
   const issues = [
     localIssue('s1-a', 'first task', 'todo'),
@@ -237,9 +224,10 @@ test('the newest step result event wins', () => {
   const events = toEvents([
     { op: 'create', issue: 'step', title: 'inspect', status: 'doing' },
     { op: 'result', issue: 'step', intent: 'inspect old', finding: 'old finding', decision: 'old decision', files: [], source: 'model' },
-    { op: 'result', issue: 'step', intent: 'inspect new', finding: 'new finding', decision: 'new decision', files: ['hooks/panel.ts'], source: 'fold' },
+    { op: 'result', issue: 'step', intent: 'inspect new', finding: 'new finding', decision: 'new decision', files: ['hooks/panel.ts'], source: 'model' },
   ], at('s1', 'github.com/o/repo'), 0, '2026-11-03T00:00:00Z')
-  expect(snapshot(events)[0]?.result).toMatchObject({ intent: 'inspect new', finding: 'new finding', decision: 'new decision', files: ['hooks/panel.ts'], source: 'fold' })
+  const stored = parseLog(events.map(event => JSON.stringify(event.op === 'result' && event.finding === 'new finding' ? { ...event, source: 'fold' } : event)).join('\n'))
+  expect(snapshot(stored)[0]?.result).toMatchObject({ intent: 'inspect new', finding: 'new finding', decision: 'new decision', files: ['hooks/panel.ts'], source: 'fold' })
 })
 
 // Regression caught: cross-session planning and ownership events were ignored when another session wrote them for the issue.
@@ -261,20 +249,6 @@ test('snapshot applies plan and claim ops written by another session', () => {
 
   const released = toEvents([{ op: 'claim', issue: 'owner-1', by: null }], worker, planned.at(-1)!.seq, '2026-10-06T03:00:00Z')
   expect(snapshot([...created, ...planned, ...released])[0]).not.toHaveProperty('claimedBy')
-})
-
-// Regression caught: making the landing status valid also let the fold model assign it without the dedicated tool.
-test('a fold op cannot set ready-to-land', () => {
-  expect(isStatus('ready-to-land')).toBe(true)
-  expect(parseOps(JSON.stringify([
-    { op: 'create', title: 'new', status: 'ready-to-land' },
-    { op: 'status', issue: 'owner-1', status: 'ready-to-land' },
-    { op: 'status', issue: 'owner-1', status: 'todo' },
-  ]), new Set(['owner-1']))).toEqual({
-    ops: [{ op: 'status', issue: 'owner-1', status: 'todo' }],
-    evidence: [[]],
-    rejected: 2,
-  })
 })
 
 // Regression caught: landing-ready work was absent from the board and its orchestration metadata was lost in projection.

@@ -193,3 +193,17 @@ test('a record above the current token count is ignored', async () => {
   expect(forks.length).toBe(1)
   expect(forks[0].includes('earlier-summary')).toBe(false)
 })
+
+// Regression: the engine summary drops opening harness reminders, including the worker handback rule.
+test('a subagent compaction keeps the opening system-reminder rows that the engine summary dropped', async ($, on) => {
+  const files: Record<string, string> = {}
+  const calls = engine(on, files)
+  const reminders = [user('<system-reminder>Use SubagentHandback to deliver the result.</system-reminder>'), user('<system-reminder>Keep the assignment.</system-reminder>')]
+  const rows = handled([...reminders, user('fix the build'), assistant('working'), user('<system-reminder>Later reminder</system-reminder>')])
+  const result = await $.session.compact({ trigger: 'auto', agentId: 'worker', messages: rows })
+  expect(calls.length).toBe(1)
+  expect(calls[0]?.agentId).toBe('worker')
+  if (!('messages' in result) || !result.messages) throw new Error('no messages')
+  expect(result.messages).toEqual([user('ENGINE SUMMARY'), ...reminders])
+  expect(files).toEqual({})
+})

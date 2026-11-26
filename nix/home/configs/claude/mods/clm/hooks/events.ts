@@ -7,8 +7,7 @@ import { describeOp } from './evidence'
 
 export type LogEvent = 'clear' | 'skip-not-shrinking' | 'merge-invalid' | 'merge-timeout' | 'ops-rejected' | 'fallback' | 'truncation' | 'escape' | 'panel-relink'
   | 'evidence-rejected' | 'review-rejected' | 'review-failed' | 'review-dropped' | 'escape-instructions-lost' | 'ledger-over-budget' | 'rewind'
-  | 'fold-job' | 'fold-persist-failed' | 'session-state-migration' | 'session-compact' | 'mod-stale'
-  | 'model-fold'
+  | 'session-state-migration' | 'mod-stale'
 export type LogFields = {
   tokensBefore?: number; tokensAfter?: number; keptTurns?: number; ratio?: number; durationMs?: number; summaryMs?: number; reason?: string
   trigger?: string; state?: 'none' | 'idle' | 'summarizing' | 'ready' | 'swapping'; outcome?: string; waitMs?: number; totalMs?: number
@@ -119,5 +118,5 @@ export async function logEvent(io: Pick<EventsIo, 'generalLogPath' | 'exists' | 
     const lines = ((await io.exists(path)) ? await io.read(path) : '').split('\n').filter(Boolean)
     lines.push(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }))
     await io.write(path, `${lines.slice(-LOG_KEEP).join('\n')}\n`)
-  } catch { /* the log must never stop a fold */ }
+  } catch { /* logging must leave task tracking running */ }
 }

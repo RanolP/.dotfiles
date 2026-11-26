@@ -1,10 +1,10 @@
 import type { SessionMessage } from 'claude-code'
 
-import { isUserTyped, stripReminders } from './fold'
+import { isUserTyped, stripReminders } from './text'
 import type { Issue, Payload } from './tracker'
 
 // A summary claim (a done step, a key fact, a user instruction) stands only on
-// a verbatim quote from one row of the folded range. The rows a quote may come
+// a verbatim quote from one row of the transcript range. The rows a quote may come
 // from are the user's messages and tool results: the assistant's own prose is
 // where a recommendation ("closing it is fine") turns into a recorded "closed",
 // so it carries no ref and cannot be cited. A user-role row the harness wrote
@@ -85,12 +85,6 @@ export function renderRange(rows: readonly SessionMessage[], cap = 120_000, refO
   return { text: cut + kept.map(r => r.text).join('\n'), sources: new Map(kept.flatMap(r => r.sources)) }
 }
 
-/** Reads a model's `evidence` field leniently: anything but `{ref, quote}` strings is skipped. */
-export function readEvidence(v: unknown): Evidence[] {
-  if (!Array.isArray(v)) return []
-  return v.flatMap(e => (typeof e === 'object' && e !== null && typeof e.ref === 'string' && typeof e.quote === 'string' ? [{ ref: e.ref, quote: e.quote }] : []))
-}
-
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
 // A model copying a clipped row copies the clip's `…` too, or marks a skipped
 // middle with one; each `…`-separated piece must then appear, in order, in the
@@ -151,7 +145,7 @@ export function resolveRef(ref: string, sources: Sources): string | undefined {
 export function evidenceProblem(e: Evidence, sources: Sources, admissible: readonly SourceKind[], forDone = false): string | undefined {
   const key = resolveRef(e.ref, sources)
   const source = key === undefined ? undefined : sources.get(key)
-  if (!source) return `ref ${e.ref} is not a citable row of the folded range`
+  if (!source) return `ref ${e.ref} is not a citable row of the transcript range`
   if (!admissible.includes(source.kind)) return `ref ${e.ref} is a ${source.kind}, not ${admissible.join(' or ')}`
   if (forDone && source.isError) return `ref ${e.ref} is a failed tool result, which proves no done`
   if (forDone && source.tool && RELAY_TOOLS.has(source.tool)) return `ref ${e.ref} is a ${source.tool} report, which proves no done`
@@ -220,14 +214,8 @@ function confirmTitle(items: readonly ConfirmItem[]): string {
   return CONFIRM_PREFIX + body + rest
 }
 
-// The fold only observes the transcript, so a done it inferred but could not
-// prove goes to the user as one question per fold, extended rather than
-// duplicated while it stays open; the user's answer then lands the dones
-// through a later fold's user-quoted ops. The items live in a note rather
-// than the title, because the title is clipped for display and cannot be
-// read back. `denied` titles are the items the user just said are not
-// finished; they join the stored denials of every confirm question of the
-// session, open or closed.
+// Keep one open confirmation question, with its complete item list stored in a
+// note because display titles are clipped. Denied titles stay excluded.
 export function confirmQuestion(claimed: readonly Payload[], landed: readonly Payload[], issues: readonly Issue[], doneTitles: ReadonlySet<string>, denied: ReadonlySet<string> = new Set(), now = new Date().toISOString()): Payload[] {
   type Item = ConfirmItem
   const statusAfter = new Map(issues.map(issue => [issue.id, issue.status]))
@@ -282,7 +270,7 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
  * The user's reply read as an answer to the confirm question, or undefined when
- * it is not plainly one; the fold still reads that reply. Items named by id or
+ * it is not plainly one. Items named by id or
  * verbatim title take the verdict of whatever else the reply says (nothing or
  * a yes confirms, a no denies). A bare yes or no answers every item, but only
  * when `askedInReply`, since otherwise it most likely answers the agent.

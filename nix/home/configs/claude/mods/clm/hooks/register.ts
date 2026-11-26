@@ -1,7 +1,7 @@
 import { update, type EngineInterface, type Register } from 'claude-code'
 import { append as appendEvents, captureOrigin as captureEventsOrigin, logEvent as writeLogEvent, readAll as readAllEvents, serialized as serializeEvents, writeEvents as writeTrackerEvents, type EventsIo, type LogEvent, type LogFields, type Payloads } from './events'
 import { assignedTaskRoots, claimAgentTaskRoot, closeAgentTaskRoot, createAgentTaskRoot, plannedAgentStep, SPAWN_PLAN_REQUEST, STEPPED_WORKTREE_CONTEXT, clmStatus as panelStatus, denyModelTask as denyPanelTask, isClmTaskInput, mirrorModelTask, openBoard as openPanelBoard, planPromptContext, runClmTask as runPanelTask, runPanelCommand, sessionIssues as panelIssues, steppedPromptContext, syncPanelSafely as syncPanelDomain, trackIssue as trackPanelIssue, TASK_TOOL, type PanelIo } from './panel'
-import { keepSpawnReminders, kst } from './fold'
+import { kst } from './text'
 import { type Evidence, renderRange } from './evidence'
 import { snapshot, focusOf, isOpen, isRecord, type Issue, type Origin, type Payload, type TrackerEvent } from './tracker'
 import { attemptState, judgeRubric, outermostSteppedRootOf, type JudgeIo } from './stepped'
@@ -584,14 +584,6 @@ export const register: Register = (on, options) => {
     await completeMainTurn(mainTurnCompletionIo($), e.turnId, e.isAborted)
     return res
   })
-
-  // Subagent compactions only: bg-compact answers the main thread's; the engine's summary of a subagent still gets its
-  // spawn reminders back.
-  on('session.compact', async ($, e, next) => {
-    const result = await next(e)
-    return e.agentId !== undefined && Array.isArray(e.messages) && 'messages' in result && result.messages ? { ...result, messages: keepSpawnReminders(e.messages, result.messages) } : result
-  })
-
 
   on('agent.spawn', async ($, e, next) => {
     const io = panelIo($)

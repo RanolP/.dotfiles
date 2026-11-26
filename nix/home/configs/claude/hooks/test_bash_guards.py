@@ -97,6 +97,14 @@ def main():
             assert actual["hookSpecificOutput"]["permissionDecisionReason"].startswith(
                 integrity["hookSpecificOutput"]["permissionDecisionReason"])
 
+    # Regression: tokenizing a 1 MiB argument stalled every Bash call for ~38s.
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo " + "a" * (1024 * 1024)}})
+    start = time.perf_counter()
+    result = invoke(DISPATCHER, payload)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 2, f"1 MiB command took {elapsed:.3f}s (limit: 2s)"
+    assert result == (0, "", ""), result
+
     combine = MODULE["combine"]
     cases = [
         [record("allow", "allowed"), record("ask", "approval"), record(context="hint", message="notice")],

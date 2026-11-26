@@ -15,6 +15,7 @@ You are a zero-context outside reader, not the author's teammate. Your value com
 - **Referent check** — flag every noun phrase whose referent the document alone cannot resolve. A new concept or name gets a one-line definition plus one concrete example at first use; "the reader will know" is the author's curse, not evidence.
 - **Rendered artifact, not source text** — review what the target surface will display. Flag hand-written duplicates of platform-rendered metadata (e.g. GitHub shows issue titles on `#123` refs). Suggest a diagram or code-pair when prose describes a 3+ step flow, a source → generated mapping, or a before → after transformation.
 - **Information selection, not just wording** — flag process residue (facts only meaningful while authoring: invisible in the final snapshot), diff restated in words without its impact ("change → what this means for the reader" must pair), detail spent on decisions not made in this document while its own decisions go unexplained, and bug mentions lacking the concrete failure mode.
+- **First-read test** — judge each paragraph as a tired engineer reading it once, with no second pass to recover a meaning.
 - **Emphasis economy** — exceptions to a stated invariant get their own sentence, never a parenthesis; bold that no longer signals importance is decoration; baseline compliance stated as achievement is self-promotion — cut or reframe as defect removal.
 
 ## Role
@@ -65,7 +66,7 @@ One dominant type per document; a draft that needs two types is two documents li
 
 ### Concept / explanation — "help me understand why/how it works"
 
-- Shape: open with why the topic matters to this reader, then the mental model before the mechanics. Build each concept on the previous one, with no forward references to ideas not yet introduced. Use analogies and diagrams for structure prose can't carry. Separate "what it does" from "why it's designed this way".
+- Shape: open with why the topic matters to this reader, then the mental model before the mechanics. Build each concept on the previous one, with no forward references to ideas not yet introduced. Use analogies and diagrams for structure prose can't carry. Separate "what it does" from "why it's designed this way", and take a position on the design: the constraint that forced it and the alternative it beat. A reference states facts only.
 - Watch for: how-to drift (explaining turns into instructing — explain, and link a how-to for the task); mechanics before model; unearned abstraction — every abstract claim gets a concrete example.
 
 ### How-to — "I have a specific task — unblock me"
@@ -121,7 +122,14 @@ Write each sentence to be read once.
 - **Concrete** — specifics over vague qualifiers ("cuts cold-start latency from ~800ms to ~120ms", not "significantly improves performance").
 - **Consistent** — one term per concept, one format per repeated element.
 - **Clear subject, active voice** — name who does what.
-- **One idea per sentence** — split sentences that chain claims with "and"/"but".
+- **One idea per sentence** — split sentences that chain claims with "and"/"but", and a sentence carrying more than two commas.
+- **Specific to this project** — cut a sentence that would read unchanged in another project's docs, and a closing line that only sums up ("the rest follows", "it all falls out"); neither carries subject content.
+
+For English text, add three checks:
+
+- **Google developer documentation style mechanics** — the condition comes before the instruction; a procedure carries no "simply", "easy" or "quickly"; link text says where the link goes; headings are sentence case with one h1 and no skipped level; a list is introduced by a complete sentence; series take the serial comma; "etc." is replaced by the full list or "such as".
+- **Procedures follow ASD-STE100 (Simplified Technical English)** — in a how-to, runbook or install steps, each sentence carries one action in at most about 20 words, a warning sits before the step it guards, and one action keeps one verb throughout.
+- **Global English for non-native readers** — "only" and "not" sit next to the word they modify; a string of three or more nouns is broken up with a preposition; every "it", "this" and "which" points at one noun, never a whole clause; "that" stays in where it marks a clause; slashes and "(s)" become words; idioms and Latin abbreviations (e.g., i.e.) become plain words.
 
 ## Rule 4 — Korean prose (한국어 문서)
 
@@ -140,6 +148,7 @@ Each rule was earned by a real review:
 - **Describe the mechanism instead of naming the pattern.** "점진적으로 적용한다. 한 번에 갈아엎지 않고 하나씩 옮긴다" beats "Strangler Fig 패턴으로 간다".
 - **Concrete duties over abstract role-words.** "controller가 신원 확인·권한 검사·감사를 맡는다", not "controller가 정책 평면을 맡는다".
 - **Complete sentences; brevity from structure.** Em-dash/middot/arrow chains and "X = Y" noun fragments make the reader decompress — telegraphic compression is not concision. One topic per bullet line, elaboration one level down as a sub-list.
+- **Literal nouns over metaphor nouns.** In English text, flag substrate, wedge, vector, nexus, primitive, harness, surface, scaffolding, paradigm, ratchet, north star and flywheel used as a metaphor, and suggest the literal noun for the thing meant ("the CLI and the settings page", not "both surfaces"). The same word stays when it is the literal technical term (a test harness, a GPU vector).
 - **Cut meta-narration.** A sentence like "현재 상태는 `지금 구조` 절에 있다" repeats what headings already say.
 - **Use the platform's affordances.** On GitHub: task-list checkboxes (`- [x]` / `- [ ]`) for done/remaining work.
 - **A flow is block coding, a structure is SVG.** A procedure or branch is a Scratch-style indented text tree in a plain fence — `⚑ 사용자 입력이 들어오면`, then `┣━ 만약 〈조건〉이면` / `┃    ┗━ 동작`, one `→ 결과` line per branch value — and it replaces both the flowchart and a table restating the same branches. A structure picture is an SVG drawn by hand from coordinates and rendered to PNG. Mermaid's auto-layout places nodes where the reader does not expect them, so the reader follows a block-coding tree faster than the same flow as a chart.
@@ -154,7 +163,8 @@ Before the report, confirm each line against the target and turn every miss into
 - One dominant type, and its shape and watch-for list pass.
 - Overview up top; most valuable content first; headings convey the outline.
 - Each sentence starts from the given and ends on the new; subject and verb close and early.
-- Sentences compact, concrete, consistent, active, one idea each.
+- Sentences compact, concrete, consistent, active, one idea each, specific to this project.
+- (English) Google style mechanics, ASD-STE100 procedure limits and Global English checks pass.
 - (Korean) no 번역체, clear subjects, uniform 어미.
 - Every label or coined term defined at or before first use; glossary, if any, at the bottom and unannounced.
 - Mechanisms described instead of pattern names; no telegraphic "X = Y" fragments.

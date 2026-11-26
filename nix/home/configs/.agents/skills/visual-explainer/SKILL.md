@@ -18,6 +18,12 @@ Every visual is markup you place by hand and then look at as rendered pixels. Th
 - **Slide decks** (a sequence of claims stepped through one per 16:9 slide): read `slide-visualizer/README.md` and draw from `slide-visualizer/template.html`; a chart or diagram on a slide follows chart-visualizer or diagram-visualizer.
 - **Code** (diffs, code files, coloured terminal output): read `code-visualizer/README.md` and pre-render with `code-visualizer/render.sh`, which writes a static fragment with no script and no CDN load (@pierre/diffs and Shiki, Nord palette).
 
+## Build a mechanism up one part at a time
+
+A mechanism with three or more moving parts is taught as a series: figure 1 draws the first two parts, and each later figure redraws the previous one and adds a single part, with every existing node at the same coordinates so the reader watches the system assemble. Each figure in the series passes the gate. A single all-parts figure is a reference to link after the series, not the explanation.
+
+When the explanation argues for a change, including your own diff, the series carries the argument: state the claim first, give each step's evidence as `file:line` under its figure, and close with each rejected alternative and the reason it lost.
+
 Credits and licenses for the adapted methods and numbers are in `NOTICE.md`.
 
 ## The gate: render, look, fix, repeat

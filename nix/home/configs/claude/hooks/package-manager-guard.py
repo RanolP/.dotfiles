@@ -17,6 +17,7 @@ Self-check: `python3 package-manager-guard.py --selftest`.
 """
 import json
 import os
+import re
 import shlex
 import sys
 
@@ -124,7 +125,9 @@ def main():
     cwd, cmd = fold_leading_cd(cmd, cwd)
 
     try:
-        toks = shlex.split(cmd)
+        # Without quotes or escapes, shlex only splits on these four characters.
+        toks = (shlex.split(cmd) if any(char in cmd for char in "\"'\\")
+                else re.findall(r"[^ \t\r\n]+", cmd))
     except ValueError:
         sys.exit(0)
 

@@ -8,7 +8,7 @@ description: Pre-draft step for any outside-facing document — README, guide, t
 1. **Name the reader** and what they will do with the doc once they finish it.
 2. **Pick ONE type**; a doc that needs two types becomes two linked docs.
    - Tutorial — one runnable happy path from a reachable clean state, each step verifiable.
-   - Explanation — why it matters, then the mental model, then the mechanics.
+   - Explanation — why it matters, then the mental model, then the mechanics. A "how does X work" answer runs Overview / How it works / Where things live (`file:line`) / Gotchas.
    - How-to — the exact problem, preconditions, the shortest correct path, alternatives after.
    - Reference — uniform scannable entries covering the whole surface, verified against source.
    - Status / design (PR body, issue, ADR) — current state, problem, options, rationale, progress checklist.
@@ -16,3 +16,5 @@ description: Pre-draft step for any outside-facing document — README, guide, t
 4. **Outline headings** that alone carry the argument.
 5. **Draft** from that outline.
 6. **Spawn `prose-editor`** on the draft and apply its findings before delivering or publishing; it reads as a zero-context outside reader, which the author never is.
+
+For a new shared API, CLI or package, write its usage README or tutorial, with real call examples, before the implementation, and agree it with the user. An awkward call shows up in an example while it is still cheap to change, and the examples then serve as the acceptance check the implementation must pass.

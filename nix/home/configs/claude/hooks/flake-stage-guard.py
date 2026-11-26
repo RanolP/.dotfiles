@@ -25,6 +25,7 @@ Self-check: `python3 flake-stage-guard.py --selftest`.
 """
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -119,7 +120,9 @@ def main():
         sys.exit(0)
     cwd, command = fold_leading_cd(command, data.get("cwd") or os.getcwd())
     try:
-        toks = shlex.split(command)
+        # Without quotes or escapes, shlex only splits on these four characters.
+        toks = (shlex.split(command) if any(char in command for char in "\"'\\")
+                else re.findall(r"[^ \t\r\n]+", command))
     except ValueError:
         sys.exit(0)
 

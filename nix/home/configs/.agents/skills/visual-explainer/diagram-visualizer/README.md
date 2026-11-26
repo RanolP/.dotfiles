@@ -10,6 +10,7 @@ The method comes from nicobailon/visual-explainer and the numbers from the Sui d
 - Pick one level of detail per figure (C4: context, container, component, code). A node that needs its internals gets a second figure, cross-referenced in the caption.
 - Flow direction: left to right for data flow, top to bottom for execution and time. A sequence diagram puts one column per actor and runs time down.
 - Over 15 nodes, split; an overview reads best at 5-8 nodes with detail in a second figure.
+- A state machine reads best at about 20 transitions or fewer. Simplify by coarsening first: give one state to values that behave the same and drop a detail the claim does not need. Keep every state on the bug path the figure exists to show, and keep two states apart when they break different rules. Then hide transitions only under four conditions: every state stays reachable from the initial state, every state that has a way out keeps at least one drawn exit, a transition with several triggers is hidden whole or not at all (hiding some narrows its condition), and the caption names what was hidden.
 
 ## 2. Grid first
 

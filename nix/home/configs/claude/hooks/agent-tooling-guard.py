@@ -31,6 +31,7 @@ Self-check: `python3 agent-tooling-guard.py --selftest`.
 """
 import json
 import os
+import re
 import shlex
 import sys
 
@@ -88,7 +89,9 @@ def is_env_assign(tok):
 def leading_tokens(cmd):
     """The command's leading tokens with env assignments stripped, or []."""
     try:
-        toks = shlex.split(cmd)
+        # Without quotes or escapes, shlex only splits on these four characters.
+        toks = (shlex.split(cmd) if any(char in cmd for char in "\"'\\")
+                else re.findall(r"[^ \t\r\n]+", cmd))
     except ValueError:
         return []
     while toks and is_env_assign(toks[0]):

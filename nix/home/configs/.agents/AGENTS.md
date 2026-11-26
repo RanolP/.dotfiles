@@ -34,7 +34,7 @@
 - A heavy local job, a charged cloud command, a remote shell and every outside-visible mutation still go through the user.
 
 ## Claims rest on observation, shown in the visible response
-- Label evidence vs premises, state unavoidable assumptions, mark fixed constraints vs scope; build premises only from what the user said, quoting it, and drop a claim no sentence of theirs supports.
+- Label evidence vs premises, state unavoidable assumptions, mark fixed constraints vs scope; build premises only from what the user said, quoting it, and drop a claim no sentence of theirs supports. Cite a rule tag only beside the decision it changed in this reply.
 - Answer "I don't know" for an unchecked cause; when an explanation is refuted, stop at "unknown" and propose the check instead of the next guess (`docs/src/agent-incidents.md`, 2026-08-18 and 2026-10-01).
 - Test the user's named cause or version first and report the result before any competing theory; check a dependency's actual version, not presence; read "really?"/"그런가?" as a demand to re-verify by a DIFFERENT method.
 - Read a general statement in a system note or tool description as a fact about the tool, never the cause of the event; ground a claim about another system in its main-branch source, and report one resting on a doc comment as unverified.

@@ -90,6 +90,13 @@ A model reads every line on every load, so length is paid for each session the t
 
 A brief for a subagent or second agent carries five things: the goal, a pass/fail done check, the proof to return, what the user already knows, and the real constraints (files in scope, what is off limits, the result's exact shape). Leave the method open for an investigative worker, so it can find a better path than the one you would pick; prescribe a step only when it is a settled plan decision, as for an implementer working from an agreed plan. Give your own theory of a cause only labelled `unverified theory`, after the symptom, because a cause stated as fact steers the worker's diagnosis to confirm it. Name a skill only to override the one the worker would pick by itself; a listed sequence of skills reorders or drops the steps those skills already sequence.
 
+## Port or vendor a skill from another pack
+
+- Keep the upstream text in one file with its version noted, and put local adaptations in a separate overlay file, so a refresh is a file replace that cannot overwrite them; keep user-owned config, maps and secrets outside the vendored directory.
+- Where an upstream step needs a capability this harness lacks, write one line `Skipped: <step>. <reason>.` and go on, leaving a labelled placeholder when a later step consumes that step's output.
+- Measure whether the ported text changes behavior with skill `blind-eval`: candidates get an organic task in a sanitized copy, never the words eval or candidate, and the author reads the raw outputs.
+- Prove the install after the rebuild with a fresh headless `claude -p` in a scratch directory asked whether the skill is available; the skill list of the session that wrote it does not count.
+
 ## Applying this to a whole file
 
 When editing an existing rules file or skill, run the cut pass above first, then work bullet by bullet:

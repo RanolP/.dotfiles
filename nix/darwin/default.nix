@@ -116,6 +116,10 @@ in
         sudo -u ranolp defaults write com.apple.AppleMultitouchTrackpad Dragging -bool true
         sudo -u ranolp defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Dragging -bool true
         sudo -u ranolp defaults write com.apple.HIToolbox TISRomanSwitchState -int 0
+        # Analytics: no diagnostics to Apple or app developers, no personalized ads
+        defaults write "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist" AutoSubmit -bool false
+        defaults write "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist" ThirdPartyDataSubmit -bool false
+        sudo -u ranolp defaults write com.apple.AdLib allowApplePersonalizedAdvertising -bool false
         # Liquid Glass 비활성화 (SwiftUI layer, macOS 26 Tahoe)
         # FeatureFlags plist approach caused fully transparent UI on 26.4+; use per-user SwiftUI default instead
         sudo -u ranolp defaults write -g com.apple.SwiftUI.DisableSolarium -bool YES

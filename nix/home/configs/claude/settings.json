@@ -155,10 +155,6 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/apology-leak-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/agent-tooling-guard.py"
           }
         ]
       },
@@ -167,67 +163,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/flake-stage-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/git-integrity-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/git-push-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/ssh-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/package-manager-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/publish-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/declarative-package-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/nsc-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/gui-launch-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/gh-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/jira-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/pr-body-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/file-edit-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/commit-check-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/leak-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/bare-sleep-hint.py"
+            "command": "python3 ~/.claude/hooks/bash-guards.py",
+            "timeout": 120
           }
         ]
       },

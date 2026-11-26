@@ -514,9 +514,6 @@ in
       # hetero-subagents runs subagent types through Codex or Antigravity;
       # its hook starts the bridge as `node <root>/daemon/codex-bridge.mjs`.
       ".claude/mods/hetero-subagents".source = heteroSubagentsMod;
-      # time-budget gates every tool on an estimate and stops the work at the
-      # budget: checkpoint reports at 1/3, 1/2, 2/3, 5/6, then abort past 6/6.
-      ".claude/mods/time-budget".source = ./configs/claude/mods/time-budget;
       # summation-panel: one auto-opened pane of usage, subagents, dotfiles version, and wayseeker state read from disk.
       ".claude/mods/summation-panel".source = ./configs/claude/mods/summation-panel;
       # ask-later: a non-blocking AskUserQuestion; the model queues questions

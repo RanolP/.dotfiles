@@ -31,7 +31,6 @@ The shared skill list in `nix/home/default.nix` links local skills into both Cla
 | `resources` | Tracks owned processes and cross-session mutexes per session, guards Bash against a mutex another session holds, detects shell-launched processes, delivers pressure/load and watchdog notices, and stops owned emulators and servers at session end |
 | `bg-compact` | Owns session compaction, preserving subagent spawn reminders. Pre-computes a cached summary via `$.model.fork` past 60% of the compaction limit; at compaction answers with that summary plus every later message unchanged |
 | `hetero-subagents` | Starts Codex and Antigravity bridges for backend-specific agent tools |
-| `time-budget` | Gives estimate, checkpoint and overrun feedback; the `extend` tool records extra time in extensions.jsonl |
 
 Mod tests (`mods/*/hooks/*.test.ts`) import `claude-code/testing`, a synthetic module the claude binary injects (`describe`, `expect`, `mock`, `test`, `tier`), so `bun test` fails with "Cannot find module" on every mod. Run them with `claude plugin test .` from the mod folder; it takes a folder and runs every `*.test.ts` under it. `claude test ...` is a different thing: the wrapper reads `test` as a prompt and starts a session. The loader also requires that `$` be passed only into a function declared in the same file as the hook, never across an import, so a helper module takes plain values.
 

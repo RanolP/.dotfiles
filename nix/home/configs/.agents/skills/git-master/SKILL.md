@@ -87,16 +87,21 @@ git rebase --exec '<lint and typecheck>' origin/main   # once, at publish: every
 - The `git diff --exit-code` check is the whole-branch case. Publishing a subset instead? Diff against the tree that subset was meant to reach.
 - `--exec` checks out each commit in turn, so a commit that passes only once a later commit lands fails here. That is what the check is for.
 - Take the lint and typecheck commands from the repo -- `package.json` scripts, the `Makefile`, or the CI workflow.
+- Order the concerns so each commit proves the next: a regression test that fails before its fix (marked expected-fail, such as `test.fails` or `@pytest.mark.xfail`, when every commit must stay green), a pure deletion before the reshape of what remains, and a measurement baseline before the optimization it is measured against. A reviewer then sees red before green and the before before the after.
 - Before review, fold every cleanup or refactor into the commit that introduced the code it touches, splitting a tail commit by file and hunk, and rewrite those commits' messages to match; a reviewer reads commit by commit, so a tail "fix 1, fix 2" commit makes them read code an earlier commit already throws away. One feature is one commit (renderer and wiring together).
 - Rejected push: `git fetch` as its own visible step, rebase onto it, and ask the user when the rebase is not obviously safe.
+- Before each push of a branch you pushed before, compare `git rev-parse origin/<branch>` after the fetch with the SHA this session last pushed. A mismatch means another session or person pushed there: stop, and report the foreign commits (`git log <last-pushed>..origin/<branch>`) to the user rather than rebasing over them; their lease then pins to the SHA they decide on.
 - Count only a human review as a review. The PR author's own explainer comments and a bot review (Codex) leave a rewrite open, but `git-integrity-guard.py` passes the author's comments and blocks on a bot's -- so for a bot-reviewed PR, hand the user `! git -C <repo> push --force-with-lease=<branch>:<fetched-sha> origin <branch>` to run. A branch whose PR carries a human review gets fixup commits on top, never a force-push.
 - Continue an epic on the branch that already carries it -- check `git worktree list` and `git branch --list 'claude/*'` first -- and leave the decision to split branches to the user.
 - A cleanup or diff-trim pass keeps the last verified commit's runtime behavior: name that baseline commit in the worker brief, have the worker return `behavior_vs_head` listing every runtime difference with the rule that requires it, and revert each difference no rule requires.
 
 ## Rebasing a stack -- verify ancestry, not the worker's report
 
+- Stack a branch on another only when it uses that branch's code; otherwise branch off the default branch, so it lands alone and never needs a restack.
+
 - Before branch surgery, `git worktree list` for stale worktrees that hold the target branch, and remove the clean ones; a stale worktree once replayed a rebase twice and leaked four foreign commits into a PR.
 - Done means `git merge-base --is-ancestor <base> <head>` succeeds for each adjacent pair and `git diff <old tip> HEAD` is empty.
+- A restack gives every branch above it new SHAs, so record each branch's `git diff <parent>...<head> | git patch-id --stable` before and after. An unchanged id keeps that PR's review verdict; a changed one sends its interdiff back to review (`github-master` `guides/shipping.md`).
 - Report a stacked PR as merged only after `git merge-base --is-ancestor <sha> origin/main` succeeds, since a PR merged into its parent branch is not on main.
 
 ## Worktrees live in the repo, never in the scratchpad

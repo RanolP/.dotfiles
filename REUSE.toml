@@ -52,6 +52,8 @@ path = [
     "nix/home/configs/.agents/skills/create-verification-skill/references/verify-existing-fix.md",
     "nix/home/configs/.agents/skills/github-master/guides/babysit.md",
     "nix/home/configs/.agents/skills/quint-verify/references/persistent.md",
+    "nix/home/configs/.agents/skills/github-master/guides/shipping.md",
+    "nix/home/configs/.agents/skills/github-master/scripts/watch-pr",
     "nix/home/configs/.agents/skills/bro/SKILL.md",
     "nix/home/configs/.agents/skills/how/SKILL.md",
     "nix/home/configs/.agents/skills/in-your-own-words/SKILL.md",

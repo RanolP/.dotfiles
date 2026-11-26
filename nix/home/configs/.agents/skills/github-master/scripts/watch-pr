@@ -1,0 +1,310 @@
+#!/usr/bin/env node
+// watch-pr: read a GitHub PR (or its stack) and print one typed verdict per poll.
+// Read-only: every call is a gh query. Ported from pstack 0.15.48 (MIT, Lauren Tan),
+// skills/poteto-mode/scripts/watch-pr. Exit codes and verdict shape: guides/babysit.md.
+"use strict";
+const { spawn } = require("node:child_process");
+
+const EXIT = { ok: 0, conflicts: 2, threads: 3, checks: 4, timeout: 5, gate: 6, query: 7, usage: 64 };
+const USAGE = "usage: watch-pr [--pr N | N] [--repo OWNER/NAME] [--stack] [--status-only]\n" +
+  "  [--interval S=60] [--timeout S=0] [--max-query-errors N=5] [--allow-draft]\n" +
+  "  [--gate-check NAME]... [--pretty]\n";
+
+class QueryError extends Error {
+  constructor(kind, detail, retryable = true) { super(detail); this.kind = kind; this.retryable = retryable; }
+}
+
+function parseArgs(argv) {
+  const o = { pr: null, repo: null, stack: false, statusOnly: false, interval: 60, timeout: 0,
+    maxQueryErrors: 5, allowDraft: false, gateChecks: ["Code Review Gate"], pretty: false };
+  const num = (v, min) => { const n = Number(v); if (!Number.isFinite(n) || n < min) throw new Error("bad number: " + v); return n; };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i], next = () => { if (i + 1 >= argv.length) throw new Error(a + " needs a value"); return argv[++i]; };
+    switch (a) {
+      case "--pr": o.pr = num(next().replace(/^#/, ""), 1); break;
+      case "--repo": o.repo = next(); if (!/^[^/\s]+\/[^/\s]+$/.test(o.repo)) throw new Error("--repo wants OWNER/NAME"); break;
+      case "--stack": o.stack = true; break;
+      case "--status-only": o.statusOnly = true; break;
+      case "--interval": o.interval = num(next(), 1); break;
+      case "--timeout": o.timeout = num(next(), 0); break;
+      case "--max-query-errors": o.maxQueryErrors = Math.trunc(num(next(), 1)); break;
+      case "--allow-draft": o.allowDraft = true; break;
+      case "--gate-check": o.gateChecks.push(next()); break;
+      case "--pretty": o.pretty = true; break;
+      case "-h": case "--help": process.stdout.write(USAGE); process.exit(0);
+      default:
+        if (/^#?\d+$/.test(a) && o.pr === null) o.pr = num(a.replace(/^#/, ""), 1);
+        else throw new Error("unknown argument: " + a);
+    }
+  }
+  if (o.pr !== null && !Number.isInteger(o.pr)) throw new Error("--pr wants an integer");
+  if (o.statusOnly) o.maxQueryErrors = 1; // a one-shot read reports a failed query at once
+  return o;
+}
+
+function run(argv) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(argv[0], argv.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (c) => (stdout += c)); child.stderr.on("data", (c) => (stderr += c));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code: code ?? -1, stdout, stderr }));
+  });
+}
+const firstLine = (s) => (s.trim().split(/\r?\n/, 1)[0] || "").slice(0, 240);
+async function ghJson(args) {
+  const r = await run(["gh", ...args]);
+  if (r.code !== 0) {
+    const detail = firstLine(r.stderr) || "gh " + args[0] + " exited " + r.code;
+    // A PR or repo that does not exist stays missing on retry, so it ends the run at once.
+    const permanent = /Could not resolve to a|no pull requests found|HTTP 404/i.test(r.stderr);
+    throw new QueryError(permanent ? "not-found" : "command-exit", detail, !permanent);
+  }
+  try { return JSON.parse(r.stdout); } catch (e) { throw new QueryError("json-parse", "gh " + args[0] + ": " + e.message); }
+}
+const graphql = (query, ctx, extra = []) =>
+  ghJson(["api", "graphql", "-f", "query=" + query, "-f", "owner=" + ctx.owner, "-f", "repo=" + ctx.repo, "-F", "pr=" + ctx.number, ...extra]);
+function dig(value, path) {
+  let cur = value;
+  for (const k of path) {
+    if (cur === null || typeof cur !== "object" || !(k in cur)) throw new QueryError("missing-key", "missing " + path.join("."));
+    cur = cur[k];
+  }
+  return cur;
+}
+
+const THREADS_Q = "query($owner:String!,$repo:String!,$pr:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$pr){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{id isResolved isOutdated path line comments(first:1){nodes{author{login}}}}}}}}";
+const COMMITS_Q = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){commits(last:50){nodes{commit{oid statusCheckRollup{state}}}}}}}";
+const ROLLUP_Q = "query($owner:String!,$repo:String!,$pr:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$pr){commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100,after:$after){pageInfo{hasNextPage endCursor} nodes{__typename ... on CheckRun{name status conclusion detailsUrl} ... on StatusContext{context state targetUrl}}}}}}}}}}";
+
+async function resolveRepo(o) {
+  if (o.repo) return o.repo;
+  const v = await ghJson(["repo", "view", "--json", "nameWithOwner"]);
+  return dig(v, ["nameWithOwner"]);
+}
+async function resolvePr(o, repo) {
+  if (o.pr !== null) return o.pr;
+  const v = await ghJson(["pr", "view", "--repo", repo, "--json", "number"]);
+  return dig(v, ["number"]);
+}
+
+async function pullRequest(ctx) {
+  const v = await ghJson(["pr", "view", String(ctx.number), "--repo", ctx.owner + "/" + ctx.repo, "--json",
+    "mergeable,mergeStateStatus,reviewDecision,headRefOid,headRefName,baseRefName,state,mergedAt,isDraft"]);
+  for (const k of ["mergeable", "mergeStateStatus", "state", "isDraft", "headRefName", "baseRefName"]) dig(v, [k]);
+  // gh reports "no review decision" as "", not null.
+  return { ...v, reviewDecision: v.reviewDecision || null };
+}
+
+// One home for check classification. A check named in --gate-check waits on a person,
+// so it is a gate rather than pending or failed CI, and the poll never waits on a human.
+function classify(name, kind, state, link, gates) {
+  if (gates.includes(name) && (kind === "pending" || state === "ACTION_REQUIRED")) kind = "approval-gate";
+  return { name, kind, state, link: link || "" };
+}
+function fastCheck(c, gates) {
+  const state = String(c.state || "").toUpperCase(), bucket = c.bucket;
+  if (state === "ACTION_REQUIRED") return classify(c.name, "failed", state, c.link, gates);
+  if (bucket === "fail" || state === "FAILURE" || state === "ERROR") return classify(c.name, "failed", state, c.link, gates);
+  if (bucket === "pending") return classify(c.name, "pending", state, c.link, gates);
+  if (bucket === "pass") return classify(c.name, "passed", state, c.link, gates);
+  if (bucket === "skipping") return classify(c.name, "skipped", state, c.link, gates);
+  return classify(c.name, "failed", state, c.link, gates);
+}
+function rollupCheck(n, gates) {
+  if (n.__typename === "CheckRun") {
+    const status = String(n.status || "").toUpperCase(), concl = String(n.conclusion || "").toUpperCase();
+    if (status !== "COMPLETED") return classify(n.name, "pending", "PENDING", n.detailsUrl, gates);
+    if (concl === "SUCCESS") return classify(n.name, "passed", concl, n.detailsUrl, gates);
+    if (concl === "NEUTRAL" || concl === "SKIPPED") return classify(n.name, "skipped", concl, n.detailsUrl, gates);
+    return classify(n.name, "failed", concl || "FAILURE", n.detailsUrl, gates);
+  }
+  if (n.__typename === "StatusContext") {
+    const state = String(n.state || "").toUpperCase();
+    if (state === "PENDING" || state === "EXPECTED") return classify(n.context, "pending", "PENDING", n.targetUrl, gates);
+    return classify(n.context, state === "SUCCESS" ? "passed" : "failed", state || "FAILURE", n.targetUrl, gates);
+  }
+  return null;
+}
+// An empty check list means "unreadable", never "green": fall back to the GraphQL rollup,
+// and when that is empty too, raise a query error instead of passing the PR.
+async function readChecks(ctx, gates) {
+  const r = await run(["gh", "pr", "checks", String(ctx.number), "--repo", ctx.owner + "/" + ctx.repo,
+    "--json", "name,state,link,bucket"]);
+  if ([0, 1, 8].includes(r.code) && r.stdout.trim()) {
+    try {
+      const v = JSON.parse(r.stdout);
+      if (Array.isArray(v) && v.length > 0) return { source: "gh-pr-checks", checks: v.map((c) => fastCheck(c, gates)) };
+    } catch { /* fall through to the rollup */ }
+  }
+  const checks = [];
+  let after = null;
+  do {
+    const v = await graphql(ROLLUP_Q, ctx, after ? ["-f", "after=" + after] : []);
+    const commits = dig(v, ["data", "repository", "pullRequest", "commits", "nodes"]);
+    const rollup = commits.length ? commits[commits.length - 1].commit.statusCheckRollup : null;
+    if (!rollup) break;
+    for (const n of rollup.contexts.nodes) { const c = rollupCheck(n, gates); if (c) checks.push(c); }
+    after = rollup.contexts.pageInfo.hasNextPage ? rollup.contexts.pageInfo.endCursor : null;
+  } while (after);
+  if (checks.length) return { source: "graphql-rollup", checks };
+  throw new QueryError("checks-unavailable", "could not read PR checks: gh pr checks exit=" + r.code +
+    " and the GraphQL rollup was empty" + (firstLine(r.stderr) ? "; " + firstLine(r.stderr) : ""));
+}
+
+async function readThreads(ctx) {
+  const out = [];
+  let after = null;
+  do {
+    const v = await graphql(THREADS_Q, ctx, after ? ["-f", "after=" + after] : []);
+    const rt = dig(v, ["data", "repository", "pullRequest", "reviewThreads"]);
+    for (const t of rt.nodes) if (!t.isResolved)
+      out.push({ id: t.id, path: t.path, line: t.line, isOutdated: t.isOutdated,
+        author: t.comments.nodes[0]?.author?.login ?? null });
+    after = rt.pageInfo.hasNextPage ? rt.pageInfo.endCursor : null;
+  } while (after);
+  return out;
+}
+
+// GitHub overloads BLOCKED: it means failing required CI only when the head rollup
+// is FAILURE or ERROR; otherwise it is a pending review gate and CI may be clean.
+async function mergeAssessment(ctx, facts) {
+  const v = await graphql(COMMITS_Q, ctx);
+  const commits = dig(v, ["data", "repository", "pullRequest", "commits", "nodes"])
+    .map((n) => ({ oid: n.commit.oid, state: n.commit.statusCheckRollup?.state ?? null }));
+  const head = commits.find((c) => c.oid === facts.headRefOid)?.state ?? null;
+  return {
+    headRollupState: head,
+    githubRefusesMerge: facts.mergeStateStatus === "BLOCKED" && (head === "FAILURE" || head === "ERROR"),
+    hadPreviousPassingCi: commits.some((c) => c.oid !== facts.headRefOid && c.state === "SUCCESS"),
+  };
+}
+
+async function snapshot(ctx, gates) {
+  const facts = await pullRequest(ctx);
+  const pr = { number: ctx.number, headRefOid: facts.headRefOid, headRefName: facts.headRefName, baseRefName: facts.baseRefName };
+  if (facts.state === "MERGED" || facts.mergedAt) return { kind: "merged", pr, mergedAt: facts.mergedAt };
+  if (facts.state === "CLOSED") return { kind: "closed", pr };
+  const threads = await readThreads(ctx);
+  const read = await readChecks(ctx, gates);
+  const failed = read.checks.filter((c) => c.kind === "failed");
+  const pending = read.checks.filter((c) => c.kind === "pending");
+  const merge = await mergeAssessment(ctx, facts);
+  const ci = failed.length ? "failing" : merge.githubRefusesMerge ? "github-rejected" : pending.length ? "pending" : "clean";
+  return { kind: "open", pr, facts: { mergeable: facts.mergeable, mergeStateStatus: facts.mergeStateStatus,
+    reviewDecision: facts.reviewDecision, isDraft: facts.isDraft }, threads,
+    ci: { state: ci, source: read.source, failed, pending,
+      gates: read.checks.filter((c) => c.kind === "approval-gate"), ...merge } };
+}
+
+const conflictTier = (r) => r.kind === "open" && (r.facts.mergeable === "CONFLICTING" ||
+  ["DIRTY", "CONFLICTING"].includes(r.facts.mergeStateStatus)) ? { kind: "merge-conflicts", exitCode: EXIT.conflicts, pr: r.pr } : null;
+const threadTier = (r) => r.kind === "open" && r.threads.length ? { kind: "review-threads", exitCode: EXIT.threads, pr: r.pr, threads: r.threads } : null;
+const ciTier = (r) => r.kind === "open" && (r.ci.state === "failing" || r.ci.state === "github-rejected")
+  ? { kind: "failing-checks", exitCode: EXIT.checks, pr: r.pr, ci: r.ci } : null;
+function gateTier(r, allowDraft) {
+  let reason = null;
+  if (r.kind === "closed") reason = "closed-without-merge";
+  else if (r.kind === "open" && r.facts.isDraft && !allowDraft && r.ci.state !== "pending") reason = "draft-pr";
+  else if (r.kind === "open" && r.facts.reviewDecision === "CHANGES_REQUESTED") reason = "changes-requested";
+  return reason ? { kind: "merge-gate", exitCode: EXIT.gate, pr: r.pr, reason } : null;
+}
+// Tier-major across a stack: a conflict anywhere outranks a thread anywhere, which outranks CI.
+function decide(rows, allowDraft) {
+  for (const tier of [conflictTier, threadTier, ciTier, (r) => gateTier(r, allowDraft)])
+    for (const r of rows) { const b = tier(r); if (b) return { kind: "BLOCKER", blocker: b }; }
+  const waiting = rows.find((r) => r.kind === "open" && r.ci.state === "pending");
+  if (waiting) return { kind: "WAITING", frontier: waiting.pr, pending: waiting.ci.pending };
+  return { kind: "READY", prs: rows.map((r) => ({ number: r.pr.number, state: r.kind, headRefOid: r.pr.headRefOid })) };
+}
+
+// Stack by base/head ref chains. A base ref belongs to this repository, so a fork head
+// with the same branch name is never a parent.
+async function discoverStack(ctx) {
+  const open = await ghJson(["pr", "list", "--repo", ctx.owner + "/" + ctx.repo, "--state", "open", "--limit", "300",
+    "--json", "number,headRefName,baseRefName,isCrossRepository"]);
+  const byHead = new Map(open.filter((p) => !p.isCrossRepository).map((p) => [p.headRefName, p]));
+  const start = open.find((p) => p.number === ctx.number);
+  if (!start) return [ctx.number];
+  const down = [], seen = new Set([start.number]);
+  for (let cur = start; byHead.has(cur.baseRefName) && !seen.has(byHead.get(cur.baseRefName).number);) {
+    cur = byHead.get(cur.baseRefName); seen.add(cur.number); down.push(cur.number);
+  }
+  const up = [];
+  const visit = (parent) => {
+    if (parent.isCrossRepository) return;
+    for (const child of open.filter((p) => p.baseRefName === parent.headRefName).sort((a, b) => a.number - b.number)) {
+      if (seen.has(child.number)) continue;
+      seen.add(child.number); up.push(child.number); visit(child);
+    }
+  };
+  visit(start);
+  return [...down.reverse(), start.number, ...up];
+}
+
+function render(v, pretty) {
+  if (!pretty) return JSON.stringify(v) + "\n";
+  const head = "[" + v.sequence + "] " + v.kind + (v.exitCode !== undefined ? " exit=" + v.exitCode : "");
+  if (v.kind === "BLOCKER") return head + " " + v.blocker.kind + (v.blocker.pr ? " #" + v.blocker.pr.number : "") +
+    (v.blocker.reason ? " (" + v.blocker.reason + ")" : "") + (v.blocker.detail ? ": " + v.blocker.detail : "") + "\n";
+  if (v.kind === "WAITING") return head + " #" + v.frontier.number + " pending: " + v.pending.map((c) => c.name).join(", ") + "\n";
+  if (v.kind === "STATUS") return head + "\n" + v.rows.map((r) => "  #" + r.pr.number + " " + r.kind +
+    (r.kind === "open" ? " merge=" + r.facts.mergeStateStatus + " threads=" + r.threads.length + " ci=" + r.ci.state +
+      " review=" + (r.facts.reviewDecision ?? "none") + (r.facts.isDraft ? " draft" : "") : "")).join("\n") + "\n";
+  return head + " " + JSON.stringify(v.prs ?? v.failure ?? {}) + "\n";
+}
+
+async function main() {
+  let o;
+  try { o = parseArgs(process.argv.slice(2)); }
+  catch (e) { process.stderr.write("watch-pr: " + e.message + "\n" + USAGE); return EXIT.usage; }
+  const mode = o.stack ? "stack" : "single";
+  let sequence = 0;
+  const stamp = (payload) => ({ schemaVersion: 1, sequence: ++sequence, observedAt: new Date().toISOString(), mode, ...payload });
+  const emit = (v) => process.stdout.write(render(v, o.pretty));
+  const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
+  const started = Date.now() / 1000;
+  const remaining = () => (o.timeout > 0 ? o.timeout - (Date.now() / 1000 - started) : Infinity);
+  const queryFailure = (e, failures) => stamp({ kind: "BLOCKER", terminal: true, exitCode: EXIT.query,
+    blocker: { kind: "status-query", failures, failure: e.kind, detail: e.message } });
+
+  let ctx, numbers;
+  try {
+    const repo = await resolveRepo(o);
+    const [owner, name] = repo.split("/");
+    ctx = { owner, repo: name, number: await resolvePr(o, repo) };
+    numbers = o.stack ? await discoverStack(ctx) : [ctx.number];
+  } catch (e) {
+    if (!(e instanceof QueryError)) throw e;
+    const v = queryFailure(e, 1); emit(v); return v.exitCode;
+  }
+
+  let failures = 0;
+  for (;;) {
+    let rows;
+    try {
+      rows = [];
+      for (const n of numbers) rows.push(await snapshot({ ...ctx, number: n }, o.gateChecks));
+      failures = 0;
+    } catch (e) {
+      if (!(e instanceof QueryError)) throw e;
+      failures += 1;
+      if (!e.retryable || failures >= o.maxQueryErrors) { const v = queryFailure(e, failures); emit(v); return v.exitCode; }
+      const retryInSeconds = Math.min(Math.max(o.interval, 60) * 2 ** (failures - 1), 300);
+      emit(stamp({ kind: "RETRY", terminal: false, failure: e.kind, detail: e.message, consecutiveFailures: failures, retryInSeconds }));
+      if (remaining() <= 0) { const v = stamp({ kind: "TIMEOUT", terminal: true, exitCode: EXIT.timeout, reason: "status-unavailable" }); emit(v); return v.exitCode; }
+      await sleep(Math.min(retryInSeconds, remaining()));
+      continue;
+    }
+    if (o.statusOnly) { emit(stamp({ kind: "STATUS", terminal: true, exitCode: EXIT.ok, reason: "status-only", rows })); return EXIT.ok; }
+    if (o.stack) emit(stamp({ kind: "STATUS", terminal: false, reason: "poll", rows }));
+    const d = decide(rows, o.allowDraft);
+    if (d.kind === "BLOCKER") { const v = stamp({ kind: "BLOCKER", terminal: true, exitCode: d.blocker.exitCode, blocker: d.blocker }); emit(v); return v.exitCode; }
+    if (d.kind === "READY") { emit(stamp({ kind: "READY", terminal: true, exitCode: EXIT.ok, prs: d.prs })); return EXIT.ok; }
+    emit(stamp({ kind: "WAITING", terminal: false, frontier: d.frontier, pending: d.pending }));
+    if (remaining() <= 0) { const v = stamp({ kind: "TIMEOUT", terminal: true, exitCode: EXIT.timeout, reason: "pending-checks", pending: d.pending }); emit(v); return v.exitCode; }
+    await sleep(Math.min(o.interval, remaining()));
+  }
+}
+main().then((code) => { process.exitCode = code; }, (e) => { process.stderr.write("watch-pr: " + (e.stack || e) + "\n"); process.exitCode = 70; });

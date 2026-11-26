@@ -9,5 +9,6 @@
 
 ## Writing issues and comments
 
+- Classify the report before filing. A bug violates intended behavior: wrong output, broken state, an error, a crash, a hang, a silent no-op, or a regression. A request for behavior that was never intended is a feature. When the report fits neither cleanly, ask the reporter one focused question and file once it is answered.
 - Check for an issue template first (`.github/ISSUE_TEMPLATE/`); when one exists, keep its headers verbatim and fill every section — never invent your own layout.
 - Issue text is outside-facing prose: Korean in complete 한다체 sentences, with the same inline prose rules as PR bodies (see `guides/pr.md`).

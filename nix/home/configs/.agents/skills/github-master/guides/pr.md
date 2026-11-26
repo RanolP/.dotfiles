@@ -30,7 +30,11 @@ The body answers one question: **what does the reviewer genuinely want to know?*
 
 **A number is one `A -> B (-N%p)` line**, and its backing is a `증거: <링크>` line. Whatever the reviewer confirms by opening the link stays unexplained in the body. A table earns its place only from three columns up, with a different kind of thing per row.
 
-**~25 lines.** A body that restates every commit message is the failure this replaces.
+**~25 lines.** A body that restates every commit message is the failure this replaces. Evidence logs, run histories and long tables go in a PR comment the body links to: the body keeps one line per check, its command and verdict, and that line carries the comment's link.
+
+**A count or tree claim holds at the landing commit.** Re-run the command behind each number or file tree in the body at the final head, and put that command in a fence under the claim, so a reviewer regenerates it rather than trusting it. Refresh both after any later push.
+
+**A bug-fix body carries the proof.** Under the template's sections, add `재현:` (the steps that showed the bug), `원인:` (the root cause in one sentence), `증거:` (before and after, the failing then passing test or the two screenshots) and `영향 범위:` (each caller, screen or config the diff reaches, and what was run for it) label lines. A fix whose after-evidence still fails says so in the `증거:` line rather than claiming the fix.
 
 **Show, don't narrate.** A diagram or a rendered screenshot goes *inside* the item it belongs to:
 
@@ -94,12 +98,12 @@ Compare that file list against `git diff --name-only origin/<default-branch>...H
 
 1. **A found PR covers this same task** → it owns the work. Name it to the user — number, title, head branch — and ask whether to continue it. Wait for the answer, then commit onto its head branch and push. Create nothing.
 2. **Work builds on an unmerged PR** → ask the user which base to use, and wait for the answer. Open a stacked PR only when the user asks for one.
-3. **Work needs more than one PR** → present the split and get approval before you write any of the code. Split the code, not the save points: expand (add the new API beside the old, behavior unchanged), switch (move the call sites, the only behavior change), contract (delete the old code and any shim). Each PR stays near 300 lines with its tests, passes type-check on its own, and is safe to deploy alone; "the switch is atomic" is a reason to re-plan, never to keep one large PR. Base an independent PR on the default branch and a dependent one on the PR below it, merge the stack bottom-up, and confirm each base with `gh pr view <n> --json baseRefName`.
+3. **Work needs more than one PR** → present the split and get approval before you write any of the code. Split the code, not the save points: expand (add the new API beside the old, behavior unchanged), switch (move the call sites, the only behavior change), contract (delete the old code and any shim, and rewrite the tests to assert the new contract, deleting each test that only pinned the old internals). Each PR stays near 300 lines with its tests, passes type-check on its own, and is safe to deploy alone; "the switch is atomic" is a reason to re-plan, never to keep one large PR. Base an independent PR on the default branch and a dependent one on the PR below it, merge the stack bottom-up, and confirm each base with `gh pr view <n> --json baseRefName`.
 4. **No overlap, single PR** → create it against the repo default branch.
 
 ## PR hygiene
 
-- `--draft` for work in progress.
+- `--draft` for work in progress. Once the user has approved the PR and the first unit is pushed, open it as a draft right away, so CI and review bots run beside the remaining work.
 - Keep PRs small and single-purpose. A feature PR carries only that feature: a new test framework, build-config changes and edits to unrelated packages go to their own PR, so read `git diff --stat origin/<default>` and move every path outside the feature out. Shared modules stay read-only in a feature PR -- build the behavior inside the feature directory, and justify each file outside it first when auditing the diff.
 - Renaming a branch (`gh api -X POST repos/{owner}/{repo}/branches/{branch}/rename -f new_name=...`) retargets every PR that uses it as base, but permanently CLOSES the PR whose head it is: `gh pr reopen` fails because the old head ref is gone. Say before the rename that the head PR dies and its number changes, then recreate it as a draft with the old body (`gh pr view <old> --json body -q .body > file`, `gh pr create --draft --body-file file`) and update every Jira, Slack and doc link to the new number. Deleting and re-pushing the branch closes it the same way.
 - Self-review the diff before requesting review.

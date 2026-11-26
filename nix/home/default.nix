@@ -208,7 +208,13 @@ let
   # so a script that imports a sibling skill by relative path
   # (design-review -> ../artificier-comparison) resolves after node follows
   # the ~/.claude/skills symlink to its real path, exactly as it does in the repo.
-  localSkill = name: "${./configs/.agents/skills}/${name}";
+  # Fails the build when a skill's frontmatter, localSkill line or relative
+  # link is broken (scripts/skills-check.py).
+  checkedSkills = pkgs.runCommand "agent-skills" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+    python3 -I ${../../scripts/skills-check.py} ${./configs/.agents/skills} ${./default.nix}
+    cp -r ${./configs/.agents/skills} $out
+  '';
+  localSkill = name: "${checkedSkills}/${name}";
   skills = {
     git-master = localSkill "git-master";
     copy-sync = localSkill "copy-sync";

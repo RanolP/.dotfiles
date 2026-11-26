@@ -12,7 +12,7 @@ export const RESOURCE_TOOL = 'mcp__resources__resource'
 export const RESOURCE_DESCRIPTION = 'Track resources this session owns and shared exclusive resources. Call `register` with kind `mutex` when a device or service may be used by only one session at a time; call `who` before using one; call `release` the moment you finish with it. Bash commands that start an emulator, simulator, Metro, a web dev server, or a PR are recorded automatically; `register` with kind `owned` covers anything they miss.'
 const HEARTBEAT_TTL_MS = 60 * 60 * 1000
 // This path predates the split and stays for live registrations.
-const RESOURCE_STATE = '.local/state/clm/resources'
+const RESOURCE_STATE = '.local/state/claude/resources'
 
 export type OwnedKind = 'android-emulator' | 'ios-simulator' | 'metro' | 'web-dev' | 'pr' | 'custom' | 'process'
 export type OwnedResource = {
@@ -1168,7 +1168,7 @@ export const registerResources: Register = (on) => {
       const notice = await consumeResourceNotice(io)
       const pending = notice ? undefined : await pendingTransferNotice(io)
       const message = notice ?? pending
-      return message ? { ...result, sections: [...result.sections, { id: 'clm:resources', text: message, scope: 'session' as const }] } : result
+      return message ? { ...result, sections: [...result.sections, { id: 'resources', text: message, scope: 'session' as const }] } : result
     } catch (err) {
       $.ui.log(`resources: prompt notice failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       return result

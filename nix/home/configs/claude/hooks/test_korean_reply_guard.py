@@ -45,8 +45,8 @@ def run(final, style_text, **extra):
     return json.loads(p.stdout) if p.stdout.strip() else None
 
 
-KO_STYLE = "<clm-stable-attachment>\n# Output Style: concise-adhd-korean\n응답 언어는 항상 한국어다."
-EN_STYLE = "<clm-stable-attachment>\n# Output Style: concise\nAnswer briefly."
+KO_STYLE = "<system-reminder>\n# Output Style: concise-adhd-korean\n응답 언어는 항상 한국어다."
+EN_STYLE = "<system-reminder>\n# Output Style: concise\nAnswer briefly."
 
 
 def main():

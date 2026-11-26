@@ -27,8 +27,8 @@ import shlex
 import sys
 
 # (path mark, sentinel, Korean label) per protected local store. Every check
-# below applies to every row; `.lessons/` holds clm-extracted lessons that may
-# carry internal work detail from other repos.
+# below applies to every row; `.lessons/` holds lessons extracted by the
+# removed clm mod, which may carry internal work detail from other repos.
 STORES = (
     (".apologies", "APOLOGY-CONFIDENTIAL", "시말서"),
     (".lessons", "LESSON-CONFIDENTIAL", "교훈"),

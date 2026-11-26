@@ -6,7 +6,7 @@ import type { MutexOwner, OwnedResource, ProcessResult, ResourceIo, ResourceSess
 import type { ResourceInput } from '../types'
 
 type World = { files: Map<string, string>; dirs: Set<string>; dirMtimes: Map<string, number>; alive: Set<number>; calls: string[][]; writes: string[]; logs: string[]; now: number }
-const ROOT = '/home/test/.local/state/clm/resources'
+const ROOT = '/home/test/.local/state/claude/resources'
 const ownedPath = (session: string) => resourceKey(ROOT, session)
 const readSession = (shared: World, session: string): ResourceSession | undefined => {
   const value = shared.files.get(ownedPath(session))

@@ -10,11 +10,11 @@ results, subagent transcripts and resumed-session replays would each inflate a c
 """
 import argparse, glob, json, os, re, sys
 
-# Harness- and plugin-injected turns (system-reminder, clm-stable-attachment, task-notification, ...) open with a tag.
+# Harness- and plugin-injected turns (system-reminder, task-notification, ...) open with a tag.
 WRAPPER = re.compile(r'^\s*<[a-z][\w-]*[\s>]')
 REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.S)
 # Credentials pasted into a prompt must not reach the output file or a subagent brief.
-# Same set as clm's hooks/memory.ts SECRETS; a pattern with a group keeps that group (the key name) and redacts the rest.
+# Copied from the removed clm mod's hooks/memory.ts SECRETS; a pattern with a group keeps that group (the key name) and redacts the rest.
 SECRETS = [
     re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----'),
     re.compile(r'\bsk-[A-Za-z0-9_-]{16,}'),
@@ -122,7 +122,7 @@ def mine(root, since):
 def selftest():
     # Regression: a harness-injected wrapper counted as a user correction, or a pasted token leaking into OUT.json.
     assert user_text({'type': 'user', 'message': {'content': '<system-reminder>x</system-reminder>'}}) is None
-    assert user_text({'type': 'user', 'message': {'content': '<clm-stable-attachment type="x">y'}}) is None
+    assert user_text({'type': 'user', 'message': {'content': '<task-notification type="x">y'}}) is None
     assert user_text({'type': 'user', 'message': {'content': [{'type': 'tool_result', 'content': 'x'}]}}) is None
     assert user_text({'type': 'user', 'isSidechain': True, 'message': {'content': 'hi'}}) is None
     assert user_text({'type': 'user', 'message': {'content': 'fix it <system-reminder>r</system-reminder>'}}) == 'fix it'

@@ -213,8 +213,7 @@ def is_turn_start(entry):
         content = content[0].get("text") or ""
     if not isinstance(content, str):
         return False
-    return not content.lstrip().startswith(
-        ("<clm-stable-attachment", "<clm-queued-message", "<system-reminder"))
+    return not content.lstrip().startswith("<system-reminder")
 
 
 def turn_entries(path):

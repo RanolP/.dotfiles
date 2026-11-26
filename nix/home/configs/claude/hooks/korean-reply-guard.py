@@ -8,8 +8,9 @@ and blocks the stop once when its prose -- code fences, inline code, block
 quotes, URLs and paths removed -- is mostly English.
 
 Which language is required, first match wins:
-  1. the newest "# Output Style: <name>" the clm mod injected into the
-     transcript (a style whose name or text says Korean means Korean);
+  1. the newest "# Output Style: <name>" in the transcript, which the harness
+     records in the session-start system-reminder (a style whose name or text
+     says Korean means Korean);
   2. `outputStyle` in ~/.claude/settings.json;
   3. $CLAUDE_REPLY_LANGUAGE, default "ko" -- this user's sessions are Korean.
 

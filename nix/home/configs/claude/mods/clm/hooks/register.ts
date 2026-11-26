@@ -9,7 +9,6 @@ import { checkpointCommit, landCommands, rollbackTo, WorktreeError, type Worktre
 import { recordPromptIntent as classifyPrompt, type PromptIntentIo } from './intent'
 import { arbitrateContinuation as arbitrateWorkflow, changeWorkflow as changeWorkflowDomain, completeMainTurn, isHumanOrigin, markActiveTurn, queueResume, readWorkflow as readWorkflowDomain, resetUserWorkflow, stampHumanPrompt as stampWorkflowPrompt, submitWithRecovery as recoverWorkflowSubmit, type MainTurnCompletionIo, type WorkflowIo, type WorkflowStateIo } from './workflow'
 import type { ClmWorkflow } from '../types'
-import { registerResources } from './resources'
 
 export { chooseContinuation, resetUserWorkflow, restoreFailedContinuation } from './workflow'
 
@@ -677,5 +676,4 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  registerResources(on, options)
 }

@@ -513,6 +513,8 @@ in
       # wayseeker keeps the user's instructions as a logic ledger per session;
       # independent of clm, which only reads it through $.wayseeker.instructions.
       ".claude/mods/wayseeker".source = ./configs/claude/mods/wayseeker;
+      # resources tracks owned processes and cross-session mutexes per session.
+      ".claude/mods/resources".source = ./configs/claude/mods/resources;
       # hetero-subagents runs subagent types through Codex or Antigravity;
       # its hook starts the bridge as `node <root>/daemon/codex-bridge.mjs`.
       ".claude/mods/hetero-subagents".source = heteroSubagentsMod;

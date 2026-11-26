@@ -1,0 +1,7 @@
+{
+  "name": "resources",
+  "version": "0.1.0",
+  "description": "Tracks owned processes (emulators and servers) and cross-session mutexes per session, guards Bash against a mutex another session holds, and stops owned resources at session end.",
+  "author": { "name": "RanolP" },
+  "types": "./types/index.d.ts"
+}

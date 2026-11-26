@@ -60,14 +60,6 @@ export type ClmTaskInput = {
   evidence?: { ref: string; quote: string }
 }
 
-export type ClmResourceInput = {
-  action: 'list' | 'who' | 'register' | 'unregister' | 'acquire' | 'release' | 'forget'
-  name?: string
-  kind?: 'owned' | 'mutex'
-  aliases?: string[]
-  description?: string
-}
-
 export type Clm = {
   /** Create an issue in this session, or set an existing issue's status. */
   track(input: ClmTrackInput): Promise<ClmIssue>
@@ -82,7 +74,6 @@ export type Clm = {
 declare module 'claude-code' {
   interface McpToolInputs {
     'mcp__clm__clm_task': ClmTaskInput
-    'mcp__clm__clm_resource': ClmResourceInput
   }
 
   interface PluginState {

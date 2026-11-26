@@ -2,7 +2,7 @@ import { test, expect } from 'claude-code/testing'
 import { acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, touchResources, turnStartResources, unregisterResource } from './resources'
 import { register } from './register'
 import type { MutexOwner, OwnedResource, ProcessResult, ResourceIo, ResourceSession } from './resources'
-import type { ClmResourceInput } from '../types'
+import type { ResourceInput } from '../types'
 
 type World = { files: Map<string, string>; dirs: Set<string>; dirMtimes: Map<string, number>; alive: Set<number>; calls: string[][]; writes: string[]; logs: string[]; now: number }
 const ROOT = '/home/test/.local/state/clm/resources'
@@ -99,7 +99,7 @@ function ioFor(shared: World, session: string, processPid = 101, cwd = '/work/re
     budgetRemaining: () => Infinity,
   }
 }
-const mutexInput = (name: string, aliases: string[] = []): ClmResourceInput => ({ action: 'register', kind: 'mutex', name, aliases, description: 'shared test resource' })
+const mutexInput = (name: string, aliases: string[] = []): ResourceInput => ({ action: 'register', kind: 'mutex', name, aliases, description: 'shared test resource' })
 
 // Regression caught: emulator starts must retain the AVD name used to find its adb serial at cleanup.
 test('regression: Android emulator detection records the AVD name after a successful start', async () => {
@@ -415,17 +415,17 @@ test('regression: resource setup failures allow Bash and create owned parents be
 })
 
 // Regression caught: malformed MCP input must be rejected before it reaches resource actions.
-test('regression: malformed clm_resource input is denied by the runtime type guard', async () => {
+test('regression: malformed resource input is denied by the runtime type guard', async () => {
   const shared = world()
-  expect(await handleResourceTool(ioFor(shared, 'bad-tool-input'), { action: 'acquire', name: 42 })).toMatchObject({ deny: 'clm_resource requires a valid action and resource fields.' })
+  expect(await handleResourceTool(ioFor(shared, 'bad-tool-input'), { action: 'acquire', name: 42 })).toMatchObject({ deny: 'resource requires a valid action and resource fields.' })
 })
 
-// Regression caught: resources must be wired by the clm entry point without importing it back from the resource module.
-test('regression: the clm entry point registers resource hooks without an import cycle', () => {
+// Regression caught: resources must be wired by the resources entry point without importing it back from the resource module.
+test('regression: the resources entry point registers resource hooks without an import cycle', () => {
   const calls: unknown[][] = []
   const on: Parameters<typeof register>[0] = ((...args: unknown[]) => { calls.push(args); return undefined }) as Parameters<typeof register>[0]
   register(on, {})
-  expect(calls.some(call => call[0] === 'tool.call' && (call[1] as { tool?: string } | undefined)?.tool === 'mcp__clm__clm_resource')).toBe(true)
+  expect(calls.some(call => call[0] === 'tool.call' && (call[1] as { tool?: string } | undefined)?.tool === 'mcp__resources__resource')).toBe(true)
 })
 
 // Regression caught: ending one profile must keep resources referenced by owned records from every other profile.
@@ -456,12 +456,12 @@ test('regression: resource changes become one prompt notice on the next turn onl
   writeSession(shared, 's1', { profile: 'default', owned: [], mutexes: [], changes: ['+metro :8081'] } satisfies ResourceSession)
   expect(await consumeResourceNotice(io)).toBe(undefined)
   await turnStartResources(io)
-  expect(await consumeResourceNotice(io)).toBe('clm resources: +metro :8081')
+  expect(await consumeResourceNotice(io)).toBe('resources: +metro :8081')
   expect(await consumeResourceNotice(io)).toBe(undefined)
   writeSession(shared, 's1', { profile: 'default', owned: [], mutexes: ['ipad'], changes: ['mutex ipad held'] } satisfies ResourceSession)
   expect(await consumeResourceNotice(io)).toBe(undefined)
   await turnStartResources(io)
-  expect(await consumeResourceNotice(io)).toBe('clm resources: mutex ipad held')
+  expect(await consumeResourceNotice(io)).toBe('resources: mutex ipad held')
   expect(resourceLedgerLines({
     owned: [{ kind: 'metro', id: '8081', label: ':8081', profile: 'default', cwd: '/work/repo', startedAt: '2026-10-16T00:00:00.000Z' }],
     mutexes: ['ipad'], changes: [],

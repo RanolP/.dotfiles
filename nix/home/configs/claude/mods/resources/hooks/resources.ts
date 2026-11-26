@@ -1,5 +1,5 @@
 import type { EngineInterface, Register } from 'claude-code'
-import type { ClmResourceInput } from '../types'
+import type { ResourceInput } from '../types'
 
 function fnv1a(seed: string): number {
   let h = 0x811c9dc5
@@ -7,9 +7,10 @@ function fnv1a(seed: string): number {
   return h
 }
 
-export const RESOURCE_TOOL = 'mcp__clm__clm_resource'
+export const RESOURCE_TOOL = 'mcp__resources__resource'
 export const RESOURCE_DESCRIPTION = 'Track resources this session owns and shared exclusive resources. Call `register` with kind `mutex` when a device or service may be used by only one session at a time; call `who` before using one; call `release` the moment you finish with it. Bash commands that start an emulator, simulator, Metro, a web dev server, or a PR are recorded automatically; `register` with kind `owned` covers anything they miss.'
 const HEARTBEAT_TTL_MS = 60 * 60 * 1000
+// This path predates the split and stays for live registrations.
 const RESOURCE_STATE = '.local/state/clm/resources'
 
 export type OwnedKind = 'android-emulator' | 'ios-simulator' | 'metro' | 'web-dev' | 'pr' | 'custom'
@@ -144,7 +145,7 @@ const serialized = async <T>(session: string, body: () => Promise<T>): Promise<T
 }
 
 const logRunFailure = (io: ResourceIo, argv: readonly string[], exitCode: number | string, stderr: string) => {
-  io.log(`clm resources: process.run failed command=${JSON.stringify(argv)} exitCode=${exitCode} stderr=${JSON.stringify(stderr)}`)
+  io.log(`resources: process.run failed command=${JSON.stringify(argv)} exitCode=${exitCode} stderr=${JSON.stringify(stderr)}`)
 }
 
 const run = async (io: ResourceIo, argv: readonly string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<ProcessResult | undefined> => {
@@ -266,7 +267,7 @@ const listMutexRecords = async (io: ResourceIo): Promise<{ record: MutexRecord; 
     }
     return out
   } catch (err) {
-    io.log(`clm resources: could not list mutexes at ${root}: ${String(err).slice(0, 160)}`)
+    io.log(`resources: could not list mutexes at ${root}: ${String(err).slice(0, 160)}`)
     throw err
   }
 }
@@ -357,7 +358,7 @@ const reclaimDeadOwner = async (io: ResourceIo, record: MutexRecord, path: strin
     if (moved?.exitCode !== 0) return false
     const removed = await run(io, ['rm', '-rf', stale], { cwd: owner.cwd, timeoutMs: 1000 })
     if (removed?.exitCode !== 0) return false
-    io.log(`clm resources: reclaimed ${record.name} from dead session ${owner.session}`)
+    io.log(`resources: reclaimed ${record.name} from dead session ${owner.session}`)
     return true
   } finally {
     await run(io, ['rmdir', reclaimPath], { cwd: owner.cwd, timeoutMs: 1000 })
@@ -383,7 +384,7 @@ const findMutex = async (io: ResourceIo, name: string) => {
 }
 
 const denial = (owner: MutexOwner) => {
-  return `clm_resource: held by ${owner.profile}/${owner.session} (${owner.cwd}, since ${owner.since}; repo ${owner.repo}).`
+  return `resource: held by ${owner.profile}/${owner.session} (${owner.cwd}, since ${owner.since}; repo ${owner.repo}).`
 }
 const ownerLabel = (owner: MutexOwner) => `${owner.profile}/${owner.session} (${owner.cwd}, since ${owner.since})`
 
@@ -415,7 +416,7 @@ const claimOne = async (io: ResourceIo, session: string, record: MutexRecord, pa
       try {
         await io.write(ownerFile(path), JSON.stringify(owner))
       } catch (err) {
-        io.log(`clm resources: could not write owner for ${record.name}: ${String(err).slice(0, 160)}`)
+        io.log(`resources: could not write owner for ${record.name}: ${String(err).slice(0, 160)}`)
         await run(io, ['rm', '-rf', ownerPath(path)], { cwd: identity.cwd, timeoutMs: 1000 })
         return { status: 'denied' }
       }
@@ -462,7 +463,7 @@ const ensureSessionIdentity = async (io: ResourceIo, session: string, promote: b
   processIdentities.set(`${identity.profile}/${session}`, nextIdentity)
   const state = await mutateSession(io, session, current => {
     const notice = promote && current.changes.length
-      ? current.notice ? `${current.notice}; ${current.changes.join(', ')}` : `clm resources: ${current.changes.join(', ')}`
+      ? current.notice ? `${current.notice}; ${current.changes.join(', ')}` : `resources: ${current.changes.join(', ')}`
       : current.notice
     return {
       next: { ...current, identity: nextIdentity, ...(promote && current.changes.length ? { changes: [], notice } : {}) },
@@ -604,10 +605,10 @@ export const recordDetected = async (io: ResourceIo, records: readonly OwnedReso
   })
 }
 
-export const registerResource = async (io: ResourceIo, input: ClmResourceInput): Promise<{ result?: unknown; deny?: string }> => {
+export const registerResource = async (io: ResourceIo, input: ResourceInput): Promise<{ result?: unknown; deny?: string }> => {
   const session = await io.sessionId()
   const name = input.name?.trim()
-  if (!name) return { deny: 'clm_resource requires a non-empty name.' }
+  if (!name) return { deny: 'resource requires a non-empty name.' }
   if (input.kind === 'owned') {
     await ensureSessionIdentity(io, session, false)
     const currentTime = await now(io)
@@ -620,7 +621,7 @@ export const registerResource = async (io: ResourceIo, input: ClmResourceInput):
     })
     return { result: { registered: 'owned', name } }
   }
-  if (input.kind !== 'mutex') return { deny: 'clm_resource register requires kind owned or mutex.' }
+  if (input.kind !== 'mutex') return { deny: 'resource register requires kind owned or mutex.' }
   const root = await mutexRoot(io)
   const madeRoot = await run(io, ['mkdir', '-p', root], { timeoutMs: 1000 })
   if (madeRoot?.exitCode !== 0) return { deny: `Could not create the mutex registry at ${root}.` }
@@ -647,17 +648,17 @@ const inspectMutexes = async (io: ResourceIo) => {
 
 export const acquireResource = async (io: ResourceIo, name: string): Promise<{ result?: unknown; deny?: string }> => {
   const found = await findMutex(io, name)
-  if (!found) return { deny: `clm_resource: no mutex is registered as ${name}.` }
+  if (!found) return { deny: `resource: no mutex is registered as ${name}.` }
   const session = await io.sessionId()
   await ensureSessionIdentity(io, session, false)
   const acquired = await claimOne(io, session, found.record, found.path)
-  if (acquired.status === 'denied') return { deny: acquired.owner ? denial(acquired.owner) : `clm_resource: could not claim ${found.record.name}; retry after checking its owner.` }
+  if (acquired.status === 'denied') return { deny: acquired.owner ? denial(acquired.owner) : `resource: could not claim ${found.record.name}; retry after checking its owner.` }
   return { result: { name: found.record.name, borrower: acquired.owner ? ownerLabel(acquired.owner) : `${await profileFor(io)}/${session}`, status: acquired.status } }
 }
 
 export const releaseResource = async (io: ResourceIo, name: string): Promise<{ result?: unknown; deny?: string }> => {
   const found = await findMutex(io, name)
-  if (!found) return { deny: `clm_resource: no mutex is registered as ${name}.` }
+  if (!found) return { deny: `resource: no mutex is registered as ${name}.` }
   const session = await io.sessionId()
   const profile = await profileFor(io)
   const owner = await ownerFor(io, found.path)
@@ -666,7 +667,7 @@ export const releaseResource = async (io: ResourceIo, name: string): Promise<{ r
     await releaseOne(io, session, found.record, found.path, true)
     return { result: { name: found.record.name, status: 'free' } }
   }
-  if (!(await releaseOne(io, session, found.record, found.path, true))) return { deny: `clm_resource: could not release ${found.record.name}.` }
+  if (!(await releaseOne(io, session, found.record, found.path, true))) return { deny: `resource: could not release ${found.record.name}.` }
   return { result: { name: found.record.name, status: 'released' } }
 }
 
@@ -678,7 +679,7 @@ const takeTemporaryOwner = async (io: ResourceIo, session: string, record: Mutex
   const owner: MutexOwner = { session, profile: identity.profile, ...(identity.pid !== undefined ? { pid: identity.pid, processCommand: identity.processCommand } : {}), cwd: identity.cwd, repo: identity.repo, since: iso(currentTime), heartbeat: currentTime }
   try { await io.write(ownerFile(path), JSON.stringify(owner)); return true }
   catch (err) {
-    io.log(`clm resources: could not write unregister owner for ${record.name}: ${String(err).slice(0, 160)}`)
+    io.log(`resources: could not write unregister owner for ${record.name}: ${String(err).slice(0, 160)}`)
     await run(io, ['rm', '-rf', ownerPath(path)], { cwd: identity.cwd, timeoutMs: 1000 })
     return false
   }
@@ -686,20 +687,20 @@ const takeTemporaryOwner = async (io: ResourceIo, session: string, record: Mutex
 
 export const unregisterResource = async (io: ResourceIo, name: string): Promise<{ result?: unknown; deny?: string }> => {
   const found = await findMutex(io, name)
-  if (!found) return { deny: `clm_resource: no mutex is registered as ${name}.` }
+  if (!found) return { deny: `resource: no mutex is registered as ${name}.` }
   const session = await io.sessionId()
   const owner = await liveOwner(io, found.record, found.path)
   if (owner && (owner.session !== session || owner.profile !== await profileFor(io))) return { deny: denial(owner) }
   const temporary = owner ? false : await takeTemporaryOwner(io, session, found.record, found.path)
-  if (!owner && !temporary) return { deny: `clm_resource: ${found.record.name} is temporarily locked; retry.` }
+  if (!owner && !temporary) return { deny: `resource: ${found.record.name} is temporarily locked; retry.` }
   const tombstone = `${found.path}.unregister-${(await now(io)).toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   const moved = await run(io, ['mv', found.path, tombstone], { timeoutMs: 1000 })
   if (moved?.exitCode !== 0) {
     if (temporary) await run(io, ['rm', '-rf', ownerPath(found.path)], { timeoutMs: 1000 })
-    return { deny: `clm_resource: could not unregister ${found.record.name}.` }
+    return { deny: `resource: could not unregister ${found.record.name}.` }
   }
   const removed = await run(io, ['rm', '-rf', tombstone], { timeoutMs: 1000 })
-  if (removed?.exitCode !== 0) return { deny: `clm_resource: ${found.record.name} was detached from the registry but its directory could not be removed.` }
+  if (removed?.exitCode !== 0) return { deny: `resource: ${found.record.name} was detached from the registry but its directory could not be removed.` }
   await removeMutexFromSession(io, session, found.record, false)
   await mutateSession(io, session, current => ({ next: { ...current, changes: [...current.changes, `mutex ${found.record.name} unregistered`] }, result: undefined }))
   return { result: { name: found.record.name, status: 'unregistered' } }
@@ -708,14 +709,14 @@ export const unregisterResource = async (io: ResourceIo, name: string): Promise<
 export const guardBash = async (io: ResourceIo, command: string): Promise<string | undefined> => {
   const segments = shellSegments(command).map(stripCommandWrappers)
   const registered = await listMutexRecords(io).catch(err => {
-    io.log(`clm resources: mutex registry lookup failed; allowing unmatched Bash command (${String(err).slice(0, 160)})`)
+    io.log(`resources: mutex registry lookup failed; allowing unmatched Bash command (${String(err).slice(0, 160)})`)
     return undefined
   })
   if (!registered) return undefined
   const found = registered.filter(({ record }) => segments.some(words => segmentUsesMutex(words, [record.name, ...record.aliases].filter(Boolean))))
   if (!found.length) return undefined
   const session = await io.sessionId().catch(err => {
-    io.log(`clm resources: session identity lookup failed; allowing matched Bash command (${String(err).slice(0, 160)})`)
+    io.log(`resources: session identity lookup failed; allowing matched Bash command (${String(err).slice(0, 160)})`)
     return undefined
   })
   if (!session) return undefined
@@ -723,16 +724,16 @@ export const guardBash = async (io: ResourceIo, command: string): Promise<string
     for (const item of found) {
       const owner = await liveOwner(io, item.record, item.path)
       if (owner && (owner.session !== session || owner.profile !== await profileFor(io))) return `${denial(owner)} Ask that borrower or wait for release before using ${item.record.name}.`
-      if (!owner && await lockIsOccupied(io, item.path)) return `clm_resource: ${item.record.name} has a stale or unreadable owner record; retry shortly.`
+      if (!owner && await lockIsOccupied(io, item.path)) return `resource: ${item.record.name} has a stale or unreadable owner record; retry shortly.`
     }
   } catch (err) {
-    io.log(`clm resources: mutex owner check failed; allowing matched Bash command (${String(err).slice(0, 160)})`)
+    io.log(`resources: mutex owner check failed; allowing matched Bash command (${String(err).slice(0, 160)})`)
     return undefined
   }
   return undefined
 }
 
-export const applyResourceAction = async (io: ResourceIo, input: ClmResourceInput): Promise<{ result?: unknown; deny?: string }> => {
+export const applyResourceAction = async (io: ResourceIo, input: ResourceInput): Promise<{ result?: unknown; deny?: string }> => {
   const name = input.name?.trim()
   switch (input.action) {
     case 'list': {
@@ -741,25 +742,25 @@ export const applyResourceAction = async (io: ResourceIo, input: ClmResourceInpu
       return { result: { owned, mutexes: await inspectMutexes(io) } }
     }
     case 'who': {
-      if (!name) return { deny: 'clm_resource who requires name.' }
+      if (!name) return { deny: 'resource who requires name.' }
       const mutexes = await inspectMutexes(io)
       const found = mutexes.find(item => [item.name, ...item.aliases].some(alias => normalized(alias) === normalized(name)))
-      return found ? { result: { name: found.name, borrower: found.borrower } } : { deny: `clm_resource: no mutex is registered as ${name}.` }
+      return found ? { result: { name: found.name, borrower: found.borrower } } : { deny: `resource: no mutex is registered as ${name}.` }
     }
     case 'register':
       return registerResource(io, input)
     case 'unregister':
-      return name ? unregisterResource(io, name) : { deny: 'clm_resource unregister requires name.' }
+      return name ? unregisterResource(io, name) : { deny: 'resource unregister requires name.' }
     case 'acquire':
-      return name ? acquireResource(io, name) : { deny: 'clm_resource acquire requires name.' }
+      return name ? acquireResource(io, name) : { deny: 'resource acquire requires name.' }
     case 'release':
-      return name ? releaseResource(io, name) : { deny: 'clm_resource release requires name.' }
+      return name ? releaseResource(io, name) : { deny: 'resource release requires name.' }
     case 'forget': {
-      if (!name) return { deny: 'clm_resource forget requires name.' }
+      if (!name) return { deny: 'resource forget requires name.' }
       const session = await io.sessionId()
       const current = await readSession(io, session)
       const resource = current.owned.find(item => item.id === name || item.label === name)
-      if (!resource) return { deny: `clm_resource: this session has no owned resource named ${name}.` }
+      if (!resource) return { deny: `resource: this session has no owned resource named ${name}.` }
       await mutateSession(io, session, state => ({ next: { ...state, owned: state.owned.filter(item => item.kind !== resource.kind || item.id !== resource.id), changes: [...state.changes, ownedChange(resource, '-')] }, result: undefined }))
       return { result: { forgotten: resource.id } }
     }
@@ -834,7 +835,7 @@ const pendingTransferNotice = async (io: ResourceIo): Promise<string | undefined
     changes.push(...state.owned.map(resource => ownedChange(resource, '+')))
     changes.push(...state.mutexes.map(name => `mutex ${name} held`))
   }
-  return changes.length ? `clm resources: ${changes.join(', ')}` : undefined
+  return changes.length ? `resources: ${changes.join(', ')}` : undefined
 }
 
 export const resourceLedgerForSession = async (session: string): Promise<string[]> => {
@@ -859,7 +860,7 @@ const promoteResourceChanges = async (io: ResourceIo, session: string) => {
   await mutateSession(io, session, current => {
     if (!current.changes.length) return { next: current, result: undefined }
     const changes = current.changes.join(', ')
-    const notice = current.notice ? `${current.notice}; ${changes}` : `clm resources: ${changes}`
+    const notice = current.notice ? `${current.notice}; ${changes}` : `resources: ${changes}`
     return { next: { ...current, changes: [], notice }, result: undefined }
   })
 }
@@ -906,16 +907,16 @@ const otherResourceReferences = async (io: ResourceIo, session: string, resource
     const identity = other.state.identity
     const alive = identity?.pid !== undefined
       ? await processAlive(io, identity.pid, identity.cwd, identity.processCommand).catch(err => {
-        io.log(`clm resources: owned record PID check failed for ${other.session} (${String(err).slice(0, 160)})`)
+        io.log(`resources: owned record PID check failed for ${other.session} (${String(err).slice(0, 160)})`)
         return false
       }) === true
       : await heartbeatAlive(io, identity?.heartbeat ?? 0).catch(err => {
-        io.log(`clm resources: owned record heartbeat check failed for ${other.session} (${String(err).slice(0, 160)})`)
+        io.log(`resources: owned record heartbeat check failed for ${other.session} (${String(err).slice(0, 160)})`)
         return false
       })
     if (!alive) {
       const removed = await run(io, ['rm', '-f', other.path], { timeoutMs: 1000 })
-      if (removed?.exitCode === 0) io.log(`clm resources: removed stale owned record ${other.session}`)
+      if (removed?.exitCode === 0) io.log(`resources: removed stale owned record ${other.session}`)
       continue
     }
     for (const source of other.state.transferredFrom ?? []) transferredFrom.add(source)
@@ -925,7 +926,7 @@ const otherResourceReferences = async (io: ResourceIo, session: string, resource
 }
 
 const stopLog = (io: ResourceIo, resource: OwnedResource, argv: readonly string[], result: ProcessResult | undefined) => {
-  io.log(`clm resources: stop ${resource.kind} ${resource.id} command=${JSON.stringify(argv)} exitCode=${result?.exitCode ?? 'unavailable'} stderr=${JSON.stringify(result?.stderr ?? '')}`)
+  io.log(`resources: stop ${resource.kind} ${resource.id} command=${JSON.stringify(argv)} exitCode=${result?.exitCode ?? 'unavailable'} stderr=${JSON.stringify(result?.stderr ?? '')}`)
 }
 
 const stopOwned = async (io: ResourceIo, resource: OwnedResource, identity: ResourceIdentity): Promise<boolean> => {
@@ -955,12 +956,12 @@ const stopOwned = async (io: ResourceIo, resource: OwnedResource, identity: Reso
       stopLog(io, resource, argv, result)
       return result?.exitCode === 0
     }
-    io.log(`clm resources: stop ${resource.kind} ${resource.id} skipped; no adb serial matched AVD ${avd}`)
+    io.log(`resources: stop ${resource.kind} ${resource.id} skipped; no adb serial matched AVD ${avd}`)
     return true
   }
   const port = Number(resource.id)
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    io.log(`clm resources: stop ${resource.kind} ${resource.id} skipped; invalid port`)
+    io.log(`resources: stop ${resource.kind} ${resource.id} skipped; invalid port`)
     return true
   }
   const lookup = ['lsof', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t']
@@ -976,7 +977,7 @@ const stopOwned = async (io: ResourceIo, resource: OwnedResource, identity: Reso
     stopLog(io, resource, argv, result)
     return result?.exitCode === 0
   }))
-  if (!pids.length) io.log(`clm resources: stop ${resource.kind} ${resource.id}; no process is listening`)
+  if (!pids.length) io.log(`resources: stop ${resource.kind} ${resource.id}; no process is listening`)
   return stopped.every(Boolean)
 }
 
@@ -997,13 +998,13 @@ export const endResources = async (io: ResourceIo, session: string, reason: stri
   await transferPending(io, session, await identityFor(io, session))
   const initial = await readSession(io, session)
   for (const name of [...initial.mutexes]) {
-    if (!hasEndBudget(io)) { io.log(`clm resources: session.end budget exhausted before releasing mutex ${name}`); break }
+    if (!hasEndBudget(io)) { io.log(`resources: session.end budget exhausted before releasing mutex ${name}`); break }
     const found = await findMutex(io, name)
     if (found) await releaseOne(io, session, found.record, found.path, false)
   }
   const identity = initial.identity ?? await runtimeIdentity(io)
   for (const resource of initial.owned) {
-    if (!hasEndBudget(io)) { io.log(`clm resources: session.end budget exhausted before stopping ${resource.kind} ${resource.id}`); break }
+    if (!hasEndBudget(io)) { io.log(`resources: session.end budget exhausted before stopping ${resource.kind} ${resource.id}`); break }
     if (await otherResourceReferences(io, session, resource)) {
       await mutateSession(io, session, current => ({ next: { ...current, owned: current.owned.filter(item => item.kind !== resource.kind || item.id !== resource.id) }, result: undefined }))
       continue
@@ -1016,7 +1017,7 @@ export const endResources = async (io: ResourceIo, session: string, reason: stri
 }
 
 const resourceActions = new Set(['list', 'who', 'register', 'unregister', 'acquire', 'release', 'forget'])
-export const isClmResourceInput = (value: unknown): value is ClmResourceInput => {
+export const isResourceInput = (value: unknown): value is ResourceInput => {
   if (!isRecord(value) || !resourceActions.has(String(value.action))) return false
   if (value.name !== undefined && typeof value.name !== 'string') return false
   if (value.kind !== undefined && value.kind !== 'owned' && value.kind !== 'mutex') return false
@@ -1026,7 +1027,7 @@ export const isClmResourceInput = (value: unknown): value is ClmResourceInput =>
 }
 
 export const handleResourceTool = async (io: ResourceIo, value: unknown): Promise<{ result?: unknown; deny?: string }> => {
-  if (!isClmResourceInput(value)) return { deny: 'clm_resource requires a valid action and resource fields.' }
+  if (!isResourceInput(value)) return { deny: 'resource requires a valid action and resource fields.' }
   return applyResourceAction(io, value)
 }
 
@@ -1046,7 +1047,7 @@ const activateResourceIo = ($: ResourceEngine, sessionId?: string) => {
 export const registerResources: Register = (on) => {
   on('turn.start', { turnId: /.*/ }, async ($, e, next) => {
     try { await turnStartResources(activateResourceIo($)) }
-    catch (err) { $.ui.log(`clm resources: turn start failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+    catch (err) { $.ui.log(`resources: turn start failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
     return next(e)
   })
 
@@ -1054,7 +1055,7 @@ export const registerResources: Register = (on) => {
     activateResourceIo($)
     try {
       await $.tool.register({
-        name: 'clm_resource', description: RESOURCE_DESCRIPTION,
+        name: 'resource', description: RESOURCE_DESCRIPTION,
         inputSchema: {
           type: 'object', properties: {
             action: { type: 'string', enum: ['list', 'who', 'register', 'unregister', 'acquire', 'release', 'forget'] },
@@ -1062,19 +1063,19 @@ export const registerResources: Register = (on) => {
           }, required: ['action'], additionalProperties: false,
         },
       })
-    } catch (err) { $.ui.log(`clm: clm_resource registration failed (${String(err).slice(0, 120)})`, { to: 'debug' }) }
+    } catch (err) { $.ui.log(`resources: resource registration failed (${String(err).slice(0, 120)})`, { to: 'debug' }) }
     return next(e)
   })
 
   on('tool.call', { tool: /.*/ }, async ($, e, next) => {
-    if (e.agentId === undefined) void touchResources(activateResourceIo($)).catch(err => $.ui.log(`clm resources: heartbeat failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
+    if (e.agentId === undefined) void touchResources(activateResourceIo($)).catch(err => $.ui.log(`resources: heartbeat failed (${String(err).slice(0, 160)})`, { to: 'debug' }))
     return next(e)
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const io = activateResourceIo($)
     const denied = await guardBash(io, e.command).catch(err => {
-      $.ui.log(`clm resources: mutex guard failed; allowing Bash command (${String(err).slice(0, 160)})`, { to: 'debug' })
+      $.ui.log(`resources: mutex guard failed; allowing Bash command (${String(err).slice(0, 160)})`, { to: 'debug' })
       return undefined
     })
     if (denied) return { deny: denied }
@@ -1082,7 +1083,7 @@ export const registerResources: Register = (on) => {
     try {
       const records = detectOwned(e.command, result, await io.cwd(), await io.now(), await profileFor(io))
       await recordDetected(io, records)
-    } catch (err) { $.ui.log(`clm resources: Bash result tracking failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+    } catch (err) { $.ui.log(`resources: Bash result tracking failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
     return result
   })
 
@@ -1092,8 +1093,8 @@ export const registerResources: Register = (on) => {
       const outcome = await handleResourceTool(activateResourceIo($), { action, name, kind, aliases, description })
       return outcome.deny ? { deny: outcome.deny } : { result: outcome.result }
     } catch (err) {
-      $.ui.log(`clm resources: resource action failed (${String(err).slice(0, 160)})`, { to: 'debug' })
-      return { deny: `clm_resource failed: ${String(err).slice(0, 160)}` }
+      $.ui.log(`resources: resource action failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      return { deny: `resource failed: ${String(err).slice(0, 160)}` }
     }
   })
 
@@ -1108,7 +1109,7 @@ export const registerResources: Register = (on) => {
       const message = notice ?? pending
       return message ? { ...result, sections: [...result.sections, { id: 'clm:resources', text: message, scope: 'session' as const }] } : result
     } catch (err) {
-      $.ui.log(`clm resources: prompt notice failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      $.ui.log(`resources: prompt notice failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       return result
     }
   })
@@ -1117,7 +1118,7 @@ export const registerResources: Register = (on) => {
     const io = resourceIo($, () => next.budget.remainingMs, e.sessionId)
     activeResourceIo = io
     try { await endResources(io, e.sessionId, e.reason) }
-    catch (err) { $.ui.log(`clm resources: session.end failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
+    catch (err) { $.ui.log(`resources: session.end failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
     return next(e)
   })
 }

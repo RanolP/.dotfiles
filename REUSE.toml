@@ -393,6 +393,7 @@ path = [
     "nix/home/configs/figma-cli/figma_check.py",
     "nix/home/configs/figma-cli/figma_cli/**",
     "nix/home/programs/figma-cli.nix",
+    "nix/home/programs/telemetry.nix",
     "nix/home/linux/pacman.nix",
     "docs/src/jira-cli.md",
     "docs/src/codex.md",

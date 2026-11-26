@@ -289,6 +289,7 @@ in
     ./programs/jira-cli.nix
     ./programs/nushell.nix
     ./programs/starship.nix
+    ./programs/telemetry.nix
     ./programs/zellij.nix
   ];
 

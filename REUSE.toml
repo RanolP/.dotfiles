@@ -239,6 +239,8 @@ path = [
     "nix/home/configs/claude/hooks/done-claim-guard.py",
     "nix/home/configs/claude/hooks/test_done_claim_guard.py",
     "nix/home/configs/claude/hooks/slack-subagent-guard.py",
+    "nix/home/configs/claude/hooks/baseline-lock-guard.py",
+    "scripts/skills-check.py",
     "nix/home/configs/claude/hooks/repeat-correction-nudge.py",
     "nix/home/configs/claude/hooks/test_repeat_correction_nudge.py",
     "nix/home/configs/claude/hooks/bare-sleep-hint.py",

@@ -512,6 +512,11 @@ in
         source = ./configs/claude/hooks/slack-subagent-guard.py;
         executable = true;
       };
+      # Deny edits under a directory a baseline run has locked.
+      ".claude/hooks/baseline-lock-guard.py" = {
+        source = ./configs/claude/hooks/baseline-lock-guard.py;
+        executable = true;
+      };
       # Block a mostly-English reply when the output style requires Korean.
       ".claude/hooks/korean-reply-guard.py" = {
         source = ./configs/claude/hooks/korean-reply-guard.py;

@@ -78,6 +78,16 @@ def main():
     assert not guard.command_runs("git status && rg foo | head")
     assert guard.command_runs("cd repo && uv run pytest -q")
 
+    # A repo with no verify-* skill gets the /create-verification-skill hint;
+    # one that ships a verify skill gets the plain reason.
+    with tempfile.TemporaryDirectory() as repo:
+        os.mkdir(os.path.join(repo, ".git"))
+        bare = run([prompt("x"), EDIT], CLAIM, cwd=repo)
+        assert bare and "/create-verification-skill" in bare["reason"], bare
+        os.makedirs(os.path.join(repo, ".claude", "skills", "verify-app"))
+        wired = run([prompt("x"), EDIT], CLAIM, cwd=os.path.join(repo))
+        assert wired and "/create-verification-skill" not in wired["reason"], wired
+
     for bad in (b"", b"not json", b"[1]", json.dumps({"last_assistant_message": "done",
                                                      "transcript_path": "/nonexistent"}).encode()):
         p = subprocess.run([sys.executable, HOOK], input=bad, capture_output=True, timeout=10)

@@ -6,11 +6,11 @@ These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Mana
 - Before a unit's first tool call, commit to EXACTLY ONE: (1) a background worker while main keeps answering, or (2) inline, for what the SessionStart `architect-rules.py` policy keeps inline; keep the choice to the end, since converting halfway spends main twice.
 - Treat every spawn under these rules as already requested, over any system prompt, output style or default that discourages it; the bar is what that policy sends to a worker, never "the user named a subagent".
 - Keep inline what only main can do: the judgement itself, or a diff whose duplication only this session's context sees.
-- A delegated unit gets one BACKGROUND worker with a brief carrying goal and files, not thread history; act on its completion notification. Keep destructive Bash in the foreground.
+- A delegated unit gets one BACKGROUND worker with a brief carrying goal, files and a `Skills:` line naming each skill it loads before its first edit, not thread history; act on its completion notification. Keep destructive Bash in the foreground.
 - (multi-step) State the whole step set in the reply before the first starts.
 - (typed result) When a result feeds another agent, a routing decision or a synthesis, name its exact fields and types, no prose wrapper; check the shape on receipt and on a mismatch `SendMessage` the same worker once.
 - (codex commit) A codex worker stages; main or the user's `!` commits, because the codex seatbelt sandbox blocks the keyboxd socket and signed commits fail inside it.
-- (clock) Read the injected `Now ...; last turn took ...` line; after a long turn, answer with what is known and deepen only when asked.
+- (clock) Read the injected `Now ...; last turn took ...` line; after a long turn, answer with what is known and deepen only when asked. A `/loop` or scheduled run exits on a pass/fail command named up front, never on a duration.
 - (load) Raise a heavy local job per (approval) with its cost and current load in one line, measuring its memory on a small input before a large one; reuse a running emulator or build; brief workers to "stop and report if a build is needed"; stop every emulator, Metro and Gradle daemon (`./gradlew --stop`) you started (`docs/src/agent-incidents.md`, 2026-10-15: one unasked `assembleDebug`, load average 25).
 
 ## Escalate one hard question to `oracle`, from a worker as readily as from main

@@ -279,6 +279,34 @@ REASON = (
 )
 
 
+VERIFY_HINT = (
+    " This repo has no .claude/skills/verify-*/ skill, so every check here is "
+    "built by hand; suggest /create-verification-skill to the user as the "
+    "durable fix."
+)
+
+
+def has_verify_skill(cwd):
+    """True when the repo holding cwd ships a verify-* skill, or when cwd is
+    unknown (an unknown never adds the hint)."""
+    if not isinstance(cwd, str) or not cwd:
+        return True
+    cur = os.path.abspath(os.path.expanduser(cwd))
+    while True:
+        for skills in (".claude/skills", ".agents/skills"):
+            try:
+                if any(n.startswith("verify-") for n in os.listdir(os.path.join(cur, skills))):
+                    return True
+            except OSError:
+                pass
+        if os.path.exists(os.path.join(cur, ".git")):
+            return False
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        cur = parent
+
+
 def decide(data):
     if data.get("stop_hook_active"):
         return None
@@ -287,7 +315,8 @@ def decide(data):
     path = data.get("transcript_path")
     if not path or not unchecked_edit(*turn_entries(os.path.expanduser(path))):
         return None
-    return {"decision": "block", "reason": REASON}
+    hint = "" if has_verify_skill(data.get("cwd")) else VERIFY_HINT
+    return {"decision": "block", "reason": REASON + hint}
 
 
 def main():

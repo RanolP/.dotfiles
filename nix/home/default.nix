@@ -321,6 +321,13 @@ in
           if [ -n "''${REX_SESSION-}" ]; then exec ${lib.getExe pkgs.nushell} --login; fi ;;
         esac
       '';
+      # Tokens come from the environment (~/.secrets.env, gh auth token), so no
+      # secret lands in the store. pnpm >= 10.34.2 expands ${...} only in this
+      # user-level file, not in a repository's .npmrc.
+      ".npmrc".text = ''
+        //registry.npmjs.org/:_authToken=''${NPM_TOKEN}
+        //npm.pkg.github.com/:_authToken=''${GITHUB_TOKEN}
+      '';
       ".claude/CLAUDE.md".source = claudeUserRules;
       ".claude/statusline.sh" = {
         source = ./configs/claude/statusline.sh;

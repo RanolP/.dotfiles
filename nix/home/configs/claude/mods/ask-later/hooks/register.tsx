@@ -322,9 +322,19 @@ export const register: Register = on => {
     const isReminding = (await $.state.get(REMIND)).value ?? false
     if (isReminding) await $.state.set(REMIND, false)
     const reminder = isReminding ? [CHAT_QUESTION_REMINDER] : []
+    const pending = (await questions($)).filter(x => x.status === 'pending')
     const id = /^\[(Q\d+)\]/.exec(e.text)?.[1]
-    const q = id ? (await questions($)).find(x => x.id === id && x.status === 'pending') : undefined
-    if (!q) return next(reminder.length ? { ...e, context: [...(e.context ?? []), ...reminder] } : e)
+    const q = id ? pending.find(x => x.id === id) : undefined
+    if (!q) {
+      // A prompt typed in the main chat may answer a queued question: the model closes it, so the band drops it.
+      const open = pending.length ? [[
+        'Queued questions still pending (ask-later):',
+        ...pending.map(x => `${x.id}: ${x.question} [${x.options.map(o => o.label).join(' | ')}]`),
+        `If this prompt answers one of them, call ${RESOLVE_TOOL} with its id and the answer before continuing.`,
+      ].join('\n')] : []
+      const extra = [...reminder, ...open]
+      return next(extra.length ? { ...e, context: [...(e.context ?? []), ...extra] } : e)
+    }
     const ctx = [
       `This prompt is about queued question ${q.id}: ${q.question}`,
       `Options: ${q.options.map(o => (o.description ? `${o.label} (${o.description})` : o.label)).join('; ')}${q.multiSelect ? ' [multi-select]' : ''}`,

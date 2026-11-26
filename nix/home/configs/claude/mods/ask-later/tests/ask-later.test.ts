@@ -176,6 +176,25 @@ test('the band keeps the row beneath it', async ($, on) => {
 })
 
 const REMINDER = 'mcp__ask-later__ask: pass `assumption`'
+const PENDING = 'Queued questions still pending (ask-later):'
+const RESOLVE = 'mcp__ask-later__resolve'
+
+// Regression: the user answers a queued question in the main chat and it stays in the queue,
+// the 답하기 band still counting it.
+test('a typed prompt lists pending questions so a chat answer can resolve them off the band', async ($, on) => {
+  const seen = contexts(on)
+  await start($, on)
+  await $.tool.call({ tool: ASK, question: 'Which db?', options: OPTIONS })
+  await $.prompt.submit({ text: 'A로 가자' })
+  const ctx = seen[0]!.find(c => c.includes(PENDING)) ?? ''
+  expect(ctx).toContain('Q1: Which db? [A | B]')
+  expect(ctx).toContain(RESOLVE)
+  expect(String((await $.tool.call({ tool: RESOLVE, id: 'Q1', answer: 'A' })).text)).toContain('Q1 resolved')
+  const ui = await band($)
+  expect(await ui.find({ key: 'answer' })).toBeUndefined()
+  await $.prompt.submit({ text: 'next' })
+  expect(seen[1]!.some(c => c.includes(PENDING))).toBe(false)
+})
 function contexts(on: On) {
   const seen: (readonly string[])[] = []
   on('prompt.submit', async (_$, e) => { seen.push(e.context ?? []); return { text: e.text } })

@@ -28,7 +28,7 @@ Read a full body only for the candidates that survive step 2.
 | **Global habit** | describes how the agent should work, and nothing in it is repo-specific | internalize into `nix/home/configs/.agents/AGENTS.md` |
 | **Global fact** | a tool, path, or platform behavior true on this machine regardless of repo | internalize, or keep if it is already in a rules file |
 | **Project fact** | names a repo, a service, a ticket, a schema | keep where it is |
-| **Duplicate** | an existing rule already says it | delete after confirming the rule covers it |
+| **Duplicate** | an existing rule, memory or doc already says it, including a "retired" entry kept only as an index line | delete the file and its `MEMORY.md` line after confirming the other source covers it; a stub pointing at the covering source adds nothing |
 | **Stale** | its premise no longer holds — a shell that changed, a version that moved, a file that is gone | delete, or rewrite from the current facts |
 | **Conflicting** | it contradicts a live rule or another memory | raise it first; the user decides which side is right |
 
@@ -57,7 +57,13 @@ Order the shortlist by damage, highest first:
 
 One row per memory, ranked, with the exact file path, the bucket, and one sentence of evidence. Name the rule it conflicts with or duplicates by its heading text, so the user can judge without opening anything.
 
-Close with the single highest-value next step: which memory to internalize first, or which correction class to hand to `correct` first, and why that one.
+Then sort the same rows into three lists, so the user sees what was filtered out as well as what was kept:
+
+- **Accept** -- seen in 2+ sessions and would change what a future agent does: the edit and its target file.
+- **Reject** -- a one-off, a detail that drifts (SHA, version, count), or a lesson that changes no behaviour: one-line reason each.
+- **Backlog** -- something a script, lint or hook could enforce: hand it to `correct` rather than writing prose.
+
+Close with the single highest-value next step: which memory to internalize first, or which correction class to hand to `correct` first, and why that one. Then ask the user one multiple-choice question (4-6 options, multi-select) on which areas they want worked first, plus one free-form question for anything the transcripts did not show.
 
 ## 5. Mine the corrections no memory caught
 
@@ -67,13 +73,17 @@ A correction the agent never saved as a memory is invisible to steps 1-4, and th
 python3 ~/.claude/skills/correct/mine-corrections.py <scratchpad>/corrections.json --since <YYYY-MM-DD>
 ```
 
-- **`--since`** -- the date of the previous memory-review run, else 14 days before today, as an absolute date.
+- **`--since`** -- the end date of the previous memory-review run, as an absolute date: the user's word, or the `mined <since>..<until>` window an earlier report or commit body recorded (`git -C ~/.dotfiles log -1 --format='%cs %b' --grep='mined '`); else 14 days before today. State the window as the first line of the step 4 report so the next run can start where this one ended.
 - **What it writes** -- one record per user-typed message, `{project, session, date, text, prev}`, where `prev` is the agent turn the message answered. Harness wrappers, tool results, subagent transcripts and replays from forked sessions are already dropped, and credentials are redacted.
-- **Classify in parallel** -- split the records by date into three slices and send one read-only miner per slice at once. Each keeps only messages that push back on what the agent did, and returns a JSON array of `{class: string, quote: string (at most 160 chars of the user's words), date: string, project: string, what_agent_did: string}`.
+- **Classify in parallel** -- split the records by date into three slices and send one read-only miner per slice at once. Each keeps the messages of four kinds and returns a JSON array of `{kind: "correction" | "fetchable_context" | "missed_skill" | "preference", class: string, quote: string (at most 160 chars of the user's words), date: string, project: string, what_agent_did: string}`:
+  - **correction** -- the user pushed back on what the agent did.
+  - **fetchable_context** -- the user pasted or typed a fact a tool in reach could have read (a file, a ticket, a log, a live state).
+  - **missed_skill** -- the work matched a skill's `description` or `when_to_use`, and the skill was never loaded; `class` names the skill.
+  - **preference** -- a stated working-style preference that was never framed as a correction (response length and format, delegation, verification posture, code or prose discipline, process conventions).
 - **Cross-check** -- merge the slices and keep a class seen in 2+ slices or 2+ sessions; a lone sighting stays out of the report.
 - **Check the rules** -- grep `~/.claude/CLAUDE.md` and the project's own rules for each kept class, and file it as **Recurring correction** with or without a live rule.
 
-Add the kept classes to the step 4 table, one row each with the count, dates and one quote. Hand them to `correct`, which picks the enforcement rung and proves it; this skill only ranks.
+Add the kept classes to the step 4 table, one row each with the count, dates and one quote. Hand corrections and fetchable context to `correct`, which picks the enforcement rung and proves it; route a missed skill to an edit of that skill's `description` or `when_to_use`, the cheapest fix there is; file a preference as a **Global habit**. This skill only ranks.
 
 ---
 

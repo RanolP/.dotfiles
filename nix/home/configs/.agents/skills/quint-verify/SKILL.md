@@ -6,6 +6,8 @@ when_to_use: The user wants to verify, model-check, or "prove" the state transit
 
 Quint is an executable specification language: state variables, guarded actions, and properties, all runnable at once. `quint run` samples random executions of the model and checks each state, so a counterexample is a concrete trace, and a clean run is evidence bounded by the samples behind it. This skill produces one spec file, runs it, and reports in a fixed shape.
 
+Let the question pick the tool before writing any model. Whether events can interleave or happen in a bad order -- a race, a lease, a retry, a lifecycle -- is this skill. Whether one function holds for every input -- an overflow, a parser round-trip, a data-structure invariant -- is a property of the code itself: test the real function with generated inputs through the repo's property-testing library (fast-check, Hypothesis, proptest), or run a code-level verifier where one exists for the language (Kani for Rust), rather than hand-modelling the function in Quint. Tell the user which route you took and why.
+
 `<skill-dir>` is the folder holding this SKILL.md.
 
 - `references/from-code.md` -- turning source into a model: the construct mapping, the atomic grain, what to hide, the correspondence map.
@@ -34,12 +36,16 @@ Typecheck after every addition (`quint typecheck <file>`), and `quint run` after
 8. **Prove the model can fail.** A spec that has never failed is no evidence. Run both:
    - **Reachability sanity** -- a property that must be violated, usually the negation of the interesting end state (`val sanityNeverDone = not(allDone)`). Its violation shows the states your invariants talk about are reachable.
    - **Bug toggle** -- a `const` (e.g. `ATOMIC: bool`) that switches the fix off. The instance with the fix off must violate the target invariant; the instance with it on must not. A target invariant that never fails with the fix off guards nothing; tighten the property or the model and say so.
-9. **Read the counterexample.** Reproduce it with `--seed <seed> --mbt` to see `mbt::actionTaken` per state, map each step through the `// src:` comments to file:line, then tell the story in domain terms and decide: real bug, model artifact (wrong guard, steps merged or split wrongly), or a property that is too strong. The spec is the ground truth for the design; when the model is wrong, fix the model and report the fix alongside the verdict.
+9. **Read the counterexample.** Reproduce it with `--seed <seed> --mbt` to see `mbt::actionTaken` per state, map each step through the `// src:` comments to file:line, then tell the story in domain terms and decide: real bug, model artifact (wrong guard, steps merged or split wrongly), or a property that is too strong. When the model describes existing code, replay the trace against that code before calling it a real bug -- a scratch test or live repro, one step per action -- and keep the repro out of product code; a trace the code does not reproduce is a model artifact until shown otherwise. A "property too strong" verdict is a proposal to the user, quoting the source sentence the property came from (step 2); the invariant stays as frozen until the user agrees to weaken it. The spec is the ground truth for the design; when the model is wrong, fix the model and report the fix alongside the verdict.
 10. **Self-review.** Every action assigns every var; no business logic outside pure defs; every map pre-populated; IDs opaque; messages a `Set` unless ordering is the property; trace lengths compared against `--max-steps + 1` (the count includes the initial state; a trace that stops short reached a state with no enabled action, and `quint run` still prints `[ok]`).
 
 ## Wording the result
 
 State a clean run as "no counterexample in N sampled traces of <= M steps (seed S)", in those words, where S is the seed you passed. Sampling is not exhaustive, so "verified", "proven", "safe", and "correct" overstate it; the user decides whether the sample size is enough. A violation is conclusive -- one trace disproves an invariant. Name the abstractions that could hide a bug in "does not cover".
+
+## Showing the flow to a non-engineer
+
+When the person who must judge the behaviour is a PM, designer or QA rather than the engineer, add a chart of the flow in their words. Collect the reachable states from the `--mbt` traces you already ran, and map each through a view: a state label says what the reader sees or cares about ("Paying", "Lease held, write pending"), never a variable name; an arrow label says what the user does or sees happen ("you press play", "the connect fails"), with a condition in brackets in the same words (`you press play [while the file loads]`). Aim for about 20 arrows; merge states that act the same, and keep every state on a counterexample path. When one chart state merges several model states, mark it "may break" unless every model state behind it violates the rule. Draw it through skill `visual-explainer`'s diagram route. Each rule the reader agrees to becomes an invariant in the spec, with a new var when the model has none for it.
 
 ## Escalating to `quint verify`
 
@@ -49,14 +55,15 @@ State a clean run as "no counterexample in N sampled traces of <= M steps (seed 
 
 Report exactly these fields, in this order:
 
-- **spec**: file path, module, and every `--main` instance run with its `const` bindings.
+- **spec**: file path, module, every `--main` instance run with its `const` bindings, and in one clause why a Quint model fits this question.
 - **bounds**: `--max-steps`, `--max-samples`, and the seed for each run: for a clean run the `--seed` you passed (run confirmations as `--seed 0x1 --max-samples 10000` so they can be re-run), for a violation the seed quint printed, which replays that one trace.
 - **witnesses**: per witness, `reached in K of N traces (P%)`, taken from a run with no violation.
 - **invariants**: per invariant and instance, `no counterexample in N traces of <= M steps` or `VIOLATED at state K`.
 - **sanity / bug toggle**: the sanity property's outcome (must be violated) and the target invariant with the fix off (must be violated) and on (must be clean).
-- **counterexample**: for each violation, the trace as numbered steps `action(args) -> changed vars`, each mapped to `path:line`, plus the verdict (real bug / model artifact / property too strong).
+- **counterexample**: for each violation, the trace as numbered steps `action(args) -> changed vars`, each mapped to `path:line`, the replay against the code (test path or repro command, and whether it reproduced), plus the verdict (real bug / model artifact / property too strong).
 - **frozen-property changes**: each change with its reason, or `none`.
 - **covers / does not cover**: what is modelled and which assumptions are encoded; what is abstracted away or left out, and which of those could hide a bug.
+- **next target**: a close neighbouring concern worth modelling, only when you found one; otherwise omit the field.
 
 <!--
 Adapted (modified, condensed into one scratchpad flow) from:

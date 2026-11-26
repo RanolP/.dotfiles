@@ -82,9 +82,17 @@ Korean stays for five cases:
 
 This also replaces quoting the user's own Korean words as a `WHY`. Extract what the quote means and write that mechanism in English; the rule keeps the force and drops the token cost.
 
+## Cut before you reword
+
+A model reads every line on every load, so length is paid for each session the text is loaded. Before saving, delete every line a capable reader would follow without being told, every template slot the task does not fill, every example that repeats one already given, and every restatement of a rule loaded elsewhere (the always-loaded `CLAUDE.md`, another skill) -- reference that source by name instead. Delete a reference file or section that holds nothing its caller does not already say, together with the pointer to it. Do this cut pass before any wording pass, so the polish goes only to lines that survive. The scale to expect: on 2026-09-22 the user rewrote an agent's PR body from about 2,900 bytes to about 400 with the same scope (`docs/src/agent-incidents.md`).
+
+## Write a worker brief as outcome, check and constraints
+
+A brief for a subagent or second agent carries five things: the goal, a pass/fail done check, the proof to return, what the user already knows, and the real constraints (files in scope, what is off limits, the result's exact shape). Leave the method open for an investigative worker, so it can find a better path than the one you would pick; prescribe a step only when it is a settled plan decision, as for an implementer working from an agreed plan. Give your own theory of a cause only labelled `unverified theory`, after the symptom, because a cause stated as fact steers the worker's diagnosis to confirm it. Name a skill only to override the one the worker would pick by itself; a listed sequence of skills reorders or drops the steps those skills already sequence.
+
 ## Applying this to a whole file
 
-When editing an existing rules file or skill, work bullet by bullet:
+When editing an existing rules file or skill, run the cut pass above first, then work bullet by bullet:
 
 1. Read each `NEVER` / `- DO NOT` line and ask what fact it carries beyond its own `DO` line.
 2. Delete it when the answer is "none".

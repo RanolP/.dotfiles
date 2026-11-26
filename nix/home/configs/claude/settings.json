@@ -193,6 +193,24 @@
             "command": "python3 ~/.claude/hooks/prose-review-nudge.py"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/baseline-lock-guard.py"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*[Ss]lack.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/slack-subagent-guard.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [

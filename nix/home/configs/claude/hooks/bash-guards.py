@@ -26,6 +26,7 @@ GUARDS = (
     "commit-check-guard.py",
     "leak-guard.py",
     "bare-sleep-hint.py",
+    "baseline-lock-guard.py",
 )
 
 

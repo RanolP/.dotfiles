@@ -59,7 +59,8 @@ export const pressureNotes = (level: number, one: number, cores: number, owned: 
 export const loadNotices = async (io: ResourceIo, pid: number | undefined, owned: OwnedResource[]) => {
   if (pid !== undefined) {
     const nice = await run(io, ['/bin/ps', '-p', String(pid), '-o', 'nice='])
-    if (nice !== undefined && Number.isFinite(Number(nice))) await run(io, ['renice', '-n', String(Math.max(15, Number(nice))), '-p', String(pid)])
+    // renice -n is an increment on macOS, so set the absolute value, and only when it must rise (non-root cannot lower it back).
+    if (nice !== undefined && Number(nice) < 15) await run(io, ['renice', '15', '-p', String(pid)])
   }
   const home = await io.home()
   const session = await io.sessionId()

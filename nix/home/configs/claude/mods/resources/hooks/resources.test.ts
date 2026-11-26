@@ -536,19 +536,23 @@ test('regression: high pressure names stop candidates in descending RSS order', 
   ])
   expect(notes[2]).toBe('pid 2 2 MB large\npid 1 1 MB small\nmetro :8081\nstop the ones you no longer need and hold off on new heavy jobs until this clears; tell the user what you stopped.')
 })
-test('regression: prompt load uses the 0.8 per-core threshold and renice preserves higher niceness', async () => {
+test('regression: prompt load uses the 0.8 per-core threshold; renice sets 15 absolutely (renice -n increments, which pushed claude to nice 20)', async () => {
   const shared = world()
   const io = ioFor(shared, 'load-test')
+  let niceValue = '19'
   const originalRun = io.run
   io.run = async (argv, options) => {
     if (argv.includes('vm.loadavg')) return result(0, '{ 6.4 2 1 }')
     if (argv.includes('hw.ncpu')) return result(0, '8')
-    if (argv.includes('nice=')) return result(0, '19')
+    if (argv.includes('nice=')) return result(0, niceValue)
     return originalRun(argv, options)
   }
   expect(await loadLine(io)).toBe('load 6.4/8 cores (high)')
   await loadNotices(io, 101, [])
-  expect(shared.calls).toContainEqual(['renice', '-n', '19', '-p', '101'])
+  expect(shared.calls.some(c => c[0] === 'renice')).toBe(false)
+  niceValue = '0'
+  await loadNotices(io, 101, [])
+  expect(shared.calls).toContainEqual(['renice', '15', '-p', '101'])
 })
 
 test('regression: a watchdog delivery file survives subsequent Bash calls without repeating notices', async () => {

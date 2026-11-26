@@ -19,11 +19,12 @@ The candidate almost always arrives as one incident: a file, a branch, a command
 
 ## 2. Confirm it is durable
 
-Three gates, all of which must pass:
+Four gates, all of which must pass:
 
-1. **It constrains future behavior.** A fact about the current state is not a rule.
-2. **A reader cannot derive it** from the code, the git history, a passing type-check, or an existing config file.
-3. **No live rule already says it.** `grep -n "^## " ~/.dotfiles/nix/home/configs/.agents/AGENTS.md ~/.dotfiles/nix/home/configs/claude/CLAUDE.md`, then read the sections that look close.
+1. **It changes what an agent would do by default.** A fact about the current state is not a rule, and neither is a default an agent already follows ("communicate clearly", "write good tests").
+2. **It still holds in six months.** Strip SHAs, version numbers and counts from the text unless the number is the threshold the rule enforces; a pinned version or a measured count drifts, and the rule goes stale with it.
+3. **A reader cannot derive it** from the code, the git history, a passing type-check, or an existing config file.
+4. **No live rule already says it.** `grep -n "^## " ~/.dotfiles/nix/home/configs/.agents/AGENTS.md ~/.dotfiles/nix/home/configs/claude/CLAUDE.md`, then read the sections that look close.
 
 Drop the candidate when a gate fails, and tell the user which gate and why. A rule that duplicates a live one splits the reader's attention across two places that will drift apart.
 
@@ -41,7 +42,7 @@ Home Manager appends `CLAUDE.md` after `AGENTS.md`, so the Claude file reads as 
 Read the `^## ` heading list of the chosen file first, then pick:
 
 - **A section already covers the ground** -- add the instruction as one more `DO` line inside it.
-- **Nothing covers it** -- open a `## Title` section whose title states the rule itself, in the voice of the sections already there.
+- **Nothing covers it** -- open a `## Title` section whose title states the rule itself, in the voice of the sections already there. Open it for this one specific rule; a heading kept to mirror a neighbouring section, or a placeholder waiting for rules, costs bytes in every session and holds nothing.
 
 Then read the neighbouring sections for contradictions. When the new rule disagrees with a live one, resolve it with the user rather than letting both stand -- two rules that disagree make the next session's behavior a coin flip.
 

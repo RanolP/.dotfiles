@@ -38,7 +38,7 @@ Print ONE table, one row per resource:
 
 - **safe** -- owner is `session` and the evidence proves it: the item is a background task of this session, or a process whose cwd sits in this session's working directory and whose start time falls inside this session. Also safe: a `finished` worktree from `worktree-cleanup`, and the scratchpad once nothing in it is referenced by an unfinished row.
 - **ask** -- every `machine` row by default (a port, a container, a booted simulator, an emulator, a workspace the session did not start); a session process whose evidence is ambiguous; a running subagent whose output has not been read yet; every proposed learning.
-- **keep** -- uncommitted changes, unpushed commits, stashes, and `unfinished` worktrees. Name what each holds and offer the `ship` skill to publish it. The `claude/local-dev` branch is a local stash stack that stays on this machine: report its commit count and keep it.
+- **keep** -- uncommitted changes, unpushed commits, stashes, and `unfinished` worktrees. Name what each holds and offer the `ship` skill to publish it. The `claude/local-dev` branch is a local stash stack that stays on this machine: report its commit count and keep it. A step still in flight (a half-applied edit, a plan with unfinished steps) is a `keep` row too: offer the `pause-resume` skill's pause half, which finishes or backs out of the step, checkpoints it and writes the resume note a cold session continues from.
 
 When the evidence leaves the owner uncertain, the verdict is `ask`.
 

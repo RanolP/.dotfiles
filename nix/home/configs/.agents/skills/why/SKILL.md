@@ -47,6 +47,7 @@ When commits, PRs and tickets leave the decision unexplained, follow links they 
 - **Record** -- each source in date order: the SHA with its subject, the PR as `#<n> (<title>)`, the ticket key with its summary; its author and date; and the author's own words in a quote.
 - **Inference** -- every claim no source states, labelled as inference, with the sources it rests on.
 - **Not in the record** -- what stays unanswered, and the person most likely to know (the author of the deciding commit or PR, by name).
+- **Sources searched** -- each source read, with its range or query (the `git log` range or `-S` string, the PRs, the ticket keys, the Slack or Notion links), including the ones that came back empty, so the reader can tell an absent answer from an unsearched one.
 
 ---
 

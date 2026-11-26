@@ -52,6 +52,7 @@ Findings to raise:
 - **Escape-hatch containers.** `Record<string, unknown>` / `Map<String, Any?>` / `[String: Any]` / `serde_json::Value` / `anyhow!("...")` used where a struct or typed variant belongs. In Rust specifically, a new `anyhow!` string where the crate has a typed error enum is this finding.
 - **An existing field reused for a new purpose** rather than a new field added. This leaves almost no trace in the type diff -- it shows up as a call site passing a value whose meaning no longer matches the field name.
 - **A catch-all variant** (`Other`, `Unknown`, `Custom(String)`, `case other(String)`) newly used for a case that deserves its own variant.
+- **Same primitive, different meaning.** A new parameter or field whose primitive type matches a sibling that means something else -- two `String` ids, a `userId: Long` beside an `orderId: Long`, a `u64` count beside a `u64` offset. Each meaning gets its own type, validated once where it is created: a branded type, `value class`, newtype, or single-case struct.
 
 Name the structural fix in the finding: the variant, field, newtype (`value class` / branded type / `struct Foo(String)` / single-case struct) that removes the hole permanently.
 
@@ -95,6 +96,7 @@ Findings:
 
 - **New variants added at the same level as variants from a different conceptual universe** -- `Region = Canada | Mexico | Alaska | Arkansas` instead of `Canada | Mexico | UsState(State)`. The tell is a downstream function whose *type* did not narrow, so it now needs a dummy arm.
 - **Any arm returning a no-op** (`return`, `break`, `Unit`, `undefined`, `None`, `()`) for a variant the function conceptually cannot receive. Each such arm marks a type that should have narrowed. Every match should strictly shrink the space it handles.
+- **A flag that must stay in sync with another flag** -- a new boolean or optional whose valid values depend on an existing one (`isLoading` beside `isError`, `hasResult` beside `result?`), or one more `else if` appended to a chain keyed on a string or `kind`. Both mean the state was never modeled. Name the union, sealed hierarchy or state machine whose variants replace the flags and the chain.
 - **A catch-all arm added to a previously exhaustive match** -- `default:` in a TS `switch` (which also kills any `assertNever(x: never)` check), `else ->` in a Kotlin `when`, `default:`/`@unknown default` in a Swift `switch`, `_ => {}` in a Rust `match`. This silently absorbs every future variant: the same effect as disabling the exhaustiveness warning, in a narrower blast radius. Removing an `assertNever` call or a `#[deny(non_exhaustive_omitted_patterns)]` is the same finding.
 
 ## 5. The code that did not change

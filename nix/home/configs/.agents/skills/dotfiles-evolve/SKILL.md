@@ -69,7 +69,7 @@ git -C ~/.dotfiles status --short                                          # wha
 grep -c "<section heading>" ~/.claude/CLAUDE.md ~/.codex/AGENTS.md         # whether the live files carry it yet
 ```
 
-`~/.dotfiles` allows direct commits on `main`, so offer the commit in one sentence and make it when the user asks. `rule-write` step 7 hands over the rebuild command; add these facts to that same message so the user sees the whole move in one place.
+`~/.dotfiles` allows direct commits on `main`, so offer the commit in one sentence and make it when the user asks. When the memory came from a `memory-review` run, end the commit body with that run's correction-mining window as its own line, `mined <since>..<until>` in absolute `YYYY-MM-DD` dates (the window its step 4 report opened with): the next `memory-review` run reads it back with `git -C ~/.dotfiles log -1 --format='%cs %b' --grep='mined '` and starts its `--since` there. `rule-write` step 7 hands over the rebuild command; add these facts to that same message so the user sees the whole move in one place.
 
 ---
 

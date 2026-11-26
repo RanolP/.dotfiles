@@ -50,6 +50,18 @@ An injected string stays in the transcript, so every later request re-reads all 
 
 Parallel sessions and subagents fire the same hooks, so give each writer its own file or key and merge where the state is read. wayseeker keeps its ledger and step rubrics in one JSON file per session id (`mods/wayseeker/hooks/register.ts` `statePath`, `~/.claude-work/plans/wayseeker-<session>.json`); its per-session promise chain (`register.ts` `serialized`) then only orders callbacks inside one process. Two writers each updating their own field of one JSON file still share that file. Reach for a cross-process lock only where a single shared target is the invariant, as with a resources mod mutex one session owns at a time (`mods/resources/hooks/resources.ts` `takeReclaimLock`, an atomic `mkdir`), and check first whether splitting the state removes the need.
 
+The structure carries the coordination. A rules line or brief asking sessions to take turns cannot prevent a race, because nothing checks it at the moment two writers collide; separate files, a lock or a single writer can. The dotfiles checkout is the worked case: sessions sharing it stashed each other's edits until each unit was committed as it landed (`docs/src/agent-incidents.md`, 2026-10-07).
+
+## Idempotent state
+
+A hook or mod that changes state must converge to the right end state however many times it fires and wherever its last run stopped, because parallel sessions fire it concurrently and a session can die mid-write. Home Manager activation scripts face the same test on every rebuild.
+
+- **Derive the step from what exists.** Read the current state, compare it to the goal, and apply only the difference -- never replay what the previous run meant to do.
+- **Make leftovers provably stale.** A lock or claim records its owner PID and start time, so the next run can check the owner is gone and reclaim it; a crashed holder otherwise wedges every session.
+- **Write atomically.** Write a state file to `<path>.tmp` and rename it into place, so a reader sees the old file or the new one, never half of either.
+
+The test before wiring it in: what happens if it runs twice, and what if the last run crashed at each line?
+
 ## Deployed hooks
 
 | File | Event | Concern |

@@ -18,9 +18,11 @@ description: TypeScript type discipline -- discriminated unions, branded and con
 | Type guards | A guard verifies its whole claim. A lying guard is worse than `as`, because the bug hides behind a name that says it is safe. Name them `isX` or `hasX`. |
 | Exhaustiveness | Put `const _exhaustive: never = x;` in default arms so the compiler errors when a new variant is added. |
 | `satisfies` over `as` | Validates the value without widening literal types. |
-| Boundary validation | Parse where data crosses in, into a named domain type. `Record<string, unknown>` (however spelled) stops at that parse; code inside trusts the type. |
+| Boundary validation | Parse where data crosses in, into a named domain type. `Record<string, unknown>` (however spelled) stops at that parse; code inside trusts the type. State each invariant once, in that parse: consumers take the narrowed or branded type and carry no second null or shape check, so a repeated check downstream is a review finding. Exported functions take and return domain types; a framework request, ORM row or SDK response type stays inside the adapter that parsed it. |
 | Schema-derived types | Reach for `Pick`/`Omit`/`Parameters`/`ReturnType`/`Awaited`/`typeof` before declaring a new interface. |
 | Object args | Pass one object rather than positional arguments, so argument order is self-documenting. Keep positional on hot paths (per-frame render, tokenizers, parsers). |
+| Real tests | Run what can run: use the framework's real test primitives with leak and disposal checks, verify UI in a running build, and mock only what cannot run locally. |
+| Structured telemetry | Log through the project's structured logger with enough context to debug from one id. Shipped code carries no `console.log`; the `no-console` lint rule is the guard where the repo has one. |
 
 Examples for each row: `references/patterns.md`.
 

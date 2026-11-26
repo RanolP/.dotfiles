@@ -24,7 +24,7 @@ In a repository whose rules forbid branches and work directly on `main` (this do
 
 ## The sequence
 
-1. **Read what is actually there.** `git status --short` and `git diff HEAD`. Name every path that changed and decide which ones this unit owns; a path modified before this session started stays out.
+1. **Read what is actually there.** `git status --short` and `git diff HEAD`. Name every path that changed and decide which ones this unit owns; a path modified before this session started stays out. In the hunks this unit owns, drop what the rules already reject before staging: comments that narrate the code, guards with no concrete trigger, compatibility paths for something that never shipped, and edits unrelated to the unit.
 2. **Stage explicit paths**, never `-A` and never `.`, in a Bash call that does nothing else.
 3. **Check safety** against the staged diff, before writing the message. The checks are below.
 4. **Commit** in its own call, with the message in the repo's dominant form (`git log --oneline -30` decides subject style, prefix and language).

@@ -261,6 +261,12 @@ let
     why = localSkill "why";
     apology = localSkill "apology";
     socratic-tutor = localSkill "socratic-tutor";
+    bro = localSkill "bro";
+    how = localSkill "how";
+    in-your-own-words = localSkill "in-your-own-words";
+    sharpen = localSkill "sharpen";
+    teach = localSkill "teach";
+    skill-help = localSkill "skill-help";
     build-the-lever = localSkill "build-the-lever";
     refactor = localSkill "refactor";
     blind-eval = localSkill "blind-eval";

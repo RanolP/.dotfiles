@@ -1,6 +1,6 @@
 ---
 name: correct
-description: Turn a mistake the user has corrected more than once into structure that makes it impossible -- cluster recurring corrections into classes (2+ occurrences), fix each class at the highest rung that works (architecture, types, a lint or check whose error names the fix, a test, a Claude Code hook, and a prose rule last), prove the new check fails on the real past mistake, and keep the rule-to-enforcer table current. Use when the user corrects the same kind of mistake again ("또", "계속", "반복", "몇 번을 말해", "again", "still", "I told you"), when `memory-review` hands over recurring correction classes, when a 시말서 records a mistake that already has one, or when the user says "/correct".
+description: Turn a mistake the user has corrected more than once into structure that makes it impossible -- cluster recurring corrections into classes (2+ occurrences), fix each class at the highest rung that works (architecture, types, a lint or check whose error names the fix, a test, a Claude Code hook, and a prose rule last), prove the new check fails on the real past mistake, and keep the rule-to-enforcer table current. Use when the user corrects the same kind of mistake again ("또", "계속", "반복", "몇 번을 말해", "again", "still", "I told you"), when `memory-review` hands over recurring correction classes, when a 시말서 records a mistake that already has one, when you catch yourself writing the same instruction into a second brief or turn, or when the user says "/correct".
 ---
 
 # Correct
@@ -18,6 +18,8 @@ Pull from every source that holds one, and record each as `{quote, date, project
 - **This session** -- the correction that triggered the run, plus earlier ones in the transcript.
 - **Transcripts** -- `python3 ~/.claude/skills/correct/mine-corrections.py <scratchpad>/corrections.json --since <YYYY-MM-DD>` writes only user-typed messages (harness wrappers dropped, credentials redacted), each with the agent turn it answered in `prev`. Keep the output in the scratchpad. `memory-review` step 5 runs the same pass and hands over its classes.
 - **`docs/src/agent-incidents.md`** in `~/.dotfiles` -- incidents already written up.
+- **Your own repeats** -- an instruction you have written into two worker briefs or two turns is a class occurrence even with no user correction, because the structure that would carry it is missing.
+- **The project repo** -- `git log --oneline --grep=Revert`, the user's PR review comments (`gh api repos/<owner>/<repo>/pulls/<n>/comments`), its `AGENTS.md`/`CLAUDE.md`, and comments explaining workarounds (`rg -n 'workaround|HACK|XXX'`).
 - **`~/.dotfiles/.apologies/`** -- each 시말서 counts toward its class's tally. Read them in the main thread and cite one only by its file path; `apology` §0 keeps their content out of briefs, commits and every shared body.
 
 For a sweep of more than a few days of transcripts, split by date into slices and send one read-only miner per slice in parallel, each returning the typed records above and nothing else.
@@ -38,6 +40,10 @@ Find where the class lives -- the project repo it happened in, or the harness ev
 4. **A behavior test** that fails when the behavior breaks and survives a refactor of internals.
 5. **A Claude Code hook** for a mistake made through a tool call -- `PreToolUse` to deny or rewrite it, `UserPromptSubmit` or `Stop` to inject the check at the moment it applies. `rule-write` §6 and `claude-hook-management` own the container verification and the four wiring points.
 6. **A prose rule** through `rule-write`, only for a judgement call no matcher can inspect -- and then with the failure as an example inside the rule. Project-scoped lessons go into that project's `AGENTS.md` or `CLAUDE.md`; ones true on every repo go into the shared rules files.
+
+When the correction targets a workaround that was already applied before (it appears in `docs/src/agent-incidents.md`, `memory/evidence/` or the repo's history), start at rung 1: propose a redesign rather than another workaround.
+
+An exception to a check this skill added sits on the offending line (or as an allowlist entry for a hook) carrying `reason:`, `expires: YYYY-MM-DD` and `approved-by: <the human>`, so every suppression can be found and retired.
 
 Fix the most frequent classes first, one change per class. For each, write down why every higher rung did not work; "the user's request was about prose" is not a reason, "the mistake happens in a judgement no tool call exposes" is.
 
@@ -66,6 +72,7 @@ The table lives in `~/.dotfiles/docs/src/agent-incidents.md` under `## Rule enfo
 ## 6. Land it
 
 - **A project repo** -- follow that repo's conventions (`git log --oneline -30`, its branch rules). Stop at the working tree and report the change unless the user asked for a commit.
+- **A skill or rule fix found mid-task** -- note it, keep the task moving, and land it as its own `~/.dotfiles` commit after the feature work, so the feature diff carries no skill change and the skill change can be reviewed alone.
 - **`~/.dotfiles`** -- commit each class on local `main` as it lands, per that repo's `AGENTS.md`; a new hook follows `claude-hook-management` from container check to registration, and the rebuild goes to the user.
 
 ## Reply
@@ -81,4 +88,4 @@ One block per class:
 
 ---
 
-*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `skills/correct`, `skills/principle-encode-lessons-in-structure`, and the slice-and-cross-check mining of `skills/automate-me`.*
+*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `skills/correct`, `skills/principle-encode-lessons-in-structure`, the slice-and-cross-check mining of `skills/automate-me`, and the workaround and skill-fix pitfalls of `docs/guide/04-design.md` and `docs/guide/09-make-it-yours.md`.*

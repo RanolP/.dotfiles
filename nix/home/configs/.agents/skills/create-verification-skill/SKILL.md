@@ -1,6 +1,6 @@
 ---
 name: create-verification-skill
-description: Generate a project-local `verify-<app>` skill that launches the app from a clean state, drives it the way a user does (`agent-browser`, `agent-device`, a PTY, HTTP), captures evidence (screenshots, transcripts, logs, rendered output with numeric checks), and cleans up while keeping that evidence -- then run it end to end once, so "done" in that repo rests on a run. Use when a project has no scripted way to prove its UI, CLI, service, audio or rendering behavior; when a change was reported done without a runtime check and the user caught it; when the user says "/create-verification-skill", "make a verify skill for this repo", or "how do I check this works"; when a repo's `verify-<app>` skill no longer matches the app; or when checking whether an existing PR or commit actually fixes a reported bug.
+description: Generate a project-local `verify-<app>` skill that launches the app from a clean state, drives it the way a user does (`agent-browser`, `agent-device`, a PTY, HTTP), captures evidence (screenshots, transcripts, logs, rendered output with numeric checks), and cleans up while keeping that evidence -- then run it end to end once, so "done" in that repo rests on a run. Use when a project has no scripted way to prove its UI, CLI, service, audio or rendering behavior; when a change was reported done without a runtime check and the user caught it; when the user says "/create-verification-skill", "make a verify skill for this repo", or "how do I check this works"; when a repo's `verify-<app>` skill no longer matches the app or the user asks to audit it; or when checking whether an existing PR or commit actually fixes a reported bug.
 ---
 
 # Create a verification skill
@@ -17,13 +17,13 @@ Answer these from the codebase -- package scripts, `Makefile`, `justfile`, READM
 - **Observe** -- what proves a behavior: a screenshot or ARIA snapshot, a terminal transcript with exit code, a response body, a log line, a DB row, a rendered file plus a numeric check on it.
 - **Isolate** -- whether two instances can run side by side (ports, data dirs, browser profiles, device sessions). When they cannot, the generated skill says so and drives only an instance it started.
 
-When the checkout does not build or start as-is, fix that or report it exactly before generating; a recipe written against a broken base teaches wrong steps. A launch that compiles natively or boots an emulator is a heavy local job: raise it with its cost and current load per the (load) rule, and reuse a running build, emulator or dev server.
+When the checkout does not build or start as-is, fix that or report it exactly before generating; a recipe written against a broken base teaches wrong steps. When an asset the verified path never uses blocks startup (a static dir the API never serves, a sample config), the generated skill may create it, labelled as verification scaffolding, and remove it in cleanup. A launch that compiles natively or boots an emulator is a heavy local job: raise it with its cost and current load per the (load) rule, and reuse a running build, emulator or dev server.
 
 ## 2. Write the skill
 
 Write `<repo>/.claude/skills/verify-<app>/SKILL.md`, and mirror it to `<repo>/.agents/skills/verify-<app>/` when the repo already keeps skills there. The frontmatter carries `name: verify-<app>` and a `description` naming the app, its surface, and the moment to use it -- "before reporting any change to <app> done" -- because the description is what makes the skill fire. Each section below holds what the interview found, with no placeholder left:
 
-- **Launch** -- the exact command, and the ready signal that means usable rather than merely listening (a log line after migrations and seeds, a prompt, a route that renders data). It reaches that state from an empty data dir. For a short-lived CLI, launch is the one-time build, and each drive runs in its own fresh `tmux` session.
+- **Launch** -- the exact command, and the ready signal that means usable rather than merely listening (a log line after migrations and seeds, a prompt, a route that renders data). It reaches that state from an empty data dir in one command that also seeds the data and test users the journeys need, so every run starts the same way. For a short-lived CLI, launch is the one-time build, and each drive runs in its own fresh `tmux` session.
 - **Doctor** -- one read-only check answering "is this instance worth driving?": process up, expected build or commit, port owned by this run, auth valid, device or GPU visible.
 - **Drive** -- the harness recipe with this repo's real selectors and commands. Prefer stable handles (ARIA names, `data-testid`, ids, prompt strings, routes) over coordinates. Send each scenario as one batch per `ui-automation`, and keep every journey as a file under `verify-<app>/journeys/` per `record-replay` (an `.ad` script, a batch JSON, a shell script). Automated surfaces launch behind the user's windows: headless `agent-browser` first, and a real Chrome only for DRM or a logged-in profile.
 - **Evidence** -- what to capture and where it lands: `verify-<app>/evidence/<run-id>/` or a scratch path the section names. The proof standard:
@@ -31,9 +31,14 @@ Write `<repo>/.claude/skills/verify-<app>/SKILL.md`, and mirror it to `<repo>/.a
   - the action and the resulting state, not only the final screen;
   - side effects checked beside what is visible (a file written, a row inserted, a message sent);
   - a dry-run or test mode verified by observing what it skips (network, files, git refs), since some still touch them;
-  - mocks only where a production boundary already isolates the external system.
+  - mocks only where a production boundary already isolates the external system;
+  - CLI proof carries the command, stdout, stderr and exit code;
+  - a mutation is proven by a second, read-only view of the stored value (reopen the record from the list; a save toast proves nothing);
+  - every artifact records the feature ID and the entry point it used.
+
+  Match the check to the change: a CLI change runs the real command; a UI change walks the changed flow in the running app; a parser or migration replays a saved input; a perf change compares before and after profiles per skill `benchmark-checklist`; a storage change reads the written value back.
 - **Cleanup** -- tear down what this run started, by PID, session name or container id, and keep the evidence directory intact.
-- **Helpers** -- every script the skill ships is executable and its invocation appears in the body.
+- **Helpers** -- every script the skill ships is executable and its invocation appears in the body. When agents keep hand-writing the same click-through, ship a small control CLI the skill calls instead, shaped for agents: a few composable commands that each do real work, `--dry-run` on every destructive one, subcommands that reveal features gradually, errors that name the command to run instead, rich `--help`, and `--json` output.
 
 ### Output a person cannot see on a screen
 
@@ -45,11 +50,11 @@ Rendered media needs a numeric check beside the artifact, because a file that ex
 
 ## 3. Seed the feature map
 
-Create `verify-<app>/features/README.md` plus one file per user-facing feature, the top 3-5 from routes, commands, menus or docs. The README holds the baseline preconditions, the driving conventions, the proof rules, and an index with one line per feature file. Each feature file opens with an H1 and one paragraph of user-visible behavior, then exactly these four H2s:
+Create `verify-<app>/features/README.md` plus one file per user-facing feature, the top 3-5 from routes, commands, menus or docs. The README holds the baseline preconditions, the driving conventions, the proof rules, and an index with one line per feature file. The conventions it states: every recipe starts from the baseline state unless its preconditions say otherwise; commands are literal, quoted names and flags unchanged; a mutation restores the seeded data afterwards while keeping its evidence; each run gets its own data dir through a run-id variable (`APP_DATA_DIR=<scratch>/verify-$RUN_ID`) so concurrent runs share no state; doctor reports the build revision. The map names only user paths, stable handles, required state, commands and observable proof; implementation details stay out, since the source is read fresh each run. Each feature file opens with an H1 and one paragraph of user-visible behavior, then exactly these four H2s:
 
 1. `Sub-features` -- short IDs, one line each.
 2. `How to get to it (user POV)` -- every entry point a user has.
-3. `Driving it with <harness>` -- a `Preconditions:` list, then labelled bullets pairing each user action with its exact command and its observable result.
+3. `Driving it with <harness>` -- a `Preconditions:` list, then labelled bullets pairing each user action with its exact command and its observable result, ending with a `Reset:` bullet (how to return to a fresh state for a second attempt) and a `Cross-check:` bullet (the read-only state or value that confirms what the screen shows).
 4. `Gotchas` -- traps that waste or invalidate a run (debounce, focus, default output format, state left behind).
 
 When seed data lacks a precondition a journey needs, the journey reports a failure and the reason goes in that feature's `Gotchas`; the journey keeps its full strength. A proof that used one entry point covers that entry point only, and says so.
@@ -72,6 +77,7 @@ When the reported environment is out of reach, restate the defect without its pl
 
 - Add one line to the repo's `AGENTS.md` or `CLAUDE.md`: the final gate for a change to <app> runs `verify-<app>`. Leave it and the skill in the working tree and report them; commit only when the user asks.
 - When the question is whether an existing PR or commit fixes a reported bug, follow `references/verify-existing-fix.md`: the generated skill drives the baseline and the patched build twice each, and the verdict is `confirmed`, `insufficient`, or `inconclusive`.
+- When the user asks to audit the verify skill, or on a schedule (skill `schedule`), run the maintenance pass in `references/maintain.md`: a read-only source reader per feature, one live pass over every feature, and an outcome of `clean`, `changed` or `blocked`.
 - When a later drive disagrees with the map, triage it in that change: a wrong description is doc drift, so fix the map; working behavior the harness cannot drive is a harness gap, so fix the harness and re-drive it; broken app behavior is a product regression, so report it and leave the map describing the intended behavior.
 
 ## Reply
@@ -82,4 +88,4 @@ When the reported environment is out of reach, restate the defect without its pl
 
 ---
 
-*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `skills/create-verification-skill` with its `references/feature-map-example`, the live-pass invariants and triage of `skills/maintain-verification-skill`, and the environment-translation section of `automations/benny/skills/reproduce-and-fix-issues/references/control-adapter.md`.*
+*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `skills/create-verification-skill` with its `references/feature-map-example`, `skills/maintain-verification-skill`, the check-matching and control-CLI guidance of `docs/guide/06-verify-and-ship.md`, and the environment-translation section of `automations/benny/skills/reproduce-and-fix-issues/references/control-adapter.md`.*

@@ -31,12 +31,14 @@ Two reproductions make a baseline. With fewer, the verdict is `inconclusive` wha
 
 ## Patched: the fix, twice
 
-Launch the patched revision with the same environment and data, drive the same journey twice from a fresh state, and confirm in each attempt that the broken state is gone and the expected state appears. Capture the same evidence as the baseline. The result comes from the running patched app; a green build or test suite is not this measurement.
+Launch the patched revision with the same environment and data, drive the same journey twice from a fresh state, and confirm in each attempt that the broken state is gone and the expected state appears. Capture the same evidence as the baseline, including the same read-only state check, so before and after compare one value. The result comes from the running patched app; a green build or test suite is not this measurement.
+
+Then smoke the blast radius: drive the states, inputs, permissions, platforms and failure paths next to the fixed behavior that the diff could reach, once each, from the same verify skill. A regression found there makes the verdict `insufficient`, with that evidence.
 
 ## Verdict
 
 - `confirmed` -- the baseline reproduced twice and the patched build resolved it twice. Report the artifact with the before and after evidence.
-- `insufficient` -- the symptom appears on both builds. Report that the artifact does not resolve it, with both sets of evidence.
+- `insufficient` -- the symptom appears on both builds, or the blast-radius smoke found a regression. Report that the artifact does not resolve it, with both sets of evidence.
 - `inconclusive` -- the baseline did not reproduce, the patched app did not run, or the evidence does not show the discriminating state. Name the half that could not be measured, and claim nothing about the fix.
 
 Posting the verdict on the PR, issue or Jira ticket is an outside-visible send: draft it in the report and post when the user asks.
@@ -47,4 +49,4 @@ Stop both instances through the verify skill's cleanup, remove the worktree, and
 
 ---
 
-*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `automations/benny/skills/reproduce-and-fix-issues/references/verify-existing-fix.md`.*
+*Adapted from pstack 0.15.48 (MIT, Lauren Tan): `automations/benny/skills/reproduce-and-fix-issues/references/verify-existing-fix.md` and step 13 of its `SKILL.md`.*

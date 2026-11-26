@@ -14,7 +14,6 @@ function world(on: any, env: Record<string, string> = {}, persistedState: Record
     aborted: [] as string[],
     steps: 0,
     ran: [] as string[],
-    clm: {} as Record<string, { id: string; title: string; status: string; updated: string }>,
     prompts: [] as string[],
     promptSubmissions: [] as { text: string; origin: any }[],
     goalRuns: [] as string[],
@@ -25,14 +24,6 @@ function world(on: any, env: Record<string, string> = {}, persistedState: Record
   }
   const clock: MockClock = mock.clock(on, { now: T0 })
   mock.env(on, { HOME: '/home/t', ...env })
-  on('engine.create', async (_$: any, e: any, next: any) => ({
-    ...(await next(e)),
-    clm: {
-      track: () => { throw new Error('test clm.track base') },
-      issues: () => { throw new Error('test clm.issues base') },
-      resume: () => { throw new Error('test clm.resume base') },
-    },
-  }))
   on('fs.exists', (_$: any, e: any) => ({ value: e.path in seen.files }))
   on('fs.read', (_$: any, e: any) => ({ value: seen.files[e.path] }))
   on('fs.write', (_$: any, e: any) => { seen.files[e.path] = e.text; return { value: undefined } })
@@ -65,16 +56,6 @@ function world(on: any, env: Record<string, string> = {}, persistedState: Record
     seen.promptSubmissions.push({ text: e.text, origin: e.origin })
     return { text: e.text, context: e.context }
   })
-  on('clm.track', (_$: any, e: any) => {
-    const id = e.issue ?? `task-${Object.keys(seen.clm).length + 1}`
-    const issue = seen.clm[id] ?? { id, title: e.title, status: e.status, updated: 'now' }
-    issue.status = e.status
-    seen.clm[id] = issue
-    return { value: issue }
-  })
-  on('clm.issues', (_$: any, e: any) => ({
-    value: Object.values(seen.clm).filter(issue => (!e?.issue || issue.id === e.issue) && (!e?.status || issue.status === e.status)),
-  }))
   on('ui.toast', (_$: any, e: any) => { seen.toasts.push(e.text); return { value: undefined } })
   // Core /goal's own output lines, as the 2.1.288 binary prints them.
   on('command.run', { command: 'goal' }, (_$: any, e: any) => {
@@ -121,21 +102,18 @@ const ENGINE_SPAWN: SpawnVia = { subagentType: 'general-purpose', provider: { pl
 const CODEX_SOL: SpawnVia = { subagentType: 'hetero-subagents:codex:gpt-5.6-sol', provider: { plugin: 'hetero-subagents', tier: 'user' } }
 const spawn = ($: Engine, tool_use_id: string, prompt: string, description: string, via = ENGINE_SPAWN) =>
   $.agent.spawn({ tool_use_id, prompt, description, ...via, parentModel: 'm', background: false, fork: false } satisfies AgentSpawnInput)
-const onlyIssue = (seen: ReturnType<typeof world>['seen']) => {
-  const entries = Object.entries(seen.clm)
-  if (entries.length !== 1) throw new Error(`expected one clm issue, found ${entries.length}`)
-  const entry = entries[0]
-  if (!entry) throw new Error('expected one clm issue entry')
-  return entry[1]
-}
+// The estimate result opens with "Unit <id>:"; that id is what task takes to resume or close it.
+const unitId = (r: { result?: string }) => /^Unit (\S+):/.exec(r.result ?? '')?.[1] ?? ''
+const close = ($: Engine, task: string, minutes = 10) =>
+  call($, TOOL.estimate, { minutes, scope: 'the task', steps: ['a', 'b'], task, done: true })
 
 const CAL = '/home/t/.local/share/claude-time-budget/calibration.jsonl'
 const EXT = '/home/t/.local/share/claude-time-budget/extensions.jsonl'
 const pairs = (seen: { files: Record<string, string> }) => (seen.files[CAL] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
 const extensions = (seen: { files: Record<string, string> }) => (seen.files[EXT] ?? '').split('\n').filter(Boolean).map(l => JSON.parse(l))
 
-// Regression: a main turn with no doing clm issue remains ungated until estimate opens one.
-test('main tools remain ungated until an estimate opens a clm task', async ($, on) => {
+// Regression: a main turn with no open unit remains ungated until estimate opens one.
+test('main tools remain ungated until an estimate opens a unit', async ($, on) => {
   const { seen } = world(on)
   await start($)
   await prompt($, 'go')
@@ -288,30 +266,28 @@ test('an overrun never aborts a turn or replaces a subagent model request', asyn
   expect(seen.aborted).toEqual([])
 })
 
-// Regression: changing the estimate does not replace the original calibration pair when the clm task closes.
+// Regression: changing the estimate does not replace the original calibration pair when the unit closes.
 test('a re-estimate can shrink a budget but calibration keeps the first estimate', async ($, on) => {
   const { seen } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
-  const task = onlyIssue(seen).id
+  const task = unitId(await estimate($, 30))
   expect((await estimate($, 10, undefined, task)).result).toContain('estimate 10 min')
-  await complete($, 't1', 'done')
-  onlyIssue(seen).status = 'done'
-  await complete($, 't2', 'close')
+  await close($, task)
   expect(pairs(seen)[0]).toMatchObject({ estimate_min: 30, budget_min: 15 })
 })
 
-// Regression: estimate without task opens a new clm task and closes the old calibration unit.
+// Regression: estimate without task opens a new unit and closes the old calibration unit.
 test('an estimate without task starts a new task', async ($, on) => {
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
+  const first = unitId(await estimate($, 30))
   await clock.advance(10 * MIN + 1)
   await report($, 1, 1)
-  expect((await estimate($, 60)).result).toContain('Budget 60 min')
-  expect(Object.keys(seen.clm)).toHaveLength(2)
+  const second = await estimate($, 60)
+  expect(second.result).toContain('Budget 60 min')
+  expect(unitId(second)).not.toBe(first)
   expect(pairs(seen)[0]).toMatchObject({ estimate_min: 30, actual_min: 10 })
 })
 
@@ -319,9 +295,8 @@ test('estimate remains available when a checkpoint report is due', async ($, on)
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
+  const task = unitId(await estimate($, 30))
   await clock.advance(10 * MIN + 1)
-  const task = onlyIssue(seen).id
   const estimateResult = await estimate($, 10, undefined, task)
   expect(estimateResult.deny).toBeUndefined()
   expect(estimateResult.result).toContain('estimate 10 min')
@@ -334,10 +309,11 @@ test('opening a new task and tools remain available after the estimated budget',
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
+  const first = unitId(await estimate($, 30))
   await clock.advance(30 * MIN + 1)
-  expect((await estimate($, 60)).result).toContain('Budget 60 min')
-  expect(Object.keys(seen.clm)).toHaveLength(2)
+  const second = await estimate($, 60)
+  expect(second.result).toContain('Budget 60 min')
+  expect(unitId(second)).not.toBe(first)
   const result = await run($, { tool: 'Bash', command: 'ls' })
   expect(result.deny).toBeUndefined()
   expect(result.result).toBe('ran')
@@ -347,16 +323,14 @@ test('an upward re-estimate is allowed and recorded while calibration keeps the 
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
-  const task = onlyIssue(seen).id
+  const task = unitId(await estimate($, 30))
   await clock.advance(5 * MIN)
   expect((await estimate($, 120, undefined, task)).result).toContain('estimate 120 min')
   expect(extensions(seen)[0]).toMatchObject({
     kind: 'main', task, estimate_min: 120, budget_before: 30, budget_after: 120, minutes: 90,
     source: 'reestimate', reason: 'Estimate refined for the task.',
   })
-  onlyIssue(seen).status = 'done'
-  await complete($, 't1', 'close')
+  await close($, task, 120)
   expect(pairs(seen)[0]).toMatchObject({ estimate_min: 30, extended_min: 0, extensions: 0 })
 })
 
@@ -364,8 +338,7 @@ test('a lower re-estimate keeps extended minutes without an immediate overrun nu
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 10)
-  const task = onlyIssue(seen).id
+  const task = unitId(await estimate($, 10))
   await call($, TOOL.extend, { minutes: 20, reason: 'Additional verification remains.' })
   await clock.advance(MIN)
   const lower = await estimate($, 5, undefined, task)
@@ -383,8 +356,7 @@ test('resuming a parked task can refine its budget and records the additional mi
   const { seen } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
-  const first = Object.keys(seen.clm)[0] ?? ''
+  const first = unitId(await estimate($, 30))
   await report($, 1, 0)
   await estimate($, 20)
   const result = await estimate($, 120, undefined, first)
@@ -398,16 +370,12 @@ test('resuming a parked task at a lower budget keeps its start and logs one pair
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
-  const first = Object.keys(seen.clm)[0] ?? ''
+  const first = unitId(await estimate($, 30))
   await clock.advance(5 * MIN)
   await estimate($, 20)
   await clock.advance(5 * MIN)
   expect((await estimate($, 25, undefined, first)).result).toContain('10 min elapsed')
-  const issue = seen.clm[first]
-  if (!issue) throw new Error(`expected clm issue ${first}`)
-  issue.status = 'done'
-  await complete($, 't1', 'close')
+  await close($, first, 25)
   expect(pairs(seen).map(p => p.estimate_min)).toEqual([30, 20])
 })
 
@@ -432,8 +400,7 @@ test('a report due before session end is still due when resumed', async ($, on) 
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
-  const first = Object.keys(seen.clm)[0] ?? ''
+  const first = unitId(await estimate($, 30))
   await clock.advance(11 * MIN)
   const firstCall = await run($, { tool: 'Bash', command: 'ls' })
   expect((firstCall.context ?? []).join('\n')).toContain('Checkpoint 1/3 is due')
@@ -449,8 +416,7 @@ test('extend adds minutes to the current budget and writes every extension recor
   const { seen, clock } = world(on, { TIME_BUDGET_DIR: '/custom/time-budget' })
   await start($)
   await prompt($, 'go')
-  await estimate($, 30)
-  const task = onlyIssue(seen).id
+  const task = unitId(await estimate($, 30))
   await clock.advance(5 * MIN)
   const file = '/custom/time-budget/extensions.jsonl'
   seen.files[file] = `${JSON.stringify({ at: 1, kind: 'sub', agent_type: 'worker', task: 'old-task', scope: 'old', estimate_min: 10, budget_before: 10, budget_after: 15, minutes: 5, elapsed_min: 2, reason: 'prior extension', source: 'extend' })}\n`
@@ -470,14 +436,13 @@ test('calibration pairs include the total extension and count', async ($, on) =>
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 10)
+  const task = unitId(await estimate($, 10))
   await clock.advance(15 * MIN + 1)
   await complete($, 't1', 'done')
   await call($, TOOL.extend, { minutes: 5, reason: 'The open item needs another check.' })
   await clock.advance(5 * MIN)
   await complete($, 't2', 'continued')
-  onlyIssue(seen).status = 'done'
-  await complete($, 't3', 'close')
+  await close($, task, 20)
   expect(pairs(seen)[0]).toMatchObject({ extended_min: 5, extensions: 1, actual_min: 20 })
 })
 
@@ -507,16 +472,13 @@ test('a grant adds time to the current subagent budget', async ($, on) => {
   expect((await report($, 1, 0, 'ag1')).result).toContain('against 40 min')
 })
 
-// Regression: closing a clm task appends its pair without trimming calibration history.
+// Regression: closing a unit appends its pair without trimming calibration history.
 test('calibration appends retain the full history beyond the factor window', async ($, on) => {
   const { seen } = world(on)
   seen.files[CAL] = `${Array.from({ length: 50 }, (_, i) => JSON.stringify({ kind: 'main', agent_type: null, estimate_min: 10, budget_min: 15, actual_min: 10, at: i })).join('\n')}\n`
   await start($)
   await prompt($, 'go')
-  await estimate($, 20)
-  await complete($, 't1', 'done')
-  onlyIssue(seen).status = 'done'
-  await complete($, 't2', 'close')
+  await close($, unitId(await estimate($, 20)), 20)
   const logged = pairs(seen)
   expect(logged).toHaveLength(51)
   expect(logged[0]?.at).toBe(0)
@@ -590,29 +552,28 @@ test('a main unit logs one pair at close, measured to its last turn end', async 
   const { seen, clock } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 20)
+  const task = unitId(await estimate($, 20))
   await clock.advance(5 * MIN)
   await complete($, 't1', 'a')
   await clock.advance(7 * MIN)
   await complete($, 't2', 'b')
   expect(pairs(seen)).toEqual([])
-  onlyIssue(seen).status = 'done'
-  await complete($, 't3', 'close')
+  await close($, task, 20)
   const logged = pairs(seen)
   expect(logged.length).toBe(1)
   expect(logged[0]).toEqual({ kind: 'main', agent_type: null, estimate_min: 20, budget_min: 20, actual_min: 12, at: Math.floor((T0 + 12 * MIN) / 1000), extended_min: 0, extensions: 0 })
 })
 
-// Regression: a clm issue reaching done closes its unit and appends exactly one calibration pair.
-test('a done clm issue closes the main unit once', async ($, on) => {
+// Regression: estimate with done closes its unit and appends exactly one calibration pair.
+test('estimate with done closes the main unit once', async ($, on) => {
   const { seen } = world(on)
   await start($)
   await prompt($, 'go')
-  await estimate($, 20)
-  onlyIssue(seen).status = 'done'
-  await complete($, 't1', 'done')
+  const task = unitId(await estimate($, 20))
+  await close($, task, 20)
   expect(pairs(seen)).toHaveLength(1)
   await complete($, 't2', 'done')
+  await close($, task, 20)
   expect(pairs(seen)).toHaveLength(1)
 })
 

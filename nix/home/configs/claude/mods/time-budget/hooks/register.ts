@@ -29,14 +29,15 @@ const minutes = { type: 'number', exclusiveMinimum: 0 }
 const TOOLS = [
   {
     name: 'estimate',
-    description: 'Open a clm tracker task and estimate its duration, or pass task with an existing issue id to resume or refine that estimate. The result shows the calibrated budget, checkpoint reminders, and recent extension history.',
+    description: 'Open a time-budget unit and estimate its duration, or pass task with an existing unit id to resume or refine that estimate; the result names the unit id. Pass done: true with task to close that unit and log its calibration pair. The result shows the calibrated budget, checkpoint reminders, and recent extension history.',
     inputSchema: {
       type: 'object',
       properties: {
         minutes: { ...minutes, description: 'Your estimate for the whole task, in minutes' },
         scope: { type: 'string', description: 'What the task covers, in one line' },
         steps: { type: 'array', items: { type: 'string' }, description: 'The planned steps, in order' },
-        task: { type: 'string', description: 'An existing clm issue id to resume' },
+        task: { type: 'string', description: 'An existing time-budget unit id to resume or refine' },
+        done: { type: 'boolean', description: 'With task: close that unit and log its calibration pair' },
       },
       required: ['minutes', 'scope', 'steps'],
     },
@@ -259,24 +260,16 @@ async function closeMain($: Ctx, s: S, now: number, key = mainEntry(s)?.[0]) {
   if (!u) return
   disarm(s, key)
   delete s.units[key]
-  // Its clm issue can be resumed by id, so the start and budget it ran under are kept for that.
+  // The unit can be resumed by id, so the start and budget it ran under are kept for that.
   if (u.kind === 'main') s.parked[key] = { ...u, calibrated: true }
   if (!u.calibrated) await logPair($, s, u, u.lastEnd ?? now)
 }
 
-async function syncMainTask($: Ctx, s: S, now: number) {
-  const entry = mainEntry(s)
-  if (!entry) return
-  const [key] = entry
-  try {
-    const issue = (await $.clm.issues({ issue: key }))[0]
-    if (issue?.status === 'done' || issue?.status === 'dropped') {
-      await closeMain($, s, now, key)
-      await save($, s)
-    }
-  } catch (err) {
-    log($, `clm task status failed for ${key}: ${errText(err)}`)
-  }
+function newUnitId(s: S, now: number): string {
+  const base = `tb-${now.toString(36)}`
+  let id = base
+  for (let n = 2; id in s.units || id in s.parked; n++) id = `${base}-${n}`
+  return id
 }
 
 function unreadReports(s: S, now: number): string[] {
@@ -449,7 +442,7 @@ export const register: Register = (on) => {
       log($, `state.get failed: ${errText(err)}`)
     }
     s.envUnlimited = /^(1|true|on|yes)$/i.test((await $.env.get('CLAUDE_TIME_BUDGET_UNLIMITED')) ?? '')
-    // The old prompt-scoped state used the literal key `main`; it cannot be tied to a clm issue.
+    // The old prompt-scoped state used the literal key `main`; it has no unit id to resume.
     if (s.units.main?.kind === 'main') {
       disarm(s, 'main')
       delete s.units.main
@@ -520,7 +513,6 @@ export const register: Register = (on) => {
       }
       return r
     }
-    await syncMainTask($, s, now)
     const u = mainEntry(s)?.[1]
     if (!u) return r
     u.lastEnd = now
@@ -553,7 +545,6 @@ export const register: Register = (on) => {
     const key = e.agentId
     const main = key === undefined
     const now = await $.clock.now()
-    if (main) await syncMainTask($, s, now)
     const unitKey = key ?? mainEntry(s)?.[0]
     const unit = unitKey ? s.units[unitKey] : undefined
     if (unit && unitKey) await advance($, s, unitKey, now)
@@ -581,7 +572,6 @@ export const register: Register = (on) => {
     const main = key === undefined
     const now = await $.clock.now()
     // An agent id no spawn of ours named (the engine's own forks) runs ungated.
-    if (main) await syncMainTask($, s, now)
     let unitKey = key ?? mainEntry(s)?.[0]
     let u = unitKey ? s.units[unitKey] : undefined
     if (u && unitKey) await advance($, s, unitKey, now)
@@ -593,19 +583,20 @@ export const register: Register = (on) => {
       const factor = calibrationFactor(await loadPairs($, s))
       const baseBudget = budgetFor(m, factor)
       const scope = typeof args.scope === 'string' ? args.scope : ''
+      let closing = false
       if (main) {
         const requested = args.task
         if (requested !== undefined && (typeof requested !== 'string' || !requested.trim()))
-          return toolError(`Call ${TOOL.estimate} with task as an existing clm issue id when resuming one.`)
+          return toolError(`Call ${TOOL.estimate} with task as an existing time-budget unit id when resuming one.`)
         const targetKey = typeof requested === 'string' ? requested : undefined
-        let issue
-        try {
-          issue = await $.clm.track({ title: scope, status: 'doing', ...(targetKey ? { issue: targetKey } : {}) })
-        } catch (err) {
-          return toolError(`${TOOL.estimate}: ${errText(err)}`)
-        }
-        if (unitKey && unitKey !== issue.id) await closeMain($, s, now, unitKey)
-        unitKey = issue.id
+        if (args.done !== undefined && typeof args.done !== 'boolean') return toolError(`Call ${TOOL.estimate} with done as true or false.`)
+        if (args.done === true && !targetKey) return toolError(`Call ${TOOL.estimate} with task as the unit id to close when done is true.`)
+        if (targetKey && s.units[targetKey]?.kind !== 'main' && !s.parked[targetKey])
+          return toolError(`${TOOL.estimate}: no time-budget unit ${targetKey}; omit task to open a new one.`)
+        const id = targetKey ?? newUnitId(s, now)
+        if (unitKey && unitKey !== id) await closeMain($, s, now, unitKey)
+        unitKey = id
+        closing = args.done === true
         u = s.units[unitKey]
         const parked = s.parked[unitKey]
         delete s.parked[unitKey]
@@ -641,11 +632,15 @@ export const register: Register = (on) => {
       }
       await save($, s)
       await arm($, s, unitKey)
+      if (closing) {
+        await closeMain($, s, now, unitKey)
+        await save($, s)
+      }
       if (main) await showStatus($, s)
       const at = CHECKPOINTS.slice(0, LAST - 1).map((c, i) => `${c.label} at ${mins(dueAt(i, unit.budgetMin!))}m`).join(', ')
       const history = extensionSummary(await loadPairs($, s), await loadExtensions($, s))
       const planFeedback = (unit.steps?.length ?? 0) <= 1 && m > 30 ? ' Plan feedback: split this estimate into smaller steps.' : ''
-      const result = { result: `Budget ${Math.round(unit.budgetMin)} min (estimate ${m} min × calibration ${factor.toFixed(2)}, floor 15); ${mins(now - unit.start)} min elapsed. Reports are due at ${at}; the budget ends at ${Math.round(unit.budgetMin)}m. ${history}${planFeedback} Use this budget and the planned steps to guide the work.` }
+      const result = { result: `Unit ${unitKey}: Budget ${Math.round(unit.budgetMin)} min (estimate ${m} min × calibration ${factor.toFixed(2)}, floor 15); ${mins(now - unit.start)} min elapsed. Reports are due at ${at}; the budget ends at ${Math.round(unit.budgetMin)}m. ${history}${planFeedback} Use this budget and the planned steps to guide the work.` }
       return withFeedback(result, await unitFeedback($, s, unit, now))
     }
 

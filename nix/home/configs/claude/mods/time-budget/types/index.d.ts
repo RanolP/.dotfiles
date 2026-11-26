@@ -4,7 +4,7 @@ export type Report = {
   more_min?: number
 }
 
-/** One timed unit: a main-thread clm task, or one subagent run. */
+/** One timed unit: a main-thread task, or one subagent run. */
 export type Unit = {
   kind: 'main' | 'sub'
   agentType?: string
@@ -37,7 +37,7 @@ export type Unit = {
 
 declare module 'claude-code' {
   interface PluginState {
-    /** `parked`: closed main units whose clm task can still be resumed, keyed by issue id. */
+    /** `parked`: closed main units that can still be resumed, keyed by unit id. */
     'time-budget': { units: Record<string, Unit>; parked: Record<string, Unit>; goal: string | null }
   }
 }

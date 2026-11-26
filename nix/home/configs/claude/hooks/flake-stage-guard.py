@@ -25,13 +25,12 @@ Self-check: `python3 flake-stage-guard.py --selftest`.
 """
 import json
 import os
-import re
 import shlex
 import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from command_cwd import fold_leading_cd
+from command_cwd import fold_leading_cd, split_command
 
 REBUILD_CMDS = {"darwin-rebuild", "nixos-rebuild", "home-manager"}
 UNTRACKED_CAP = 50
@@ -120,9 +119,7 @@ def main():
         sys.exit(0)
     cwd, command = fold_leading_cd(command, data.get("cwd") or os.getcwd())
     try:
-        # Without quotes or escapes, shlex only splits on these four characters.
-        toks = (shlex.split(command) if any(char in command for char in "\"'\\")
-                else re.findall(r"[^ \t\r\n]+", command))
+        toks = split_command(command)
     except ValueError:
         sys.exit(0)
 

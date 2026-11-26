@@ -17,12 +17,11 @@ Self-check: `python3 package-manager-guard.py --selftest`.
 """
 import json
 import os
-import re
 import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from command_cwd import fold_leading_cd
+from command_cwd import fold_leading_cd, split_command
 
 PMS = {"npm", "pnpm", "yarn", "bun"}
 OPS = {"&&", "||", ";", "&", "|", "|&", "(", ")", "{", "}"}
@@ -125,9 +124,7 @@ def main():
     cwd, cmd = fold_leading_cd(cmd, cwd)
 
     try:
-        # Without quotes or escapes, shlex only splits on these four characters.
-        toks = (shlex.split(cmd) if any(char in cmd for char in "\"'\\")
-                else re.findall(r"[^ \t\r\n]+", cmd))
+        toks = split_command(cmd)
     except ValueError:
         sys.exit(0)
 

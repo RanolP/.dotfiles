@@ -31,9 +31,10 @@ Self-check: `python3 agent-tooling-guard.py --selftest`.
 """
 import json
 import os
-import re
-import shlex
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from command_cwd import split_command
 
 STATE_DIR = os.path.expanduser("~/.claude-personal/state/agent-tooling-guard")
 SKILL_PATH = os.environ.get(
@@ -89,9 +90,7 @@ def is_env_assign(tok):
 def leading_tokens(cmd):
     """The command's leading tokens with env assignments stripped, or []."""
     try:
-        # Without quotes or escapes, shlex only splits on these four characters.
-        toks = (shlex.split(cmd) if any(char in cmd for char in "\"'\\")
-                else re.findall(r"[^ \t\r\n]+", cmd))
+        toks = split_command(cmd)
     except ValueError:
         return []
     while toks and is_env_assign(toks[0]):

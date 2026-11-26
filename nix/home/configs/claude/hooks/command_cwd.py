@@ -7,6 +7,37 @@ LEADING_CD = re.compile(
     r"^\s*cd[ \t]+(?P<target>'[^']*'|\"(?:\\.|[^\"\\])*\"|[^ \t\r\n;&|]+)"
     r"[ \t]*&&[ \t]*"
 )
+COMMAND_PART = re.compile(
+    r'''[ \t\r\n]+|'[^']*'|"[^"\\]*(?:\\.[^"\\]*)*"|\\.|[^ \t\r\n'"\\]+''',
+    re.DOTALL,
+)
+
+
+def split_command(command):
+    """Match shlex.split's default POSIX rules without per-character token copies."""
+    tokens, parts = [], []
+    position = 0
+    while position < len(command):
+        match = COMMAND_PART.match(command, position)
+        if match is None:
+            raise ValueError("Incomplete quote or escape")
+        part = match.group()
+        position = match.end()
+        if part[0] in " \t\r\n":
+            if parts:
+                tokens.append("".join(parts))
+                parts = []
+        elif part[0] == "'":
+            parts.append(part[1:-1])
+        elif part[0] == '"':
+            parts.append(re.sub(r'\\(["\\])', r'\1', part[1:-1]))
+        elif part[0] == "\\":
+            parts.append(part[1:])
+        else:
+            parts.append(part)
+    if parts:
+        tokens.append("".join(parts))
+    return tokens
 
 
 def fold_leading_cd(command, cwd):

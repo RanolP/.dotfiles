@@ -2,11 +2,14 @@
 """Catch lost denials/context and guard crashes when sharing a Python process."""
 import json
 import runpy
+import shlex
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+from command_cwd import split_command
 
 HOOKS = Path(__file__).resolve().parent
 DISPATCHER = HOOKS / "bash-guards.py"
@@ -97,13 +100,26 @@ def main():
             assert actual["hookSpecificOutput"]["permissionDecisionReason"].startswith(
                 integrity["hookSpecificOutput"]["permissionDecisionReason"])
 
-    # Regression: tokenizing a 1 MiB argument stalled every Bash call for ~38s.
-    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo " + "a" * (1024 * 1024)}})
-    start = time.perf_counter()
-    result = invoke(DISPATCHER, payload)
-    elapsed = time.perf_counter() - start
-    assert elapsed < 2, f"1 MiB command took {elapsed:.3f}s (limit: 2s)"
-    assert result == (0, "", ""), result
+    # Preserve shell quoting, escapes, empty tokens, and shlex's exact whitespace.
+    for command in ("", "echo '' \"\"", "a'b c'd", 'echo "a\\qb\\\"c\\\\d"',
+                    "echo a\\ b", "echo #comment", "echo a\vb\u00a0c", "echo \\\nnext"):
+        assert split_command(command) == shlex.split(command)
+    for command in ("echo 'unfinished", 'echo "unfinished', "echo trailing\\"):
+        try:
+            split_command(command)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Incomplete quote or escape accepted: {command}")
+
+    # Regression: 1 MiB plain/quoted tokens stalled every Bash call for ~38s/~34s.
+    for argument in ("a" * (1024 * 1024), '"' + "a" * (1024 * 1024) + '"'):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo " + argument}})
+        start = time.perf_counter()
+        result = invoke(DISPATCHER, payload)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 2, f"1 MiB command took {elapsed:.3f}s (limit: 2s)"
+        assert result == (0, "", ""), result
 
     combine = MODULE["combine"]
     cases = [

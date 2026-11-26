@@ -4,7 +4,9 @@ import { extractTurn } from './extract'
 import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, readWayseekerTurns, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { promptFingerprint, promptsKey, readPromptRows, reconcilePrompts } from './rewind'
 import { isHumanRow, needsSayNudge, openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_NUDGE, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
-import { deliveredSectionKey, nextId, readDeliveredSection } from './store'
+import { renderRange } from './evidence'
+import { debateRubric, judgeRubric, readSteps, rubricText, STEP_ATOM, writeStepRule, writeVerdicts, type ModelIo } from './stepped'
+import { deliveredSectionKey, nextId, readDeliveredSection, type Ledger } from './store'
 import { isHarnessText, isRecord, stripReminders } from './text'
 import type { WayseekerInstructionsInput } from '../types'
 
@@ -192,6 +194,108 @@ async function say($: EngineInterface, lines: readonly unknown[], agentId: strin
   })
 }
 
+const STEP_TOOL = 'step'
+const CHECK_TOOL = 'check'
+const STEP_TOOL_ID = `mcp__wayseeker__${STEP_TOOL}`
+const CHECK_TOOL_ID = `mcp__wayseeker__${CHECK_TOOL}`
+const stepsKey = (key: string) => `steps:${key}`
+
+const STEP_DESCRIPTION = [
+  'Record one planned step of a goal with a rubric: a drafter and an adversarial reviewer settle the checks that prove the step done (commands that must exit 0, and evidence criteria a quoted tool result or user message must show).',
+  'The step lands in the wayseeker ledger as a check rule pass(step, item1), pass(step, item2), ... -> done(step). Group steps under a goal with say: done(s1), done(s2) -> ready(goal) and ready(goal) -> done(goal).',
+  'step is a lowercase snake_case atom; cwd is the absolute repository path commands run in. Calling it again for the same step replaces its rubric. When the work is finished, call ' + CHECK_TOOL_ID + ' for the step.',
+].join('\n')
+const STEP_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    goal: { type: 'string', description: 'the goal this step belongs to, in a sentence' },
+    step: { type: 'string', description: 'the step as a lowercase snake_case atom, e.g. parser_handles_unicode' },
+    cwd: { type: 'string', description: 'absolute path of the repository the step works in' },
+    notes: { type: 'array', items: { type: 'string' }, description: 'what the step must achieve, one point per item' },
+  },
+  required: ['goal', 'step', 'cwd'],
+  additionalProperties: false,
+}
+const CHECK_DESCRIPTION = [
+  'Judge a step recorded with ' + STEP_TOOL_ID + ' against its rubric now: each command item runs, and each evidence item is judged on the quote you cite for it.',
+  'For every evidence item, cite {item, ref, quote}: ref is a tool_use_id of a tool result or m<n> of a user message, and quote is copied verbatim from that row.',
+  'A passing item lands as check: say(pass(step, item)); a pass whose item now fails is withdrawn. The result lists each item\'s verdict and reason and whether done(step) holds.',
+].join('\n')
+const CHECK_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    step: { type: 'string', description: 'the step atom given to ' + STEP_TOOL_ID },
+    evidence: {
+      type: 'array', description: 'one citation per evidence item',
+      items: { type: 'object', properties: { item: { type: 'string' }, ref: { type: 'string' }, quote: { type: 'string' } }, required: ['item', 'ref', 'quote'], additionalProperties: false },
+    },
+  },
+  required: ['step'],
+  additionalProperties: false,
+}
+
+/** Lands lines check writes onto the main ledger, joining the latest prompt's turn so rewinding that prompt cuts them. */
+async function landAsCheck($: EngineInterface, session: string, write: (ledger: Ledger) => { ledger: Ledger; landed: string[]; errors: string[] }): Promise<{ ledger: Ledger; landed: string[]; errors: string[] }> {
+  await chains.get(session)
+  const key = transcriptKey(session)
+  const store = sessionStore($, session)
+  return serialized(session, async () => {
+    const stored = await store.get(wayseekerKey(key))
+    const ledger = readWayseekerLedger(stored)
+    const firstId = nextId(ledger)
+    const written = write(ledger)
+    if (written.landed.length) {
+      const address = readPromptRows(await store.get(promptsKey(key))).findLast(row => row.address !== undefined)?.address
+      const turns = readWayseekerTurns(stored)
+      const added = written.ledger.utterances.some(u => u.id >= firstId)
+      await store.set(wayseekerKey(key), { ...written.ledger, turns: added && address ? [...turns, { address, firstId }] : turns })
+    }
+    return written
+  })
+}
+
+const modelIo = ($: EngineInterface): ModelIo => ({
+  complete: async request => {
+    const response = await $.model.complete(request)
+    return response.isAnswered ? { isAnswered: true, text: response.text, reason: '' } : { isAnswered: false, text: '', reason: response.reason }
+  },
+})
+
+async function recordStep($: EngineInterface, input: { goal: string; step: string; cwd: string; notes: string[] }): Promise<{ result: string; isError?: boolean }> {
+  const session = await $.session.id()
+  const key = transcriptKey(session)
+  const store = sessionStore($, session)
+  const steps = readSteps(await store.get(stepsKey(key)))
+  const siblings = Object.entries(steps).filter(([name, s]) => name !== input.step && s.goal === input.goal).map(([name]) => name)
+  const rubric = await debateRubric(modelIo($), { ...input, siblings })
+  if (typeof rubric === 'string') return { result: 'No rubric settled for ' + input.step + ': ' + rubric + '. Call ' + STEP_TOOL_ID + ' again.', isError: true }
+  await serialized(session, async () => {
+    const fresh = readSteps(await store.get(stepsKey(key)))
+    await store.set(stepsKey(key), { ...fresh, [input.step]: { goal: input.goal, cwd: input.cwd, notes: input.notes, items: rubric } })
+  })
+  const written = await landAsCheck($, session, ledger => writeStepRule(ledger, input.step, rubric))
+  if (written.errors.length) $.ui.log('wayseeker: step rule rejected (' + written.errors.join('; ').slice(0, 160) + ')', { to: 'debug' })
+  return { result: JSON.stringify({ step: input.step, rubric: rubricText(rubric), landed: written.landed, rejected: written.errors }), ...(written.errors.length ? { isError: true } : {}) }
+}
+
+async function checkStep($: EngineInterface, step: string, evidence: readonly unknown[]): Promise<{ result: string; isError?: boolean }> {
+  const session = await $.session.id()
+  const key = transcriptKey(session)
+  const stored = readSteps(await serialized(session, () => sessionStore($, session).get(stepsKey(key))))[step]
+  if (!stored) return { result: 'Step ' + step + ' has no rubric; record it with ' + STEP_TOOL_ID + ' first.', isError: true }
+  const cited: Record<string, { ref: string; quote: string }> = {}
+  for (const e of evidence) if (isRecord(e) && typeof e.item === 'string' && typeof e.ref === 'string' && typeof e.quote === 'string') cited[e.item] = { ref: e.ref, quote: e.quote }
+  const verdicts = await judgeRubric(stored.items, {
+    ...modelIo($),
+    run: (argv, options) => $.process.run(argv, options),
+    sources: async () => renderRange(await $.session.messages()).sources,
+  }, cited, stored.cwd)
+  for (const v of verdicts) if (v.internal) $.ui.log('wayseeker: check internal error step=' + step + ' item=' + v.id + ' ' + v.reason.slice(0, 300), { to: 'debug' })
+  const written = await landAsCheck($, session, ledger => writeVerdicts(ledger, step, verdicts))
+  const done = evaluate(written.ledger).facts.get('done(' + step + ')')?.value === 'true'
+  return { result: JSON.stringify({ step, done, verdicts: verdicts.map(v => ({ item: v.id, pass: v.pass, reason: v.reason })), landed: written.landed, rejected: written.errors }) }
+}
+
 const EMPTY_LEDGER = readWayseekerLedger(undefined)
 // What the section reads with no instruction and no raise; the per-turn attachment skips it.
 const EMPTY_SECTION = renderInstructions(EMPTY_LEDGER, evaluate(EMPTY_LEDGER))
@@ -257,8 +361,10 @@ export const register: Register = on => {
     const started = await next(e)
     try {
       await $.tool.register({ name: SAY_TOOL, description: SAY_DESCRIPTION, inputSchema: SAY_INPUT_SCHEMA, isDeferred: false })
+      await $.tool.register({ name: STEP_TOOL, description: STEP_DESCRIPTION, inputSchema: STEP_INPUT_SCHEMA, isDeferred: false })
+      await $.tool.register({ name: CHECK_TOOL, description: CHECK_DESCRIPTION, inputSchema: CHECK_INPUT_SCHEMA, isDeferred: false })
     } catch (err) {
-      $.ui.log(`wayseeker: say registration failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      $.ui.log(`wayseeker: tool registration failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }
     return started
   })
@@ -270,6 +376,20 @@ export const register: Register = on => {
     for (const line of landedActs(result.landed)) $.ui.log(line)
     for (const { line, error } of result.rejected) $.ui.log(`wayseeker: say rejected ${JSON.stringify(line)} (${error.slice(0, 160)})`, { to: 'debug' })
     return { result: JSON.stringify(result) }
+  })
+
+  on('tool.call', { tool: STEP_TOOL_ID }, async ($, e) => {
+    const input = e as unknown as { goal?: unknown; step?: unknown; cwd?: unknown; notes?: unknown }
+    if (typeof input.goal !== 'string' || !input.goal.trim() || typeof input.step !== 'string' || !STEP_ATOM.test(input.step) || typeof input.cwd !== 'string' || !input.cwd.startsWith('/'))
+      return { result: `Call ${STEP_TOOL_ID} with goal (a sentence), step (a lowercase snake_case atom) and cwd (an absolute path).`, isError: true }
+    const notes = Array.isArray(input.notes) ? input.notes.filter((n): n is string => typeof n === 'string') : []
+    return recordStep($, { goal: input.goal, step: input.step, cwd: input.cwd, notes })
+  })
+
+  on('tool.call', { tool: CHECK_TOOL_ID }, async ($, e) => {
+    const input = e as unknown as { step?: unknown; evidence?: unknown }
+    if (typeof input.step !== 'string' || !STEP_ATOM.test(input.step)) return { result: `Call ${CHECK_TOOL_ID} with step: the atom given to ${STEP_TOOL_ID}.`, isError: true }
+    return checkStep($, input.step, Array.isArray(input.evidence) ? input.evidence : [])
   })
 
   on('prompt.submit', async ($, e, next) => {

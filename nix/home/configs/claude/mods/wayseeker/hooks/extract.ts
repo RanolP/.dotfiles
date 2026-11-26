@@ -1,5 +1,5 @@
 import { append, type Ledger } from './store'
-import { printLine } from './syntax'
+import { parseLine, printLine } from './syntax'
 
 /**
  * Per-user-message extraction: Sonnet turns one user message (with the
@@ -237,6 +237,9 @@ export async function extractTurn(io: ExtractIo, ledger: Ledger, userMessage: st
   const appended: string[] = []
   const rejected: { line: string; errors: string[] }[] = []
   for (const line of parseExtraction(response.text)) {
+    // check speaks only through the step and check tools, never through a model's lines.
+    const parsed = parseLine(line)
+    if (parsed.ok && parsed.entry.kind !== 'declaration' && parsed.entry.kind !== 'gloss' && parsed.entry.speaker === 'check') { rejected.push({ line, errors: ['check speaks only through the step and check tools'] }); continue }
     const result = append(current, line)
     if (result.ok) {
       current = result.ledger

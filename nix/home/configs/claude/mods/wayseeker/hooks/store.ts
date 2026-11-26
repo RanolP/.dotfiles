@@ -10,7 +10,8 @@ export const readDeliveredSection = (value: unknown): { fingerprint: string; sec
   isRecord(value) && typeof value.fingerprint === 'string' && typeof value.section === 'string'
     ? { fingerprint: value.fingerprint, section: value.section, atSubmit: value.atSubmit === true } : undefined
 
-export const BASE_SPEAKERS = ['user', 'agent', 'worker'] as const
+// check is the mod's own rubric verdict, written only by the step and check tools (stepped.ts).
+export const BASE_SPEAKERS = ['user', 'check', 'agent', 'worker'] as const
 
 // raise_on(K) routes conflicts (design page U2); usable without a decl line.
 export const BUILTIN_DECLS: Decl[] = [{ kind: 'declaration', name: 'raise_on', columns: ['key'], key: ['key'], gloss: 'conflicts on this key are raised to the user' }]
@@ -49,7 +50,7 @@ const validateUtterance = (ledger: Ledger, u: Utterance): string[] => {
   if (u.id < latest) errors.push('@' + u.id + ' is earlier than the latest @' + latest)
   if (u.id < 1) errors.push('utterance ids start at @1')
   const pasted = new Set(ledger.glosses.map(g => g.atom))
-  if (!(BASE_SPEAKERS as readonly string[]).includes(u.speaker) && !pasted.has(u.speaker)) errors.push('speaker ' + u.speaker + ' is neither user, agent, worker nor a glossed pasted-material atom')
+  if (!(BASE_SPEAKERS as readonly string[]).includes(u.speaker) && !pasted.has(u.speaker)) errors.push('speaker ' + u.speaker + ' is neither user, check, agent, worker nor a glossed pasted-material atom')
 
   const decls = declarations(ledger)
   for (const fact of factsOf(u)) {

@@ -24,7 +24,7 @@ type World = { best: Store; all: Cand[] }
 
 class FuelExhausted extends Error {}
 
-const SPEAKER_RANK: Record<string, number> = { user: 3, agent: 2, worker: 1 }
+const SPEAKER_RANK: Record<string, number> = { user: 4, check: 3, agent: 2, worker: 1 }
 const rankOf = (speaker: string): number => SPEAKER_RANK[speaker] ?? 0 // pasted-material speakers rank last
 
 const complementKey = (literal: Literal): string => printLiteral({ ...literal, negated: !literal.negated })
@@ -67,7 +67,7 @@ export function evaluate(ledger: Ledger, opts: { atTime?: number; fuel?: number 
   const live = liveIds(utterances)
   const decls = declarations(ledger)
   const ranks = new Map<number, number>()
-  for (const u of utterances) ranks.set(u.id, Math.min(ranks.get(u.id) ?? 3, rankOf(u.speaker)))
+  for (const u of utterances) ranks.set(u.id, Math.min(ranks.get(u.id) ?? Number.POSITIVE_INFINITY, rankOf(u.speaker)))
   const linesOf = (id: number) => utterances.filter(u => u.id === id)
   const liveLines = utterances.filter(u => live.has(u.id))
 

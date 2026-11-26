@@ -1,6 +1,6 @@
 ---
 name: planner
-description: Reads the repository and returns an ordered step plan for one big request, each step with a verifiable done state. Use when clm marks the focused task as a stepped goal, before the first edit. Read-only; returns the plan, the caller records the steps as clm tasks.
+description: Reads the repository and returns an ordered step plan for one big request, each step with a verifiable done state. Use before the first edit of a big request that needs several checked steps. Read-only; returns the plan, and the caller records each step with the wayseeker step tool.
 model: opus
 tools: Read, Grep, Glob, Bash
 ---
@@ -39,6 +39,7 @@ Reply with only this JSON object, steps in execution order:
   "steps": [
     {
       "title": "<short imperative, at most 60 characters>",
+      "step": "<lowercase snake_case atom naming the step, the id the caller records it under>",
       "why": "<what this step makes possible for the next ones>",
       "files": ["<path relative to repo>"],
       "done": ["<one verifiable done condition, naming its command or the output to observe>"]

@@ -2,6 +2,7 @@
 // plus the mid-turn nudge for a turn that changed files without one.
 import { evaluate } from './eval'
 import { L1_KINDS, L1_RULES, l1Forms, WITHDRAWAL_RULE } from './extract'
+import { rubricClaimError } from './stepped'
 import { append, liveIds, nextId, type Ledger } from './store'
 import { parseLine, printLine, printLiteral, type Literal, type Utterance } from './syntax'
 import { isHarnessText, stripReminders } from './text'
@@ -13,7 +14,7 @@ export type SaySpeaker = 'agent' | 'worker'
 /** The call site fixes the speaker: a subagent's call carries its agentId, the main thread's none. */
 export const speakerOf = (agentId: string | undefined): SaySpeaker => agentId === undefined ? 'agent' : 'worker'
 
-const RANK: Record<string, number> = { user: 3, agent: 2, worker: 1 }
+const RANK: Record<string, number> = { user: 4, check: 3, agent: 2, worker: 1 }
 const rankOf = (speaker: string) => RANK[speaker] ?? 0
 
 export const SAY_DESCRIPTION = [
@@ -26,7 +27,8 @@ export const SAY_DESCRIPTION = [
   'Rules:',
   ...L1_RULES,
   '- The tool assigns ids and the speaker: write each line bare, as kind(content) or a condition, with no "@n speaker:" prefix; every line of one call shares the call\'s id (the next field of the latest say result). A prefixed line whose @n is at or below an existing utterance is renumbered to the call\'s id, and the renumbering is reported in landed. Call with lines: [] to read next and the open list without writing anything.',
-  '- Offer a choice as try(p) and let the user accept it: accept(@n) of a proposal your own speaker made is rejected, and so is reject(@n) of a line from a higher-ranked speaker (user > agent > worker).',
+  '- Offer a choice as try(p) and let the user accept it: accept(@n) of a proposal your own speaker made is rejected, and so is reject(@n) of a line from a higher-ranked speaker (user > check > agent > worker; check is the rubric verdict the step and check tools write).',
+  '- A step recorded with the step tool is done when check says so: call the check tool for it, and write done(goal) rules over its done(step) as usual.',
   WITHDRAWAL_RULE,
   '- Report finished work as say(done(x)), not want.',
   '',
@@ -45,11 +47,14 @@ export type SayResult = { landed: string[]; rejected: { line: string; error: str
 /**
  * What the say tool enforces beyond store.append: the speaker is the caller's; ids never fall to or below an utterance
  * that existed before the call (a shared @n would pull the user's line down to the caller's rank, since eval ranks an id
- * by its lowest speaker); no self-accept; no withdrawal of a higher-ranked line (liveIds kills any reject target).
+ * by its lowest speaker); no self-accept; no withdrawal of a higher-ranked line (liveIds kills any reject target); no
+ * done or pass of a step that has a rubric, which only check asserts.
  */
 export function sayCheck(ledger: Ledger, u: Utterance, speaker: SaySpeaker, firstId: number): string[] {
   if (u.speaker !== speaker) return ['speaker ' + u.speaker + ' is not yours; this call speaks as ' + speaker]
   if (u.id < firstId) return ['@' + u.id + ' is taken; number this call\'s lines @' + firstId]
+  const claim = rubricClaimError(ledger, u)
+  if (claim) return [claim]
   const act = u.act
   if (act.kind !== 'accept' && act.kind !== 'reject') return []
   const targets = ledger.utterances.filter(x => x.id === act.target)

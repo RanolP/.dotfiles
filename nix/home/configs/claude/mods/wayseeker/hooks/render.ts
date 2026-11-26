@@ -1,6 +1,6 @@
 import { isRecord, stripReminders } from './text'
 import { parseLiteral, printArgument, printFact, printLiteral, type Fact, type Literal } from './syntax'
-import { append, emptyLedger, liveIds, nextId, type Ledger } from './store'
+import { append, declarations, emptyLedger, liveIds, nextId, type Ledger } from './store'
 import type { EvalResult } from './eval'
 import { liveRubricItems, rubricSteps } from './stepped'
 
@@ -110,10 +110,10 @@ function sentence(ledger: Ledger, fact: Fact, negated: boolean): string {
 
 /** The filled gloss of one fact without closing punctuation; a nested fact argument fills its column with its own clause. */
 function clause(ledger: Ledger, fact: Fact): string {
-  const decl = ledger.decls.findLast(item => item.name === fact.name)
+  const decl = declarations(ledger).get(fact.name)
   const glossOf = (atom: string) => ledger.glosses.findLast(item => item.atom === atom)?.gloss ?? atom
   const values = fact.args.map(arg => arg.kind === 'atom' ? glossOf(arg.name)
-    : arg.kind === 'fact' ? (ledger.decls.some(item => item.name === arg.name) ? clause(ledger, arg) : printFact(arg))
+    : arg.kind === 'fact' ? (declarations(ledger).has(arg.name) ? clause(ledger, arg) : printFact(arg))
     : printArgument(arg))
   let text: string
   if (decl?.gloss) {
@@ -200,7 +200,7 @@ export function renderInstructions(ledger: Ledger, result: EvalResult): string {
   ].join('\n\n')
   const collapsed = (count: number) => count ? [`- 마친 step ${count}개`] : []
   const full = section([...steps.open, ...(steps.done.length > 3 ? collapsed(steps.done.length) : steps.done)])
-  if (full.length <= SECTION_CAP) return full
+  if (full.length <= SECTION_CAP || !steps.open.length && !steps.done.length) return full
   // Over the cap, done steps go first, then unfinished ones from the end; instructions and raises always stay.
   const shortened = section([...steps.open, ...collapsed(steps.done.length)])
   if (shortened.length <= SECTION_CAP) return shortened

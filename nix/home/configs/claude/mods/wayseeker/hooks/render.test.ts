@@ -111,6 +111,19 @@ test('a ledger whose steps exceed the cap renders within 3000 chars and keeps ev
   expect(cut).toMatch(/- …외 \d+개$/)
 })
 
+// Regression caught: instructions alone past the cap growing an empty "## steps\n\n- …외 0개" block in a session with no step.
+test('instructions over the cap with no step render no steps block', () => {
+  const out = render(Array.from({ length: 90 }, (_, i) => '@' + (i + 1) + ' user: want(use(serving, tool_with_a_long_name_' + i + '))'))
+  expect(out.length).toBeGreaterThan(3000)
+  expect(out).not.toContain('## steps')
+  expect(out).toContain('(@90)')
+})
+
+// Regression caught: the builtin done decl never rendering its gloss, so want(done(release)) read "done: 릴리스".
+test('a want over the builtin done renders through its gloss', () => {
+  expect(render(['release := "릴리스"', '@1 user: want(done(release))'])).toContain('- 릴리스를 마쳤다. (@1)')
+})
+
 // Regression caught: a rewound turn's extracted lines staying in the wayseeker ledger.
 test('rewinding a prompt cuts the utterances it appended from the wayseeker ledger', () => {
   const ledger = appendAll([...DECLS, '@1 user: say(use(serving, sglang))', '@2 user: say(use(serving, vllm))'])

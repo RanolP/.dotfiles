@@ -32,6 +32,35 @@ test('an agent or worker line asserting done or pass of a rubric step is rejecte
   // A check line may not be smuggled in through extraction either.
   const extracted = await extractTurn({ complete: async () => answer('\x60\x60\x60\n@9 check: say(pass(parser, tests))\n\x60\x60\x60') }, ledger, 'x', '')
   expect(extracted.appended).toEqual([])
+  // Nor an agent's done claim, which extraction lands without the say tool's checks.
+  const claimed = await extractTurn({ complete: async () => answer('\x60\x60\x60\n@9 agent: say(done(parser))\n\x60\x60\x60') }, ledger, 'x', '')
+  expect(claimed.appended).toEqual([])
+})
+
+// Regression caught: re-recording a step whose new rubric reuses an item id keeps done(step) on the old run's pass.
+test('re-recording a step withdraws its old passes, so done(step) waits for a new check', async () => {
+  let ledger = writeStepRule(appendAll([]), 'parser', ITEMS).ledger
+  ledger = writeVerdicts(ledger, 'parser', [pass('tests'), pass('types')]).ledger
+  expect(holds(ledger, 'done(parser)')).toBe(true)
+  ledger = writeStepRule(ledger, 'parser', [{ id: 'tests', kind: 'command', argv: ['bun', 'test', 'new'] }]).ledger
+  expect(holds(ledger, 'done(parser)')).toBe(false)
+  ledger = writeVerdicts(ledger, 'parser', [pass('tests')]).ledger
+  expect(holds(ledger, 'done(parser)')).toBe(true)
+})
+
+// Regression caught: a done claim or a done rule the agent wrote before the step had a rubric still closes it.
+test('recording a step withdraws earlier agent done claims and done rules for it', async () => {
+  let ledger = appendAll(['decl done(task) key(task) "{task}을 마쳤다"', 'decl ok(x) key(x) "{x} ok"'])
+  // One say call per line: lines of one call share an @n, and reject withdraws the whole id.
+  for (const line of ['say(done(parser))', 'ok(parser) -> done(parser)', 'ok(?x) -> done(?x)', 'say(done(other))']) ledger = sayLines(ledger, [line], 'agent').ledger
+  expect(holds(ledger, 'done(parser)')).toBe(true)
+  ledger = writeStepRule(ledger, 'parser', ITEMS).ledger
+  expect(holds(ledger, 'done(parser)')).toBe(false)
+  const said = sayLines(ledger, ['say(ok(parser))'], 'agent')
+  expect(said.rejected).toEqual([])
+  expect(holds(said.ledger, 'done(parser)')).toBe(false)
+  // A step without a rubric keeps the agent's own claim.
+  expect(holds(said.ledger, 'done(other)')).toBe(true)
 })
 
 // Regression caught: the rubric rule or the goal rules fail the term-cycle guard or never derive done of the goal.

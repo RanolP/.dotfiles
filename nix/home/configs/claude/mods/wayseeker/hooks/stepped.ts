@@ -217,6 +217,9 @@ export const rubricSteps = (ledger: Ledger): Set<string> => new Set(ledger.utter
   && u.act.kind === 'condition' && u.act.conclusion.kind === 'literal' && u.act.conclusion.fact.name === 'done'
   && u.act.conclusion.fact.args[0]?.kind === 'atom' ? [u.act.conclusion.fact.args[0].name] : []))
 
+/** A fact's first argument names this step, or is a variable that can bind to it (ok(X) -> done(X) claims every step). */
+const namesStep = (fact: Fact, step: string) => fact.args[0]?.kind === 'variable' || (fact.args[0]?.kind === 'atom' && fact.args[0].name === step)
+
 /** Why an agent or worker line may not stand: it asserts done(s) or pass(s, ...) for a step with a rubric. */
 export function rubricClaimError(ledger: Ledger, u: Utterance): string | undefined {
   const steps = rubricSteps(ledger)
@@ -227,7 +230,7 @@ export function rubricClaimError(ledger: Ledger, u: Utterance): string | undefin
   if (act.kind === 'accept') facts = ledger.utterances.filter(x => x.id === act.target).flatMap(x =>
     (x.act.kind === 'try' || x.act.kind === 'want') && x.act.content.kind === 'literal' && !x.act.content.negated ? [x.act.content.fact] : [])
   for (const fact of facts) for (const step of steps) {
-    if (isFact(fact, 'done', step, 1) || (fact.name === 'pass' && fact.args[0]?.kind === 'atom' && fact.args[0].name === step))
+    if ((fact.name === 'done' && fact.args.length === 1 && namesStep(fact, step)) || (fact.name === 'pass' && namesStep(fact, step)))
       return 'step ' + step + ' has a rubric, so only check marks it passed or done; call the check tool with step: ' + step
   }
   return undefined
@@ -248,18 +251,6 @@ function appendAsCheck(ledger: Ledger, bodies: readonly string[]): { ledger: Led
 
 const declared = (ledger: Ledger, name: string) => ledger.decls.some(d => d.name === name)
 
-/** Writes the step's rule pass(s, i1), ... -> done(s) as check, withdrawing an earlier live rule of the same step. */
-export function writeStepRule(ledger: Ledger, step: string, items: readonly RubricItem[]): { ledger: Ledger; landed: string[]; errors: string[] } {
-  const live = liveIds(ledger.utterances)
-  const bodies = [
-    ...(declared(ledger, 'pass') ? [] : [PASS_DECL]),
-    ...(declared(ledger, 'done') ? [] : [DONE_DECL]),
-    ...stepRules(ledger, step).filter(u => live.has(u.id)).map(u => 'reject(@' + u.id + ')'),
-    items.map(item => 'pass(' + step + ', ' + item.id + ')').join(', ') + ' -> done(' + step + ')',
-  ]
-  return appendAsCheck(ledger, bodies)
-}
-
 /** The live say(pass(step, item)) lines check wrote, by item. */
 const livePasses = (ledger: Ledger, step: string): Map<string, number[]> => {
   const live = liveIds(ledger.utterances)
@@ -271,6 +262,29 @@ const livePasses = (ledger: Ledger, step: string): Map<string, number[]> => {
     if (isFact(fact, 'pass', step, 2) && item?.kind === 'atom') out.set(item.name, [...(out.get(item.name) ?? []), u.id])
   }
   return out
+}
+
+/**
+ * Writes the step's rule pass(s, i1), ... -> done(s) as check, so only a fresh check run makes done(s) true. It withdraws
+ * the step's earlier live rule and check's live pass(s, *) lines (a re-recorded rubric that reuses an item id must not
+ * inherit the old pass), then every live line below user rank that rubricClaimError now refuses: a say(done(s)) or a
+ * rule concluding done(s) or pass(s, ...) written before the step had a rubric.
+ */
+export function writeStepRule(ledger: Ledger, step: string, items: readonly RubricItem[]): { ledger: Ledger; landed: string[]; errors: string[] } {
+  const live = liveIds(ledger.utterances)
+  const first = appendAsCheck(ledger, [
+    ...(declared(ledger, 'pass') ? [] : [PASS_DECL]),
+    ...(declared(ledger, 'done') ? [] : [DONE_DECL]),
+    ...stepRules(ledger, step).filter(u => live.has(u.id)).map(u => 'reject(@' + u.id + ')'),
+    ...[...livePasses(ledger, step).values()].flat().map(id => 'reject(@' + id + ')'),
+    items.map(item => 'pass(' + step + ', ' + item.id + ')').join(', ') + ' -> done(' + step + ')',
+  ])
+  const withRule = liveIds(first.ledger.utterances)
+  // The user outranks check, so a user line stands; extraction and the say tool refuse new lower-ranked claims.
+  const stale = first.ledger.utterances.filter(u => u.speaker !== CHECK_SPEAKER && u.speaker !== 'user' && withRule.has(u.id)
+    && rubricClaimError(first.ledger, u))
+  const swept = appendAsCheck(first.ledger, [...new Set(stale.map(u => u.id))].map(id => 'reject(@' + id + ')'))
+  return { ledger: swept.ledger, landed: [...first.landed, ...swept.landed], errors: [...first.errors, ...swept.errors] }
 }
 
 /** Lands a check run: say(pass(step, item)) for a newly passing item, reject(@n) of the live pass of a now failing one. */

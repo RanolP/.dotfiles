@@ -1,4 +1,5 @@
 import { append, type Ledger } from './store'
+import { rubricClaimError } from './stepped'
 import { parseLine, printLine } from './syntax'
 
 /**
@@ -239,7 +240,12 @@ export async function extractTurn(io: ExtractIo, ledger: Ledger, userMessage: st
   for (const line of parseExtraction(response.text)) {
     // check speaks only through the step and check tools, never through a model's lines.
     const parsed = parseLine(line)
-    if (parsed.ok && parsed.entry.kind !== 'declaration' && parsed.entry.kind !== 'gloss' && parsed.entry.speaker === 'check') { rejected.push({ line, errors: ['check speaks only through the step and check tools'] }); continue }
+    if (parsed.ok && parsed.entry.kind !== 'declaration' && parsed.entry.kind !== 'gloss') {
+      if (parsed.entry.speaker === 'check') { rejected.push({ line, errors: ['check speaks only through the step and check tools'] }); continue }
+      // done and pass of a rubric step are check's alone; a user line outranks check and stands.
+      const claim = parsed.entry.speaker === 'user' ? undefined : rubricClaimError(current, parsed.entry)
+      if (claim) { rejected.push({ line, errors: [claim] }); continue }
+    }
     const result = append(current, line)
     if (result.ok) {
       current = result.ledger

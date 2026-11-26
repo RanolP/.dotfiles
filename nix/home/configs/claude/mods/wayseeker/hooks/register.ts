@@ -14,7 +14,7 @@ const isHumanOrigin = (origin: PromptOrigin) => origin.kind === 'composer' || or
 const transcriptKey = (session: string, agentId?: string) => `${session}:${agentId ?? 'main'}`
 const nextAddressKey = (key: string) => `next-address:${key}`
 
-// One JSON file per session, beside clm's own per-session state, so the ledger never grows the plugin-wide 4 MiB store.
+// One JSON file per session under ~/.claude-work/plans, so the ledger never grows the plugin-wide 4 MiB store.
 async function statePath($: EngineInterface, session: string): Promise<string> {
   return `${(await $.env.get('HOME')) ?? '.'}/.claude-work/plans/wayseeker-${session}.json`
 }

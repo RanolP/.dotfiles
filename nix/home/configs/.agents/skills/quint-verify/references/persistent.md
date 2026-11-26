@@ -1,6 +1,6 @@
 # Promote a spec to a persistent repo check
 
-The loop in `SKILL.md` writes a spec to the scratchpad and ends in a report. When the modelled code keeps changing and its property is worth rechecking on every change, move the spec into the repo beside the code and tie it to the code with a replay test. clm's fold job is the worked instance, under `nix/home/configs/claude/mods/clm/`:
+The loop in `SKILL.md` writes a spec to the scratchpad and ends in a report. When the modelled code keeps changing and its property is worth rechecking on every change, move the spec into the repo beside the code and tie it to the code with a replay test. clm's fold job is the worked instance; the clm mod was removed in 89affcc, so read its files from the parent commit (`git show 89affcc^:nix/home/configs/claude/mods/clm/spec/fold-job.qnt`):
 
 - `spec/fold-job.qnt` -- the model, its run commands in the header, and instances bound to current and past code;
 - `spec/fold-job-traces.sh` -- samples the `current` instance and writes `spec/fold-job-traces.ts`;

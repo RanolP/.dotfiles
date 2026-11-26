@@ -48,7 +48,7 @@ export function findBoundary(rows: readonly SessionMessage[], boundary: readonly
   return -1
 }
 
-export const SUMMARY_HEAD = 'This session continues from an earlier part of the conversation, summarized below; every message after this one is the conversation since, unchanged.'
+export const SUMMARY_HEAD = 'This session continues from an earlier part of the conversation, summarized below; every message after this one is the conversation since, unchanged. The wayseeker section and every message after this summary are newer than it, and win where they disagree with it.'
 
 export const summaryMessage = (summary: string): SessionMessage => ({ role: 'user', text: `${SUMMARY_HEAD}\n\n<summary>\n${summary.trim()}\n</summary>`, toolUses: [] })
 
@@ -72,11 +72,14 @@ export function summaryPrompt(previous?: string): string {
     'Write a continuation summary of this conversation for yourself: the same agent will carry on the work from it, with the summary in place of the turns it covers.',
     'Read the whole transcript, tool results included, and keep exact file paths, commands, commit SHAs, identifiers and numbers as they appear there.',
     'Cover, under these headings:',
-    '1. Goal: what the user wants, and every instruction they gave, quoted in their own words.',
-    '2. Decisions: what was decided and why.',
-    '3. Done: what was done, with the files, commands and commits involved and their outcome.',
-    '4. Left: what remains, in order.',
-    '5. Open questions: what is unresolved or waiting on the user.',
+    '1. Task: what the user wants, and every instruction they gave, quoted in their own words.',
+    '2. Current work: what was in progress, its intent, and the very next action.',
+    '3. Plan: the remaining items in order, each with its status.',
+    '4. Done when: how each remaining item will be verified (the command, test or evidence).',
+    '5. Artifacts: the exact paths, commits, commands and URLs to reopen.',
+    '6. Decisions: what was decided and why.',
+    '7. Open questions: what is unresolved or waiting on the user.',
+    'After compaction a wayseeker section re-attaches the user\'s open instructions, each with an @id: cite that @id where an instruction you quote matches one, and still quote the user verbatim, since the section is an extracted paraphrase.',
     ...(previous ? [
       'An earlier summary of this conversation follows. Extend it into one complete summary covering everything up to now: keep what still holds, update what changed, and add what came after it.',
       '<earlier-summary>', previous.trim(), '</earlier-summary>',

@@ -13,8 +13,11 @@ export const readDeliveredSection = (value: unknown): { fingerprint: string; sec
 // check is the mod's own rubric verdict, written only by the step and check tools (stepped.ts).
 export const BASE_SPEAKERS = ['user', 'check', 'agent', 'worker'] as const
 
-// raise_on(K) routes conflicts (design page U2); usable without a decl line.
-export const BUILTIN_DECLS: Decl[] = [{ kind: 'declaration', name: 'raise_on', columns: ['key'], key: ['key'], gloss: 'conflicts on this key are raised to the user' }]
+// raise_on(K) routes conflicts (design page U2) and done(task) reports finished work; both usable without a decl line.
+export const BUILTIN_DECLS: Decl[] = [
+  { kind: 'declaration', name: 'raise_on', columns: ['key'], key: ['key'], gloss: 'conflicts on this key are raised to the user' },
+  { kind: 'declaration', name: 'done', columns: ['task'], key: ['task'], gloss: '{task}을 마쳤다' },
+]
 
 export function emptyLedger(): Ledger { return { utterances: [], decls: [], glosses: [] } }
 

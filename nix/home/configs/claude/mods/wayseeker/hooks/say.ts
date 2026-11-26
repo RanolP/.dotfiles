@@ -227,4 +227,6 @@ export function needsSayNudge(rows: readonly Row[]): boolean {
 }
 
 // Delivered as tool.call context at the turn's first unrecorded change, so the record lands mid-turn and the final reply stays the user's answer.
-export const SAY_NUDGE = `This turn has changed something and recorded nothing in wayseeker yet. Before your final reply, call ${SAY_TOOL_ID} once with what you did and decided (say(done(x)), try(p) for a choice the user should make, want(p) for what is still open), then keep working on the user's request.`
+// An argument must be an atom, so the example glosses its atom first; say.test.ts lands it on an empty ledger.
+export const SAY_NUDGE_EXAMPLE = ['fix_login := "로그인 오류 수정"', 'say(done(fix_login))'] as const
+export const SAY_NUDGE = `This turn has changed something and recorded nothing in wayseeker yet. Before your final reply, call ${SAY_TOOL_ID} once with what you did and decided: finished work as an atom with a gloss line, then say(done(atom)), as in lines: ${JSON.stringify(SAY_NUDGE_EXAMPLE)}; try(p) for a choice the user should make; want(p) for what is still open. Then keep working on the user's request.`

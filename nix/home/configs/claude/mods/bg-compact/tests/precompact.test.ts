@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { SessionCompactInput, SessionCompactResult, SessionMessage } from 'claude-code'
-import { boundaryOf, PreCompactor, summaryMessage, type PreCompaction, type PreIo } from '../hooks/precompact'
+import { boundaryOf, PreCompactor, SUMMARY_HEAD, summaryMessage, summaryPrompt, type PreCompaction, type PreIo } from '../hooks/precompact'
 
 const S = { ratio: 0.6, extendRatio: 0.3 }
 const LIMIT = 100000
@@ -110,6 +110,18 @@ test('no pre-compaction below the ratio, one at it, and an extend only past the 
   const extend = fake({ tokens: 90001, stored: stored() })
   await (await new PreCompactor(S).turnEnd(extend.io)).started
   expect(extend.forks[0]).toContain('<earlier-summary>\nSUMMARY\n</earlier-summary>')
+})
+
+// Regression: a summary that drops the next action and how each remaining item is verified, so the resumed agent
+// re-derives its plan, and one that trusts its own stale paraphrase over the wayseeker section re-attached after it.
+test('the summary prompt asks for a task brief and the head ranks newer context above the summary', () => {
+  const prompt = summaryPrompt()
+  const headings = ['1. Task:', '2. Current work:', '3. Plan:', '4. Done when:', '5. Artifacts:', '6. Decisions', '7. Open questions:'].map(h => prompt.indexOf(h))
+  expect(headings.every(i => i >= 0)).toBe(true)
+  expect([...headings].sort((a, b) => a - b)).toEqual(headings)
+  expect(prompt).toContain('quoted in their own words')
+  expect(prompt).toContain('@id')
+  expect(SUMMARY_HEAD).toContain('wayseeker section')
 })
 
 // Through the registered hooks, the test's own session.compact hook standing for the engine beneath the plugin.

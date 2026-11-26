@@ -2,6 +2,7 @@ import { isRecord, stripReminders } from './text'
 import { parseLiteral, printArgument, printFact, printLiteral, type Fact, type Literal } from './syntax'
 import { append, emptyLedger, liveIds, nextId, type Ledger } from './store'
 import type { EvalResult } from './eval'
+import { liveRubricItems, rubricSteps } from './stepped'
 
 /** Session state key of the wayseeker Ledger for one transcript (`<session>:<agent or main>`). */
 export const wayseekerKey = (key: string) => `wayseeker:${key}`
@@ -191,8 +192,41 @@ export function renderInstructions(ledger: Ledger, result: EvalResult): string {
   }
   for (const [key, state] of result.facts) if (state.value === 'contested') contested.add(key)
   for (const key of contested) raises.push(`- 다툼: ${literalSentence(ledger, key).replace(/\.$/, '')} — 사용자에게 묻는다`)
-  return [
+  const steps = stepLines(ledger, holds)
+  const section = (steps: readonly string[]) => [
     '## user instructions', instructions.length ? instructions.join('\n') : '- (none yet)',
+    ...(steps.length ? ['## steps', steps.join('\n')] : []),
     ...(raises.length ? ['## raises', raises.join('\n')] : []),
   ].join('\n\n')
+  const collapsed = (count: number) => count ? [`- 마친 step ${count}개`] : []
+  const full = section([...steps.open, ...(steps.done.length > 3 ? collapsed(steps.done.length) : steps.done)])
+  if (full.length <= SECTION_CAP) return full
+  // Over the cap, done steps go first, then unfinished ones from the end; instructions and raises always stay.
+  const shortened = section([...steps.open, ...collapsed(steps.done.length)])
+  if (shortened.length <= SECTION_CAP) return shortened
+  for (let keep = steps.open.length - 1; keep > 0; keep--) {
+    const cut = section([...steps.open.slice(0, keep), `- …외 ${steps.open.length - keep + steps.done.length}개`])
+    if (cut.length <= SECTION_CAP) return cut
+  }
+  return section([`- …외 ${steps.open.length + steps.done.length}개`])
+}
+
+// Provisional: the section rides every prompt; register.ts logs each delivered length so the cap can be measured.
+const SECTION_CAP = 3000
+
+/** One line per step check has a live rubric rule for: its gloss, items passed of the rule's items, and whether done(step) holds. */
+function stepLines(ledger: Ledger, holds: (literal: Literal) => boolean): { open: string[]; done: string[] } {
+  const open: string[] = [], done: string[] = []
+  const atom = (name: string) => ({ kind: 'atom' as const, name })
+  const fact = (name: string, args: string[]): Literal => ({ kind: 'literal', negated: false, fact: { kind: 'fact', name, args: args.map(atom) } })
+  for (const step of rubricSteps(ledger)) {
+    const items = liveRubricItems(ledger, step)
+    if (!items) continue
+    const passed = items.filter(item => holds(fact('pass', [step, item]))).length
+    const finished = holds(fact('done', [step]))
+    const gloss = ledger.glosses.findLast(g => g.atom === step)?.gloss
+    const line = `- ${gloss ? `${oneLine(gloss)} (step ${step})` : `step ${step}`}: ${passed}/${items.length} 통과${finished ? ', 마쳤다' : ''}`
+    ;(finished ? done : open).push(line)
+  }
+  return { open, done }
 }

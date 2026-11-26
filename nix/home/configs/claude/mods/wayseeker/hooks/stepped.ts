@@ -217,6 +217,14 @@ export const rubricSteps = (ledger: Ledger): Set<string> => new Set(ledger.utter
   && u.act.kind === 'condition' && u.act.conclusion.kind === 'literal' && u.act.conclusion.fact.name === 'done'
   && u.act.conclusion.fact.args[0]?.kind === 'atom' ? [u.act.conclusion.fact.args[0].name] : []))
 
+/** The item ids of the step's latest live rubric rule, in rule order; undefined when no live rule remains. */
+export const liveRubricItems = (ledger: Ledger, step: string): string[] | undefined => {
+  const live = liveIds(ledger.utterances)
+  const rule = stepRules(ledger, step).findLast(u => live.has(u.id))
+  if (!rule || rule.act.kind !== 'condition') return undefined
+  return rule.act.premises.flatMap(p => isFact(p.fact, 'pass', step, 2) && p.fact.args[1]?.kind === 'atom' ? [p.fact.args[1].name] : [])
+}
+
 /** A fact's first argument names this step, or is a variable that can bind to it (ok(X) -> done(X) claims every step). */
 const namesStep = (fact: Fact, step: string) => fact.args[0]?.kind === 'variable' || (fact.args[0]?.kind === 'atom' && fact.args[0].name === step)
 

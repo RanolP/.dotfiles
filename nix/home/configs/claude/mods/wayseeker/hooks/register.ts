@@ -320,6 +320,7 @@ const instructionAttachment = async ($: EngineInterface, atSubmit: boolean): Pro
     // A tool.call in the turn that submit delivered to trusts the record: the prompt's row may not hold the attachment yet.
     if (delivered?.fingerprint === fingerprint && ((!atSubmit && delivered.atSubmit) || (await $.session.messages()).some(row => row.text.includes(delivered.section)))) return undefined
     await store.set(deliveredSectionKey(key), { fingerprint, section, atSubmit })
+    $.ui.log(`wayseeker: section delivered chars=${section.length}`, { to: 'debug' })
     return `<system-reminder>\n${section}\n</system-reminder>`
   })
 }

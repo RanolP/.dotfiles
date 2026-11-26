@@ -4,6 +4,8 @@ import { appendAll } from './store'
 import { evaluate } from './eval'
 import { countUserRows, dropWayseekerTurns, landWayseekerTurn, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { promptFingerprint, reconcilePrompts } from './rewind'
+import { writeStepRule, writeVerdicts, type RubricItem } from './stepped'
+import type { Ledger } from './store'
 
 const DECLS = [
   'decl use(role, tool) key(role) "{role}에 {tool}을 쓴다"',
@@ -54,6 +56,59 @@ test('a particle after a filled column follows the filled text\'s last syllable'
   expect(out).toContain('- 문제를 분리하는 방식(과제 76)으로 고친다. (@2)')
   expect(out).toContain('- rebuild이(가) 완료되었다. (@3)')
   expect(out).toContain('- rebuild을(를) 모델로 고친다. (@4)')
+})
+
+const ITEMS: RubricItem[] = [{ id: 'tests_pass', kind: 'command', argv: ['true'] }, { id: 'banner', kind: 'evidence', criterion: 'the banner shows' }]
+// A step with a rubric whose items pass as given; check writes the rule and the verdicts, as the step and check tools do.
+const stepped = (ledger: Ledger, step: string, passing: readonly string[]): Ledger => {
+  const ruled = writeStepRule(ledger, step, ITEMS).ledger
+  return writeVerdicts(ruled, step, ITEMS.map(item => ({ id: item.id, pass: passing.includes(item.id), reason: '' }))).ledger
+}
+
+// Regression caught: step progress invisible in the resident section, so after a compaction the agent re-checks or skips steps.
+test('a stepped ledger shows each step with passed k/n and whether it is done', () => {
+  let ledger = appendAll([...DECLS, 'fix_login := "로그인 오류 수정"', 'deploy := "배포"', '@1 user: want(use(serving, vllm))'])
+  ledger = stepped(ledger, 'fix_login', ['tests_pass'])
+  ledger = stepped(ledger, 'deploy', ['tests_pass', 'banner'])
+  expect(renderInstructions(ledger, evaluate(ledger))).toBe([
+    '## user instructions', '- 서빙에 vllm을(를) 쓴다. (@1)',
+    '## steps', '- 로그인 오류 수정 (step fix_login): 1/2 통과\n- 배포 (step deploy): 2/2 통과, 마쳤다',
+  ].join('\n\n'))
+})
+
+const LONG = '아주 긴 설명이 붙은 작업 단계 '.repeat(6)
+const many = (prefix: string, count: number, passing: readonly string[], start: Ledger): Ledger => {
+  let ledger = start
+  for (let i = 0; i < count; i++) ledger = stepped(appendAll([prefix + i + ' := "' + LONG + i + '"'], ledger), prefix + i, passing)
+  return ledger
+}
+
+// Regression caught: finished steps crowding the resident section that every prompt pays for.
+test('more than three done steps collapse to one count line; three stay listed', () => {
+  const three = many('fin_', 3, ['tests_pass', 'banner'], appendAll(DECLS))
+  expect(renderInstructions(three, evaluate(three)).match(/마쳤다/g)).toHaveLength(3)
+  const four = many('fin_', 4, ['tests_pass', 'banner'], appendAll(DECLS))
+  const out = renderInstructions(four, evaluate(four))
+  expect(out).toContain('- 마친 step 4개')
+  expect(out).not.toContain('마쳤다')
+})
+
+// Regression caught: a long-running stepped session growing the section without bound, or the cap cutting user instructions.
+test('a ledger whose steps exceed the cap renders within 3000 chars and keeps every instruction and unfinished step', () => {
+  const wants = ['@1 user: want(use(serving, vllm))', '@2 user: want(use(training, deepspeed))', '@3 user: want(use(eval, lm_harness))']
+  const base = many('fin_', 40, ['tests_pass', 'banner'], appendAll([...DECLS, 'training := "학습"', 'eval := "평가"', ...wants]))
+  const ledger = many('open_', 4, ['tests_pass'], base)
+  const out = renderInstructions(ledger, evaluate(ledger))
+  expect(out.length).toBeLessThanOrEqual(3000)
+  for (const line of ['- 서빙에 vllm을(를) 쓴다. (@1)', '- 학습에 deepspeed을(를) 쓴다. (@2)', '- 평가에 lm_harness을(를) 쓴다. (@3)']) expect(out).toContain(line)
+  for (let i = 0; i < 4; i++) expect(out).toContain('(step open_' + i + '): 1/2 통과')
+
+  // Unfinished steps alone past the cap: the block ends on a count of the rest, and the instructions stay.
+  const crowded = many('open_', 40, ['tests_pass'], appendAll([...DECLS, ...wants.slice(0, 1)]))
+  const cut = renderInstructions(crowded, evaluate(crowded))
+  expect(cut.length).toBeLessThanOrEqual(3000)
+  expect(cut).toContain('- 서빙에 vllm을(를) 쓴다. (@1)')
+  expect(cut).toMatch(/- …외 \d+개$/)
 })
 
 // Regression caught: a rewound turn's extracted lines staying in the wayseeker ledger.

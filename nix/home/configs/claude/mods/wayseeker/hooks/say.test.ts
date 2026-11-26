@@ -1,7 +1,7 @@
 import { test, expect, type Engine } from 'claude-code/testing'
 
 import { readWayseekerLedger, wayseekerKey } from './render'
-import { isReadOnlyBash, replDoesWork, SAY_TOOL_ID, type SayResult } from './say'
+import { isReadOnlyBash, replDoesWork, SAY_NUDGE, SAY_NUDGE_EXAMPLE, SAY_TOOL_ID, type SayResult } from './say'
 import { appendAll } from './store'
 
 const STATE = '/home/t/.claude-work/plans/wayseeker-s1.json'
@@ -112,6 +112,16 @@ test('want(p) leaves the open list once done(p) holds', async ($, on) => {
   const result = await say($, ['@2 agent: say(done(use(serving, sglang)))'])
   expect(result.rejected).toEqual([])
   expect(result.open.want).toEqual([])
+})
+
+// Regression caught: the nudge's example say(done(x)) rejected "predicate done is not declared" in a session with no step.
+test('on an empty ledger, every line the say nudge shows lands', async ($, on) => {
+  const { ledger } = world(on)
+  expect(SAY_NUDGE).toContain(JSON.stringify(SAY_NUDGE_EXAMPLE))
+  const result = await say($, [...SAY_NUDGE_EXAMPLE])
+  expect(result.rejected).toEqual([])
+  expect(result.landed).toHaveLength(SAY_NUDGE_EXAMPLE.length)
+  expect(ledger().utterances).toHaveLength(1)
 })
 
 // Regression caught: a turn that edited files ending without a ledger record, or the nudge repeating on every later call of that turn.

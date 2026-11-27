@@ -1,6 +1,6 @@
 import { test, expect } from 'claude-code/testing'
-import { acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, scanShellProcesses, touchResources, turnStartResources, unregisterResource } from './resources'
-import { deliveredPath, loadLine, loadNotices, ownerNotices, pressureNotes, shellJobs } from './load'
+import { stopWorkerProcesses, taggedBash, acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, scanShellProcesses, touchResources, turnStartResources, unregisterResource } from './resources'
+import { envAgentIds, deliveredPath, loadLine, loadNotices, ownerNotices, pressureNotes, shellJobs } from './load'
 import { register } from './register'
 import type { MutexOwner, OwnedResource, ProcessResult, ResourceIo, ResourceSession } from './resources'
 import type { ResourceInput } from '../types'
@@ -534,7 +534,7 @@ test('regression: high pressure names stop candidates in descending RSS order', 
     { ...base, kind: 'metro', id: '8081', label: ':8081' },
     { ...base, kind: 'process', id: 'pid:2@t', pid: 2, rss: 2048, label: 'large' },
   ])
-  expect(notes[2]).toBe('pid 2 2 MB large\npid 1 1 MB small\nmetro :8081\nstop the ones you no longer need and hold off on new heavy jobs until this clears; tell the user what you stopped.')
+  expect(notes[2]).toBe('pid 2 2 MB large (started by main)\npid 1 1 MB small (started by main)\nmetro :8081\nstop the ones you no longer need and hold off on new heavy jobs until this clears; tell the user what you stopped.')
 })
 test('regression: prompt load uses the 0.8 per-core threshold; renice sets 15 absolutely (renice -n increments, which pushed claude to nice 20)', async () => {
   const shared = world()
@@ -593,4 +593,38 @@ test('regression: an owned shell job stays tracked after reparenting but a reuse
   io.run = async (argv, options) => argv[1] === '-axo' ? result(0, '101 1 100 S claude --test\n111 1 2048 S unrelated') : argv.includes('lstart=') ? result(0, 'reused') : originalRun(argv, options)
   await scanShellProcesses(io)
   expect(readSession(shared, 'orphan-job')?.owned).toEqual([])
+})
+
+test('regression: a subagent Bash call exports its worker id and main stays untouched', () => {
+  expect(taggedBash({ command: 'python x.py', agentId: 'abea15e8dca011a5d' }).command).toBe('export CLAUDE_AGENT_ID=abea15e8dca011a5d; python x.py')
+  expect(taggedBash({ command: 'python x.py' }).command).toBe('python x.py')
+  expect(taggedBash({ command: 'ls', agentId: 'a; rm -rf ~' }).command).toBe('ls')
+})
+test('regression: pressure candidates and watchdog stops name the worker that started the process', () => {
+  const base = { profile: 'default', cwd: '/w', startedAt: 't' }
+  expect(pressureNotes(4, 1, 8, [{ ...base, kind: 'process', id: 'pid:1@t', pid: 1, rss: 1024, label: 'mps', agentId: 'abea15e8dca011a5d' }])[1]).toContain('pid 1 1 MB mps (started by worker abea15e8dca011a5d)')
+  expect(ownerNotices([{ ...stoppedJob, agent_id: 'abea15e8dca011a5d' }], 'A', new Set()).notes[0]).toContain('by worker abea15e8dca011a5d,')
+  expect(ownerNotices([stoppedJob], 'A', new Set()).notes[0]).toContain('by main,')
+  expect([...envAgentIds('77 sleep 1777 HOME=/h CLAUDE_AGENT_ID=abea15e8dca011a5d\n78 sleep 1 HOME=/h')]).toEqual([[77, 'abea15e8dca011a5d']])
+})
+test('regression: TaskStop kills a detached job of the stopped worker (ppid 1, survived 2026-11-27), spares main and other workers', async () => {
+  const shared = world()
+  const io = ioFor(shared, 'ts')
+  const live = new Set([77, 79])
+  io.run = async argv => {
+    shared.calls.push([...argv])
+    if (argv[1] === '-axwwE') return result(0, '77 sleep 1777 CLAUDE_AGENT_ID=abea15e8dca011a5d\n78 sleep 5 CLAUDE_AGENT_ID=a0000000000000000\n79 stubborn CLAUDE_AGENT_ID=abea15e8dca011a5d\n80 sleep 9 HOME=/h')
+    if (argv[1] === '-axo') return result(0, '77 1 1 S sleep 1777\n78 1 1 S sleep 5\n79 1 1 S stubborn\n80 1 1 S sleep 9')
+    if (argv[1] === '-0') return live.has(Number(argv[2])) ? result() : result(1)
+    if (argv[1] === '-TERM') live.delete(77)
+    if (argv[1] === '-KILL') for (const p of argv.slice(2)) live.delete(Number(p))
+    return result()
+  }
+  const note = await stopWorkerProcesses(io, 'abea15e8dca011a5d')
+  expect(note).toContain('pid 77 sleep 1777')
+  expect(note).toContain('pid 79 stubborn (needed SIGKILL)')
+  expect(note).not.toContain('pid 78')
+  expect(note).not.toContain('pid 80')
+  expect(shared.calls.find(a => a[1] === '-TERM')).toEqual(['/bin/kill', '-TERM', '77', '79'])
+  expect(shared.calls.find(a => a[1] === '-KILL')).toEqual(['/bin/kill', '-KILL', '79'])
 })

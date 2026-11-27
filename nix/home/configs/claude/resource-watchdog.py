@@ -4,7 +4,7 @@ has stayed normal. Incident: 2026-11-23, three parallel `ipsw dyld xref` on a 5.
 Looks only at memory, never at command names: whatever an agent runs is covered.
 Each stop is recorded with the Claude Code session that owns the process, so the resources mod tells that session
 alone what was stopped, why, and when it resumes."""
-import glob, json, os, signal, subprocess, time
+import glob, json, os, re, signal, subprocess, time
 from pathlib import Path
 
 STATE = Path.home() / ".cache/claude-resource-watchdog/stopped.json"
@@ -46,6 +46,15 @@ def claude_env_pids() -> set[int]:
     inherits, even after the parent exits and launchd adopts the child (ps -E shows a same-user env)."""
     out = subprocess.run(["/bin/ps", "-axwwE", "-o", "pid=,command="], capture_output=True, text=True).stdout
     return {int(line.split(None, 1)[0]) for line in out.splitlines() if " CLAUDECODE=1" in line}
+
+def agent_id_in_env(ps_line: str) -> str | None:
+    """The worker (subagent) id the resources mod exports as CLAUDE_AGENT_ID in that worker's shell; None for main."""
+    m = re.search(r" CLAUDE_AGENT_ID=([A-Za-z0-9_-]+)(?:\s|$)", ps_line)
+    return m.group(1) if m else None
+
+def agent_id_of(pid: int) -> str | None:
+    out = subprocess.run(["/bin/ps", "-wwE", "-p", str(pid), "-o", "command="], capture_output=True, text=True).stdout
+    return agent_id_in_env(out)
 
 def agent_children(procs: dict, tagged: set[int] = frozenset()) -> list[tuple[int, int, str, str]]:
     """Stop candidates: jobs an agent started through its shell tool, i.e. a non-shell process with a shell between
@@ -131,6 +140,7 @@ def stop_one(level: int, procs: dict) -> dict | None:
         return None
     pid, rss, _, cmd = max(kids, key=lambda k: k[1])
     started = lstart(pid)
+    agent_id = agent_id_of(pid)
     try:
         os.kill(pid, signal.SIGSTOP)
     except OSError:  # exited since ps ran
@@ -138,7 +148,7 @@ def stop_one(level: int, procs: dict) -> dict | None:
     at = now()
     entry = {"id": f"{pid}@{at}", "pid": pid, "lstart": started, "command": cmd[:300], "rss_mb": rss // 1024,
              "pressure": level, "pressure_name": LEVELS.get(level, str(level)), "stopped_at": at,
-             "resume_policy": RESUME_POLICY, "resumed_at": None, "resumed_by": None, **owner(pid, procs)}
+             "resume_policy": RESUME_POLICY, "resumed_at": None, "resumed_by": None, "agent_id": agent_id, **owner(pid, procs)}
     notify(f"SIGSTOP {pid} ({rss // 1024} MB): {cmd[:80]}")
     return entry
 

@@ -40,4 +40,7 @@ assert 401 not in {k[0] for k in wd.agent_children(orphans, {400})}, "an untagge
 assert wd.agent_children(orphans) == wd.agent_children(procs), "without tags, orphans stay out"
 daemons = {**procs, 402: (1, 8_000, "S", "keyboxd --homedir /h/.gnupg --daemon")}
 assert 402 not in {k[0] for k in wd.agent_children(daemons, {402})}, "a small tagged daemon (keyboxd) is never frozen"
+# A stopped job must say which worker started it: every subagent shell exports CLAUDE_AGENT_ID, main's has none.
+assert wd.agent_id_in_env("python stage_b.py HOME=/h CLAUDE_AGENT_ID=abea15e8dca011a5d CLAUDECODE=1") == "abea15e8dca011a5d"
+assert wd.agent_id_in_env("python stage_b.py HOME=/h CLAUDECODE=1") is None, "main's jobs carry no worker id"
 print("ok")

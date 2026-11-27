@@ -1,6 +1,6 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ResourceInput } from '../types'
-import { loadLine, loadNotices, processRows, shellJobs } from './load'
+import { AGENT_ID_RE, envAgentIds, loadLine, loadNotices, processRows, shellJobs } from './load'
 
 function fnv1a(seed: string): number {
   let h = 0x811c9dc5
@@ -25,6 +25,7 @@ export type OwnedResource = {
   pid?: number
   rss?: number
   backgroundTaskId?: string
+  agentId?: string
 }
 export type MutexRecord = { name: string; aliases: string[]; description: string; registeredBy: string }
 export type MutexOwner = { session: string; profile: string; pid?: number; processCommand?: string; cwd: string; repo: string; since: string; heartbeat: number }
@@ -70,6 +71,7 @@ const isOwnedResource = (value: unknown): value is OwnedResource => isRecord(val
   && (value.pid === undefined || typeof value.pid === 'number')
   && (value.rss === undefined || typeof value.rss === 'number')
   && (value.backgroundTaskId === undefined || typeof value.backgroundTaskId === 'string')
+  && (value.agentId === undefined || typeof value.agentId === 'string')
 const isIdentity = (value: unknown): value is StoredIdentity => isRecord(value)
   && typeof value.cwd === 'string' && typeof value.repo === 'string' && typeof value.heartbeat === 'number'
   && (value.pid === undefined || typeof value.pid === 'number') && (value.processCommand === undefined || typeof value.processCommand === 'string')
@@ -1029,6 +1031,7 @@ export const scanShellProcesses = async (io: ResourceIo) => {
   const snapshot = await run(io, ['/bin/ps', '-axo', 'pid=,ppid=,rss=,stat=,command='])
   if (!snapshot || snapshot.exitCode !== 0) return
   const jobs = shellJobs(snapshot.stdout, identity.pid)
+  const workers = envAgentIds((await run(io, ['/bin/ps', '-axwwE', '-o', 'pid=,command=']))?.stdout ?? '')
   const shellPids = new Set(jobs.map(job => job.pid))
   const current = await readSession(io, session)
   const rows = processRows(snapshot.stdout)
@@ -1050,10 +1053,34 @@ export const scanShellProcesses = async (io: ResourceIo) => {
     if (!start || start.exitCode !== 0 || !start.stdout.trim()) continue
     const previous = current.owned.find(resource => resource.kind === 'process' && resource.pid === job.pid)
     if (previous && previous.id !== `pid:${job.pid}@${start.stdout.trim()}` && !shellPids.has(job.pid)) continue
-    detected.push({ kind: 'process', id: `pid:${job.pid}@${start.stdout.trim()}`, pid: job.pid, rss: job.rss, label: job.command.slice(0, 80), startedAt: start.stdout.trim(), profile: identity.profile, cwd: identity.cwd })
+    detected.push({ kind: 'process', id: `pid:${job.pid}@${start.stdout.trim()}`, pid: job.pid, rss: job.rss, label: job.command.slice(0, 80), startedAt: start.stdout.trim(), profile: identity.profile, cwd: identity.cwd, ...(workers.has(job.pid) ? { agentId: workers.get(job.pid) } : {}) })
   }
   if (!detected.length && !current.owned.some(r => r.kind === 'process')) return
   await mutateSession(io, session, state => ({ next: { ...state, owned: [...state.owned.filter(r => r.kind !== 'process'), ...detected] }, result: undefined }))
+}
+
+// Every shell a subagent runs exports CLAUDE_AGENT_ID (see the Bash hook), so its detached children keep the tag after
+// TaskStop kills the worker (measured 2026-11-27: a `(nohup sleep 1777 &)` survived with ppid 1).
+export const stopWorkerProcesses = async (io: ResourceIo, agentId: string, ownPid = 0): Promise<string | undefined> => {
+  if (!AGENT_ID_RE.test(agentId)) return undefined
+  const env = await run(io, ['/bin/ps', '-axwwE', '-o', 'pid=,command='])
+  const pids = [...envAgentIds(env?.stdout ?? '')].filter(([pid, id]) => id === agentId && pid !== ownPid).map(([pid]) => pid)
+  if (!pids.length) return undefined
+  const commands = processRows(`${(await run(io, ['/bin/ps', '-axo', 'pid=,ppid=,rss=,stat=,command=']))?.stdout ?? ''}`)
+  const alive = async () => {
+    const live: number[] = []
+    for (const pid of pids) if ((await run(io, ['/bin/kill', '-0', String(pid)]))?.exitCode === 0) live.push(pid)
+    return live
+  }
+  await run(io, ['/bin/kill', '-TERM', ...pids.map(String)])
+  let left = await alive()
+  for (let i = 0; i < 3 && left.length; i++) {
+    await run(io, ['/bin/sleep', '1'], { timeoutMs: 2000 })
+    left = await alive()
+  }
+  if (left.length) await run(io, ['/bin/kill', '-KILL', ...left.map(String)])
+  const list = pids.map(pid => `pid ${pid} ${(commands.get(pid)?.command ?? '?').slice(0, 80)}${left.includes(pid) ? ' (needed SIGKILL)' : ''}`).join('; ')
+  return `TaskStop ${agentId}: stopped ${pids.length} process(es) the worker had started: ${list}.`
 }
 
 const resourceActions = new Set(['list', 'who', 'register', 'unregister', 'acquire', 'release', 'forget'])
@@ -1084,6 +1111,9 @@ const activateResourceIo = ($: ResourceEngine, sessionId?: string) => {
   activeResourceIo = resourceIo($, undefined, sessionId)
   return activeResourceIo
 }
+// A subagent's Bash env equals main's, so the tag is the only thing that says which worker started a process.
+export const taggedBash = <T extends { command: string; agentId?: string }>(e: T): T =>
+  e.agentId !== undefined && AGENT_ID_RE.test(e.agentId) ? { ...e, command: `export CLAUDE_AGENT_ID=${e.agentId}; ${e.command}` } : e
 export const registerResources: Register = (on) => {
   on('turn.start', { turnId: /.*/ }, async ($, e, next) => {
     try { await turnStartResources(activateResourceIo($)) }
@@ -1112,6 +1142,21 @@ export const registerResources: Register = (on) => {
     return next(e)
   })
 
+  on('tool.call', { tool: 'TaskStop' }, async ($, e, next) => {
+    const result = await next(e)
+    if ('deny' in result && result.deny || 'isError' in result && result.isError) return result
+    const id = e.task_id ?? e.shell_id
+    if (!id) return result
+    try {
+      const io = activateResourceIo($)
+      const note = await stopWorkerProcesses(io, id, (await identityFor(io, await io.sessionId())).pid)
+      return note ? { ...result, context: [...('context' in result ? result.context ?? [] : []), note] } : result
+    } catch (err) {
+      $.ui.log(`resources: TaskStop cleanup failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      return result
+    }
+  })
+
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const io = activateResourceIo($)
     const denied = await guardBash(io, e.command).catch(err => {
@@ -1126,7 +1171,7 @@ export const registerResources: Register = (on) => {
       io.log(`resources: load notices failed: ${String(err)}`)
       return []
     })
-    const result = await next(e)
+    const result = await next(taggedBash(e))
     try {
       const records = detectOwned(e.command, result, await io.cwd(), await io.now(), await profileFor(io))
       await recordDetected(io, records)

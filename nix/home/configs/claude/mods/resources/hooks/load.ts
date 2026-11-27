@@ -12,6 +12,17 @@ const run = async (io: ResourceIo, argv: string[]) => {
   } catch (err) { io.log(`resources: ${JSON.stringify(argv)} failed: ${String(err)}`) }
   return undefined
 }
+export const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+export const startedBy = (agentId: unknown) => typeof agentId === 'string' && agentId ? `worker ${agentId}` : 'main'
+// `ps -axwwE -o pid=,command=` prints each process's environment after its command line.
+export const envAgentIds = (output: string) => {
+  const ids = new Map<number, string>()
+  for (const line of output.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s.*?\sCLAUDE_AGENT_ID=([A-Za-z0-9_-]+)(?:\s|$)/)
+    if (m) ids.set(Number(m[1]), m[2] ?? '')
+  }
+  return ids
+}
 export const deliveredPath = (home: string, session: string) => /^[A-Za-z0-9_-]{1,128}$/.test(session) ? `${home}/.cache/claude-resource-watchdog/delivered/${session}.json` : undefined
 export const ownerNotices = (entries: unknown, session: string, delivered: Set<string>) => {
   const notes: string[] = []
@@ -23,7 +34,7 @@ export const ownerNotices = (entries: unknown, session: string, delivered: Set<s
     const resume = `${e.id}:resume`
     if (!delivered.has(stop)) {
       keys.push(stop)
-      notes.push(`resource-watchdog stopped (SIGSTOP) pid ${e.pid} (${e.rss_mb} MB, ${cmd}), started from this session, at ${e.stopped_at} because memory pressure was ${e.pressure_name} (level ${e.pressure}). Resume: ${e.resume_policy}. To free the memory sooner, kill it yourself (\`kill -9 ${e.pid}\`) and rerun it smaller; tell the user what you did.`)
+      notes.push(`resource-watchdog stopped (SIGSTOP) pid ${e.pid} (${e.rss_mb} MB, ${cmd}), started from this session by ${startedBy(e.agent_id)}, at ${e.stopped_at} because memory pressure was ${e.pressure_name} (level ${e.pressure}). Resume: ${e.resume_policy}. To free the memory sooner, kill it yourself (\`kill -9 ${e.pid}\`) and rerun it smaller; tell the user what you did.`)
     }
     if (e.resumed_at && !delivered.has(resume)) {
       keys.push(resume)
@@ -52,7 +63,7 @@ export const pressureNotes = (level: number, one: number, cores: number, owned: 
   if (!notes.length) return notes
   const candidates = owned.filter(r => ['process', 'android-emulator', 'ios-simulator', 'metro', 'web-dev'].includes(r.kind)).sort((a, b) => (b.rss ?? 0) - (a.rss ?? 0))
   notes.push(candidates.length
-    ? `${candidates.map(r => r.pid === undefined ? `${r.kind} ${r.label}` : `pid ${r.pid} ${Math.round((r.rss ?? 0) / 1024)} MB ${r.label.slice(0, 80)}`).join('\n')}\nstop the ones you no longer need and hold off on new heavy jobs until this clears; tell the user what you stopped.`
+    ? `${candidates.map(r => r.pid === undefined ? `${r.kind} ${r.label}` : `pid ${r.pid} ${Math.round((r.rss ?? 0) / 1024)} MB ${r.label.slice(0, 80)} (started by ${startedBy(r.agentId)})`).join('\n')}\nstop the ones you no longer need and hold off on new heavy jobs until this clears; tell the user what you stopped.`
     : 'Check the processes you started (`ps -o pid,rss,stat,command -U $USER`), stop the heavy ones that are yours, and hold off on new heavy jobs until this clears; tell the user what you stopped.')
   return notes
 }

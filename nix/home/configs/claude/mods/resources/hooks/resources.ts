@@ -1,6 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ResourceInput } from '../types'
-import { AGENT_ID_RE, envAgentIds, loadLine, loadNotices, processRows, shellJobs } from './load'
+import { AGENT_ID_RE, infrastructure, loadLine, loadNotices, processRows, shellJobs } from './load'
+import { matchFlights, parseForkLines, parsePgidRows } from './attribution'
+import type { Flight } from './attribution'
 
 function fnv1a(seed: string): number {
   let h = 0x811c9dc5
@@ -40,6 +42,8 @@ export type ResourceSession = {
   notice?: string
   pendingTransfer?: boolean
   identity?: StoredIdentity
+  // process group -> worker id, from fork-tracker.py lines (see attributeFlights)
+  agentPgids?: Record<string, string>
 }
 export type ProcessResult = { exitCode: number; stdout: string; stderr: string }
 export type ResourceIo = {
@@ -93,6 +97,7 @@ export const asSession = (value: unknown, profile = 'default'): ResourceSession 
     ...(typeof value.notice === 'string' ? { notice: value.notice } : {}),
     ...(value.pendingTransfer === true ? { pendingTransfer: true } : {}),
     ...(isIdentity(value.identity) ? { identity: value.identity } : {}),
+    ...(isRecord(value.agentPgids) ? { agentPgids: Object.fromEntries(Object.entries(value.agentPgids).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) } : {}),
   }
 }
 export const resourceKey = (root: string, session: string) => `${root.replace(/\/$/, '')}/owned/${session}.json`
@@ -1024,6 +1029,59 @@ export const endResources = async (io: ResourceIo, session: string, reason: stri
   if (!remaining.mutexes.length && !remaining.owned.length && !remaining.transferredFrom?.length) await removeSession(io, session)
 }
 
+// Which worker started a process. fork-tracker.py appends one line per Bash shell Claude Code forks (see attribution.ts);
+// a call is matched to its line once it settles, and the shell's process group is kept against the worker so a job that
+// outlives its shell stays attributable. Nothing about the command or its environment is touched.
+const pendingFlights: Flight[] = []
+const claimedForks = new Set<string>()
+const FLIGHT_GRACE_MS = 60_000
+export const beginFlight = (agentId: string | undefined, command: string, startedAt: number): Flight => {
+  const flight: Flight = { ...(agentId === undefined ? {} : { agentId }), command, startedAt }
+  pendingFlights.push(flight)
+  return flight
+}
+export const forkLedgerPath = async (io: ResourceIo, claudePid: number) => `${await resourcesRoot(io)}/forks/${claudePid}.jsonl`
+const pgidRows = async (io: ResourceIo) => parsePgidRows((await run(io, ['/bin/ps', '-axwwo', 'pid=,pgid=,command='], { timeoutMs: 3000 }))?.stdout ?? '')
+export const attributeFlights = async (io: ResourceIo): Promise<void> => {
+  const session = await io.sessionId()
+  const claude = (await identityFor(io, session)).pid
+  if (claude === undefined) return
+  await serialized(`forks/${session}`, async () => {
+    const at = await io.now()
+    for (let i = pendingFlights.length - 1; i >= 0; i--) {
+      const flight = pendingFlights[i]
+      if (flight?.endedAt !== undefined && at - flight.endedAt > FLIGHT_GRACE_MS) {
+        io.log(`resources: no fork-tracker line for a Bash call started ${flight.startedAt} (${flight.command.slice(0, 60)}); its jobs stay unattributed`)
+        pendingFlights.splice(i, 1)
+      }
+    }
+    const pairs = pendingFlights.length ? matchFlights(pendingFlights, parseForkLines(await io.read(await forkLedgerPath(io, claude)) ?? ''), claimedForks) : []
+    for (const { flight } of pairs) pendingFlights.splice(pendingFlights.indexOf(flight), 1)
+    const added = pairs.flatMap(({ flight, line }) => flight.agentId === undefined ? [] : [[String(line.pgid), flight.agentId] as const])
+    if (claimedForks.size > 5000) claimedForks.clear()
+    if (!added.length && !Object.keys((await readSession(io, session)).agentPgids ?? {}).length) return
+    // A group no process carries any more is dropped, so a reused pid is never read as a worker's group.
+    const live = new Set([...await pgidRows(io)].map(([, row]) => String(row.pgid)))
+    await mutateSession(io, session, current => {
+      const merged = { ...current.agentPgids, ...Object.fromEntries(added) }
+      const kept = Object.fromEntries(Object.entries(merged).filter(([pgid]) => live.has(pgid)))
+      const { agentPgids: _before, ...rest } = current
+      return { next: Object.keys(kept).length ? { ...rest, agentPgids: kept } : rest, result: undefined }
+    })
+  })
+}
+
+const startForkTracker = async ($: ResourceEngine, io: ResourceIo) => {
+  try {
+    const root = (await $.process.hookEnv()).CLAUDE_PLUGIN_ROOT
+    const pid = (await identityFor(io, await io.sessionId())).pid
+    if (!root || pid === undefined) { io.log('resources: fork-tracker not started (no plugin root or claude pid)'); return }
+    for await (const piece of $.process.spawn({ argv: ['/usr/bin/python3', `${root}/hooks/fork-tracker.py`, String(pid), await forkLedgerPath(io, pid)] })) {
+      if ('text' in piece) io.log(`resources: fork-tracker ${piece.stream}: ${piece.text.slice(0, 200)}`)
+    }
+  } catch (err) { io.log(`resources: fork-tracker stopped (${String(err).slice(0, 160)})`) }
+}
+
 export const scanShellProcesses = async (io: ResourceIo) => {
   const session = await io.sessionId()
   const identity = await identityFor(io, session)
@@ -1031,13 +1089,18 @@ export const scanShellProcesses = async (io: ResourceIo) => {
   const snapshot = await run(io, ['/bin/ps', '-axo', 'pid=,ppid=,rss=,stat=,command='])
   if (!snapshot || snapshot.exitCode !== 0) return
   const jobs = shellJobs(snapshot.stdout, identity.pid)
-  const workers = envAgentIds((await run(io, ['/bin/ps', '-axwwE', '-o', 'pid=,command=']))?.stdout ?? '')
+  const groups = await pgidRows(io)
   const shellPids = new Set(jobs.map(job => job.pid))
   const current = await readSession(io, session)
   const rows = processRows(snapshot.stdout)
   for (const resource of current.owned) {
     const row = resource.kind === 'process' && resource.pid !== undefined ? rows.get(resource.pid) : undefined
     if (row && !row.stat.startsWith('Z') && !jobs.some(job => job.pid === row.pid)) jobs.push(row)
+  }
+  const agentOf = (pid: number) => { const group = groups.get(pid)?.pgid; return group === undefined ? undefined : current.agentPgids?.[String(group)] }
+  // A worker's job that outlived its shell has ppid 1, so the tree walk above misses it; its process group still names it.
+  for (const row of rows.values()) {
+    if (row.ppid === 1 && !row.stat.startsWith('Z') && !infrastructure(row.command) && agentOf(row.pid) !== undefined && !jobs.some(job => job.pid === row.pid)) jobs.push(row)
   }
   const covered = new Set(current.owned.filter(r => r.kind !== 'process').flatMap(r => r.pid === undefined ? [] : [r.pid]))
   for (const resource of current.owned.filter(r => r.kind === 'metro' || r.kind === 'web-dev')) {
@@ -1053,21 +1116,23 @@ export const scanShellProcesses = async (io: ResourceIo) => {
     if (!start || start.exitCode !== 0 || !start.stdout.trim()) continue
     const previous = current.owned.find(resource => resource.kind === 'process' && resource.pid === job.pid)
     if (previous && previous.id !== `pid:${job.pid}@${start.stdout.trim()}` && !shellPids.has(job.pid)) continue
-    detected.push({ kind: 'process', id: `pid:${job.pid}@${start.stdout.trim()}`, pid: job.pid, rss: job.rss, label: job.command.slice(0, 80), startedAt: start.stdout.trim(), profile: identity.profile, cwd: identity.cwd, ...(workers.has(job.pid) ? { agentId: workers.get(job.pid) } : {}) })
+    detected.push({ kind: 'process', id: `pid:${job.pid}@${start.stdout.trim()}`, pid: job.pid, rss: job.rss, label: job.command.slice(0, 80), startedAt: start.stdout.trim(), profile: identity.profile, cwd: identity.cwd, ...(agentOf(job.pid) !== undefined ? { agentId: agentOf(job.pid) } : {}) })
   }
   if (!detected.length && !current.owned.some(r => r.kind === 'process')) return
   await mutateSession(io, session, state => ({ next: { ...state, owned: [...state.owned.filter(r => r.kind !== 'process'), ...detected] }, result: undefined }))
 }
 
-// Finds processes whose env carries CLAUDE_AGENT_ID. Nothing exports it since the Bash hook stopped prefixing
-// `export CLAUDE_AGENT_ID=...;` (every worker call became an approval ask, 2026-11-27), so this matches only a process
-// a worker tagged itself. Origin: TaskStop left a worker's detached job running (measured 2026-11-27: a `(nohup sleep 1777 &)` survived with ppid 1).
+// Stops every live process in the process groups the fork ledger maps to this worker, including a detached job whose shell
+// already exited (measured 2026-11-27: a `(nohup sleep 1777 &)` survived TaskStop with ppid 1 and kept the shell's pgid).
 export const stopWorkerProcesses = async (io: ResourceIo, agentId: string, ownPid = 0): Promise<string | undefined> => {
   if (!AGENT_ID_RE.test(agentId)) return undefined
-  const env = await run(io, ['/bin/ps', '-axwwE', '-o', 'pid=,command='])
-  const pids = [...envAgentIds(env?.stdout ?? '')].filter(([pid, id]) => id === agentId && pid !== ownPid).map(([pid]) => pid)
+  const session = await io.sessionId()
+  await attributeFlights(io)
+  const groups = new Set(Object.entries((await readSession(io, session)).agentPgids ?? {}).filter(([, id]) => id === agentId).map(([pgid]) => Number(pgid)))
+  if (!groups.size) return undefined
+  const commands = await pgidRows(io)
+  const pids = [...commands].filter(([pid, row]) => groups.has(row.pgid) && pid !== ownPid).map(([pid]) => pid)
   if (!pids.length) return undefined
-  const commands = processRows(`${(await run(io, ['/bin/ps', '-axo', 'pid=,ppid=,rss=,stat=,command=']))?.stdout ?? ''}`)
   const alive = async () => {
     const live: number[] = []
     for (const pid of pids) if ((await run(io, ['/bin/kill', '-0', String(pid)]))?.exitCode === 0) live.push(pid)
@@ -1121,6 +1186,7 @@ export const registerResources: Register = (on) => {
 
   on('session.start', { isInteractive: [true, false] }, async ($, e, next) => {
     activateResourceIo($)
+    void startForkTracker($, activateResourceIo($))
     try {
       await $.tool.register({
         name: 'resource', description: RESOURCE_DESCRIPTION,
@@ -1164,12 +1230,16 @@ export const registerResources: Register = (on) => {
     if (denied) return { deny: denied }
     const notes = await (async () => {
       const session = await io.sessionId()
-      return serialized(`load-notices/${session}`, async () => loadNotices(io, (await identityFor(io, session)).pid, (await readSession(io, session)).owned))
+      return serialized(`load-notices/${session}`, async () => { const state = await readSession(io, session); return loadNotices(io, (await identityFor(io, session)).pid, state.owned, state.agentPgids) } )
     })().catch(err => {
       io.log(`resources: load notices failed: ${String(err)}`)
       return []
     })
-    const result = await next(e)
+    const flight = beginFlight(e.agentId, e.command, await io.now())
+    const result = await (async () => {
+      try { return await next(e) } finally { flight.endedAt = await io.now() }
+    })()
+    await attributeFlights(io).catch(err => io.log(`resources: fork attribution failed: ${String(err)}`))
     try {
       const records = detectOwned(e.command, result, await io.cwd(), await io.now(), await profileFor(io))
       await recordDetected(io, records)

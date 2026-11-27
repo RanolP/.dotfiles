@@ -1,7 +1,8 @@
 import { test, expect } from 'claude-code/testing'
-import { stopWorkerProcesses, acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, scanShellProcesses, touchResources, turnStartResources, unregisterResource } from './resources'
-import { envAgentIds, deliveredPath, loadLine, loadNotices, ownerNotices, pressureNotes, shellJobs } from './load'
+import { attributeFlights, beginFlight, stopWorkerProcesses, acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, scanShellProcesses, touchResources, turnStartResources, unregisterResource } from './resources'
+import { deliveredPath, loadLine, loadNotices, ownerNotices, pressureNotes, shellJobs } from './load'
 import { register } from './register'
+import { evalNeedle, matchFlights, parseForkLines } from './attribution'
 import type { MutexOwner, OwnedResource, ProcessResult, ResourceIo, ResourceSession } from './resources'
 import type { ResourceInput } from '../types'
 
@@ -600,26 +601,77 @@ test('regression: pressure candidates and watchdog stops name the worker that st
   expect(pressureNotes(4, 1, 8, [{ ...base, kind: 'process', id: 'pid:1@t', pid: 1, rss: 1024, label: 'mps', agentId: 'abea15e8dca011a5d' }])[1]).toContain('pid 1 1 MB mps (started by worker abea15e8dca011a5d)')
   expect(ownerNotices([{ ...stoppedJob, agent_id: 'abea15e8dca011a5d' }], 'A', new Set()).notes[0]).toContain('by worker abea15e8dca011a5d,')
   expect(ownerNotices([stoppedJob], 'A', new Set()).notes[0]).toContain('by main,')
-  expect([...envAgentIds('77 sleep 1777 HOME=/h CLAUDE_AGENT_ID=abea15e8dca011a5d\n78 sleep 1 HOME=/h')]).toEqual([[77, 'abea15e8dca011a5d']])
+  expect(ownerNotices([stoppedJob], 'A', new Set(), pid => pid === 7 ? 'abea15e8dca011a5d' : undefined).notes[0]).toContain('by worker abea15e8dca011a5d,')
 })
-test('regression: TaskStop kills a detached job of the stopped worker (ppid 1, survived 2026-11-27), spares main and other workers', async () => {
-  const shared = world()
-  const io = ioFor(shared, 'ts')
-  const live = new Set([77, 79])
-  io.run = async argv => {
-    shared.calls.push([...argv])
-    if (argv[1] === '-axwwE') return result(0, '77 sleep 1777 CLAUDE_AGENT_ID=abea15e8dca011a5d\n78 sleep 5 CLAUDE_AGENT_ID=a0000000000000000\n79 stubborn CLAUDE_AGENT_ID=abea15e8dca011a5d\n80 sleep 9 HOME=/h')
-    if (argv[1] === '-axo') return result(0, '77 1 1 S sleep 1777\n78 1 1 S sleep 5\n79 1 1 S stubborn\n80 1 1 S sleep 9')
-    if (argv[1] === '-0') return live.has(Number(argv[2])) ? result() : result(1)
-    if (argv[1] === '-TERM') live.delete(77)
-    if (argv[1] === '-KILL') for (const p of argv.slice(2)) live.delete(Number(p))
-    return result()
+
+const WORKER = 'abea15e8dca011a5d'
+// What fork-tracker.py writes for one Bash call: the zsh -c line Claude Code builds around eval '<command>'.
+const shellLine = (command: string, pid: number, pgid: number, t: number) => JSON.stringify({ pid, pgid, t, argv: ['/bin/zsh', '-c', "source /snap.sh 2>/dev/null || true && eval '" + command.replaceAll("'", "'\"'\"'") + "' < /dev/null && pwd -P >| /tmp/claude-cwd"] })
+const withProcesses = (shared: World, io: ResourceIo, ps: string, live: Set<number>) => {
+  const originalRun = io.run
+  io.run = async (argv, options) => {
+    if (argv[0] === '/bin/ps' && argv[1] === '-axwwo') { shared.calls.push([...argv]); return result(0, ps) }
+    if (argv[0] === '/bin/kill' && argv[1] === '-0') { shared.calls.push([...argv]); return live.has(Number(argv[2])) ? result() : result(1) }
+    if (argv[0] === '/bin/kill' && argv[1] === '-TERM') { shared.calls.push([...argv]); for (const p of argv.slice(2)) if (p !== '806') live.delete(Number(p)); return result() }
+    if (argv[0] === '/bin/kill' && argv[1] === '-KILL') { shared.calls.push([...argv]); for (const p of argv.slice(2)) live.delete(Number(p)); return result() }
+    return originalRun(argv, options)
   }
-  const note = await stopWorkerProcesses(io, 'abea15e8dca011a5d')
-  expect(note).toContain('pid 77 sleep 1777')
-  expect(note).toContain('pid 79 stubborn (needed SIGKILL)')
-  expect(note).not.toContain('pid 78')
-  expect(note).not.toContain('pid 80')
-  expect(shared.calls.find(a => a[1] === '-TERM')).toEqual(['/bin/kill', '-TERM', '77', '79'])
-  expect(shared.calls.find(a => a[1] === '-KILL')).toEqual(['/bin/kill', '-KILL', '79'])
+}
+
+test('regression 2026-11-27: a worker whose shell exits at once leaves an orphan that keeps its pgid, is attributed from the fork ledger and is killed by TaskStop', async () => {
+  const shared = world()
+  const io = ioFor(shared, 'orphan')
+  const command = "(nohup sleep 41 >/dev/null 2>&1 &); echo it's done"
+  const flight = beginFlight(WORKER, command, shared.now)
+  shared.files.set(ROOT + '/forks/101.jsonl', shellLine(command, 800, 800, shared.now + 20) + '\n')
+  flight.endedAt = shared.now + 120
+  const live = new Set([805, 806, 900])
+  // shell 800 is gone; orphans 805 and 806 (ppid 1) keep pgid 800; 900 is another group
+  withProcesses(shared, io, '805 800 sleep 41\n806 800 sleep 42\n900 900 unrelated\n', live)
+  await attributeFlights(io)
+  expect(readSession(shared, 'orphan')?.agentPgids).toEqual({ '800': WORKER })
+  const note = await stopWorkerProcesses(io, WORKER)
+  expect(note).toContain('pid 805 sleep 41')
+  expect(note).toContain('pid 806 sleep 42 (needed SIGKILL)')
+  expect(note).not.toContain('pid 900')
+  expect(shared.calls.find(a => a[1] === '-TERM')).toEqual(['/bin/kill', '-TERM', '805', '806'])
+  expect(shared.calls.find(a => a[1] === '-KILL')).toEqual(['/bin/kill', '-KILL', '806'])
+  expect(await stopWorkerProcesses(io, 'a0000000000000000')).toBeUndefined()
+})
+
+test('regression: two identical commands in flight from different agents pair with their shells by start order, and a shell from before the call is nobody\'s', () => {
+  const t0 = 1_000_000
+  const flights = [{ agentId: 'b1', command: 'sleep 5', startedAt: t0 + 10 }, { agentId: 'a1', command: 'sleep 5', startedAt: t0 }, { agentId: 'c1', command: 'echo stale', startedAt: t0 }]
+  const lines = parseForkLines([shellLine('sleep 5', 10, 10, t0 + 30), shellLine('sleep 5', 11, 11, t0 + 40), shellLine('echo stale', 9, 9, t0 - 5000)].join('\n') + '\ntorn')
+  const pairs = matchFlights(flights, lines, new Set())
+  expect(pairs.map(p => [p.flight.agentId, p.line.pgid])).toEqual([['a1', 10], ['b1', 11]])
+  expect(evalNeedle("it's")).toBe("eval 'it'\"'\"'s'")
+})
+
+test('regression: a worker job that outlived its shell (ppid 1) is listed with its worker from its pgid', async () => {
+  const shared = world()
+  writeSession(shared, 'scan-orphan', { profile: 'default', owned: [], mutexes: [], changes: [], agentPgids: { '800': WORKER } })
+  const io = ioFor(shared, 'scan-orphan')
+  withProcesses(shared, io, '805 800 sleep 41\n', new Set())
+  const originalRun = io.run
+  io.run = async (argv, options) => argv[1] === '-axo' ? result(0, '101 1 100 S claude --test\n805 1 2048 S sleep 41') : argv.includes('lstart=') ? result(0, 'start') : originalRun(argv, options)
+  await scanShellProcesses(io)
+  expect(readSession(shared, 'scan-orphan')?.owned[0]).toMatchObject({ pid: 805, agentId: WORKER })
+})
+
+test('regression: the Bash hook passes the command to the rest of the stack byte-identical, without an env prefix', async () => {
+  const shared = world()
+  const io = ioFor(shared, 'hook')
+  const hooks: Record<string, (...args: never[]) => unknown> = {}
+  const on = ((event: string, matcher: unknown, hook: (...args: never[]) => unknown) => { if (event === 'tool.call' && (matcher as { tool?: string }).tool === 'Bash') hooks.bash = hook }) as unknown as Parameters<typeof register>[0]
+  register(on, {})
+  const engine = { session: { id: io.sessionId, cwd: io.cwd, root: io.repo }, env: { get: async (k: string) => k === 'HOME' ? '/home/test' : undefined }, clock: { now: io.now }, fs: { exists: io.exists, list: io.list, read: io.read, write: io.write }, process: { run: io.run }, ui: { log: () => undefined } }
+  const command = "echo 'a' && ls"
+  let seen: Record<string, unknown> | undefined
+  const e = { tool: 'Bash', command, agentId: WORKER }
+  const next = async (input: Record<string, unknown>) => { seen = input; return { result: { exitCode: 0, stdout: '' } } }
+  await (hooks.bash as unknown as (...args: unknown[]) => Promise<unknown>)(engine, e, next)
+  expect(seen).toEqual(e)
+  expect(seen?.command).toBe(command)
+  expect(JSON.stringify(seen)).not.toContain('CLAUDE_AGENT_ID')
 })

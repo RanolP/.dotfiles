@@ -121,12 +121,16 @@ test('the summary prompt asks for a task brief and the head ranks newer context 
   expect([...headings].sort((a, b) => a - b)).toEqual(headings)
   expect(prompt).toContain('quoted in their own words')
   expect(prompt).toContain('@id')
+  // Regression (2026-11-27): a finished one-shot restart request carried as pending was carried out again and killed Firefox.
+  expect(prompt).toContain('done 17:31')
+  expect(summaryPrompt(undefined, '/p/t.jsonl')).toContain('/p/t.jsonl')
   expect(SUMMARY_HEAD).toContain('wayseeker section')
 })
 
 // Through the registered hooks, the test's own session.compact hook standing for the engine beneath the plugin.
 function engine(on: any, files: Record<string, string>, fsThrows = false, onWrite = () => {}) {
   on('session.id', () => ({ value: 's1' }))
+  on('session.info', () => ({ value: { transcriptPath: '/data/s1.jsonl' } }))
   on('process.hookEnv', () => ({ value: { CLAUDE_PLUGIN_DATA: '/data/bg-compact' } }))
   on('fs.exists', (_$: any, e: any) => { if (fsThrows) throw new Error('disk gone'); return { value: e.path in files } })
   on('fs.read', (_$: any, e: any) => ({ value: files[e.path] }))

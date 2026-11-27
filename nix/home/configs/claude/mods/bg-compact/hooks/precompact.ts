@@ -66,22 +66,24 @@ export function concat(rows: readonly SessionMessage[], pre: PreCompaction): { m
   return { messages: [summaryMessage(pre.summary), ...tail] }
 }
 
-export function summaryPrompt(previous?: string): string {
+export function summaryPrompt(previous?: string, transcript?: string): string {
   return [
     'Stop the task. You have no tools in this reply: answer straight away with text only.',
     'Write a continuation summary of this conversation for yourself: the same agent will carry on the work from it, with the summary in place of the turns it covers.',
     'Read the whole transcript, tool results included, and keep exact file paths, commands, commit SHAs, identifiers and numbers as they appear there.',
     'Cover, under these headings:',
-    '1. Task: what the user wants, and every instruction they gave, quoted in their own words.',
+    '1. Task: the request that opened the session, quoted verbatim; then each instruction of the user\'s that still governs the remaining work, quoted in their own words.',
+    'Close every one-shot request already carried out with "done" and the time it was done ("restart the dev server: done 17:31"), so the resumed agent reads it as finished and never carries it out again.',
     '2. Current work: what was in progress, its intent, and the very next action.',
     '3. Plan: the remaining items in order, each with its status.',
     '4. Done when: how each remaining item will be verified (the command, test or evidence).',
     '5. Artifacts: the exact paths, commits, commands and URLs to reopen.',
+    ...(transcript ? [`The full transcript stays on disk at ${transcript}: list that path first under Artifacts, so a detail this summary leaves out is searched there with rg rather than guessed.`] : []),
     '6. Decisions: what was decided and why.',
     '7. Open questions: what is unresolved or waiting on the user.',
     'After compaction a wayseeker section re-attaches the user\'s open instructions, each with an @id: cite that @id where an instruction you quote matches one, and still quote the user verbatim, since the section is an extracted paraphrase.',
     ...(previous ? [
-      'An earlier summary of this conversation follows. Extend it into one complete summary covering everything up to now: keep what still holds, update what changed, and add what came after it.',
+      'An earlier summary of this conversation follows. Extend it into one complete summary covering everything up to now: keep what still holds, update what changed, close each request finished since with its time, and add what came after it.',
       '<earlier-summary>', previous.trim(), '</earlier-summary>',
     ] : []),
     'Reply with the summary alone.',
@@ -104,6 +106,8 @@ export function limitOf(usage: SessionUsage): number | undefined {
 
 export type PreIo = {
   sessionId(): Promise<string>
+  // The main transcript file the summary points back to; absent in tests.
+  transcript?(): Promise<string | undefined>
   usage(): Promise<{ tokens?: number; limit?: number }>
   rows(): Promise<readonly SessionMessage[]>
   fork(prompt: string): Promise<{ text?: string; why?: string }>
@@ -173,7 +177,7 @@ export class PreCompactor {
     const rows = await io.rows()
     const at = boundaryOf(rows)
     if (!at) { await io.log('pre-compaction skipped: no user row to anchor a boundary'); return }
-    const reply = await io.fork(summaryPrompt(previous?.summary))
+    const reply = await io.fork(summaryPrompt(previous?.summary, await io.transcript?.()))
     if (!reply.text?.trim()) { await io.log(`pre-compaction fork gave no summary (${reply.why ?? 'empty'})`); return }
     const createdAt = await io.now()
     if ((this.generation.get(session) ?? 0) !== gen) { await io.log('pre-compaction dropped: the conversation compacted while it ran'); return }
@@ -224,6 +228,7 @@ export function preIo($: EngineInterface): PreIo {
   const readText = async (path: string) => (await $.fs.exists(path)) ? await $.fs.read(path) : undefined
   return {
     sessionId: () => $.session.id(),
+    transcript: () => $.session.info().then(i => i.transcriptPath || undefined, () => undefined),
     usage: async () => {
       const { context } = await $.session.usage()
       if (!limits.has(context.window)) limits.set(context.window, limitOf(await $.session.usage({ breakdown: 'summary' })))

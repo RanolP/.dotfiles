@@ -3,17 +3,19 @@
 
 Two policies contradict each other by design. `## Architect mode` puts every
 code mutation in a parallel worker and keeps the main thread on assessment,
-which is right when the main model's own tokens are the expensive ones. `## Delegation threshold` makes
+which is right when the main model is the orchestrator of the role model. `## Delegation threshold` makes
 inline work the default until the task outgrows the thread, which is right
-otherwise. Holding both in CLAUDE.md left a live conflict on the page and cost
+otherwise. Architect mode follows the role model in docs/src/harness.md: main is
+the lead practitioner who stays free for the user and owns every outcome, and
+workers are junior hires briefed in detail. Holding both in CLAUDE.md left a live conflict on the page and cost
 every session -- and every subagent spawn -- the bytes of the one it ignores,
 while CLAUDE.md had crossed the 40,000-char limit the harness warns about.
 
 So both moved here and exactly one is emitted per session. The model is read from the
 SessionStart payload, which per the hooks reference is the ONLY event that can
 carry a `model` field -- and "it is not guaranteed to be present". When it is
-missing, the transcript tail is read the way subagent-model-guard.py reads it
-(last `assistant` entry's `message.model`), which covers resume/clear/compact
+missing, the transcript tail is read (last `assistant` entry's
+`message.model`), which covers resume/clear/compact
 where a transcript already exists.
 
 When BOTH sources come up empty the architect rules are emitted. The asymmetry
@@ -37,9 +39,9 @@ ARCHITECT_MODELS = ("fable", "opus")
 RULES = """## Architect mode: the main thread talks, workers mutate
 - Main thread assesses (read, diagnose, scope, plan, brief, decide); every code mutation beyond the few-line edit below runs in a background worker, keeping main context free of read-before-write traces.
 - Spawn one worker per unit as it starts; send every unit with no unmet dependency in one message so they run in parallel; adopt each checked result as it lands. Snapshot `git status --porcelain` before spawning a read-only worker (`Explore`, `Plan`, `planner`, a reviewer) and diff it when the worker returns; a new change in that diff is the worker's violation to report, since other sessions share the checkout and the snapshot tells their edits apart.
-- Route by tier label: `haiku` mechanical, `sonnet` well-scoped, `opus` deep -- for research, lookups, and edits needing this session's Claude-side context (model-facing prompt text); Fable only via `oracle`. When two workers have failed the same brief's `Done when:`, send the brief and both failure reports to `oracle` before any third spawn.
-- Code from a settled plan goes, in the background, to the hetero-subagents type the `Non-Claude agent types` session list names for that kind of unit. Codex sees none of this thread: the brief opens with `Budget: <N> min`, then `writable: /abs/workdir, /abs/other` listing every directory it writes (checked against the plan's files), then goal, files, `Preserve:` (HEAD behaviours at file:line that must survive), `Reuse:` (existing helpers or twins at file:line), `Baseline:` (the verify command and its current pass count), `Done when:` (a failing test that must pass, or a concrete input -> output), constraints, plan decisions, then the exact return shape.
-- At the final gate (all units landed, before commit or push) spawn ONE `code-reviewer` on the combined diff (plus `hetero-subagents:codex:gpt-6.2-astra` when a Claude worker wrote a high-stakes diff); SendMessage each finding scored 80+ (the floor `code-reviewer` reports) to the implementer owning those lines, re-review only changed lines, max 3 rounds, then report open findings to the user. When the user said push, fixes ship once type-check and lint pass, without re-review.
+- Route workers as juniors: `sonnet` or `haiku` by default; hard work gets a more detailed brief and more checkpoints at the same tier; `opus` only for work needing this session's own context (model-facing prompt text); Fable only via `oracle`. When two workers have failed the same brief's `Done when:`, send the brief and both failure reports to `oracle` before any third spawn.
+- Code from a settled plan goes, in the background, to the hetero-subagents type the `Non-Claude agent types` session list names for that kind of unit. Codex sees none of this thread: the brief opens with `Budget: <N> min`, then `writable: /abs/workdir, /abs/other` listing every directory it writes (checked against the plan's files), then goal, files, `Known:`, `Stop when:` (the (report) defaults plus unit-specific ones), `Preserve:` (HEAD behaviours at file:line that must survive), `Reuse:` (existing helpers or twins at file:line), `Baseline:` (the verify command and its current pass count), `Done when:` (a failing test that must pass, or a concrete input -> output), constraints, plan decisions, then the exact return shape.
+- At the final gate (all units landed, before commit or push) of a diff that ships or that other code builds on, spawn ONE `code-reviewer` on the combined diff (plus `hetero-subagents:codex:gpt-6.2-astra` when a Claude worker wrote a high-stakes diff); SendMessage each finding scored 80+ (the floor `code-reviewer` reports) to the implementer owning those lines, re-review only changed lines, max 3 rounds, then report open findings to the user. When the user said push, fixes ship once type-check and lint pass, without re-review.
 - Main keeps the plan file, memory/evidence files, short read-only inspection (a couple of tool calls), and an edit of a few lines in one file it has already read, since a spawn outweighs a task that small."""
 
 LAZY_RULES = """## Delegation threshold: work inline until the task outgrows the thread

@@ -1,6 +1,6 @@
 ---
 name: jira-master
-description: Read and edit Jira card bodies as raw ADF through the `jira` CLI, never through markdown. Covers the read commands, the ADF staging workflow, and the image rules. Use when reading, searching, or changing any Jira card. The `jira-guard` PreToolUse hook injects this skill in full before any `jira edit` command.
+description: Read and edit Jira card bodies as raw ADF through the `jira` CLI, never through markdown. Covers the read commands, the ADF staging workflow, and the image rules. Use when reading, searching, or changing any Jira card.
 ---
 
 # Jira master

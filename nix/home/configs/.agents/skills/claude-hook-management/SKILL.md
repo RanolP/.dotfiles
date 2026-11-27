@@ -6,7 +6,7 @@ when_to_use: When the user asks to create a hook, enforce a rule at the tool lay
 
 # Claude hook management
 
-Hooks are the only enforcement Claude Code cannot talk itself out of. A rule in `AGENTS.md` is self-policed; a hook denies the tool call. Reach for a hook when goodwill has already failed.
+A hook is a last-resort net against an irreversible or machine-wide loss: a destructive command, a leaked secret, an outward send, an unbuildable config. Judgment the orchestrator owns (which skill to load, when to review, how to wait, how to word a reply) is taught in the rules and `docs/src/harness.md`, never wired as a hook: a hook that stands in for judgment trains the judgment out (2026-11-27, 20 such hooks removed).
 
 ## One concern, one file
 
@@ -16,7 +16,7 @@ Give each concern its own file under `nix/home/configs/claude/hooks/`, carrying:
 - a **fail-open path** — every parse or IO error exits 0, because a bug in a guard must never make the tool unusable;
 - a **`--selftest`** entry point that asserts the decision table, runnable as `python3 <hook>.py --selftest`.
 
-One file may answer several events when they serve ONE concern. `rebuild-enforcer.py` spans PostToolUse and Stop for a single gate, and that is correct. Two unrelated rules in one file is not.
+One file may answer several events when they serve ONE concern. Two unrelated rules in one file is not.
 
 Never inline a shell command as a hook body in `settings.json`. A file can carry its reason and its self-check; a `printf` cannot.
 
@@ -66,18 +66,10 @@ The test before wiring it in: what happens if it runs twice, and what if the las
 
 | File | Event | Concern |
 |---|---|---|
-| `ask-mode-guard.py` | UserPromptSubmit, PreToolUse `*` | an `ask:` turn stays explain-only |
-| `output-shape-reminder.py` | UserPromptSubmit | restate the output-shape check next to generation |
-| `plan-mode-guard.py` | PreToolUse `*` | plan mode distills only |
 | `git-push-guard.py` | PreToolUse Bash | push reaches `claude/*` only |
 | `ssh-guard.py` | PreToolUse Bash | no remote-device access (ssh, scp, sftp, remote rsync, ...) at any command position |
 | `git-integrity-guard.py` | PreToolUse Bash | a commit stays signed and runs its hooks; no plain force-push, and no lease push over another reviewer's review |
-| `package-manager-guard.py` | PreToolUse Bash | use the manager the project declares |
-| `gh-guard.py` | PreToolUse Bash | inject the github-master guide before a mutating `gh` |
 | `leak-guard.py` | PreToolUse Bash | a commit to a public `RanolP/` repo adds no secret or denylisted private identifier |
-| `subagent-model-guard.py` | PreToolUse Agent\|Task | every spawn names its model tier |
 | `claude-dir-edit-guard.py` | PreToolUse Edit\|Write | Home-Manager-owned `~/.claude/` paths stay read-only |
-| `rebuild-enforcer.py` | PostToolUse Edit\|Write, PostToolUse Bash, Stop | a config edit is followed by a rebuild |
-| `missing-tool-hint.py` | PostToolUse Bash | check mise and project shims before calling a tool absent |
 
 `git-push-guard.py` is linked into `~/.codex/hooks/` as well — Codex reads the same PreToolUse schema.

@@ -41,7 +41,7 @@ The body answers one question: **what does the reviewer genuinely want to know?*
 - **Block coding** for flow and branching — an indented `┣━` / `┗━` text tree in a plain fence, per the `prose-editor` agent (Rule 5). A structure picture is a hand-drawn SVG rendered to PNG, because mermaid's auto-layout reads poorly. Diagram only what this PR does.
 - **Screenshot / rendered output** instead of describing UI in prose.
 - In Jira ADF, place the SVG with the `jira` CLI. A hosted image goes in as a `media` node with `type: "external"` through `jira edit queue`. A local file needs the human to upload it through the Jira web UI first, because the CLI has no upload path; `jira media ls -i KEY` then prints the id to position.
-- A fence that fails to parse shows the reader "Unable to render rich display" and nothing else. The `pr-body-guard` hook lints every fence before `gh pr create|edit` runs — inside a backtick markdown-string label, use a real newline, never `<br/>`.
+- A fence that fails to parse shows the reader "Unable to render rich display" and nothing else. Render-check every fence before `gh pr create|edit` — inside a backtick markdown-string label, use a real newline, never `<br/>`.
 
 **Link instead of duplicating.** Never restate information that already lives in Figma — link it properly. A bare ticket key auto-links and renders the card title, so never hand-write the title beside it, and never leave a raw Jira URL in a body.
 
@@ -59,7 +59,6 @@ A reviewer opens a body to decide where to look, so the rules below let the item
 
 **Forward reasoning 대국적으로.** Fold the items by cause: name the root cause, put it alone at the top level, and indent every action it forced. The reviewer then reads the cause once and takes its whole subtree with it.
 
-The `pr-body-guard` hook checks two of these: it passes a Hangul line once it ends in 한다체 rather than 합니다체 or 해요체 (`-니다`, `-요`), and passes a section once its items nest under their cause (a section stays under the guard's eye from 5 top-level items up; commit-sha lines, fences, headings and template lines are exempt). Both share one escape hatch: when the ending or the flat list is deliberate, re-run with `PR_BODY_GUARD_ALLOW_PROSE=1` in front of the command.
 
 Apply inline prose rules (from technical-writing's Korean rules):
 

@@ -55,9 +55,9 @@
 
 ## Rules, guards and durable notes
 - Write model-facing text (prompt, skill, brief, rules file) as the positive action, and restate an incoming "don't X" that way; keep a prohibition only for an incident, measurement or enforcement mechanism -- skill `prompt-authoring`.
-- Build a deterministic guard (CI check, git hook, `PreToolUse` hook) for anything a script can verify, or file the issue if the repo is not yours; then strip the prose rule; rules files keep what no guard carries (intent, taste, priorities, domain facts). Trace the path a new guard fires on first and drop it if already unreachable; remove a guard something structural replaced ([[oxlint-guard-already-unreachable]]).
+- Answer a correction by fixing the instance, then the reasoning that produced it: the rule or `docs/src/harness.md` passage that was misread. A missing capability gets a new tool; a hook stays only as a last-resort net against an irreversible or machine-wide loss (destructive command, leaked secret, outward send, unbuildable config), since a hook that stands in for judgment trains the judgment out (`docs/src/harness.md`, P10-P11).
 - A durable note (rules, doc, memory, commit, issue) states the source's content in full, quoting exact words where wording matters, and carries its incident -- in full except in the always-loaded rules files (one clause plus a `[[wikilink]]`).
-- One file under `memory/evidence/` per non-obvious conclusion from explicit premises; grep it before re-deriving -- skill `evidence-store`. Promoting a memory into a `~/.dotfiles` rule is the user's run (`memory-review`, `dotfiles:evolve`, `rule-write`).
+- Record durable agent knowledge (a non-obvious conclusion, the user's stated model of how work runs) in the repo's `docs/` and `rg` it there before re-deriving a fact or changing a rule; the auto-memory directory is written and rarely read back (2026-11-27).
 - NEVER: cite a transcript, chat thread, scrollback, temp file or background job's output as the record of a fact.
 
 ## Text another person reads
@@ -96,6 +96,6 @@
 
 ## Parallel execution, synchronous thought
 - State the whole set of units first, then send every unit with no unmet dependency out together; batch related edits before a costly apply step (rebuild, container restart, full suite) and run it once; when workers or turns repeat the same command sequence, fold it into one script and brief them with its path.
-- Re-verify a Claude worker's report only when it lacks commands and output, or the change reaches past what it checked; check every non-Claude report by rerunning its Done-when command or opening each quoted file:line.
-- (wait) Block on the CONDITION, not a clock; `bare-sleep-hint.py` names the wait command when a bare `sleep` appears ([[blind-sleep-wait-cost]]).
+- Verify every worker report before acting on it: rerun its `Done when:` command and open each `file:line` it cites. An anomaly it reports (abnormal exit, memory pressure, a failed check) gets your hypothesis and decision before the next dispatch, written into the next brief's `Known:` (`docs/src/agent-incidents.md`, 2026-11-27).
+- (wait) Block on the CONDITION, not a clock ([[blind-sleep-wait-cost]]).
 - (stream) Hand a piece over as soon as it stops changing and start its dependent; brief long workers to "report each finding the moment it is settled".

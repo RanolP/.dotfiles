@@ -1,6 +1,6 @@
 ---
 name: prompt-authoring
-description: Write text that a model reads as behavior -- a skill, a subagent brief, a prompt, a rules file -- in positive form, so the instruction names the action to take rather than the anti-pattern to avoid. Covers which prohibitions earn their place and which plant the thing they forbid. Use when authoring or editing any SKILL.md, agent definition, AGENTS.md, CLAUDE.md, or prompt. The `prompt-authoring-guard` PreToolUse hook injects this skill at the first such edit of a session.
+description: Write text that a model reads as behavior -- a skill, a subagent brief, a prompt, a rules file -- in positive form, so the instruction names the action to take rather than the anti-pattern to avoid. Covers which prohibitions earn their place and which plant the thing they forbid. Use when authoring or editing any SKILL.md, agent definition, AGENTS.md, CLAUDE.md, or prompt.
 ---
 
 # Prompt authoring

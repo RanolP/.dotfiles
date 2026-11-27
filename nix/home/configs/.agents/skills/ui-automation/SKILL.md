@@ -1,6 +1,6 @@
 ---
 name: ui-automation
-description: Drive browser, simulator, device and app UI with `agent-browser` and `agent-device`, sending each scenario as ONE batch call so timing-bound UX survives the agent's own round-trip latency. Covers the batch syntax of both CLIs, where waits and evidence capture belong, how far one batch can reach, and the version-matched docs to read first. Use when automating any web page, simulator, physical device, TV or desktop app UI. The `agent-tooling-guard` PreToolUse hook injects this skill in full at the first `agent-browser` or `agent-device` command.
+description: Drive browser, simulator, device and app UI with `agent-browser` and `agent-device`, sending each scenario as ONE batch call so timing-bound UX survives the agent's own round-trip latency. Covers the batch syntax of both CLIs, where waits and evidence capture belong, how far one batch can reach, and the version-matched docs to read first. Use when automating any web page, simulator, physical device, TV or desktop app UI.
 ---
 
 # UI automation

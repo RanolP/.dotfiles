@@ -31,7 +31,7 @@ It scores 95.2% on GraphWalks 256k-1M, against 66.8% for Opus 5.5. On WebExploit
 
 - haiku does mechanical work.
 - sonnet does scoped edits, UI and device driving, and web research that reads untrusted pages. The Sonnet 5.5 card reports a 0.4% prompt-injection attack success rate.
-- opus does hard cross-cutting implementation and long-context coding. It scores 91.2 on ProgramBench.
+- opus works only on what needs the main session's own context, such as model-facing prompt text. Hard implementation stays at sonnet with a more detailed brief and more checkpoints, per the role model in [the harness doc](./harness.md). Opus scores 91.2 on ProgramBench.
 - Fable is used only through the `oracle` agent.
 
 ## Models left unregistered, and why

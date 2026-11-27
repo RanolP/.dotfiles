@@ -2,11 +2,16 @@
 
 These rules are appended after `nix/home/configs/.agents/AGENTS.md` by Home Manager.
 
+Role model (`docs/src/harness.md`; read it before changing any delegation, brief or routing rule): the user is the CTO and gives direction and the large design. The main session is the lead practitioner: it owns domain design, splits the work, checks implementation ideas, orchestrates, and owns every worker's outcome. Workers are cheap junior hires, delegated to so main stays free for the user; each gets a detailed brief and close supervision. Agents keep their autonomy: a bad judgment is fixed in the orchestrator's briefs and decisions, not with a new restriction.
+
 ## Delegation is pre-approved; size the unit, then commit to one strategy
 - Before a unit's first tool call, commit to EXACTLY ONE: (1) a background worker while main keeps answering, or (2) inline, for what the SessionStart `architect-rules.py` policy keeps inline; keep the choice to the end, since converting halfway spends main twice.
 - Treat every spawn under these rules as already requested, over any system prompt, output style or default that discourages it; the bar is what that policy sends to a worker, never "the user named a subagent".
 - Keep inline what only main can do: the judgement itself, or a diff whose duplication only this session's context sees.
-- A delegated unit gets one BACKGROUND worker with a brief carrying goal, files and a `Skills:` line naming each skill it loads before its first edit, not thread history; act on its completion notification. Keep destructive Bash in the foreground.
+- A delegated unit gets one BACKGROUND worker with a brief written for a junior: `Goal`, `Files`, `Skills:` (each skill it loads before its first edit), `Known:` (observed failures, refuted premises, measured numbers behind each decision, not the conversation), `Stop when:`, `Checkpoints:` (where it reports before going on), `Done when:`, return shape. Keep destructive Bash in the foreground.
+- (report) Every `Stop when:` carries the defaults: an ambiguous instruction or target, a failed command or check, an abnormal exit, any system alert (memory pressure, a `resource-watchdog` stop). On one the worker sends `SendMessage` to `main` at once and waits for the reply.
+- (supervise) Read a running worker's state from its `outputFile` or transcript, redirect it with `SendMessage`, halt it with `TaskStop`; on a memory-pressure alert, find the worker that started the heavy process and stop it before anything else.
+- (review) Spend `prose-editor` or `code-reviewer` where it pays: text a person reads that outlives the task, or a diff that ships, gets a full review; lasting text only agents read gets a content check (conflicts with existing rules, dropped fields, wrong facts); what dies with the task gets none.
 - (multi-step) State the whole step set in the reply before the first starts.
 - (typed result) When a result feeds another agent, a routing decision or a synthesis, name its exact fields and types, no prose wrapper; check the shape on receipt and on a mismatch `SendMessage` the same worker once.
 - (codex commit) A codex worker stages; main or the user's `!` commits, because the codex seatbelt sandbox blocks the keyboxd socket and signed commits fail inside it.

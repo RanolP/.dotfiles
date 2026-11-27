@@ -675,3 +675,21 @@ test('regression: the Bash hook passes the command to the rest of the stack byte
   expect(seen?.command).toBe(command)
   expect(JSON.stringify(seen)).not.toContain('CLAUDE_AGENT_ID')
 })
+
+test('regression: a shell sharing claude\'s own process group is never attributed and TaskStop never signals claude or its group', async () => {
+  const shared = world()
+  const io = ioFor(shared, 'claude-group')
+  const command = 'echo shares-claude-group'
+  const flight = beginFlight(WORKER, command, shared.now)
+  // the shell (pid 810) was not its own group leader: it carries claude's group 100, which header line says claude leads
+  shared.files.set(ROOT + '/forks/101.jsonl', '{"claudePgid": 100}\n' + shellLine(command, 810, 100, shared.now + 20) + '\n')
+  flight.endedAt = shared.now + 50
+  const live = new Set([101, 810, 811])
+  withProcesses(shared, io, '101 100 claude --test\n810 100 zsh shell\n811 100 sleep 9\n', live)
+  await attributeFlights(io)
+  expect(readSession(shared, 'claude-group')?.agentPgids).toBeUndefined()
+  // even a ledger that already maps the group (older tracker, hand edit) must not make TaskStop signal it
+  writeSession(shared, 'claude-group', { profile: 'default', owned: [], mutexes: [], changes: [], agentPgids: { '100': WORKER } })
+  expect(await stopWorkerProcesses(io, WORKER, 101)).toBeUndefined()
+  expect(shared.calls.some(a => a[0] === '/bin/kill' && (a[1] === '-TERM' || a[1] === '-KILL'))).toBe(false)
+})

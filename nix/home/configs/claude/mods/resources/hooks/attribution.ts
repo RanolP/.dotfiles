@@ -44,6 +44,16 @@ export const matchFlights = (flights: readonly Flight[], lines: readonly ForkLin
   return pairs
 }
 
+// The tracker writes {"claudePgid": n} once at start: the group claude itself leads, which no worker's job may ever be signalled through.
+export const parseClaudePgid = (text: string): number | undefined => {
+  let found: number | undefined
+  for (const raw of text.split('\n')) {
+    const m = raw.match(/^\{"claudePgid": (\d+)\}$/)
+    if (m) found = Number(m[1])
+  }
+  return found
+}
+
 export type PgidRow = { pgid: number; command: string }
 // `ps -axwwo pid=,pgid=,command=`
 export const parsePgidRows = (output: string) => {

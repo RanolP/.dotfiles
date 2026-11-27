@@ -74,8 +74,10 @@ export const loadNotices = async (io: ResourceIo, pid: number | undefined, owned
   if (path) {
     const raw = await readJson(io, path)
     const delivered = new Set(Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : [])
-    const rows = Object.keys(agentPgids).length ? parsePgidRows(await run(io, ['/bin/ps', '-axwwo', 'pid=,pgid=,command=']) ?? '') : new Map<number, PgidRow>()
-    const notices = ownerNotices(await readJson(io, `${home}/.cache/claude-resource-watchdog/stopped.json`), session, delivered, stopped => {
+    const stoppedJobs = await readJson(io, `${home}/.cache/claude-resource-watchdog/stopped.json`)
+    const needsAgent = Object.keys(agentPgids).length > 0 && Array.isArray(stoppedJobs) && stoppedJobs.some(e => record(e) && e.session_id === session && !e.agent_id && e.id && !delivered.has(`${e.id}:stop`))
+    const rows = needsAgent ? parsePgidRows(await run(io, ['/bin/ps', '-axwwo', 'pid=,pgid=,command=']) ?? '') : new Map<number, PgidRow>()
+    const notices = ownerNotices(stoppedJobs, session, delivered, stopped => {
       const group = rows.get(stopped)?.pgid
       return group === undefined ? undefined : agentPgids[String(group)]
     })

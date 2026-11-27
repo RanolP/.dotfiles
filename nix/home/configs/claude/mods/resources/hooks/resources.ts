@@ -1,7 +1,7 @@
 import type { EngineInterface, Register } from 'claude-code'
 import type { ResourceInput } from '../types'
 import { AGENT_ID_RE, infrastructure, loadLine, loadNotices, processRows, shellJobs } from './load'
-import { matchFlights, parseForkLines, parsePgidRows } from './attribution'
+import { matchFlights, parseClaudePgid, parseForkLines, parsePgidRows } from './attribution'
 import type { Flight } from './attribution'
 
 function fnv1a(seed: string): number {
@@ -1055,19 +1055,18 @@ export const attributeFlights = async (io: ResourceIo): Promise<void> => {
         pendingFlights.splice(i, 1)
       }
     }
-    const pairs = pendingFlights.length ? matchFlights(pendingFlights, parseForkLines(await io.read(await forkLedgerPath(io, claude)) ?? ''), claimedForks) : []
+    if (!pendingFlights.length) return
+    const ambiguous = new Set(pendingFlights.filter(f => pendingFlights.some(o => o !== f && o.command === f.command && o.agentId !== f.agentId)).map(f => f.command))
+    for (const command of ambiguous) io.log(`resources: identical Bash command in flight from different agents, paired by start order (${command.slice(0, 60)})`)
+    const ledger = await io.read(await forkLedgerPath(io, claude)) ?? ''
+    const pairs = matchFlights(pendingFlights, parseForkLines(ledger), claimedForks)
     for (const { flight } of pairs) pendingFlights.splice(pendingFlights.indexOf(flight), 1)
-    const added = pairs.flatMap(({ flight, line }) => flight.agentId === undefined ? [] : [[String(line.pgid), flight.agentId] as const])
     if (claimedForks.size > 5000) claimedForks.clear()
-    if (!added.length && !Object.keys((await readSession(io, session)).agentPgids ?? {}).length) return
-    // A group no process carries any more is dropped, so a reused pid is never read as a worker's group.
-    const live = new Set([...await pgidRows(io)].map(([, row]) => String(row.pgid)))
-    await mutateSession(io, session, current => {
-      const merged = { ...current.agentPgids, ...Object.fromEntries(added) }
-      const kept = Object.fromEntries(Object.entries(merged).filter(([pgid]) => live.has(pgid)))
-      const { agentPgids: _before, ...rest } = current
-      return { next: Object.keys(kept).length ? { ...rest, agentPgids: kept } : rest, result: undefined }
-    })
+    // Only a shell that leads its own group names a worker's group; one sharing claude's (or any other) group would let TaskStop signal bystanders.
+    const claudeGroup = parseClaudePgid(ledger)
+    const added = pairs.flatMap(({ flight, line }) => flight.agentId === undefined || line.pgid !== line.pid || line.pgid === claudeGroup ? [] : [[String(line.pgid), flight.agentId] as const])
+    if (!added.length) return
+    await mutateSession(io, session, current => ({ next: { ...current, agentPgids: { ...current.agentPgids, ...Object.fromEntries(added) } }, result: undefined }))
   })
 }
 
@@ -1097,6 +1096,14 @@ export const scanShellProcesses = async (io: ResourceIo) => {
     const row = resource.kind === 'process' && resource.pid !== undefined ? rows.get(resource.pid) : undefined
     if (row && !row.stat.startsWith('Z') && !jobs.some(job => job.pid === row.pid)) jobs.push(row)
   }
+  // A group no process carries any more is dropped, so a reused pid is never read as a worker's group.
+  const livePgids = new Set([...groups.values()].map(row => String(row.pgid)))
+  const stale = Object.keys(current.agentPgids ?? {}).filter(pgid => !livePgids.has(pgid))
+  if (stale.length) await mutateSession(io, session, state => {
+    const { agentPgids, ...rest } = state
+    const kept = Object.fromEntries(Object.entries(agentPgids ?? {}).filter(([pgid]) => !stale.includes(pgid)))
+    return { next: Object.keys(kept).length ? { ...rest, agentPgids: kept } : rest, result: undefined }
+  })
   const agentOf = (pid: number) => { const group = groups.get(pid)?.pgid; return group === undefined ? undefined : current.agentPgids?.[String(group)] }
   // A worker's job that outlived its shell has ppid 1, so the tree walk above misses it; its process group still names it.
   for (const row of rows.values()) {
@@ -1128,10 +1135,12 @@ export const stopWorkerProcesses = async (io: ResourceIo, agentId: string, ownPi
   if (!AGENT_ID_RE.test(agentId)) return undefined
   const session = await io.sessionId()
   await attributeFlights(io)
-  const groups = new Set(Object.entries((await readSession(io, session)).agentPgids ?? {}).filter(([, id]) => id === agentId).map(([pgid]) => Number(pgid)))
+  const claude = (await identityFor(io, session)).pid
+  const claudeGroup = claude === undefined ? undefined : parseClaudePgid(await io.read(await forkLedgerPath(io, claude)) ?? '')
+  const groups = new Set(Object.entries((await readSession(io, session)).agentPgids ?? {}).filter(([, id]) => id === agentId).map(([pgid]) => Number(pgid)).filter(pgid => pgid !== claudeGroup))
   if (!groups.size) return undefined
   const commands = await pgidRows(io)
-  const pids = [...commands].filter(([pid, row]) => groups.has(row.pgid) && pid !== ownPid).map(([pid]) => pid)
+  const pids = [...commands].filter(([pid, row]) => groups.has(row.pgid) && pid !== ownPid && pid !== claude).map(([pid]) => pid)
   if (!pids.length) return undefined
   const alive = async () => {
     const live: number[] = []
@@ -1239,7 +1248,7 @@ export const registerResources: Register = (on) => {
     const result = await (async () => {
       try { return await next(e) } finally { flight.endedAt = await io.now() }
     })()
-    await attributeFlights(io).catch(err => io.log(`resources: fork attribution failed: ${String(err)}`))
+    void attributeFlights(io).catch(err => io.log(`resources: fork attribution failed: ${String(err)}`))
     try {
       const records = detectOwned(e.command, result, await io.cwd(), await io.now(), await profileFor(io))
       await recordDetected(io, records)

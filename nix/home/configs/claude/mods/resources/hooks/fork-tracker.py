@@ -64,6 +64,7 @@ def main():
                 try: os.unlink(os.path.join(directory, stem + suffix))
                 except OSError: pass
     out = open(ledger, 'a', buffering=1)
+    out.write(json.dumps({'claudePgid': os.getpgid(claude)}) + '\n')  # a worker's job must never be signalled through claude's own group
 
     def record(pid, argv):
         try: pgid = os.getpgid(pid)
@@ -87,11 +88,14 @@ def main():
 
     def scan():
         for pid in children(claude):
-            if pid not in watched:
-                watched.add(pid)
-                try: kq.control([ev(pid, select.KQ_NOTE_EXEC | select.KQ_NOTE_EXIT)], 0)
-                except OSError: watched.discard(pid); continue
-            inspect(pid)
+            if pid in watched:
+                inspect(pid)
+                continue
+            inspect(pid)  # read at the fork itself: a fast shell may exit before the watch below is placed
+            watched.add(pid)
+            try: kq.control([ev(pid, select.KQ_NOTE_EXEC | select.KQ_NOTE_EXIT)], 0)
+            except OSError: watched.discard(pid); continue
+            inspect(pid)  # closes the gap between the first read and the watch (exec in between)
 
     scan()
     while alive(claude):

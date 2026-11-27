@@ -1,5 +1,5 @@
 import { test, expect } from 'claude-code/testing'
-import { stopWorkerProcesses, taggedBash, acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, scanShellProcesses, touchResources, turnStartResources, unregisterResource } from './resources'
+import { recheckTagged, untaggedCommand, stopWorkerProcesses, taggedBash, acquireResource, applyResourceAction, consumeResourceNotice, detectOwned, endResources, guardBash, handleResourceTool, profileName, recordDetected, registerResource, releaseResource, resourceKey, resourceLedgerLines, scanShellProcesses, touchResources, turnStartResources, unregisterResource } from './resources'
 import { envAgentIds, deliveredPath, loadLine, loadNotices, ownerNotices, pressureNotes, shellJobs } from './load'
 import { register } from './register'
 import type { MutexOwner, OwnedResource, ProcessResult, ResourceIo, ResourceSession } from './resources'
@@ -627,4 +627,21 @@ test('regression: TaskStop kills a detached job of the stopped worker (ppid 1, s
   expect(note).not.toContain('pid 80')
   expect(shared.calls.find(a => a[1] === '-TERM')).toEqual(['/bin/kill', '-TERM', '77', '79'])
   expect(shared.calls.find(a => a[1] === '-KILL')).toEqual(['/bin/kill', '-KILL', '79'])
+})
+
+test('regression: a worker read tagged with its own id is judged as the untagged command (every worker rg asked, 2026-11-27)', async () => {
+  const id = 'a0810850cc8220ed1'
+  const tagged = taggedBash({ command: 'rg -n x docs | head -20', agentId: id }).command
+  expect(untaggedCommand(tagged, id)).toBe('rg -n x docs | head -20')
+  expect(untaggedCommand(tagged, 'abea15e8dca011a5d')).toBe(undefined)
+  expect(untaggedCommand('rg x', undefined)).toBe(undefined)
+  const asked: string[] = []
+  type V = { decision: string; hook?: string; rule?: string }
+  const check = async (command: string): Promise<V> => (asked.push(command), { decision: command.startsWith('rg') ? 'allow' : 'ask' })
+  expect((await recheckTagged({ decision: 'ask' }, 'rg -n x docs | head -20', check)).decision).toBe('allow')
+  expect((await recheckTagged({ decision: 'ask' }, 'rm -rf build', check)).decision).toBe('ask')
+  expect((await recheckTagged({ decision: 'deny' }, 'rg x', check)).decision).toBe('deny')
+  expect((await recheckTagged({ decision: 'ask', hook: 'PreToolUse' }, 'rg x', check)).decision).toBe('ask')
+  expect((await recheckTagged({ decision: 'ask', rule: 'Bash(rg:*)' }, 'rg x', check)).decision).toBe('ask')
+  expect(asked).toEqual(['rg -n x docs | head -20', 'rm -rf build'])
 })

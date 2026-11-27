@@ -1114,7 +1114,26 @@ const activateResourceIo = ($: ResourceEngine, sessionId?: string) => {
 // A subagent's Bash env equals main's, so the tag is the only thing that says which worker started a process.
 export const taggedBash = <T extends { command: string; agentId?: string }>(e: T): T =>
   e.agentId !== undefined && AGENT_ID_RE.test(e.agentId) ? { ...e, command: `export CLAUDE_AGENT_ID=${e.agentId}; ${e.command}` } : e
+// taggedBash's `export` makes core read a worker's `rg | head` as an env-changing compound, so every worker read
+// asked for approval (2026-11-27). Strip only the exact prefix this call got, so a forged prefix is judged as written.
+export const untaggedCommand = (command: unknown, agentId?: string) => {
+  if (typeof command !== 'string' || agentId === undefined || !AGENT_ID_RE.test(agentId)) return undefined
+  const prefix = `export CLAUDE_AGENT_ID=${agentId}; `
+  return command.startsWith(prefix) ? command.slice(prefix.length) : undefined
+}
+// Loosens only core's own ask (no hook, plugin or rule behind it), and only to the verdict the untagged command gets.
+export const recheckTagged = async <V extends { decision: string; hook?: string; plugin?: string; rule?: string }>(verdict: V, original: string | undefined, check: (command: string) => Promise<V>) => {
+  if (original === undefined || verdict.decision !== 'ask' || verdict.hook || verdict.plugin || verdict.rule) return verdict
+  const plain = await check(original)
+  return plain.decision === 'allow' ? plain : verdict
+}
 export const registerResources: Register = (on) => {
+  on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
+    const verdict = await next(e)
+    const input = typeof e.input === 'object' && e.input !== null ? e.input as Record<string, unknown> : {}
+    return recheckTagged(verdict, untaggedCommand(input.command, e.agentId), command => $.tool.check({ tool: 'Bash', input: { ...input, command } }))
+  })
+
   on('turn.start', { turnId: /.*/ }, async ($, e, next) => {
     try { await turnStartResources(activateResourceIo($)) }
     catch (err) { $.ui.log(`resources: turn start failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }

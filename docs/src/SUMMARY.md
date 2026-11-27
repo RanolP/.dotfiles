@@ -15,6 +15,7 @@
 - [Claude Code](./claude-code.md)
 - [Codex](./codex.md)
 - [Choosing a subagent by kind of work](./model-routing.md)
+- [Agent harness: roles and delegation](./harness.md)
 - [Karabiner](./karabiner.md)
 - [LinearMouse](./linearmouse.md)
 - [Raycast](./raycast.md)

@@ -158,6 +158,10 @@ Across two projects in two days the same shape recurred. An audio-model run prod
 
 Asked why a development loop was slow, an agent listed three plausible causes. The user: "그건 니가 gpu 쓰면 될걸 cpu 쓴 게 문제 아니었을까" (wasn't it that you used the CPU where the GPU was available). None of the three causes had been checked against live counters, and the one resource that bounded the run was never measured. A speed number is now explained only after the bounding resource is named from counters taken during the run (`nvidia-smi` utilization and device placement, per-process CPU in `top`, I/O wait, a profiler).
 
+## 2026-11-27 -- an orchestrator passed a refuted premise to a junior worker and the Mac reset
+
+At 13:27 KST the Mac hung and came back at 13:29:59 through a hardware watchdog reset (`panic-base+socd`: "SOCD report detected: (iBoot panic)"; `ResetCounter`: "Boot faults: wdog"). The 2026-11-23 reset has the same signature. A main Opus 5.5 session was running IndexTTS-2 on MPS on the 24GB Mac. Its own notes on the first run say "27.6 GB peak footprint ... no stop by the watchdog ... pressure going to level 4 and swap growing to 8 GB". It then briefed a Sonnet 5.5 worker with "the resource-watchdog SIGSTOPs the largest process when kern.memorystatus_vm_pressure_level >= 2" and the same `launch.sh`, which backgrounds python with `&` and exits, so launchd adopts it. `resource-watchdog.py` only considered jobs under an agent shell, so it froze a 1 MB `eza` and a 51 MB `stop_hook.py` while pressure went critical. The resources mod told the session "memory pressure was critical (level 4)" and "hold off on new heavy jobs"; the worker started the next batch at 13:27:03. The watchdog now also freezes an orphaned job whose env carries `CLAUDECODE=1` and whose RSS is at least 512 MB (`40c110d`). The user placed the failure on the orchestrator, not on missing guardrails, and rejected tighter guardrails as the fix; the role model and the plan built from it are in [the harness doc](./harness.md).
+
 ## Rule enforcers
 
 | Rule | Lives in | Enforced by | Incidents |

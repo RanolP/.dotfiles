@@ -403,6 +403,7 @@ path = [
     "docs/src/agent-incidents.md",
     "docs/src/xpkg.md",
     "docs/src/model-routing.md",
+    "docs/src/harness.md",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 RanolP"

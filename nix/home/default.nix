@@ -366,27 +366,14 @@ in
         source = ./configs/claude/hooks/declarative-package-guard.py;
         executable = true;
       };
-      # A flake reads the git tree, so a new file that was never staged is
-      # invisible to the rebuild. Stage the untracked ones before it runs.
-      # Commit b28bf99 shipped declarative-package-guard.py without its
-      # settings.json registration, leaving it deployed-but-inert for weeks. The
-      # guard denies a commit whose edited files never had their check run.
-      ".claude/hooks/commit-check-guard.py" = {
-        source = ./configs/claude/hooks/commit-check-guard.py;
-        executable = true;
-      };
       # Denies a commit to a github.com/RanolP/ repo whose staged diff adds a
       # secret or a denylisted private identifier.
       ".claude/hooks/leak-guard.py" = {
         source = ./configs/claude/hooks/leak-guard.py;
         executable = true;
       };
-      # Nothing triggered the memory-review skill, so promotion candidates piled
-      # up unread. This nudges once the pile grows.
-      ".claude/hooks/memory-review-nudge.py" = {
-        source = ./configs/claude/hooks/memory-review-nudge.py;
-        executable = true;
-      };
+      # A flake reads the git tree, so a new file that was never staged is
+      # invisible to the rebuild. Stage the untracked ones before it runs.
       ".claude/hooks/flake-stage-guard.py" = {
         source = ./configs/claude/hooks/flake-stage-guard.py;
         executable = true;
@@ -415,52 +402,10 @@ in
         source = ./configs/claude/hooks/ssh-guard.py;
         executable = true;
       };
-      ".claude/hooks/subagent-model-guard.py" = {
-        source = ./configs/claude/hooks/subagent-model-guard.py;
-        executable = true;
-      };
-      # The positive-form authoring rules arrive when behavior text is edited,
-      # not in every session's CLAUDE.md.
-      ".claude/hooks/prompt-authoring-guard.py" = {
-        source = ./configs/claude/hooks/prompt-authoring-guard.py;
-        executable = true;
-      };
-      # Point a reader-facing Markdown/HTML edit at the prose-editor subagent,
-      # once per file per session, without denying the edit.
-      ".claude/hooks/prose-review-nudge.py" = {
-        source = ./configs/claude/hooks/prose-review-nudge.py;
-        executable = true;
-      };
       # The Fable-only rules load at SessionStart when the model is Fable, so a
       # non-Fable session does not carry them in CLAUDE.md.
       ".claude/hooks/architect-rules.py" = {
         source = ./configs/claude/hooks/architect-rules.py;
-        executable = true;
-      };
-      # Enforce the repo's declared package manager (npm/pnpm/yarn/bun).
-      ".claude/hooks/package-manager-guard.py" = {
-        source = ./configs/claude/hooks/package-manager-guard.py;
-        executable = true;
-      };
-      # Nudge UI automation toward agent-browser / agent-device: one prompt
-      # per session per family, then out of the way.
-      ".claude/hooks/agent-tooling-guard.py" = {
-        source = ./configs/claude/hooks/agent-tooling-guard.py;
-        executable = true;
-      };
-      # Force-inject github-master guides on mutating gh pr/issue commands.
-      ".claude/hooks/gh-guard.py" = {
-        source = ./configs/claude/hooks/gh-guard.py;
-        executable = true;
-      };
-      # Force-inject the jira-master skill on mutating `jira edit` commands.
-      ".claude/hooks/jira-guard.py" = {
-        source = ./configs/claude/hooks/jira-guard.py;
-        executable = true;
-      };
-      # Keep a PR body from losing remote lines or shipping a broken mermaid fence.
-      ".claude/hooks/pr-body-guard.py" = {
-        source = ./configs/claude/hooks/pr-body-guard.py;
         executable = true;
       };
       # Keep 시말서 records in .apologies/ from reaching any outbound channel.
@@ -468,53 +413,15 @@ in
         source = ./configs/claude/hooks/apology-leak-guard.py;
         executable = true;
       };
-      # Route a single-file shell edit back to Edit/Write, which skip the
-      # ~2s approval step a write-shaped shell command pays.
-      ".claude/hooks/file-edit-guard.py" = {
-        source = ./configs/claude/hooks/file-edit-guard.py;
-        executable = true;
-      };
       # Deny direct edits to ~/.claude/ -- the repo is the source of truth.
       ".claude/hooks/claude-dir-edit-guard.py" = {
         source = ./configs/claude/hooks/claude-dir-edit-guard.py;
-        executable = true;
-      };
-      # Block finishing a session with unapplied nix/home/configs edits.
-      ".claude/hooks/rebuild-enforcer.py" = {
-        source = ./configs/claude/hooks/rebuild-enforcer.py;
         executable = true;
       };
       # Snapshot MCP token health before the session connects, so an "it logged
       # out again" report separates an expired token from a failed refresh.
       ".claude/hooks/mcp-auth-log.py" = {
         source = ./configs/claude/hooks/mcp-auth-log.py;
-        executable = true;
-      };
-      # Plan mode is distill-only: deny every tool except plan-file writes
-      # and ExitPlanMode once permission_mode is "plan".
-      ".claude/hooks/plan-mode-guard.py" = {
-        source = ./configs/claude/hooks/plan-mode-guard.py;
-        executable = true;
-      };
-      # `ask:` prompts become text-only turns: every tool call is denied.
-      ".claude/hooks/ask-mode-guard.py" = {
-        source = ./configs/claude/hooks/ask-mode-guard.py;
-        executable = true;
-      };
-      # Restate the output-shape check next to generation, where it applies.
-      ".claude/hooks/output-shape-reminder.py" = {
-        source = ./configs/claude/hooks/output-shape-reminder.py;
-        executable = true;
-      };
-      # A prompt complaining of a repeated mistake gets a nudge to turn the
-      # class into a mechanism (skill `correct` / `rule-write`).
-      ".claude/hooks/repeat-correction-nudge.py" = {
-        source = ./configs/claude/hooks/repeat-correction-nudge.py;
-        executable = true;
-      };
-      # Block a "done" reply when nothing ran after the turn's last code edit.
-      ".claude/hooks/done-claim-guard.py" = {
-        source = ./configs/claude/hooks/done-claim-guard.py;
         executable = true;
       };
       # Deny Slack write tools when the call comes from a subagent.
@@ -525,11 +432,6 @@ in
       # Deny edits under a directory a baseline run has locked.
       ".claude/hooks/baseline-lock-guard.py" = {
         source = ./configs/claude/hooks/baseline-lock-guard.py;
-        executable = true;
-      };
-      # Block a mostly-English reply when the output style requires Korean.
-      ".claude/hooks/korean-reply-guard.py" = {
-        source = ./configs/claude/hooks/korean-reply-guard.py;
         executable = true;
       };
       # Keep Claude Code's Rex pane tinted for the cwd or file it just touched.
@@ -554,15 +456,6 @@ in
       ".claude/mods/request".source = ./configs/claude/mods/request;
       # bg-compact: pre-compute a summary before the auto-compact limit so compaction is that summary plus the later messages
       ".claude/mods/bg-compact".source = ./configs/claude/mods/bg-compact;
-      # On "command not found", point at mise/project shims before installs.
-      ".claude/hooks/missing-tool-hint.py" = {
-        source = ./configs/claude/hooks/missing-tool-hint.py;
-        executable = true;
-      };
-      ".claude/hooks/bare-sleep-hint.py" = {
-        source = ./configs/claude/hooks/bare-sleep-hint.py;
-        executable = true;
-      };
       # Reuse the Claude policy scripts; the Codex adapter translates tool payloads.
       ".codex/hooks/claude-hook-adapter.py" = {
         source = ./configs/codex/hooks/claude-hook-adapter.py;
@@ -585,55 +478,15 @@ in
         source = ./configs/claude/hooks/ssh-guard.py;
         executable = true;
       };
-      ".codex/hooks/package-manager-guard.py" = {
-        source = ./configs/claude/hooks/package-manager-guard.py;
-        executable = true;
-      };
       ".codex/hooks/declarative-package-guard.py" = {
         source = ./configs/claude/hooks/declarative-package-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/gh-guard.py" = {
-        source = ./configs/claude/hooks/gh-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/jira-guard.py" = {
-        source = ./configs/claude/hooks/jira-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/pr-body-guard.py" = {
-        source = ./configs/claude/hooks/pr-body-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/file-edit-guard.py" = {
-        source = ./configs/claude/hooks/file-edit-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/agent-tooling-guard.py" = {
-        source = ./configs/claude/hooks/agent-tooling-guard.py;
-        executable = true;
-      };
-      ".codex/hooks/prompt-authoring-guard.py" = {
-        source = ./configs/claude/hooks/prompt-authoring-guard.py;
         executable = true;
       };
       ".codex/hooks/claude-dir-edit-guard.py" = {
         source = ./configs/claude/hooks/claude-dir-edit-guard.py;
         executable = true;
       };
-      ".codex/hooks/rebuild-enforcer.py" = {
-        source = ./configs/claude/hooks/rebuild-enforcer.py;
-        executable = true;
-      };
-      ".codex/hooks/missing-tool-hint.py" = {
-        source = ./configs/claude/hooks/missing-tool-hint.py;
-        executable = true;
-      };
-      ".codex/hooks/output-shape-reminder.py" = {
-        source = ./configs/claude/hooks/output-shape-reminder.py;
-        executable = true;
-      };
-      # The three-day transcript audit behind file-edit-guard.py counted 414
+      # A three-day transcript audit counted 414
       # throwaway python3 file edits at a 2.45s median against 88 Edit calls at
       # a 0.11s median. Where the work genuinely has to stay in the shell, this
       # gives it an edit primitive with the safety properties of the Edit tool

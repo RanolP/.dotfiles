@@ -27,7 +27,7 @@ Two pattern sources scan the ADDED lines of those diffs (`-U0`, `+` lines):
 
 Escape hatch for a deliberate false positive: `LEAK_GUARD_ALLOW=1 git commit ...`.
 
-Parsing reuses `commit-check-guard.py`'s single-pass, O(n), quote-aware
+Parsing uses a single-pass, O(n), quote-aware
 tokenizer. Never a backtracking regex over the whole command: `git-push-guard.py`
 once ReDoSed for minutes on a long quoted command and hung every Bash call.
 
@@ -95,7 +95,7 @@ def decide(decision, reason):
 
 def parse_segments(command):
     """Single-pass, O(n) split of a shell command into operator-separated
-    segments of whitespace-separated tokens (copied from commit-check-guard.py).
+    segments of whitespace-separated tokens.
 
     Quote characters are consumed; `&& || ; & |` split only outside quotes.
     Never backtracks, so it cannot ReDoS. parse_error marks an unterminated

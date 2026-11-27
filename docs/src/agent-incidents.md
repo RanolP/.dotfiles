@@ -36,11 +36,11 @@ So `nix/home/darwin/default.nix` fetches the official upstream release, then mou
 
 The broken seal also explains why espanso once lost Accessibility on every release bump (2026-08-11). macOS records a TCC grant made to an app whose seal does not validate as a bare `cdhash` requirement, which names one build; System Settings still showed the toggle on while the new build ran unpermitted. `sudo tccutil reset Accessibility com.federicoterzi.espanso`, then restarting the launchd job so the validly signed app asked again, produced `identifier "com.federicoterzi.espanso" and anchor apple generic and certificate leaf[subject.OU] = "6424323YUH"`, which every later release from the same signer satisfies. Check the stored requirement with `sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "select quote(csreq) from access where client='com.federicoterzi.espanso';"` and decode it with `csreq -r <blob> -t`.
 
-## 2026-08-27 -- file-edit-guard.py was registered without being deployed and stopped every Bash call
+## 2026-08-27 -- file-edit-guard.py (removed 2026-11-27) was registered without being deployed and stopped every Bash call
 
 A `PreToolUse` hook on the `Bash` matcher runs in front of every Bash call in every session on this machine, so a bad one is a total work stoppage that only a rebuild can lift.
 
-`file-edit-guard.py` was registered in `nix/home/configs/claude/settings.json` while both its `home.file` entry in `nix/home/default.nix` and its `git add` were missing. Python exited `2` on the absent file, `PreToolUse` read exit `2` as a block, and every Bash call in every session died with `can't open file '/Users/ranolp/.claude/hooks/file-edit-guard.py'`. It stayed broken until the entry was added and the user rebuilt.
+`file-edit-guard.py` (removed 2026-11-27) was registered in `nix/home/configs/claude/settings.json` while both its `home.file` entry in `nix/home/default.nix` and its `git add` were missing. Python exited `2` on the absent file, `PreToolUse` read exit `2` as a block, and every Bash call in every session died with `can't open file '/Users/ranolp/.claude/hooks/file-edit-guard.py'`. It stayed broken until the entry was added and the user rebuilt.
 
 Two structural facts caused it. Nix deploys the hooks directory as one explicit entry per script, never by directory recursion, so a new script that is not listed is not deployed. And a flake reads the git tree, so a file that was never `git add`ed is invisible to the rebuild even when it exists on disk.
 

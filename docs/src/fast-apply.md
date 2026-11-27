@@ -13,4 +13,4 @@ Local file-edit command for exact replacements and anchored block merges.
 | Either edit mode with `--dry-run` | Prints the proposed diff without writing |
 | `fast-apply --selftest` | Runs the script's offline assertions |
 
-Edits refuse ambiguous or missing matches, write atomically, and print a diff. `nix/home/configs/claude/hooks/file-edit-guard.py` can direct shell-based file edits to this command.
+Edits refuse ambiguous or missing matches, write atomically, and print a diff.

@@ -91,37 +91,7 @@ timeout = 30
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/package-manager-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
 command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/declarative-package-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/gh-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/jira-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" --timeout 25 "$HOME/.codex/hooks/pr-body-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/file-edit-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/agent-tooling-guard.py"'
 timeout = 30
 
 [[hooks.PreToolUse]]
@@ -130,41 +100,6 @@ matcher = "^apply_patch$"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/claude-dir-edit-guard.py"'
-timeout = 30
-
-[[hooks.PreToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/prompt-authoring-guard.py"'
-timeout = 30
-
-[[hooks.PostToolUse]]
-matcher = "^apply_patch$"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/rebuild-enforcer.py"'
-timeout = 30
-
-[[hooks.PostToolUse]]
-matcher = "^Bash$"
-
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/missing-tool-hint.py"'
-timeout = 30
-
-[[hooks.UserPromptSubmit]]
-
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/output-shape-reminder.py"'
-timeout = 30
-
-[[hooks.Stop]]
-
-[[hooks.Stop.hooks]]
-type = "command"
-command = 'python3 "$HOME/.codex/hooks/claude-hook-adapter.py" "$HOME/.codex/hooks/rebuild-enforcer.py"'
 timeout = 30
 
 [hooks.state."@codexConfig@:pre_tool_use:0:0"]
@@ -180,46 +115,13 @@ trusted_hash = "sha256:324d0772394c6bcb2ce898f4adb0c51fe6754890eb3d27a00625bdf2a
 trusted_hash = "sha256:45ba7398a70caab1b0eaf05b3eaeab87020c4b8126d79df1babb29979238beb4"
 
 [hooks.state."@codexConfig@:pre_tool_use:0:4"]
-trusted_hash = "sha256:8a73e021ed03d4376b8656675a0c236017ee2ce1d8dbdb162ddbf9035effe8c9"
-
-[hooks.state."@codexConfig@:pre_tool_use:0:5"]
 trusted_hash = "sha256:51cf946f8991ec72798464903ef1df3a76a8a47ccc205f828e7b51a6a587d407"
-
-[hooks.state."@codexConfig@:pre_tool_use:0:6"]
-trusted_hash = "sha256:35b738910c05f1c0a406325a77bb8ed3166124cb754aa42e758a6ad93e4b0faf"
-
-[hooks.state."@codexConfig@:pre_tool_use:0:7"]
-trusted_hash = "sha256:8afd7ca91e2521992f484dbd7fc798f04449c96bfa64451525b70f2558d81981"
-
-[hooks.state."@codexConfig@:pre_tool_use:0:8"]
-trusted_hash = "sha256:d5dbff449bf359cc8fd6af8f6c2318e297ebf47c1e0b1eb087e7fee4f54dcbb4"
-
-[hooks.state."@codexConfig@:pre_tool_use:0:9"]
-trusted_hash = "sha256:1f9f01c318fb17b797fa0ae132031be37bef46b32b367a14c9f644a76582501a"
-
-[hooks.state."@codexConfig@:pre_tool_use:0:10"]
-trusted_hash = "sha256:e1d4f37cf9a0f4d6ef5ef70b587e4d6954ed1d5f3cb2e622d10df2441c2727b8"
 
 [hooks.state."@codexConfig@:pre_tool_use:1:0"]
 trusted_hash = "sha256:60aec6911e73c3da3ba873e0c81db4f6deeb58a5abaa84804519314e77ad5d67"
 
-[hooks.state."@codexConfig@:pre_tool_use:1:1"]
-trusted_hash = "sha256:f4f1bd0de33e2b1003deacc15a6a615d7c2364c2d5bf36d1ae107e3ec4969fce"
-
 [hooks.state."@codexConfig@:pre_tool_use:2:0"]
 trusted_hash = "sha256:e67bbc0c973e65867f1807599227838de3b761f76568dfdd533bec1578332f77"
-
-[hooks.state."@codexConfig@:post_tool_use:0:0"]
-trusted_hash = "sha256:8bc27cdf0d29cefe2e8b2325233a98beaddbaa7f2d9232001805915a0c7da59a"
-
-[hooks.state."@codexConfig@:post_tool_use:1:0"]
-trusted_hash = "sha256:cdeed70aca395af81f5a6a6c8171457da4812be4204b3f01e34f5766fe4b8381"
-
-[hooks.state."@codexConfig@:user_prompt_submit:0:0"]
-trusted_hash = "sha256:f74b235080280e0d8e09ef743855309b7c34e97c58e4e73e9aafa9edb358577e"
-
-[hooks.state."@codexConfig@:stop:0:0"]
-trusted_hash = "sha256:13ab42fd789464251b1a33b19d680c7747fa983bccc0816b5f7ad82bd8b7ac7b"
 
 [hooks.state."@dotfilesConfig@:post_tool_use:0:0"]
 trusted_hash = "sha256:112dc6851ce7a42e08f21563e6394cfc7fc45a9b2df44d53b642a30d5f5b386b"
@@ -232,3 +134,4 @@ url = "https://mcp.atlassian.com/v1/mcp/authv2"
 
 [mcp_servers.figma]
 url = "https://mcp.figma.com/mcp"
+

@@ -14,7 +14,7 @@ the call unprotected.  Other event failures become advisory context.
 
 Run with one existing guard as the final argument, for example::
 
-    python3 claude-hook-adapter.py ~/.codex/hooks/prompt-authoring-guard.py
+    python3 claude-hook-adapter.py ~/.codex/hooks/ssh-guard.py
 
 The child timeout defaults to two seconds; network-backed guards can opt into
 a larger value with ``--timeout 25``.

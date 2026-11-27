@@ -122,36 +122,10 @@
     }
   },
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/ask-mode-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/output-shape-reminder.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/repeat-correction-nudge.py"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "*",
         "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/ask-mode-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/plan-mode-guard.py"
-          },
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/apology-leak-guard.py"
@@ -169,28 +143,11 @@
         ]
       },
       {
-        "matcher": "Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/subagent-model-guard.py"
-          }
-        ]
-      },
-      {
         "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/claude-dir-edit-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/prompt-authoring-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/prose-review-nudge.py"
           }
         ]
       },
@@ -222,24 +179,6 @@
             "command": "python3 ~/.claude/hooks/rex-project-theme.py"
           }
         ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/missing-tool-hint.py"
-          }
-        ]
       }
     ],
     "SessionStart": [
@@ -255,29 +194,7 @@
           },
           {
             "type": "command",
-            "command": "python3 ~/.claude/hooks/memory-review-nudge.py"
-          },
-          {
-            "type": "command",
             "command": "python3 ~/.claude/hooks/rex-project-theme.py"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/rebuild-enforcer.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/done-claim-guard.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/korean-reply-guard.py"
           }
         ]
       }

@@ -9,23 +9,15 @@ import sys
 from pathlib import Path
 
 GUARDS = (
-    "agent-tooling-guard.py",
     "flake-stage-guard.py",
     "git-integrity-guard.py",
     "git-push-guard.py",
     "ssh-guard.py",
-    "package-manager-guard.py",
     "publish-guard.py",
     "declarative-package-guard.py",
     "nsc-guard.py",
     "gui-launch-guard.py",
-    "gh-guard.py",
-    "jira-guard.py",
-    "pr-body-guard.py",
-    "file-edit-guard.py",
-    "commit-check-guard.py",
     "leak-guard.py",
-    "bare-sleep-hint.py",
     "baseline-lock-guard.py",
 )
 

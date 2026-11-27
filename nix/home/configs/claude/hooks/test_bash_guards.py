@@ -78,9 +78,9 @@ def main():
     groups = settings["hooks"]["PreToolUse"]
     registered = [Path(hook["command"]).name for group in groups
                   for hook in group["hooks"]
-                  if group["matcher"] == "Bash" or "agent-tooling-guard.py" in hook["command"]]
+                  if group["matcher"] == "Bash"]
     assert tuple(registered) == GUARDS or registered == ["bash-guards.py"]
-    for command in ("ls", "git push --force", "sleep 30", "ssh example.invalid", "npm publish"):
+    for command in ("ls", "git push --force", "ssh example.invalid", "npm publish"):
         payload = json.dumps({"tool_name": "Bash", "cwd": str(HOOKS),
                               "tool_input": {"command": command}})
         separate = [invoke(HOOKS / name, payload) for name in GUARDS]
@@ -91,8 +91,6 @@ def main():
         assert actual == expected(separate), (command, actual, expected(separate))
         if command == "ls":
             assert actual == {}
-        elif command == "sleep 30":
-            assert "block on the condition" in actual["hookSpecificOutput"]["additionalContext"]
         else:
             assert actual["hookSpecificOutput"]["permissionDecision"] == "deny"
         if command == "git push --force":

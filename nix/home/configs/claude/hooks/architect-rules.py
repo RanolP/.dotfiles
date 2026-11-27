@@ -69,7 +69,7 @@ def payload_model(data):
 def transcript_model(data):
     """Return the last assistant entry's model, lowercased, or None.
 
-    Mirrors subagent-model-guard.py: only the tail is read, newest-first."""
+    Only the tail is read, newest-first."""
     path = data.get("transcript_path")
     if not path:
         return None

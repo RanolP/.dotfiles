@@ -4,8 +4,8 @@
 # xpkg/configs/install.nu merges the Windows overlay
 # (xpkg/configs/mise/config.toml) on top of it for Windows machines.
 #
-# Kept OUTSIDE nix/home/configs/ on purpose: editing configs/ trips the
-# rebuild-enforcer Stop hook, which can't be satisfied from Windows.
+# Kept OUTSIDE nix/home/configs/ on purpose: an edit under configs/ asks
+# for a darwin or home-manager rebuild, which Windows cannot run.
 
 [settings]
 experimental = true

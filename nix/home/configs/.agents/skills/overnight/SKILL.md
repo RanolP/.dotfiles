@@ -25,7 +25,7 @@ Write it back to the user in the reply, each line filled:
 
 - **Goal** -- the user's request, quoted.
 - **Done means** -- a predicate every iteration can run that passes or fails ("zero hits for `rg -F oldParser src/`, `pnpm test parser` green, the old API file deleted"). A duration ("work on it for four hours") gives the loop nothing to check; turn it into a predicate and confirm it with the user before leaving.
-- **Where** -- an isolated worktree per skill `git-master` (`<repo>/.claude/worktrees/<name>`), off a named base, so the run cannot collide with the user's open work; in a repo whose rules forbid branches, a detached worktree.
+- **Where** -- an isolated worktree (location per skill `worktree` section 2), off a named base, so the run cannot collide with the user's open work; in a repo whose rules forbid branches, a detached worktree.
 - **Permissions** -- the user's own sentence quoted for each mutation the run may make unasked ("don't ask me before committing"). Anything unquoted keeps its usual gate from `AGENTS.md` (Mutations the outside world can see): the run stops at it and records it for the morning.
 - **Escape hatch** -- after 3 failed hypotheses on the same obstacle (`AGENTS.md`, A failure earns a hypothesis), stop, write up why, and leave the tree at the last green checkpoint.
 - **Log** -- the decision-log path (skill `decision-log`).

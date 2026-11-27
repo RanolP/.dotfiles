@@ -104,9 +104,9 @@ git rebase --exec '<lint and typecheck>' origin/main   # once, at publish: every
 - A restack gives every branch above it new SHAs, so record each branch's `git diff <parent>...<head> | git patch-id --stable` before and after. An unchanged id keeps that PR's review verdict; a changed one sends its interdiff back to review (`github-master` `guides/shipping.md`).
 - Report a stacked PR as merged only after `git merge-base --is-ancestor <sha> origin/main` succeeds, since a PR merged into its parent branch is not on main.
 
-## Worktrees live in the repo, never in the scratchpad
+## Worktrees
 
-Start every branch job in `git worktree add <repo>/.claude/worktrees/<name> -b claude/<name> origin/<default>`, install dependencies there, and put that path in the worker brief; the main checkout stays on its default branch, where the user's untracked files would otherwise fail the commit hooks. The session scratchpad is under `/private/tmp`, which macOS empties on reboot, taking an uncommitted worktree with it -- so checkpoint-commit a worker's tree changes as soon as they land.
+Where a worktree lives, what it shares and how its builds stay out of syncthing: skill `worktree`.
 
 ## Destructive-op guardrails — fail closed: confirm + back up first
 

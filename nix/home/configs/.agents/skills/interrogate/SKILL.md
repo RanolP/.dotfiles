@@ -33,7 +33,7 @@ Rerun every finding's command yourself. Keep a finding when the output shows the
 - **Findings**: per verified finding, the command, its output, how it breaks the intent, and the adversaries that found it; "no verified findings" when none survive.
 - **Dropped**: per adversary, the count of dropped findings and why.
 
-Then tear down the adversary worktrees with skill `worktree-cleanup`.
+Then tear down the adversary worktrees per skill `worktree` section 7.
 
 ---
 

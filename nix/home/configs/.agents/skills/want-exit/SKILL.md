@@ -18,7 +18,7 @@ Send all probes in ONE message so they run in parallel. For each CLI category, r
 | Session tasks | `TaskList`, plus the background shells and subagents this session launched |
 | Listening servers | `lsof -iTCP -sTCP:LISTEN -n -P`, then `lsof -a -p <pid> -d cwd -Fn` and `ps -o pid,ppid,lstart,command -p <pid>` for each dev-server-looking row (node, vite, Metro, python, ruby) |
 | Git state | in each repo this session touched: `git status --porcelain`, `git log @{u}..HEAD --oneline` (no upstream is itself a finding), `git stash list`, `git log --oneline origin/HEAD..claude/local-dev` when that branch exists |
-| Worktrees | run the `worktree-cleanup` skill's audit steps (1-3) and take its finished/unfinished verdicts as-is |
+| Worktrees | run the `worktree` skill's cleanup audit steps (7.1-7.3) and take its finished/unfinished verdicts as-is |
 | Browser / device | `agent-browser`, `agent-device` -- their session list command |
 | Simulators / emulators | `xcrun simctl list devices booted`, `adb devices` |
 | Containers | `docker ps` (OrbStack answers the same CLI) |
@@ -36,7 +36,7 @@ Print ONE table, one row per resource:
 
 ## 2. Verdict rules
 
-- **safe** -- owner is `session` and the evidence proves it: the item is a background task of this session, or a process whose cwd sits in this session's working directory and whose start time falls inside this session. Also safe: a `finished` worktree from `worktree-cleanup`, and the scratchpad once nothing in it is referenced by an unfinished row.
+- **safe** -- owner is `session` and the evidence proves it: the item is a background task of this session, or a process whose cwd sits in this session's working directory and whose start time falls inside this session. Also safe: a `finished` worktree from the `worktree` skill's cleanup (section 7), and the scratchpad once nothing in it is referenced by an unfinished row.
 - **ask** -- every `machine` row by default (a port, a container, a booted simulator, an emulator, a workspace the session did not start); a session process whose evidence is ambiguous; a running subagent whose output has not been read yet; every proposed learning.
 - **keep** -- uncommitted changes, unpushed commits, stashes, and `unfinished` worktrees. Name what each holds and offer the `ship` skill to publish it. The `claude/local-dev` branch is a local stash stack that stays on this machine: report its commit count and keep it. A step still in flight (a half-applied edit, a plan with unfinished steps) is a `keep` row too: offer the `pause-resume` skill's pause half, which finishes or backs out of the step, checkpoints it and writes the resume note a cold session continues from.
 
@@ -48,7 +48,7 @@ Remove only rows whose verdict is `safe`:
 
 - Background tasks and subagents: `TaskStop` by task ID.
 - Session processes: `kill <pid>` (SIGTERM), then re-run the `lsof` probe to confirm the port closed. Escalate to `kill -9` only after the re-probe shows it still bound, and say so in the report.
-- Finished worktrees: run `worktree-cleanup` step 4.
+- Finished worktrees: run `worktree` step 7.4.
 - Browser/device/simulator/emulator/workspace sessions the session opened: each tool's own close subcommand from its `--help`.
 - Scratchpad: remove its contents.
 

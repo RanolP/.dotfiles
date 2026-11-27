@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Arena
 
-Rival attempts at one task, compared on a rubric. This differs from skill `parallel-worktree-workflow`, which splits different units across workers. State the six phases (Frame, Fan out, Cross-judge, Pick, Graft, Verify) in the reply before launching anything.
+Rival attempts at one task, compared on a rubric. This differs from skill `worktree` section 6 (parallel worktree workflow), which splits different units across workers. State the six phases (Frame, Fan out, Cross-judge, Pick, Graft, Verify) in the reply before launching anything.
 
 ## 1. Frame
 
@@ -55,7 +55,7 @@ Run the Done-when command on the synthesized artifact (the runtime check `AGENTS
 
 ## Reply
 
-One synthesized artifact plus a short synthesis note: the base and why; the judge's per-criterion verdict, or that the judge was skipped and why; each graft with its source candidate; what was rejected and why; any convergence or dropouts; the verification command and its result. Then tear down the candidate worktrees with skill `worktree-cleanup`.
+One synthesized artifact plus a short synthesis note: the base and why; the judge's per-criterion verdict, or that the judge was skipped and why; each graft with its source candidate; what was rejected and why; any convergence or dropouts; the verification command and its result. Then tear down the candidate worktrees per skill `worktree` section 7.
 
 ---
 

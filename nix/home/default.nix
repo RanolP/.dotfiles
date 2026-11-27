@@ -228,9 +228,8 @@ let
     artificier-comparison = localSkill "artificier-comparison";
     reverse-engineer-anything = localSkill "reverse-engineer-anything";
     slack-messaging = localSkill "slack-messaging";
-    worktree-cleanup = localSkill "worktree-cleanup";
+    worktree = localSkill "worktree";
     want-exit = localSkill "want-exit";
-    parallel-worktree-workflow = localSkill "parallel-worktree-workflow";
     one-domain = localSkill "one-domain";
     diagnose = localSkill "diagnose";
     tdd = localSkill "tdd";

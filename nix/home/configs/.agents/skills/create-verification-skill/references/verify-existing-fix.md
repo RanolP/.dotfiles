@@ -10,7 +10,7 @@ When several candidates exist, take the one linked from the report or ticket; ot
 
 ## Two builds, one environment
 
-Run both builds in a separate checkout (`git worktree add`, per skill `parallel-worktree-workflow`) so the user's working tree stays untouched. Record before the first run:
+Run both builds in a separate checkout (`git worktree add`, per skill `worktree`) so the user's working tree stays untouched. Record before the first run:
 
 - the baseline revision -- the PR's base for an open PR; the parent of the fix commit for a merged one, when that parent builds and shows the old behavior;
 - the patched revision -- the PR head or the fix commit;

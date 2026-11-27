@@ -176,6 +176,12 @@ To tell which worker started a process, `0663f69` (claude: tag worker processes 
 
 Both commits passed their unit tests; neither was checked against a live worker call in auto mode. The design was wrong at its premise: a tag carried in the text the model wrote changes what every permission layer, the transcript and the user see. `6d771cb` removed the prefix and the re-check. The replacement tracks the Bash shell's process group (each Bash call's shell is its own PGID leader, and a `nohup ... &` orphan keeps that PGID), leaving the command byte-identical.
 
+## 2026-11-27 -- an Xcode build directory outside the sync ignore list
+
+On 2026-11-06 the agent of session `eb5734aa` built an iOS app (`<app>`) in two worktrees, `~/syncthing/Projects/.worktrees/<app>/<name-a>` and `<name-b>`, with `xcodebuild -derivedDataPath ios/build-dd`. `~/syncthing/Projects/.stignore-shared` ignores `**/build`, which matches a directory named exactly `build`, so `build-dd` was not ignored and each worktree put about 60,000 DerivedData files into syncthing. The Projects folder grew to about 460,000 files, and syncthing kept using 65-180% CPU, which the user felt as a periodic lag on the Mac. Another session that built with `ios/build/dd` stayed inside the `**/build` rule and caused nothing.
+
+`.stignore-shared` gained `(?d)**/ios/build-*` and `(?d)**/DerivedData`. The user's decision: "worktree가 syncthing에 있어도 돼. 근데 저따위로 지맘대로 ignored file을 ignored가 아니게 만들진 못하게 해;;;" (a worktree may stay inside syncthing, but an agent must not on its own turn ignored files into synced ones). So skill `worktree` section 3 keeps build outputs and caches at the tool's default location -- Xcode's default DerivedData with `-derivedDataPath` left off -- and lets an output-path option name only a path a `.stignore-shared` rule already matches.
+
 ## Rule enforcers
 
 | Rule | Lives in | Enforced by | Incidents |

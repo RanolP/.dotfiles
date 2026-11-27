@@ -151,8 +151,8 @@ const literalSentence = (ledger: Ledger, key: string) => {
  * still waiting on a decision and contested facts. Paid on every prompt, so empty
  * blocks are left out.
  */
-export function renderInstructions(ledger: Ledger, result: EvalResult): string {
-  const instructions: string[] = []
+export function renderInstructions(ledger: Ledger, result: EvalResult, quoteOf?: QuoteOf): string {
+  const entries: { id: number; line: string }[] = []
   const live = liveIds(ledger.utterances)
   const holds = (literal: Literal) => result.facts.get(printLiteral(literal))?.value === 'true'
   const done = (fact: Fact): Literal => ({ kind: 'literal', negated: false, fact: { kind: 'fact', name: 'done', args: [fact] } })
@@ -162,13 +162,13 @@ export function renderInstructions(ledger: Ledger, result: EvalResult): string {
     if (u.speaker !== 'user' || u.act.kind !== 'want' || !live.has(u.id)) continue
     const content = u.act.content
     if (content.kind === 'literal') {
-      if (!holds(done(content.fact))) instructions.push(`- ${sentence(ledger, content.fact, content.negated)} ${address([u.id])}`)
+      if (!holds(done(content.fact))) entries.push({ id: u.id, line: `- ${sentence(ledger, content.fact, content.negated)} ${address([u.id])}` })
       continue
     }
     const conclusion = content.conclusion
     if (conclusion.kind !== 'literal' || holds(done(conclusion.fact))) continue
     const premises = content.premises.map(p => p.kind === 'try' ? `${clause(ledger, p.fact)}를 시도한다` : p.negated ? `${clause(ledger, p.fact)}는 것이 아니라` : clause(ledger, p.fact))
-    instructions.push(`- ${premises.join(', ')}면 ${sentence(ledger, conclusion.fact, conclusion.negated)} ${address([u.id])}`)
+    entries.push({ id: u.id, line: `- ${premises.join(', ')}면 ${sentence(ledger, conclusion.fact, conclusion.negated)} ${address([u.id])}` })
   }
   // An accepted try is the user's decision; it leaves once done(p) holds, as a want does.
   for (const u of ledger.utterances) {
@@ -177,9 +177,10 @@ export function renderInstructions(ledger: Ledger, result: EvalResult): string {
     for (const t of ledger.utterances) {
       if (t.id !== target || t.act.kind !== 'try' || t.act.content.kind !== 'literal') continue
       const p = t.act.content
-      if (holds(p) && !holds(done(p.fact))) instructions.push(`- ${sentence(ledger, p.fact, p.negated)} ${address([u.id])}`)
+      if (holds(p) && !holds(done(p.fact))) entries.push({ id: u.id, line: `- ${sentence(ledger, p.fact, p.negated)} ${address([u.id])}` })
     }
   }
+  const instructions = instructionLines(entries, quoteOf)
   // Facts settled before fuel ran out still render above; this line says the rest are undecided.
   const raises: string[] = result.fuelExhausted ? ['- 평가 한도 초과: 일부 사실을 정하지 못했다. 사용자에게 묻는다.'] : []
   const contested = new Set<string>()
@@ -193,22 +194,49 @@ export function renderInstructions(ledger: Ledger, result: EvalResult): string {
   for (const [key, state] of result.facts) if (state.value === 'contested') contested.add(key)
   for (const key of contested) raises.push(`- 다툼: ${literalSentence(ledger, key).replace(/\.$/, '')} — 사용자에게 묻는다`)
   const steps = stepLines(ledger, holds)
-  const section = (steps: readonly string[]) => [
-    '## user instructions', instructions.length ? instructions.join('\n') : '- (none yet)',
+  const section = (steps: readonly string[], shown: readonly string[] = instructions) => [
+    '## user instructions', shown.length ? shown.join('\n') : '- (none yet)',
     ...(steps.length ? ['## steps', steps.join('\n')] : []),
     ...(raises.length ? ['## raises', raises.join('\n')] : []),
   ].join('\n\n')
   const collapsed = (count: number) => count ? [`- 마친 step ${count}개`] : []
-  const full = section([...steps.open, ...(steps.done.length > 3 ? collapsed(steps.done.length) : steps.done)])
-  if (full.length <= SECTION_CAP || !steps.open.length && !steps.done.length) return full
-  // Over the cap, done steps go first, then unfinished ones from the end; instructions and raises always stay.
-  const shortened = section([...steps.open, ...collapsed(steps.done.length)])
-  if (shortened.length <= SECTION_CAP) return shortened
-  for (let keep = steps.open.length - 1; keep > 0; keep--) {
-    const cut = section([...steps.open.slice(0, keep), `- …외 ${steps.open.length - keep + steps.done.length}개`])
-    if (cut.length <= SECTION_CAP) return cut
+  const fitSteps = (shown: readonly string[]): string => {
+    const full = section([...steps.open, ...(steps.done.length > 3 ? collapsed(steps.done.length) : steps.done)], shown)
+    if (full.length <= SECTION_CAP || !steps.open.length && !steps.done.length) return full
+    // Over the cap, done steps go first, then unfinished ones from the end; raises always stay.
+    const shortened = section([...steps.open, ...collapsed(steps.done.length)], shown)
+    if (shortened.length <= SECTION_CAP) return shortened
+    for (let keep = steps.open.length - 1; keep > 0; keep--) {
+      const cut = section([...steps.open.slice(0, keep), `- …외 ${steps.open.length - keep + steps.done.length}개`], shown)
+      if (cut.length <= SECTION_CAP) return cut
+    }
+    return section([`- …외 ${steps.open.length + steps.done.length}개`], shown)
   }
-  return section([`- …외 ${steps.open.length + steps.done.length}개`])
+  // Still over the cap with every step cut down: the oldest instructions go, the newest stay.
+  for (let omitted = 0; ; omitted++) {
+    const out = fitSteps(omitted ? [OMITTED_LINE, ...instructions.slice(omitted)] : instructions)
+    if (out.length <= SECTION_CAP || omitted >= instructions.length - 1) return out
+  }
+}
+
+const OMITTED_LINE = '- (older instructions omitted)'
+const QUOTE_MAX = 400
+
+/** The text of the user prompt the ledger address @id came from, when the caller can find it. */
+export type QuoteOf = (id: number) => string | undefined
+
+/**
+ * One line per address, ordered by address. An address whose prompt text is known renders as the user's own
+ * words, `- (@3) "<prompt>"`; one whose text is gone keeps its rendered sentences, so nothing is dropped.
+ */
+function instructionLines(entries: readonly { id: number; line: string }[], quoteOf: QuoteOf | undefined): string[] {
+  const ids = [...new Set(entries.map(entry => entry.id))].sort((a, b) => a - b)
+  return ids.flatMap(id => {
+    const raw = quoteOf?.(id)
+    const text = raw === undefined ? '' : oneLine(stripReminders(raw))
+    if (!text) return entries.filter(entry => entry.id === id).map(entry => entry.line)
+    return [`- ${address([id])} "${text.length > QUOTE_MAX ? `${text.slice(0, QUOTE_MAX)}…` : text}"`]
+  })
 }
 
 // Provisional: the section rides every prompt; register.ts logs each delivered length so the cap can be measured.

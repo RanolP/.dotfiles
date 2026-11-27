@@ -114,9 +114,42 @@ test('a ledger whose steps exceed the cap renders within 3000 chars and keeps ev
 // Regression caught: instructions alone past the cap growing an empty "## steps\n\n- …외 0개" block in a session with no step.
 test('instructions over the cap with no step render no steps block', () => {
   const out = render(Array.from({ length: 90 }, (_, i) => '@' + (i + 1) + ' user: want(use(serving, tool_with_a_long_name_' + i + '))'))
-  expect(out.length).toBeGreaterThan(3000)
+  expect(out.length).toBeLessThanOrEqual(3000)
   expect(out).not.toContain('## steps')
   expect(out).toContain('(@90)')
+  expect(out).toContain('- (older instructions omitted)')
+  expect(out).not.toContain('(@1)')
+})
+
+// Regression caught: the section rebuilding the user's words from templates ("구현 언어에 Go을(를) 쓴다.") instead of quoting the prompt.
+test('two wants from one prompt @3 render as one line carrying that prompt\'s exact text', () => {
+  const ledger = appendAll([...DECLS, 'training := "학습"', '@3 user: want(use(serving, vllm))', '@3 user: want(use(training, deepspeed))', '@5 user: want(use(serving, sglang))'])
+  const prompt = '서빙은 vllm, 학습은 deepspeed로 해줘.\n<system-reminder>harness</system-reminder>'
+  const out = renderInstructions(ledger, evaluate(ledger), id => id === 3 ? prompt : undefined)
+  expect(out).toBe('## user instructions\n\n- (@3) "서빙은 vllm, 학습은 deepspeed로 해줘."\n- 서빙에 sglang을(를) 쓴다. (@5)')
+})
+
+// Regression caught: an address whose prompt text is gone (midTurn prompt, lost store) vanishing from the section instead of keeping its rendered sentence.
+test('an address with no prompt text falls back to the rendered sentence', () => {
+  const ledger = appendAll([...DECLS, '@1 user: want(use(serving, vllm))'])
+  expect(renderInstructions(ledger, evaluate(ledger), () => undefined)).toBe('## user instructions\n\n- 서빙에 vllm을(를) 쓴다. (@1)')
+})
+
+// Regression caught: one very long pasted prompt filling the section; a quote stops at 400 chars.
+test('a quote is cut at 400 characters', () => {
+  const ledger = appendAll([...DECLS, '@1 user: want(use(serving, vllm))'])
+  const out = renderInstructions(ledger, evaluate(ledger), () => 'ㄱ'.repeat(900))
+  expect(out).toBe('## user instructions\n\n- (@1) "' + 'ㄱ'.repeat(400) + '…"')
+})
+
+// Regression caught: instructions past the cap dropping the newest quotes instead of the oldest.
+test('over the cap the oldest quotes go and the omitted line leads', () => {
+  const ledger = appendAll([...DECLS, ...Array.from({ length: 10 }, (_, i) => '@' + (i + 1) + ' user: want(use(serving, tool_' + i + '))')])
+  const out = renderInstructions(ledger, evaluate(ledger), id => 'x'.repeat(390) + id)
+  expect(out.length).toBeLessThanOrEqual(3000)
+  expect(out.split('\n')[2]).toBe('- (older instructions omitted)')
+  expect(out).toContain('(@10)')
+  expect(out).not.toContain('(@1)')
 })
 
 // Regression caught: the builtin done decl never rendering its gloss, so want(done(release)) read "done: 릴리스".

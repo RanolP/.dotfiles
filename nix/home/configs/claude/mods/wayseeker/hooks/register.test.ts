@@ -94,7 +94,7 @@ test('the first prompt after a landed compaction gets the section, and the next 
   await $.session.compact({ trigger: 'manual', messages: [summary] })
   await submit($, '다른 얘기')
   await settle()
-  expect(contexts[1]).toEqual(['<system-reminder>\n## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)\n</system-reminder>'])
+  expect(contexts[1]).toEqual(['<system-reminder>\n## user instructions\n\n- (@1) "sglang 써"\n</system-reminder>'])
   await submit($, '다른 얘기')
   await settle()
   expect(contexts[2]).toBeUndefined()

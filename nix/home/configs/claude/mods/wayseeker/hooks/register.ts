@@ -1,7 +1,7 @@
 import type { EngineInterface, PromptOrigin, Register, SessionMessage } from 'claude-code'
 import { evaluate } from './eval'
 import { extractTurn } from './extract'
-import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, readWayseekerTurns, renderInstructions, turnIsLive, wayseekerKey } from './render'
+import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, readWayseekerTurns, renderInstructions, turnIsLive, wayseekerKey, type QuoteOf } from './render'
 import { promptFingerprint, promptsKey, readPromptRows, reconcilePrompts } from './rewind'
 import { openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
 import { renderRange } from './evidence'
@@ -72,15 +72,39 @@ async function observePrompt($: EngineInterface, session: string, rows: readonly
       $.ui.log(`wayseeker: rewind cut ${rewound.length} turn(s)`, { to: 'debug' })
     }
   }
+  if (rewound.length) {
+    const quotes = readQuotes(await store.get(quotesKey(key)))
+    for (const address of rewound) delete quotes[address]
+    await store.set(quotesKey(key), quotes)
+  }
   let address: string | undefined
   if (userMessage !== undefined) {
     const seq = Number(await store.get(nextAddressKey(key)) ?? 1)
     address = `@w${seq}`
     await store.set(nextAddressKey(key), seq + 1)
     prompts.push({ fp: promptFingerprint(userMessage), address })
+    await store.set(quotesKey(key), { ...readQuotes(await store.get(quotesKey(key))), [address]: stripReminders(userMessage).slice(0, 1000) })
   }
   await store.set(promptsKey(key), prompts)
   return address
+}
+
+/**
+ * The user's own text for each ledger address @N: the turn whose firstId is the largest one <= N names its prompt
+ * address, whose text observePrompt stored under quotesKey. The transcript is no source: a compaction, the one case
+ * the section is delivered in, has already replaced the old prompts there.
+ */
+const quotesKey = (key: string) => `quotes:${key}`
+const readQuotes = (value: unknown): Record<string, string> => isRecord(value)
+  ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+  : {}
+function promptQuotes(stored: unknown, quotes: unknown): QuoteOf {
+  const byAddress = readQuotes(quotes)
+  const turns = [...readWayseekerTurns(stored)].sort((a, b) => a.firstId - b.firstId)
+  return id => {
+    const turn = turns.findLast(t => t.firstId <= id)
+    return turn && byAddress[turn.address]
+  }
 }
 
 // One extraction at a time per session, so each appends onto the ledger the one before it wrote.
@@ -314,8 +338,10 @@ const instructionAttachment = async ($: EngineInterface): Promise<string | undef
   return serialized(session, async () => {
     // The user's own prompts are already in context verbatim; the section only carries instructions across a compaction.
     if (await store.get(compactedSinceDeliveryKey(key)) !== true) return undefined
-    const ledger = readWayseekerLedger(await store.get(wayseekerKey(key)))
-    const section = renderInstructions(ledger, evaluate(ledger))
+    const storedLedger = await store.get(wayseekerKey(key))
+    const ledger = readWayseekerLedger(storedLedger)
+    const quoteOf = promptQuotes(storedLedger, await store.get(quotesKey(key)))
+    const section = renderInstructions(ledger, evaluate(ledger), quoteOf)
     if (section === EMPTY_SECTION) return undefined // keep the flag: the next prompt tries again
     await store.set(compactedSinceDeliveryKey(key), undefined)
     $.ui.log(`wayseeker: section delivered chars=${section.length}`, { to: 'debug' })

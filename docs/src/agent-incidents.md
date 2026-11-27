@@ -170,6 +170,12 @@ The watchdog now also freezes an orphaned job whose env carries `CLAUDECODE=1` a
 
 The user blamed the orchestrator's brief and rejected tighter guardrails as the fix. The role model and the plan built from it are in [the harness doc](./harness.md).
 
+## 2026-11-27 -- worker tagging rewrote every command and auto mode asked for each one
+
+To tell which worker started a process, `0663f69` (claude: tag worker processes and stop them with their worker) made the `resources` mod rewrite every subagent Bash command to `export CLAUDE_AGENT_ID=<id>; <command>`. Core then judged each worker read (`rg ... | head`) as an env-changing compound and asked for approval, so auto mode behaved as if it were off. `26ddb2d` added a `tool.check` re-check of the untagged command, which did not stop the asks. The user, in two sessions: "export CLAUDE_AGENT_ID=a978a255c9f9a0a1d; rg <- 이 미친 것 좀 그만하라고", "모든 명령어에 export를 붙이는 건 해결책이 아니세요", "돌아간다고 다 코드가 아니에요 명백하게 틀린 코드가 세상에 있고 니가 짠 건 명백하게 틀렸고".
+
+Both commits passed their unit tests; neither was checked against a live worker call in auto mode. The design was wrong at its premise: a tag carried in the text the model wrote changes what every permission layer, the transcript and the user see. `6d771cb` removed the prefix and the re-check. The replacement tracks the Bash shell's process group (each Bash call's shell is its own PGID leader, and a `nohup ... &` orphan keeps that PGID), leaving the command byte-identical.
+
 ## Rule enforcers
 
 | Rule | Lives in | Enforced by | Incidents |

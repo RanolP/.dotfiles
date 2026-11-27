@@ -1,13 +1,13 @@
 import { test, expect, type Engine } from 'claude-code/testing'
 
 import { readWayseekerLedger, wayseekerKey } from './render'
-import { isReadOnlyBash, replDoesWork, SAY_NUDGE, SAY_NUDGE_EXAMPLE, SAY_TOOL_ID, type SayResult } from './say'
+import { SAY_TOOL_ID, type SayResult } from './say'
 import { appendAll } from './store'
 
 const STATE = '/home/t/.claude-work/plans/wayseeker-s1.json'
 const DECLS = ['decl use(role, tool) key(role) "{role}에 {tool}을 쓴다"', 'serving := "서빙"']
-type Use = { tool_use_id: string; tool: string; input: Record<string, unknown> }
 type Row = { role: 'user' | 'assistant'; text: string; toolUses: Use[] }
+type Use = { tool_use_id: string; tool: string; input: Record<string, unknown> }
 
 function world(on: any, seed?: string[]) {
   const files: Record<string, string> = {}
@@ -30,18 +30,6 @@ const say = async ($: Engine, lines: string[], agentId?: string): Promise<SayRes
   const r = await $.tool.call({ tool: SAY_TOOL_ID, lines, ...(agentId ? { agentId } : {}) } as unknown as Parameters<Engine['tool']['call']>[0]) as { result: string }
   return JSON.parse(r.result) as SayResult
 }
-const human = (text: string): Row => ({ role: 'user', text, toolUses: [] })
-const acting = (...uses: [tool: string, input?: Record<string, unknown>][]): Row =>
-  ({ role: 'assistant', text: '', toolUses: uses.map(([tool, input], i) => ({ tool_use_id: 't' + i, tool, input: input ?? {} })) })
-// The context a main-thread call adds; the turn's last row holds the call itself, so it is popped and replayed through tool.call.
-const nudged = async ($: Engine, rows: Row[]): Promise<string | undefined> => {
-  const last = rows.at(-1)!.toolUses.at(-1)!
-  rows.at(-1)!.toolUses.pop()
-  const r = await $.tool.call({ tool: last.tool, ...last.input } as unknown as Parameters<Engine['tool']['call']>[0]) as { context?: string[] }
-  rows.at(-1)!.toolUses.push(last)
-  return r.context?.find(text => text.includes(SAY_TOOL_ID))
-}
-
 // Regression caught: the speaker taken from the line instead of the call site, so a subagent could speak as the main agent.
 test('a subagent call lands as worker and a main-thread call as agent', async ($, on) => {
   const { ledger } = world(on)
@@ -114,68 +102,6 @@ test('want(p) leaves the open list once done(p) holds', async ($, on) => {
   expect(result.open.want).toEqual([])
 })
 
-// Regression caught: the nudge's example say(done(x)) rejected "predicate done is not declared" in a session with no step.
-test('on an empty ledger, every line the say nudge shows lands', async ($, on) => {
-  const { ledger } = world(on)
-  expect(SAY_NUDGE).toContain(JSON.stringify(SAY_NUDGE_EXAMPLE))
-  const result = await say($, [...SAY_NUDGE_EXAMPLE])
-  expect(result.rejected).toEqual([])
-  expect(result.landed).toHaveLength(SAY_NUDGE_EXAMPLE.length)
-  expect(ledger().utterances).toHaveLength(1)
-})
-
-// Regression caught: a turn that edited files ending without a ledger record, or the nudge repeating on every later call of that turn.
-test('the first Edit of a turn with no say gets the nudge once', async ($, on) => {
-  const { rows } = world(on)
-  rows.push(human('fix it'), acting(['Edit']))
-  expect(await nudged($, rows)).toContain(SAY_TOOL_ID)
-  rows.push(acting(['Write']))
-  expect(await nudged($, rows)).toBeUndefined()
-  rows.push(human('again'), acting(['Edit']))
-  expect(await nudged($, rows)).toContain(SAY_TOOL_ID)
-})
-
-// Regression caught: nudging a turn that already recorded its work.
-test('no nudge when say was called earlier this turn', async ($, on) => {
-  const { rows } = world(on)
-  rows.push(human('fix it'), acting([SAY_TOOL_ID, { lines: [] }], ['Edit']))
-  expect(await nudged($, rows)).toBeUndefined()
-})
-
-// Regression caught: nudging a turn that only looked around, or one whose Edit belonged to an earlier turn.
-test('no nudge for read-only Bash', async ($, on) => {
-  const { rows } = world(on)
-  rows.push(human('before'), acting(['Edit']), human('look'), acting(['Bash', { command: 'git -C /x status && rg foo src | head -5 2>/dev/null' }], ['Bash', { command: 'claude plugin test .' }]))
-  expect(await nudged($, rows)).toBeUndefined()
-})
-
-// Regression caught: the nudge never firing in REPL-driven sessions, where files change through edit()/write() inside a script.
-test('a REPL call with edit( and no say triggers the nudge', async ($, on) => {
-  const { rows } = world(on)
-  rows.push(human('fix it'), acting(['REPL', { code: "await edit(H+'say.ts', 'a', 'b')" }]))
-  expect(await nudged($, rows)).toContain(SAY_TOOL_ID)
-})
-
-// Regression caught: a REPL script that only reads (git status, cd + ls with an interpolated dir) being nudged as work.
-test('a REPL call running only read-only shell does not trigger the nudge', async ($, on) => {
-  const { rows } = world(on)
-  rows.push(human('look'), acting(['REPL', { code: 'const s = await $\x60git status\x60.text(); const l = await $\x60cd ${D} && ls hooks\x60; $(\'pwd\')' }]))
-  expect(await nudged($, rows)).toBeUndefined()
-})
-
-// Regression caught: a REPL script hiding a mutation behind a shell template, an interpolated head, or a tools.Bash call.
-test('REPL shell outside the allowlist counts as work', async ($, on) => {
-  const { rows } = world(on)
-  rows.push(human('a'), acting(['REPL', { code: 'await $\x60git commit -m ${msg}\x60' }]))
-  expect(await nudged($, rows)).toBeDefined()
-  rows.push(human('b'), acting(['REPL', { code: 'await $\x60${cmd} status\x60' }]))
-  expect(await nudged($, rows)).toBeDefined()
-  rows.push(human('c'), acting(['REPL', { code: "await tools.Bash({ command: 'ls' })" }]))
-  expect(await nudged($, rows)).toBeDefined()
-  rows.push(human('d'), acting(['REPL', { code: "await edit(p, 'a', 'b'); await tools['" + SAY_TOOL_ID + "']({ lines: [] })" }]))
-  expect(await nudged($, rows)).toBeUndefined()
-})
-
 // Regression caught: the first say of a session rejected for numbering because nothing told the agent which id comes next.
 test('the result next is the id a following line must use, and that line lands', async ($, on) => {
   world(on, [...DECLS, '@1 user: say(use(serving, sglang))', '@2 user: want(use(serving, vllm))'])
@@ -185,32 +111,4 @@ test('the result next is the id a following line must use, and that line lands',
   const written = await say($, [line])
   expect(written.landed).toEqual([line])
   expect(written.next).toBe(probe.next + 1)
-})
-
-// Regression caught: the Stop nudge firing on read-only REPL turns because tput, readlink, tr and a $(readlink ...) substitution were not allowlisted.
-test('read-only REPL shell with tput, a substitution and /dev/null redirects is not work', () => {
-  const code = 'await $`tput cols 2>/dev/null; echo $COLUMNS`.nothrow().text(); await $`ls -la ~/.claude/mods 2>/dev/null | head; p=$(readlink -f ~/.claude/mods/clm 2>/dev/null); echo $p; ls $p/hooks 2>/dev/null | tr "\\n" " "`.nothrow().text()'
-  expect(replDoesWork(code)).toBe(false)
-  expect(replDoesWork('await $`echo x > f`')).toBe(true)
-  expect(replDoesWork('await $`git commit -m x`')).toBe(true)
-  expect(replDoesWork('await $`echo $(rm -rf x)`')).toBe(true)
-  expect(replDoesWork('await edit(p, "a", "b")')).toBe(true)
-})
-
-// Regression caught: a write disguised as a reader (redirect, substitution, find -delete) passing as read-only.
-test('read-only Bash needs every segment to be an allowlisted reader', () => {
-  expect(isReadOnlyBash('git log --oneline -5 | cat')).toBe(true)
-  expect(isReadOnlyBash('ls 2>&1 | wc -l')).toBe(true)
-  expect(isReadOnlyBash('echo hi > out.txt')).toBe(false)
-  expect(isReadOnlyBash('echo "$(rm -rf x)"')).toBe(false)
-  expect(isReadOnlyBash('find . -name x -delete')).toBe(false)
-  expect(isReadOnlyBash('ls && git commit -m x')).toBe(false)
-  expect(isReadOnlyBash('npm test')).toBe(false)
-  expect(isReadOnlyBash('cd x && ls')).toBe(true)
-  expect(isReadOnlyBash('cd x && rm y')).toBe(false)
-  // Regression caught: a quoted ')' ending the $( ) scan early hid a write; sort -o / uniq in out / date -s write too.
-  expect(isReadOnlyBash('echo $(echo ")"; rm -rf x)')).toBe(false)
-  expect(isReadOnlyBash('sort -o out in')).toBe(false)
-  expect(isReadOnlyBash('uniq in out')).toBe(false)
-  expect(isReadOnlyBash('date -s now')).toBe(false)
 })

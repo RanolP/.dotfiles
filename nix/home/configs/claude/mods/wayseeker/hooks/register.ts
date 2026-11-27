@@ -3,7 +3,7 @@ import { evaluate } from './eval'
 import { extractTurn } from './extract'
 import { countUserRows, dropWayseekerTurns, landWayseekerTurn, readWayseekerLedger, readWayseekerTurns, renderInstructions, turnIsLive, wayseekerKey } from './render'
 import { promptFingerprint, promptsKey, readPromptRows, reconcilePrompts } from './rewind'
-import { isHumanRow, needsSayNudge, openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_NUDGE, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
+import { openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
 import { renderRange } from './evidence'
 import { debateRubric, judgeRubric, readSteps, rubricText, STEP_ATOM, writeStepRule, writeVerdicts, type ModelIo } from './stepped'
 import { deliveredSectionKey, nextId, readDeliveredSection, type Ledger } from './store'
@@ -307,7 +307,7 @@ async function instructions($: EngineInterface, input: WayseekerInstructionsInpu
   return renderInstructions(ledger, evaluate(ledger))
 }
 
-const instructionAttachment = async ($: EngineInterface, atSubmit: boolean): Promise<string | undefined> => {
+const instructionAttachment = async ($: EngineInterface): Promise<string | undefined> => {
   const session = await $.session.id()
   const key = transcriptKey(session)
   const store = sessionStore($, session)
@@ -317,32 +317,11 @@ const instructionAttachment = async ($: EngineInterface, atSubmit: boolean): Pro
     if (section === EMPTY_SECTION) return undefined
     const fingerprint = promptFingerprint(section)
     const delivered = readDeliveredSection(await store.get(deliveredSectionKey(key)))
-    // A tool.call in the turn that submit delivered to trusts the record: the prompt's row may not hold the attachment yet.
-    if (delivered?.fingerprint === fingerprint && ((!atSubmit && delivered.atSubmit) || (await $.session.messages()).some(row => row.text.includes(delivered.section)))) return undefined
-    await store.set(deliveredSectionKey(key), { fingerprint, section, atSubmit })
+    if (delivered?.fingerprint === fingerprint && (await $.session.messages()).some(row => row.text.includes(delivered.section))) return undefined
+    await store.set(deliveredSectionKey(key), { fingerprint, section })
     $.ui.log(`wayseeker: section delivered chars=${section.length}`, { to: 'debug' })
     return `<system-reminder>\n${section}\n</system-reminder>`
   })
-}
-
-// Human rows seen when the session's turn was last nudged: one nudge per turn, at its first change with no say before it.
-const NUDGED_KEY = 'say-nudged-at'
-async function sayNudge($: EngineInterface, call: { tool: string } & Record<string, unknown>): Promise<string | undefined> {
-  try {
-    const rows = await $.session.messages()
-    if (!needsSayNudge([...rows, { role: 'assistant', text: '', toolUses: [{ tool: call.tool, input: call }] }])) return undefined
-    const session = await $.session.id()
-    const store = sessionStore($, session)
-    const humans = rows.filter(isHumanRow).length
-    return serialized(session, async () => {
-      if (await store.get(NUDGED_KEY) === humans) return undefined
-      await store.set(NUDGED_KEY, humans)
-      return SAY_NUDGE
-    })
-  } catch (err) {
-    $.ui.log(`wayseeker: say nudge check failed (${String(err).slice(0, 160)})`, { to: 'debug' })
-    return undefined
-  }
 }
 
 export const register: Register = on => {
@@ -405,9 +384,9 @@ export const register: Register = on => {
       const address = await serialized(session, () => observePrompt($, session, rows, userMessage, overTurn))
       if (overTurn && address !== undefined && userMessage !== undefined) awaitingFold.set(session, [...(awaitingFold.get(session) ?? []), { address, text: userMessage }])
       // Rendered after observePrompt so a rewind's cuts are already gone, and before the extraction starts so it
-      // cannot land ahead of this prompt's own row; this prompt's lines reach the next tool call's attachment.
+      // cannot land ahead of this prompt's own row; this prompt's lines reach the next prompt's attachment.
       try {
-        attachment = await instructionAttachment($, true)
+        attachment = await instructionAttachment($)
       } catch (err) {
         $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
       }
@@ -450,19 +429,5 @@ export const register: Register = on => {
       $.ui.log(`wayseeker: marking a mid-turn prompt failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }
     return result
-  })
-
-  on('tool.call', async ($, e, next) => {
-    const result = await next(e)
-    if (e.agentId !== undefined || result.deny !== undefined) return result
-    try {
-      const attachment = await instructionAttachment($, false)
-      const nudge = await sayNudge($, e as unknown as { tool: string } & Record<string, unknown>)
-      const added = [attachment, nudge].filter((text): text is string => text !== undefined)
-      return added.length ? { ...result, context: [...(result.context ?? []), ...added] } : result
-    } catch (err) {
-      $.ui.log(`wayseeker: instructions render failed (${String(err).slice(0, 160)})`, { to: 'debug' })
-      return result
-    }
   })
 }

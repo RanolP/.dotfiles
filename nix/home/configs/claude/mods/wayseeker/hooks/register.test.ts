@@ -93,22 +93,8 @@ test('an unchanged section present in the transcript is not attached on the next
   expect(contexts[2]).toBeUndefined()
 })
 
-test('a changed section lands on the next tool call in the same human turn', async ($, on) => {
-  const { rows } = world(on)
-  await submit($, 'sglang 써')
-  await settle()
-  const first = await $.tool.call({ tool: 'Read', file_path: '/test' })
-  expect(first.context).toEqual(['existing context', '<system-reminder>\n## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)\n</system-reminder>'])
-  rows.push({ role: 'assistant', text: (first.context ?? []).join('\n'), toolUses: [] })
-  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context).toEqual(['existing context'])
-  await submit($, 'vllm으로 바꿔')
-  await settle()
-  const changed = await $.tool.call({ tool: 'Read', file_path: '/test' })
-  expect(changed.context?.[1]).toContain('vllm')
-})
-
 // Regression caught: the stored transcript keeps pre-compact rows, so the section still "found" there was never delivered again after /compact or a clm fold.
-test('a compacted section is delivered again on prompt submit and tool call', async ($, on) => {
+test('a compacted section is delivered again on prompt submit', async ($, on) => {
   const { rows, contexts } = world(on)
   let skip: string | undefined
   const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
@@ -127,31 +113,11 @@ test('a compacted section is delivered again on prompt submit and tool call', as
   await submit($, '다른 얘기')
   await settle()
   expect(contexts[3]).toEqual(contexts[1])
-  await $.session.compact({ trigger: 'manual', messages: [summary] })
-  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context?.[1]).toBe(contexts[1]?.[0])
   skip = 'nothing to do'
   await $.session.compact({ trigger: 'manual', messages: [summary] })
-  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context).toEqual(['existing context'])
-})
-
-test('worker and denied tool calls leave changed instructions for the main agent', async ($, on) => {
-  world(on)
-  await submit($, 'sglang 써')
-  await settle()
-  expect((await $.tool.call({ tool: 'Read', file_path: '/test', agentId: 'worker' })).context).toEqual(['existing context'])
-  expect((await $.tool.call({ tool: 'Denied' })).context).toBeUndefined()
-  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context?.[1]).toContain('sglang')
-})
-
-// Regression caught: a section delivered at prompt.submit was attached again on the same turn's first tool.call because the prompt's row did not yet hold it.
-test('a section delivered at prompt.submit is not re-sent by the same turn\'s tool.call', async ($, on) => {
-  const { contexts } = world(on, false)
-  await submit($, 'sglang 써')
-  await settle()
   await submit($, '다른 얘기')
   await settle()
-  expect(contexts[1]?.[0]).toContain('sglang')
-  expect((await $.tool.call({ tool: 'Read', file_path: '/test' })).context).toEqual(['existing context'])
+  expect(contexts[4]).toBeUndefined()
 })
 
 test('the user is shown an added instruction, and nothing when the section is unchanged', async ($, on) => {

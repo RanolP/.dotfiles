@@ -96,6 +96,11 @@ in
     };
     NSGlobalDomain."com.apple.mouse.tapBehavior" = 1;
     controlcenter.Bluetooth = false;
+    # Rex Settings > Shell ("Choose the command run when a new local terminal
+    # opens"): new local panes start nushell directly instead of the /bin/sh
+    # login shell.
+    CustomUserPreferences."com.superlogical.rex"."Workspace.terminalStartupCommand" =
+      "${pkgs.lib.getExe pkgs.nushell} --login";
   };
 
   # Extra tweaks not covered by nix-darwin options (runs as root, sudo -u for user prefs)
@@ -165,7 +170,7 @@ in
   # Code's Bash tool at startup: nushell via heavy per-invocation startup, zsh via
   # a job-control deadlock (interactive zsh blocks in acquire_pgrp/tcsetpgrp when
   # spawned on a tty it isn't the foreground pgrp of). /bin/sh has a trivial,
-  # non-blocking startup. The terminal (Rex) still launches Nushell interactively.
+  # non-blocking startup. Rex opens Nushell via its startup command (system.defaults).
   users.users.ranolp = {
     name = "ranolp";
     home = "/Users/ranolp";

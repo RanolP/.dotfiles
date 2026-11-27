@@ -1059,8 +1059,9 @@ export const scanShellProcesses = async (io: ResourceIo) => {
   await mutateSession(io, session, state => ({ next: { ...state, owned: [...state.owned.filter(r => r.kind !== 'process'), ...detected] }, result: undefined }))
 }
 
-// Every shell a subagent runs exports CLAUDE_AGENT_ID (see the Bash hook), so its detached children keep the tag after
-// TaskStop kills the worker (measured 2026-11-27: a `(nohup sleep 1777 &)` survived with ppid 1).
+// Finds processes whose env carries CLAUDE_AGENT_ID. Nothing exports it since the Bash hook stopped prefixing
+// `export CLAUDE_AGENT_ID=...;` (every worker call became an approval ask, 2026-11-27), so this matches only a process
+// a worker tagged itself. Origin: TaskStop left a worker's detached job running (measured 2026-11-27: a `(nohup sleep 1777 &)` survived with ppid 1).
 export const stopWorkerProcesses = async (io: ResourceIo, agentId: string, ownPid = 0): Promise<string | undefined> => {
   if (!AGENT_ID_RE.test(agentId)) return undefined
   const env = await run(io, ['/bin/ps', '-axwwE', '-o', 'pid=,command='])
@@ -1111,29 +1112,7 @@ const activateResourceIo = ($: ResourceEngine, sessionId?: string) => {
   activeResourceIo = resourceIo($, undefined, sessionId)
   return activeResourceIo
 }
-// A subagent's Bash env equals main's, so the tag is the only thing that says which worker started a process.
-export const taggedBash = <T extends { command: string; agentId?: string }>(e: T): T =>
-  e.agentId !== undefined && AGENT_ID_RE.test(e.agentId) ? { ...e, command: `export CLAUDE_AGENT_ID=${e.agentId}; ${e.command}` } : e
-// taggedBash's `export` makes core read a worker's `rg | head` as an env-changing compound, so every worker read
-// asked for approval (2026-11-27). Strip only the exact prefix this call got, so a forged prefix is judged as written.
-export const untaggedCommand = (command: unknown, agentId?: string) => {
-  if (typeof command !== 'string' || agentId === undefined || !AGENT_ID_RE.test(agentId)) return undefined
-  const prefix = `export CLAUDE_AGENT_ID=${agentId}; `
-  return command.startsWith(prefix) ? command.slice(prefix.length) : undefined
-}
-// Loosens only core's own ask (no hook, plugin or rule behind it), and only to the verdict the untagged command gets.
-export const recheckTagged = async <V extends { decision: string; hook?: string; plugin?: string; rule?: string }>(verdict: V, original: string | undefined, check: (command: string) => Promise<V>) => {
-  if (original === undefined || verdict.decision !== 'ask' || verdict.hook || verdict.plugin || verdict.rule) return verdict
-  const plain = await check(original)
-  return plain.decision === 'allow' ? plain : verdict
-}
 export const registerResources: Register = (on) => {
-  on('tool.check', { tool: 'Bash' }, async ($, e, next) => {
-    const verdict = await next(e)
-    const input = typeof e.input === 'object' && e.input !== null ? e.input as Record<string, unknown> : {}
-    return recheckTagged(verdict, untaggedCommand(input.command, e.agentId), command => $.tool.check({ tool: 'Bash', input: { ...input, command } }))
-  })
-
   on('turn.start', { turnId: /.*/ }, async ($, e, next) => {
     try { await turnStartResources(activateResourceIo($)) }
     catch (err) { $.ui.log(`resources: turn start failed (${String(err).slice(0, 160)})`, { to: 'debug' }) }
@@ -1190,7 +1169,7 @@ export const registerResources: Register = (on) => {
       io.log(`resources: load notices failed: ${String(err)}`)
       return []
     })
-    const result = await next(taggedBash(e))
+    const result = await next(e)
     try {
       const records = detectOwned(e.command, result, await io.cwd(), await io.now(), await profileFor(io))
       await recordDetected(io, records)

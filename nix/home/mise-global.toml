@@ -29,7 +29,9 @@ cmake = "4.4.4"
 difftastic = "0.70.0"
 claude = "2.1.327"
 "npm:@earendil-works/pi-coding-agent" = "1.4.0"
-"npm:@sourcegraph/amp" = "0.0.1795737653-g84af98"
+# @ampcode/cli places its native binary in postinstall, which npm 12's allowScripts blocks
+# under mise's npm backend; fetch the per-platform binary tarball directly instead.
+"http:amp" = { version = "0.0.1795737653-g84af98", bin_path = "package", platforms = { macos-arm64 = { url = "https://registry.npmjs.org/@ampcode/cli-darwin-arm64/-/cli-darwin-arm64-{{version}}.tgz" }, macos-x64 = { url = "https://registry.npmjs.org/@ampcode/cli-darwin-x64/-/cli-darwin-x64-{{version}}.tgz" }, linux-arm64 = { url = "https://registry.npmjs.org/@ampcode/cli-linux-arm64/-/cli-linux-arm64-{{version}}.tgz" }, linux-x64 = { url = "https://registry.npmjs.org/@ampcode/cli-linux-x64/-/cli-linux-x64-{{version}}.tgz" }, windows-x64 = { url = "https://registry.npmjs.org/@ampcode/cli-win32-x64/-/cli-win32-x64-{{version}}.tgz" } } }
 "aqua:anomalyco/opencode" = "2.4.1"
 "aqua:google-antigravity/antigravity-cli" = "1.5.14"
 "aqua:typst/typst" = "0.15.1"

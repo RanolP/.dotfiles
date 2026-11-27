@@ -17,6 +17,7 @@ LEVELS = {1: "normal", 2: "warn", 4: "critical"}
 RESUME_AFTER_S = 60
 RESUME_POLICY = (f"resource-watchdog resumes it (SIGCONT) once memory pressure has stayed normal for {RESUME_AFTER_S} s, "
                  "oldest-stopped first, one process per window")
+ORPHAN_MIN_RSS_KB = 512 * 1024  # a detached job below this is never frozen
 KEEP = 50  # state entries kept; older closed ones are dropped
 # Claude Code writes <config dir>/sessions/<claude pid>.json with "sessionId" (seen in 2.1.327); the config dir is
 # CLAUDE_CONFIG_DIR, which launchd does not pass here, so every ~/.claude* dir is tried.
@@ -40,20 +41,33 @@ def is_agent(cmd: str) -> bool:
 def is_shell(cmd: str) -> bool:
     return os.path.basename(cmd.split()[0]).lstrip("-") in SHELLS if cmd.split() else False
 
-def agent_children(procs: dict) -> list[tuple[int, int, str, str]]:
+def claude_env_pids() -> set[int]:
+    """Pids whose environment carries CLAUDECODE=1, which Claude Code sets for its shell tool and every child
+    inherits, even after the parent exits and launchd adopts the child (ps -E shows a same-user env)."""
+    out = subprocess.run(["/bin/ps", "-axwwE", "-o", "pid=,command="], capture_output=True, text=True).stdout
+    return {int(line.split(None, 1)[0]) for line in out.splitlines() if " CLAUDECODE=1" in line}
+
+def agent_children(procs: dict, tagged: set[int] = frozenset()) -> list[tuple[int, int, str, str]]:
     """Stop candidates: jobs an agent started through its shell tool, i.e. a non-shell process with a shell between
     it and the nearest agent root. Agent infrastructure has no shell ancestor and is never a candidate: 2026-11-23
-    the watchdog froze this session's hetero-subagents codex bridge repeatedly, dropping the codex worker."""
+    the watchdog froze this session's hetero-subagents codex bridge repeatedly, dropping the codex worker.
+    A job detached with `cmd &` from a shell that then exits has no agent ancestor at all, so it is a candidate
+    when its env is tagged (`tagged`): 2026-11-27 an agent's launch.sh backgrounded an IndexTTS-2 MPS run, launchd
+    adopted it, the watchdog froze a 1 MB eza instead, and the Mac hung into a hardware watchdog reset."""
     roots = {p for p, (_, _, _, cmd) in procs.items() if is_agent(cmd)}
     def shell_job(pid: int) -> bool:
         seen, shell = set(), False
+        start = pid
         while pid in procs and pid not in seen:
             seen.add(pid)
             pid = procs[pid][0]
             if pid in roots:
                 return shell
             shell = shell or (pid in procs and is_shell(procs[pid][3]))
-        return False
+        # No agent above it: an orphaned job, if a Claude Code shell started it and it is big enough to matter.
+        # The floor keeps out daemons a session spawned in passing (keyboxd, gpg-agent from a signed commit are
+        # tagged too, and freezing keyboxd breaks signing for every session).
+        return start in tagged and procs[start][1] >= ORPHAN_MIN_RSS_KB
     return [(p, rss, stat, cmd) for p, (_, rss, stat, cmd) in procs.items()
             if p not in roots and not is_shell(cmd) and shell_job(p)]
 
@@ -106,7 +120,7 @@ def notify(msg: str):
     subprocess.run(["/usr/bin/osascript", "-e", f"display notification {json.dumps(msg)} with title \"claude resource watchdog\""])
 
 def stop_one(level: int, procs: dict) -> dict | None:
-    kids = agent_children(procs)
+    kids = agent_children(procs, claude_env_pids())
     # At warn, freeze one process and then wait: while any agent child is already stopped (ps stat "T"), stop
     # nothing more. Measured 2026-11-23: skipping only the stopped one made each 2 s tick freeze the next-largest
     # child, and 12 MCP servers and codex bridges of other sessions were frozen within 25 s while pressure stayed

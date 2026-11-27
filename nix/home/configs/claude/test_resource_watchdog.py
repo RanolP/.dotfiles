@@ -32,4 +32,12 @@ bridge = {**procs, 130: (100, 9_999_999, "S", "node /h/.claude/mods/hetero-subag
 cands = {k[0] for k in wd.agent_children(bridge)}
 assert 130 not in cands, "a codex bridge under a claude session is never a stop candidate"
 assert cands == {111}, f"only shell-tool jobs are candidates (not the shell, codex app-server, its children, MCP): {cands}"
+# 2026-11-27: a job backgrounded by a shell that exited is adopted by launchd (ppid 1); the Mac hung while the
+# watchdog froze a 1 MB process instead. A tagged orphan is a candidate; an untagged one (the user's app) is not.
+orphans = {**procs, 400: (1, 20_000_000, "R", "/usr/bin/time -l python -I -u stage_b.py"), 401: (1, 30_000_000, "S", "/Applications/Firefox.app/firefox")}
+assert max(wd.agent_children(orphans, {400}), key=lambda k: k[1])[0] == 400, "a tagged orphan is the biggest candidate"
+assert 401 not in {k[0] for k in wd.agent_children(orphans, {400})}, "an untagged launchd child is never a candidate"
+assert wd.agent_children(orphans) == wd.agent_children(procs), "without tags, orphans stay out"
+daemons = {**procs, 402: (1, 8_000, "S", "keyboxd --homedir /h/.gnupg --daemon")}
+assert 402 not in {k[0] for k in wd.agent_children(daemons, {402})}, "a small tagged daemon (keyboxd) is never frozen"
 print("ok")

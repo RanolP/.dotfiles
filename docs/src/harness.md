@@ -25,6 +25,7 @@ Found 2026-11-27, after the Mac's hardware watchdog (iBoot) reset the machine (s
 5. No rule names the points where main must decide before the next dispatch.
 6. A worker reports only at the end. No rule makes it report an ambiguity or failure while it works.
 7. Main cannot see which worker started which process, and stopping a worker may leave a job it detached running.
+9. Review hooks decide by path, not by reader or lifetime. `prose-review-nudge.py` orders "spawn the `prose-editor` subagent" for every `.md`/`.html` outside agents, skills and memory, so a one-line `SUMMARY.md` entry and a long-lived doc get the same order. The agent can only obey it everywhere or skip it everywhere.
 8. `AGENTS.md` routes durable narratives to `memory/evidence/` ("One file under `memory/evidence/` per non-obvious conclusion ... skill `evidence-store`"; repo `AGENTS.md`: "write the narrative into `memory/evidence/` or `docs/src/agent-incidents.md`"). Agents write there and rarely read it back.
 
 ## Improvement plan
@@ -41,6 +42,12 @@ Proposed 2026-11-27. Check an item off when it is applied.
   - Triggers: an ambiguous instruction or target, a failed command or check, an abnormal exit, any system alert (memory pressure, a `resource-watchdog` stop).
   - Channel: `SendMessage` with `to: "main"`, which a background subagent can call. The worker waits for main's reply before it goes on.
   - These triggers are the default contents of P2's `Stop when:` slot.
+- [ ] **P9** (drift 9) Main sizes each review by two questions: does a person read it, and will it be read again after this task. The user on 2026-11-27: "사람이 마주하는 것과 아닌 것을 판단하고, 장기적으로 쓰일 것과 아닐 것을 판단해서 적절한 장소에만 써야지. 근데 이러면 100% 쓰거나 0% 쓰거나 둘 중 하나밖에 못해."
+  - A person reads it and it lasts (a `docs/src/` page, a PR body, an Artifact): full `prose-editor` review.
+  - Only agents read it and it lasts (a rules file, a brief template, the agent-facing part of a doc): a content check only, for conflicts with existing rules, dropped fields and wrong facts, without style findings.
+  - It does not last (a scratch note, a one-line index entry, a chat reply): no review.
+  - The same sizing goes for `code-reviewer`: a diff that ships or that other code builds on gets it; a throwaway probe does not.
+  - `prose-review-nudge.py` states these three cases instead of a bare "spawn", and leaves the choice to main.
 - [ ] **P8** (drift 7) Main can see a running worker's state and stop or redirect it at once. The user: "상급자가 현재 상황을 알아보고 신입을 즉시 중단하거나 할 수단도 필요한 거고."
   - Exists today: the spawn result's `outputFile` and the worker's transcript show its state; `SendMessage` redirects it; `TaskStop` with its agent ID halts it.
   - To build: the `resources` mod (the Claude Code mod that posts memory-pressure notices into sessions) also tells main which running worker started each heavy process, so main stops the right one.

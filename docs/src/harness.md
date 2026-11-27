@@ -42,12 +42,8 @@ Proposed 2026-11-27. Check an item off when it is applied.
   - Triggers: an ambiguous instruction or target, a failed command or check, an abnormal exit, any system alert (memory pressure, a `resource-watchdog` stop).
   - Channel: `SendMessage` with `to: "main"`, which a background subagent can call. The worker waits for main's reply before it goes on.
   - These triggers are the default contents of P2's `Stop when:` slot.
-- [ ] **P9** (drift 9) Main sizes each review by two questions: does a person read it, and will it be read again after this task. The user on 2026-11-27: "사람이 마주하는 것과 아닌 것을 판단하고, 장기적으로 쓰일 것과 아닐 것을 판단해서 적절한 장소에만 써야지. 근데 이러면 100% 쓰거나 0% 쓰거나 둘 중 하나밖에 못해."
-  - A person reads it and it lasts (a `docs/src/` page, a PR body, an Artifact): full `prose-editor` review.
-  - Only agents read it and it lasts (a rules file, a brief template, the agent-facing part of a doc): a content check only, for conflicts with existing rules, dropped fields and wrong facts, without style findings.
-  - It does not last (a scratch note, a one-line index entry, a chat reply): no review.
-  - The same sizing goes for `code-reviewer`: a diff that ships or that other code builds on gets it; a throwaway probe does not.
-  - `prose-review-nudge.py` states these three cases instead of a bare "spawn", and leaves the choice to main.
+- [ ] **P9** (drift 9) Main decides by itself, per artifact, whether a review earns its cost: does a person read it, and will it be read again after this task. The user on 2026-11-27: "사람이 마주하는 것과 아닌 것을 판단하고, 장기적으로 쓰일 것과 아닐 것을 판단해서 적절한 장소에만 써야지." Remove `prose-review-nudge.py`. The user: "nudge 훅이 필요한 것부터가 구조적 실패라니까? 지능이 알아서 판단해야 하는데 그게 안돼서 실패하니까 자꾸 훅으로 가잖아."
+- [ ] **P10** Audit every hook under `nix/home/configs/claude/hooks/`. Keep a hook that is a last-resort safety net against an irreversible or machine-wide loss (a destructive command, a leaked secret, an unbuildable config). Remove a hook that stands in for a judgment the orchestrator owns (a nudge, a hint, a reminder to load a skill), and move the judgment's reason into this doc.
 - [ ] **P8** (drift 7) Main can see a running worker's state and stop or redirect it at once. The user: "상급자가 현재 상황을 알아보고 신입을 즉시 중단하거나 할 수단도 필요한 거고."
   - Exists today: the spawn result's `outputFile` and the worker's transcript show its state; `SendMessage` redirects it; `TaskStop` with its agent ID halts it.
   - To build: the `resources` mod (the Claude Code mod that posts memory-pressure notices into sessions) also tells main which running worker started each heavy process, so main stops the right one.

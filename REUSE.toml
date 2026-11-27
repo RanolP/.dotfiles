@@ -316,7 +316,6 @@ path = [
     "nix/home/configs/.agents/skills/memory-review/SKILL.md",
     "nix/home/configs/.agents/skills/correct/mine-corrections.py",
     "nix/home/configs/.agents/skills/dotfiles-evolve/SKILL.md",
-    "nix/home/configs/.agents/skills/evidence-store/SKILL.md",
     "nix/home/configs/.agents/skills/docs-write/SKILL.md",
     "nix/home/configs/.agents/skills/apology/SKILL.md",
     "nix/home/configs/claude/hooks/apology-leak-guard.py",

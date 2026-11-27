@@ -15,7 +15,7 @@ Role model (`docs/src/harness.md`; read it before changing any delegation, brief
 - (multi-step) State the whole step set in the reply before the first starts.
 - (typed result) When a result feeds another agent, a routing decision or a synthesis, name its exact fields and types, no prose wrapper; check the shape on receipt and on a mismatch `SendMessage` the same worker once.
 - (codex commit) A codex worker stages; main or the user's `!` commits, because the codex seatbelt sandbox blocks the keyboxd socket and signed commits fail inside it.
-- (clock) Read the injected `Now ...; last turn took ...` line; after a long turn, answer with what is known and deepen only when asked. A `/loop` or scheduled run exits on a pass/fail command named up front, never on a duration.
+- (clock) After a long turn, answer with what is known and deepen only when asked. A `/loop` or scheduled run exits on a pass/fail command named up front, never on a duration.
 - (load) Raise a heavy local job per (approval) with its cost and current load in one line, measuring its memory on a small input before a large one; reuse a running emulator or build; brief workers to "stop and report if a build is needed"; stop every emulator, Metro and Gradle daemon (`./gradlew --stop`) you started (`docs/src/agent-incidents.md`, 2026-10-15: one unasked `assembleDebug`, load average 25).
 
 ## Escalate one hard question to `oracle`, from a worker as readily as from main

@@ -54,15 +54,11 @@ Name every referent by its exact identifier -- `git-integrity-guard.py`, never "
 
 For the sentence-level form -- positive phrasing, which prohibitions earn their place, how a `WHY` states a mechanism rather than a conclusion, and why the prose is English -- follow the `prompt-authoring` skill. It owns that layer.
 
-## 6. Mechanize it when a machine can check it
+## 6. Build a missing capability as a tool
 
-A prose rule aimed at a model is a request, and a request gets violated eventually. When a `PreToolUse` hook or a CI check could decide the rule -- a forbidden command, a required file, a format, a skipped step -- the guard is the deliverable and the prose line is its fallback.
+When the rule asks for something the agent cannot do yet (a lookup, a measurement, a control over a worker), build that tool and point the rule at it. A judgement the agent owns stays in the rule. A hook is only a last-resort net against an irreversible or machine-wide loss, per `claude-hook-management`.
 
-Follow `claude-hook-management` for the container verification, the `nix/home/default.nix` entry, the `git add`, and the `settings.json` registration. A hook reaches every session on this machine, so an unverified one is a total work stoppage.
-
-Keep the prose alone only for what no matcher can inspect: intent, priority, taste, and judgement criteria.
-
-When the candidate is a mistake the user has already corrected more than once, run the `correct` skill first; it picks the rung and keeps the rule-to-enforcer table current.
+When the candidate is a mistake the user has already corrected more than once, run the `correct` skill first.
 
 ## 7. Hand the rebuild to the user
 

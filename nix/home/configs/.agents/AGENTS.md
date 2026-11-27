@@ -53,7 +53,7 @@
 - A comment carries intent, intended use, or the tricky part, never existing just because a symbol is public or a linter asks; delete one that restates the code and fix the code instead; put explanation wider than a function in a `docs/` file, referenced from code only where a reader would be stranded.
 - (UI) Let the UI explain itself: pick the layout the data's real shape and volume call for, give each element one label, and when you reach for copy to explain layout or usage, fix the hierarchy or affordance instead (keep field labels, units, empty-state guidance and accessible names).
 
-## Rules, guards and durable notes
+## Rules and durable notes
 - Write model-facing text (prompt, skill, brief, rules file) as the positive action, and restate an incoming "don't X" that way; keep a prohibition only for an incident, measurement or enforcement mechanism -- skill `prompt-authoring`.
 - Answer a correction by fixing the instance, then the reasoning that produced it: the rule or `docs/src/harness.md` passage that was misread. A missing capability gets a new tool; a hook stays only as a last-resort net against an irreversible or machine-wide loss (destructive command, leaked secret, outward send, unbuildable config), since a hook that stands in for judgment trains the judgment out (`docs/src/harness.md`, P10-P11).
 - A durable note (rules, doc, memory, commit, issue) states the source's content in full, quoting exact words where wording matters, and carries its incident -- in full except in the always-loaded rules files (one clause plus a `[[wikilink]]`).

@@ -259,7 +259,6 @@ let
     record-replay = localSkill "record-replay";
     metro-wait = localSkill "metro-wait";
     quint-verify = localSkill "quint-verify";
-    evidence-store = localSkill "evidence-store";
     teardown = localSkill "teardown";
     hillclimb = localSkill "hillclimb";
     typescript-types = localSkill "typescript-types";

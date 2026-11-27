@@ -61,7 +61,6 @@ Then sort the same rows into three lists, so the user sees what was filtered out
 
 - **Accept** -- seen in 2+ sessions and would change what a future agent does: the edit and its target file.
 - **Reject** -- a one-off, a detail that drifts (SHA, version, count), or a lesson that changes no behaviour: one-line reason each.
-- **Backlog** -- something a script, lint or hook could enforce: hand it to `correct` rather than writing prose.
 
 Close with the single highest-value next step: which memory to internalize first, or which correction class to hand to `correct` first, and why that one. Then ask the user one multiple-choice question (4-6 options, multi-select) on which areas they want worked first, plus one free-form question for anything the transcripts did not show.
 

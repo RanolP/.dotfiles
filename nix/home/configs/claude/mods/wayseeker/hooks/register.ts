@@ -229,6 +229,13 @@ const STEP_DESCRIPTION = [
   'The step lands in the wayseeker ledger as a check rule pass(step, item1), pass(step, item2), ... -> done(step). Group steps under a goal with say: done(s1), done(s2) -> ready(goal) and ready(goal) -> done(goal).',
   'step is a lowercase snake_case atom; cwd is the absolute repository path commands run in. Calling it again for the same step replaces its rubric. When the work is finished, call ' + CHECK_TOOL_ID + ' for the step.',
 ].join('\n')
+// Felix Rieseberg's "Depth" questions as nicobailon/pi-better asks them, minus its fourth ("what shows the result is
+// right"), which the rubric debate already settles. Main answers them itself; nothing rewrites the prompt for it.
+const DEPTH_QUESTIONS = [
+  'Go deeper on this step, not bigger. First, without asking the user anything, find and read the code, files, docs and logs it touches, so your answers rest on them.',
+  'Then, before starting the work, answer: (1) what a top professional in this field would do here that the goal does not ask for; (2) the rawest material they would start from instead of what has already been digested; (3) the specific methods and tools they would use.',
+  'When an answer changes the step, call ' + STEP_TOOL_ID + ' again with revised notes.',
+].join('\n')
 const STEP_INPUT_SCHEMA = {
   type: 'object',
   properties: {
@@ -299,7 +306,7 @@ async function recordStep($: EngineInterface, input: { goal: string; step: strin
   })
   const written = await landAsCheck($, session, ledger => writeStepRule(ledger, input.step, rubric))
   if (written.errors.length) $.ui.log('wayseeker: step rule rejected (' + written.errors.join('; ').slice(0, 160) + ')', { to: 'debug' })
-  return { result: JSON.stringify({ step: input.step, rubric: rubricText(rubric), landed: written.landed, rejected: written.errors }), ...(written.errors.length ? { isError: true } : {}) }
+  return { result: JSON.stringify({ step: input.step, rubric: rubricText(rubric), landed: written.landed, rejected: written.errors, depth: DEPTH_QUESTIONS }), ...(written.errors.length ? { isError: true } : {}) }
 }
 
 async function checkStep($: EngineInterface, step: string, evidence: readonly unknown[]): Promise<{ result: string; isError?: boolean }> {

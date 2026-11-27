@@ -178,6 +178,8 @@ test('the step tool lands the rubric rule and the check tool lands passes that m
   const ledger = () => readWayseekerLedger(JSON.parse(files['/home/t/.claude-work/plans/wayseeker-s1.json'] ?? '{}')[wayseekerKey('s1:main')])
   const stepped = await call('mcp__wayseeker__step', { goal: 'ship the parser', step: 'parser', cwd: '/repo' })
   expect(stepped.landed.at(-1)).toMatch(/check: pass\(parser, tests\) -> done\(parser\)$/)
+  // Regression caught: the step result dropping the depth questions, so main plans from the digested request alone.
+  expect(stepped.depth).toMatch(/read the code, files, docs and logs[\s\S]*rawest material/)
   expect((await call('mcp__wayseeker__check', { step: 'parser' })).done).toBe(true)
   exit = 1
   const failed = await call('mcp__wayseeker__check', { step: 'parser' })

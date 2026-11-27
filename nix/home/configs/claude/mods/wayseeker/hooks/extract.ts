@@ -226,14 +226,17 @@ export function parseExtraction(text: string): string[] {
 const nextUtteranceId = (ledger: Ledger) => ledger.utterances.reduce((max, item) => Math.max(max, item.id), 0) + 1
 
 export async function extractTurn(io: ExtractIo, ledger: Ledger, userMessage: string, prevAssistant: string): Promise<{ ledger: Ledger; appended: string[]; rejected: { line: string; errors: string[] }[] }> {
-  const response = await io.complete({
-    model: 'sonnet',
+  const request = {
+    model: 'sonnet' as const,
     system: EXTRACT_SYSTEM,
     prompt: extractPrompt(ledger, userMessage, prevAssistant, nextUtteranceId(ledger)),
     maxTokens: 2000,
     timeoutMs: 30_000,
-  })
-  if (!response.isAnswered) return { ledger, appended: [], rejected: [{ line: '', errors: ['not answered: ' + response.reason] }] }
+  }
+  // One retry: a timed-out extraction otherwise drops this prompt's instructions for good.
+  const first = await io.complete(request)
+  const response = first.isAnswered ? first : await io.complete(request)
+  if (!response.isAnswered) return { ledger, appended: [], rejected: [{ line: '', errors: [`not answered twice: ${first.isAnswered ? '' : first.reason}; ${response.reason}`] }] }
   let current = ledger
   const appended: string[] = []
   const rejected: { line: string; errors: string[] }[] = []

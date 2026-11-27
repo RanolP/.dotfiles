@@ -45,6 +45,32 @@ test('extractTurn appends valid lines and reports invalid ones without touching 
   expect(ledger.utterances.length).toBe(1)
 })
 
+const flakyIo = (answers: boolean[], text: string, calls: Request[]) => ({
+  complete: async (request: Request) => {
+    calls.push(request)
+    const isAnswered = answers[calls.length - 1] ?? false
+    return isAnswered ? { isAnswered: true as const, text, reason: '' } : { isAnswered: false as const, text: '', reason: 'timeout' }
+  },
+})
+
+// Regression caught: one timed-out extraction silently dropping the prompt's instructions.
+test('extractTurn retries once when the first call is not answered', async () => {
+  const calls: Request[] = []
+  const reply = fence + '\n@1 user: say(use(server, vllm))\n' + fence
+  const result = await extractTurn(flakyIo([false, true], reply, calls), ledgerOf(['decl use(slot, tool) key(slot) "자리마다 쓰는 도구"']), 'vllm 써', '')
+  expect(calls.length).toBe(2)
+  expect(result.appended.length).toBe(1)
+})
+
+// Regression caught: retrying without a bound, or giving up before the one retry.
+test('extractTurn gives up after the second failure and appends nothing', async () => {
+  const calls: Request[] = []
+  const result = await extractTurn(flakyIo([false, false], '', calls), emptyLedger(), 'vllm 써', '')
+  expect(calls.length).toBe(2)
+  expect(result.appended).toEqual([])
+  expect(result.rejected[0]?.errors[0]?.startsWith('not answered')).toBe(true)
+})
+
 // Regression: the model inventing a predicate that already exists under another name because it never saw the vocabulary.
 test('extractPrompt lists every decl and gloss and numbers from firstId', () => {
   const ledger = ledgerOf([

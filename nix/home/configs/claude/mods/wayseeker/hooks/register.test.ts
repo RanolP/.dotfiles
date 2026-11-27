@@ -70,54 +70,62 @@ test('a prompt rewound before the next submit loses its extracted lines', async 
   expect(await instructions()).toBe('## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)')
 })
 
-// Regression caught: the instructions reaching the model only through clm's ledger, so they vanish once clm is removed.
-test('a human turn gets the wayseeker instructions attachment even with clm absent', async ($, on) => {
+// Regression caught: the section riding every changed prompt, re-sending instructions the user's own prompts already carry verbatim.
+test('an ordinary human turn gets no instructions attachment even when the section changed', async ($, on) => {
   const { contexts } = world(on)
   await submit($, 'sglang 써')
   await settle()
-  expect(contexts[0]).toBeUndefined() // the ledger rendered empty: no attachment
+  await submit($, '다른 얘기')
+  await settle()
+  await submit($, '아니 vllm으로')
+  await settle()
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts.every(c => c === undefined)).toBe(true)
+})
+
+// Regression caught: a landed compaction dropping the instructions with the pre-compact prompts, so the model never sees them again.
+test('the first prompt after a landed compaction gets the section, and the next prompt does not', async ($, on) => {
+  const { contexts } = world(on)
+  const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
+  on('session.compact', () => ({ messages: [summary] }))
+  await submit($, 'sglang 써')
+  await settle()
+  await $.session.compact({ trigger: 'manual', messages: [summary] })
   await submit($, '다른 얘기')
   await settle()
   expect(contexts[1]).toEqual(['<system-reminder>\n## user instructions\n\n- 서빙에 sglang을(를) 쓴다. (@1)\n</system-reminder>'])
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts[2]).toBeUndefined()
 })
 
-test('an unchanged section present in the transcript is not attached on the next human turn', async ($, on) => {
+// Regression caught: a skipped compaction (nothing summarised) re-sending the section into a context that still holds it.
+test('a skipped compaction arms no delivery', async ($, on) => {
   const { contexts } = world(on)
+  on('session.compact', () => ({ skip: 'nothing to do' }))
   await submit($, 'sglang 써')
   await settle()
+  await $.session.compact({ trigger: 'manual', messages: [] })
   await submit($, '다른 얘기')
   await settle()
-  await submit($, '다른 얘기')
-  await settle()
-  expect(contexts[1]?.[0]).toContain('sglang')
-  expect(contexts[2]).toBeUndefined()
+  expect(contexts[1]).toBeUndefined()
 })
 
-// Regression caught: the stored transcript keeps pre-compact rows, so the section still "found" there was never delivered again after /compact or a clm fold.
-test('a compacted section is delivered again on prompt submit', async ($, on) => {
-  const { rows, contexts } = world(on)
-  let skip: string | undefined
+// Regression caught: an empty ledger at the first post-compaction prompt spending the one-shot, so instructions extracted later never arrive.
+test('the delivery stays armed while the section is empty', async ($, on) => {
+  const { contexts } = world(on)
   const summary = { role: 'user' as const, text: 'summary', toolUses: [] }
-  on('session.compact', () => skip === undefined ? { messages: [summary] } : { skip })
+  on('session.compact', () => ({ messages: [summary] }))
+  await $.session.compact({ trigger: 'manual', messages: [summary] })
+  await submit($, '다른 얘기')
+  await settle()
+  expect(contexts[0]).toBeUndefined()
   await submit($, 'sglang 써')
   await settle()
   await submit($, '다른 얘기')
   await settle()
-  expect(contexts[1]?.[0]).toContain('sglang')
-  await submit($, '다른 얘기')
-  await settle()
-  expect(contexts[2]).toBeUndefined()
-  const rowCount = rows.length
-  await $.session.compact({ trigger: 'manual', messages: [summary] })
-  expect(rows).toHaveLength(rowCount)
-  await submit($, '다른 얘기')
-  await settle()
-  expect(contexts[3]).toEqual(contexts[1])
-  skip = 'nothing to do'
-  await $.session.compact({ trigger: 'manual', messages: [summary] })
-  await submit($, '다른 얘기')
-  await settle()
-  expect(contexts[4]).toBeUndefined()
+  expect(contexts[2]?.[0]).toContain('sglang')
 })
 
 test('the user is shown an added instruction, and nothing when the section is unchanged', async ($, on) => {

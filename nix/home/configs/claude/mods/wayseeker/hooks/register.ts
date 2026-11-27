@@ -6,7 +6,7 @@ import { promptFingerprint, promptsKey, readPromptRows, reconcilePrompts } from 
 import { openItems, SAY_DESCRIPTION, SAY_INPUT_SCHEMA, SAY_TOOL, SAY_TOOL_ID, sayLines, speakerOf, type SayResult } from './say'
 import { renderRange } from './evidence'
 import { debateRubric, judgeRubric, readSteps, rubricText, STEP_ATOM, writeStepRule, writeVerdicts, type ModelIo } from './stepped'
-import { deliveredSectionKey, nextId, readDeliveredSection, type Ledger } from './store'
+import { compactedSinceDeliveryKey, nextId, type Ledger } from './store'
 import { isHarnessText, isRecord, stripReminders } from './text'
 import type { WayseekerInstructionsInput } from '../types'
 
@@ -297,7 +297,7 @@ async function checkStep($: EngineInterface, step: string, evidence: readonly un
 }
 
 const EMPTY_LEDGER = readWayseekerLedger(undefined)
-// What the section reads with no instruction and no raise; the per-turn attachment skips it.
+// What the section reads with no instruction and no raise; the post-compaction attachment skips it.
 const EMPTY_SECTION = renderInstructions(EMPTY_LEDGER, evaluate(EMPTY_LEDGER))
 
 async function instructions($: EngineInterface, input: WayseekerInstructionsInput = {}): Promise<string> {
@@ -312,13 +312,12 @@ const instructionAttachment = async ($: EngineInterface): Promise<string | undef
   const key = transcriptKey(session)
   const store = sessionStore($, session)
   return serialized(session, async () => {
+    // The user's own prompts are already in context verbatim; the section only carries instructions across a compaction.
+    if (await store.get(compactedSinceDeliveryKey(key)) !== true) return undefined
     const ledger = readWayseekerLedger(await store.get(wayseekerKey(key)))
     const section = renderInstructions(ledger, evaluate(ledger))
-    if (section === EMPTY_SECTION) return undefined
-    const fingerprint = promptFingerprint(section)
-    const delivered = readDeliveredSection(await store.get(deliveredSectionKey(key)))
-    if (delivered?.fingerprint === fingerprint && (await $.session.messages()).some(row => row.text.includes(delivered.section))) return undefined
-    await store.set(deliveredSectionKey(key), { fingerprint, section })
+    if (section === EMPTY_SECTION) return undefined // keep the flag: the next prompt tries again
+    await store.set(compactedSinceDeliveryKey(key), undefined)
     $.ui.log(`wayseeker: section delivered chars=${section.length}`, { to: 'debug' })
     return `<system-reminder>\n${section}\n</system-reminder>`
   })
@@ -402,16 +401,15 @@ export const register: Register = on => {
     return next(attachment === undefined ? e : { ...e, context: [...(e.context ?? []), attachment] })
   })
 
-  // The stored transcript keeps rows from before a compaction (bg-compact delivers through this same event), so the
-  // delivered-section scan alone would still find the old section; a landed compaction forgets the record instead.
+  // A landed main-session compaction arms the one-shot delivery of the section on the next human prompt.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     if (e.agentId !== undefined || (result as { skip?: unknown }).skip !== undefined) return result
     try {
       const session = await $.session.id()
-      await serialized(session, () => sessionStore($, session).set(deliveredSectionKey(transcriptKey(session)), undefined))
+      await serialized(session, () => sessionStore($, session).set(compactedSinceDeliveryKey(transcriptKey(session)), true))
     } catch (err) {
-      $.ui.log(`wayseeker: clearing delivered section failed (${String(err).slice(0, 160)})`, { to: 'debug' })
+      $.ui.log(`wayseeker: arming section delivery failed (${String(err).slice(0, 160)})`, { to: 'debug' })
     }
     return result
   })

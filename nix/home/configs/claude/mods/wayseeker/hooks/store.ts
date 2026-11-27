@@ -4,11 +4,8 @@ import { isRecord } from './text'
 
 export type Ledger = { utterances: Utterance[]; decls: Decl[]; glosses: Gloss[] }
 
-export const deliveredSectionKey = (key: string) => `delivered-section:${key}`
-/** atSubmit: the section rode this turn's prompt.submit, whose row may not carry it by the first tool.call. */
-export const readDeliveredSection = (value: unknown): { fingerprint: string; section: string; atSubmit: boolean } | undefined =>
-  isRecord(value) && typeof value.fingerprint === 'string' && typeof value.section === 'string'
-    ? { fingerprint: value.fingerprint, section: value.section, atSubmit: value.atSubmit === true } : undefined
+/** True from a landed main-session compaction until the section has been attached to a prompt. */
+export const compactedSinceDeliveryKey = (key: string) => `compacted-since-delivery:${key}`
 
 // check is the mod's own rubric verdict, written only by the step and check tools (stepped.ts).
 export const BASE_SPEAKERS = ['user', 'check', 'agent', 'worker'] as const

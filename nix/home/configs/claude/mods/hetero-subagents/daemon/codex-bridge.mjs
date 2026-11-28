@@ -634,7 +634,8 @@ async function open(b) {
   }
   const writableRoots = b.writableRoots?.length ? b.writableRoots : [b.cwd]
   const workspaceWrite = b.sandbox === 'workspace-write'
-  const common = { model: b.model ?? null, cwd: b.cwd ?? null, approvalPolicy: 'never', ...(workspaceWrite ? { permissions: WORKSPACE_WRITE_PROFILE, runtimeWorkspaceRoots: writableRoots, config: workspaceWriteConfig(writableRoots) } : { sandbox: b.sandbox ?? 'read-only' }), developerInstructions: b.developerInstructions ?? null }
+  // Select the profile through config's default_permissions, not the `permissions` param: codex 0.171's per-turn workspace-routing reload drops that param and fails with "failed to load workspace requirements: invalid input parameter".
+  const common = { model: b.model ?? null, cwd: b.cwd ?? null, approvalPolicy: 'never', ...(workspaceWrite ? { runtimeWorkspaceRoots: writableRoots, config: { default_permissions: WORKSPACE_WRITE_PROFILE, ...workspaceWriteConfig(writableRoots) } } : { sandbox: b.sandbox ?? 'read-only' }), developerInstructions: b.developerInstructions ?? null }
   // A threadId from the mod means this bridge restarted: rejoin the thread codex persisted.
   let r
   if (b.threadId) r = await rpc('thread/resume', { threadId: b.threadId, ...common, excludeTurns: true })

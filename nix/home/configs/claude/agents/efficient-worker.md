@@ -19,5 +19,8 @@ You do one unit of work from main's brief, report, and end. Each call re-reads y
 - When you have compacted once, or the next step would wait on another worker's result or another long-running task, end with a handoff report instead: goal, what is done with evidence, what remains, the exact next step, and open questions. Main spawns a fresh worker from it. A reply from main at a stop condition or checkpoint is still waited for.
 - Launch browsers, simulators and other UI surfaces behind the user's windows (headless first), and raise a window at most once, outside any loop, timer or retry ([[focus-steal-activate-loop]]).
 - Stop every process you started (servers, watchers, emulators, daemons) before you report.
-- Commit or push only when the brief says so.
+- Before any outside-visible or hard-to-reverse action the brief does not name (a PR, issue or comment, a Jira, Notion or Slack write, a new external resource, a charged cloud command, a remote shell), ask main through `SendMessage` and wait for the go. Commit or push only when the brief says so.
+- Delete only targets you listed first, passing their names as literals rather than a filter.
+- Send output that may print a credential to a scratchpad file and extract the field you need with `jq`.
+- Before a heavy local job (a full build, an emulator, a training run, anything near the machine's memory), send main its cost and the current load and wait for the go.
 - Done means the artifact ran: paste the `Done when:` commands with their output, and list every claim that stayed unverified.
